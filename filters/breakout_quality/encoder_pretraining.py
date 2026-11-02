@@ -51,6 +51,43 @@ def build_ticker_balanced_epoch_ids(
     return selected, tickers
 
 
+def build_ticker_balanced_epoch_schedules(
+    group_table: pd.DataFrame,
+    fit_ids: np.ndarray,
+    *,
+    seed: int,
+    epochs: int,
+) -> tuple[list[np.ndarray], tuple[str, ...]]:
+    """Equivalent to per-epoch sampling; group the large daily pool just once.
+
+    A stable ticker ordering preserves each ticker's candidate order and the
+    original per-epoch SeedSequence draws/shuffle (no sampling semantic change).
+    """
+    ids = np.asarray(fit_ids, dtype=np.int64)
+    if ids.ndim != 1 or len(ids) < 2 or int(epochs) < 1:
+        raise ValueError("ticker-balanced pretraining缺少合法sample/epoch")
+    tickers_for_rows = group_table.iloc[ids]["ticker"].astype(str).to_numpy()
+    ordered = np.argsort(tickers_for_rows, kind="mergesort")
+    ordered_names = tickers_for_rows[ordered]
+    ordered_ids = ids[ordered]
+    names, starts = np.unique(ordered_names, return_index=True)
+    if len(names) < 2:
+        raise ValueError("ticker-balanced pretraining至少需要2個ticker class")
+    candidates = np.split(ordered_ids, starts[1:].tolist())
+    epoch_ids: list[np.ndarray] = []
+    for epoch in range(1, int(epochs) + 1):
+        rng = np.random.default_rng(
+            np.random.SeedSequence([int(seed), int(epoch), 0x534343])
+        )
+        chosen = np.asarray([
+            int(row_ids[int(rng.integers(0, len(row_ids)))])
+            for row_ids in candidates
+        ], dtype=np.int64)
+        rng.shuffle(chosen)
+        epoch_ids.append(chosen)
+    return epoch_ids, tuple(str(value) for value in names)
+
+
 def _ticker_targets(
     group_table: pd.DataFrame,
     group_ids: np.ndarray,
@@ -249,15 +286,26 @@ def _pretrain_future_path_encoder_state(
 
     scoped_dates = pd.to_datetime(group_table.iloc[ids]["date"], errors="raise")
     fitting_cutoff = pd.Timestamp(scoped_dates.max()).normalize()
+    if profile.source_scope == "matured_daily_universal_asof_fitting_cutoff":
+        # Candidate rows come from the same feature-complete stock/day bank,
+        # *not* from the sparse trade-path CP labels. Strictly stop at the
+        # downstream train-only cutoff in inner selection; use final-refit
+        # cutoff in the independent final fitting stage.
+        all_dates = pd.to_datetime(group_table["date"], errors="raise")
+        candidate_ids = np.flatnonzero(
+            (all_dates <= fitting_cutoff).to_numpy(dtype=bool)
+        ).astype(np.int64)
+    else:
+        candidate_ids = ids
     max_horizon_bars = int(profile.future_path_max_horizon_bars or 0)
     if max_horizon_bars <= 0:
         raise ValueError("future-path pretraining缺少合法max horizon contract")
     matured_mask = feature_bank.future_path_maturity_mask(
-        ids,
+        candidate_ids,
         horizon_bars=max_horizon_bars,
         cutoff_date=fitting_cutoff,
     )
-    matured_ids = ids[np.asarray(matured_mask, dtype=bool)]
+    matured_ids = candidate_ids[np.asarray(matured_mask, dtype=bool)]
     if len(matured_ids) < 2:
         raise ValueError("future-path encoder pretraining沒有足夠PIT-matured fitting rows")
     matured_tickers = tuple(
@@ -266,17 +314,14 @@ def _pretrain_future_path_encoder_state(
     if len(matured_tickers) < 2:
         raise ValueError("future-path encoder pretraining至少需要2個matured ticker")
 
-    epoch_schedules: list[np.ndarray] = []
-    for epoch in range(1, int(profile.epochs) + 1):
-        epoch_ids, epoch_tickers = build_ticker_balanced_epoch_ids(
-            group_table,
-            matured_ids,
-            seed=int(seed),
-            epoch=int(epoch),
-        )
-        if epoch_tickers != matured_tickers:
-            raise AssertionError("future-path ticker universe在epoch內發生漂移")
-        epoch_schedules.append(epoch_ids)
+    epoch_schedules, epoch_tickers = build_ticker_balanced_epoch_schedules(
+        group_table,
+        matured_ids,
+        seed=int(seed),
+        epochs=int(profile.epochs),
+    )
+    if epoch_tickers != matured_tickers:
+        raise AssertionError("future-path ticker universe在epoch內發生漂移")
 
     scheduled_ids = np.concatenate(epoch_schedules).astype(np.int64, copy=False)
     unique_ids = np.unique(scheduled_ids).astype(np.int64, copy=False)
@@ -410,6 +455,7 @@ def _pretrain_future_path_encoder_state(
         "fitting_date_end": str(scoped_dates.max().date()),
         "future_path_maturity_cutoff": str(fitting_cutoff.date()),
         "matured_fitting_group_count": int(len(matured_ids)),
+        "candidate_pretraining_group_count": int(len(candidate_ids)),
         "matured_ticker_count": int(len(matured_tickers)),
         "unique_pretraining_window_count": int(len(unique_ids)),
         "samples_per_epoch": int(len(matured_tickers)),
@@ -473,5 +519,6 @@ def pretrain_encoder_state(
 
 __all__ = [
     "build_ticker_balanced_epoch_ids",
+    "build_ticker_balanced_epoch_schedules",
     "pretrain_encoder_state",
 ]

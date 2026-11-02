@@ -403,6 +403,9 @@ DAILY_UNIVERSAL_FORMAL_MINTRADE_FULLCYCLE_NETR_PAIRWISE_PROFILE = "daily_univers
 DAILY_UNIVERSAL_FORMAL_MINTRADE_FULLCYCLE_NETPNL_PAIRWISE_PROFILE = "daily_universal_formal_mintrade_fullcycle_netpnl_per_seed_full_list_ndcg_pairwise"
 DAILY_UNIVERSAL_JOINT_MFE_D40_QUADRANT_PROFILE = "daily_universal_joint_mfe_d40_quadrant_cross_entropy"
 DAILY_UNIVERSAL_NETPNL_POSITIVE_BINARY_PROFILE = "daily_universal_formal_mintrade_fullcycle_netpnl_positive_binary"
+DAILY_UNIVERSAL_T40_PRETRAINED_NETPNL_POSITIVE_BINARY_PROFILE = (
+    "daily_universal_t40_pretrained_formal_mintrade_fullcycle_netpnl_positive_binary"
+)
 DAILY_UNIVERSAL_DIRECT_U40_HUBER_PROFILE = "daily_universal_full_horizon_mfe_minus_d40_huber"
 DAILY_UNIVERSAL_DIRECT_U40_PAIRWISE_PROFILE = "daily_universal_full_horizon_mfe_minus_d40_full_list_ndcg_pairwise"
 DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_PIT_TRADE_COUNT_PROFILE = (
@@ -540,6 +543,7 @@ DAILY_UNIVERSAL_RISK_CONTEXT_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE = "daily_univer
 TS2VEC_SELECTION_ONLY_PRETRAINING_PROFILE = "ts2vec_selection_only"
 STOCK_CODE_CLASSIFICATION_ENCODER_PRETRAINING_PROFILE = "stock_code_classification_v1"
 FUTURE_PATH_STATISTICS_ENCODER_PRETRAINING_PROFILE = "future_path_statistics_v1"
+DAILY_T40_ENCODER_PRETRAINING_PROFILE = "daily_t40_regression_encoder_v1"
 FUTURE_PATH_STATISTICS_TARGET_NAMES = (
     "terminal_return_5d", "terminal_return_10d", "terminal_return_20d", "terminal_return_40d",
     "max_downside_10d", "max_downside_20d", "max_downside_40d",
@@ -1060,11 +1064,17 @@ class BreakoutQualityEncoderPretrainingProfile:
                 raise ValueError("SCC encoder pretraining 不得宣告future-path regression設定")
         else:
             expected_targets = FUTURE_PATH_STATISTICS_TARGET_NAMES
-            if self.source_scope != "matured_downstream_fitting_rows_only":
+            if self.source_scope not in {
+                "matured_downstream_fitting_rows_only",
+                "matured_daily_universal_asof_fitting_cutoff",
+            }:
                 raise ValueError("future-path pretraining source scope 必須限制於fitting cutoff前已成熟rows")
             if self.loss_name != "smooth_l1":
                 raise ValueError("future-path encoder pretraining 必須使用smooth_l1")
-            if tuple(self.target_names) != expected_targets:
+            if tuple(self.target_names) not in {
+                expected_targets,
+                ("terminal_mae_gated_t40_40d",),
+            }:
                 raise ValueError("future-path encoder pretraining target set不符合scientific contract")
             if self.target_standardization != "fitting_scope_zscore":
                 raise ValueError("future-path encoder pretraining 必須使用fitting-scope z-score")
@@ -1126,6 +1136,24 @@ _ENCODER_PRETRAINING_PROFILES = {
         downstream_finetune="full_unfrozen",
         loss_name="smooth_l1",
         target_names=FUTURE_PATH_STATISTICS_TARGET_NAMES,
+        target_standardization="fitting_scope_zscore",
+        smooth_l1_beta=1.0,
+        future_path_max_horizon_bars=40,
+    ),
+    DAILY_T40_ENCODER_PRETRAINING_PROFILE: BreakoutQualityEncoderPretrainingProfile(
+        name=DAILY_T40_ENCODER_PRETRAINING_PROFILE,
+        task="future_path_statistics_regression",
+        optimizer_name="adam",
+        epochs=100,
+        batch_size=128,
+        learning_rate=0.001,
+        weight_decay=0.0001,
+        gradient_clip_norm=1.0,
+        sampling_mode="ticker_balanced_one_window_per_ticker_per_epoch",
+        source_scope="matured_daily_universal_asof_fitting_cutoff",
+        downstream_finetune="full_unfrozen",
+        loss_name="smooth_l1",
+        target_names=("terminal_mae_gated_t40_40d",),
         target_standardization="fitting_scope_zscore",
         smooth_l1_beta=1.0,
         future_path_max_horizon_bars=40,
@@ -1726,6 +1754,19 @@ _EXPERIMENT_PROFILES = {
         training_label_scope=TRAINING_LABEL_SCOPE_ALL,
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
         model_architecture="inception_time_v1",
+    ),
+    DAILY_UNIVERSAL_T40_PRETRAINED_NETPNL_POSITIVE_BINARY_PROFILE: BreakoutQualityExperimentProfile(
+        name=DAILY_UNIVERSAL_T40_PRETRAINED_NETPNL_POSITIVE_BINARY_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_NETPNL_POSITIVE_BINARY,
+        continuous_target_id="daily_formal_mintrade_fullcycle_netpnl_per_seed_v1",
+        loss_name="binary_positive_cross_entropy",
+        epoch_selection_metric="positive_validation_cross_entropy",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+        model_architecture="inception_time_v1",
+        encoder_pretraining_profile=DAILY_T40_ENCODER_PRETRAINING_PROFILE,
     ),
     DAILY_UNIVERSAL_COUNTERFACTUAL_MINTRADE40_NETR_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
         name=DAILY_UNIVERSAL_COUNTERFACTUAL_MINTRADE40_NETR_PAIRWISE_PROFILE,
@@ -3415,6 +3456,29 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
             "Independent two-class PIT cross-entropy auxiliary output. "
             "C125/C126 preserve MR-13CO rank and apply only P(positive)>0.5 admission; "
             "neither OOS labels nor hindsight Oracle outcomes enter FIT."
+        ),
+        metric_scope="all_stock_days_formal_mintrade_fullcycle_netpnl_positive_binary",
+        score_semantic_id="daily_formal_mintrade_fullcycle_netpnl_p_positive",
+        selection_pit_authorized=True,
+        current_time_validation_authorized=True,
+    ),
+    DAILY_UNIVERSAL_T40_PRETRAINED_NETPNL_POSITIVE_BINARY_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=DAILY_UNIVERSAL_T40_PRETRAINED_NETPNL_POSITIVE_BINARY_PROFILE,
+        model_research_id="MR-13CQ",
+        experiment_name="MR-13CQ Daily T40-pretrained Full-cycle NetPnL Positive Classifier",
+        phase="13CQ",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description=(
+            "Exact MR-13CP per-seed full-cycle broker NetPnL>0 binary target; "
+            "unfilled, censored and unknown remain NULL"
+        ),
+        objective_description=(
+            "PIT-matured daily-universal T40 encoder regression pretraining, "
+            "then original MR-13CP positive cross-entropy full-unfrozen fine-tuning; "
+            "pretraining uses only stock-days whose complete 40-bar path matures "
+            "before each fitting-stage cutoff. Same CO score ranks C127/C128; "
+            "only this independent PIT positive probability changes. "
+            "No reuse of CJ checkpoint, OOS labels or hindsight Oracle outcomes."
         ),
         metric_scope="all_stock_days_formal_mintrade_fullcycle_netpnl_positive_binary",
         score_semantic_id="daily_formal_mintrade_fullcycle_netpnl_p_positive",

@@ -377,6 +377,7 @@ class LazyDailyFeatureBank:
             "max_downside",
             "max_upside",
             "realized_volatility",
+            "terminal_mae_gated_t40",
         }
         target_specs: list[tuple[str, int]] = []
         for name in names:
@@ -434,6 +435,16 @@ class LazyDailyFeatureBank:
             for column, (component, target_horizon) in enumerate(target_specs):
                 if component == "terminal_return":
                     out[:, column] = closes[:, target_horizon - 1] / anchor - 1.0
+                elif component == "terminal_mae_gated_t40":
+                    # Reuse the exact daily T40 reward and MAE primitives.
+                    # No copied risk-barrier/stop-loss formula is permitted here.
+                    risk_budget = float(StrategyAlignedContinuousTargetSpec.from_label_policy(DEFAULT_LABEL_POLICY).risk_budget_return)
+                    terminal_r = (closes[:, target_horizon - 1] / anchor - 1.0) / risk_budget
+                    minimum_low_return = np.min(lows[:, :target_horizon], axis=1) / anchor - 1.0
+                    safety_r = full_horizon_mae_safety_r_from_minimum_low_return(
+                        minimum_low_return, risk_budget_return=risk_budget,
+                    )
+                    out[:, column] = full_horizon_mae_gated_reward_r(terminal_r, safety_r)
                 elif component == "max_downside":
                     out[:, column] = (
                         np.min(lows[:, :target_horizon], axis=1) / anchor - 1.0
