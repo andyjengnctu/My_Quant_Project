@@ -296,7 +296,7 @@ def _audit_seed(root: Path, *, model: str, profile: str, seed: int) -> dict[str,
     )
     cohort = _prepare_cohort(bundle)
     recipe = get_continuous_ranker_execution_recipe(profile)
-    is_binary = recipe.objective_policy.target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_BINARY_POSITIVE
+    is_binary = recipe.training_policy.target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_BINARY_POSITIVE
     all_fold_rows: list[dict[str, Any]] = []
     all_year_rows: list[dict[str, Any]] = []
     last_observation = None

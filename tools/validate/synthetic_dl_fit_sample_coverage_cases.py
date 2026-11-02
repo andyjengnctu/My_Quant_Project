@@ -15,11 +15,16 @@ import numpy as np
 import pandas as pd
 
 from core.audit_policy import get_reusable_audit_definitions
+from core.breakout_quality_policy import get_continuous_ranker_execution_recipe
 from core.breakout_quality_registry import (
     TRAINING_LABEL_SCOPE_ALL, TRAINING_LABEL_SCOPE_PASS_ONLY,
     TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS, TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
 )
 from core.research_report_contract import validate_approved_persistent_report_contracts
+from core.breakout_quality_runtime import (
+    CONTINUOUS_RANKER_TARGET_BUILDER_BINARY_POSITIVE,
+    CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH,
+)
 from filters.breakout_quality.artifacts import build_file_manifest
 from filters.breakout_quality.contract import DEFAULT_MODEL_FILENAME, LABEL_PASS, LABEL_REJECT
 from filters.breakout_quality.pit_group_selection import _fold_group_ids
@@ -110,7 +115,7 @@ class SampleCoverageTests(unittest.TestCase):
         self.assertEqual(cohort["event_weights"][ids["final_ids"]].sum(), 5)
         self.assertIsNone(audit._positive_counts(cohort, parts["fit_mask"], is_positive_binary=False)[2])
 
-    def make_published_fold(self, root: Path, bundle):
+    def make_published_fold(self, root: Path, bundle, *, profile="test-profile"):
         base = root / "models" / "research" / "breakout_quality" / "model_robustness" / "rolling_oos" / "test-profile" / "seed_7"
         fold_dir = base / "folds" / "fold_001"
         fold_dir.mkdir(parents=True)
@@ -123,16 +128,20 @@ class SampleCoverageTests(unittest.TestCase):
         observed = {name: audit._date_range(cohort["dates"], phase) for name, phase in phase_ids.items()}
         counts = {name: len(phase) for name, phase in phase_ids.items()}
         event_counts = {name: int(cohort["event_weights"][phase].sum()) for name, phase in phase_ids.items()}
+        cutoff = str(cohort["maturity"].iloc[ids["final_ids"]].max().date())
         source = FitDataDependencies.from_bundle(bundle).rolling_source(
-            fit_cutoff=pd.Timestamp("2020-12-18"),
-            daily_training_universe_start_date="2014-01-01",
+            fit_cutoff=pd.Timestamp(cutoff),
+            daily_training_universe_start_date=(
+                "2014-01-01" if bundle.profile.training_sample_scope
+                == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS else None
+            ),
         )
         manifest = {
-            "fold_id": "fold_001", "seed": 7, "experiment_profile": "test-profile",
+            "fold_id": "fold_001", "seed": 7, "experiment_profile": profile,
             "filter_id": "test_filter", "model_architecture": "test_arch",
             "planned_periods": planned, "observed_periods": observed,
             "group_counts": counts, "event_row_counts": event_counts,
-            "model_information_cutoff": "2020-12-18", "training_settings": {},
+            "model_information_cutoff": cutoff, "training_settings": {},
             "source_contract": source,
         }
         fold_path = fold_dir / "manifest.json"
@@ -148,7 +157,7 @@ class SampleCoverageTests(unittest.TestCase):
         aggregate = {"folds": [{
             "fold_id": "fold_001", "planned_periods": planned, "observed_periods": observed,
             "group_counts": counts, "event_row_counts": event_counts,
-            "model_information_cutoff": "2020-12-18",
+            "model_information_cutoff": cutoff,
             "fold_manifest": records["fold_manifest"],
             "artifacts": {key: records[key] for key in ("checkpoint", "scores", "validation_scores")},
         }]}
@@ -163,8 +172,8 @@ class SampleCoverageTests(unittest.TestCase):
             args = {"filter_id": "test_filter", "model_architecture": "test_arch"}
             fake_settings = SimpleNamespace(**args)
             fake_recipe = SimpleNamespace(
-                objective_policy=SimpleNamespace(target_builder="binary_positive_from_raw"),
-                target_policy=SimpleNamespace(materialization_mode="daily_trade_path"),
+                training_policy=SimpleNamespace(target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_BINARY_POSITIVE),
+                target_policy=SimpleNamespace(materialization_mode=CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH),
             )
             with (patch.object(audit, "_source_path", return_value=(base, "test_filter", "test_arch")),
                   patch.object(audit, "get_breakout_quality_workflow_settings", return_value=fake_settings),
@@ -201,8 +210,8 @@ class SampleCoverageTests(unittest.TestCase):
             signed_before = signed_path.read_bytes()
             fake_settings = SimpleNamespace(filter_id="test_filter", model_architecture="test_arch")
             fake_recipe = SimpleNamespace(
-                objective_policy=SimpleNamespace(target_builder="binary_positive_from_raw"),
-                target_policy=SimpleNamespace(materialization_mode="daily_trade_path"),
+                training_policy=SimpleNamespace(target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_BINARY_POSITIVE),
+                target_policy=SimpleNamespace(materialization_mode=CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH),
             )
             definitions = get_reusable_audit_definitions("breakout_quality")
             definition = next(d for d in definitions if d.audit_type == audit.SUPPORTED_AUDIT_TYPE)
@@ -234,6 +243,46 @@ class SampleCoverageTests(unittest.TestCase):
             self.assertIn("MODEL-A", report_text)
             self.assertIn("FileNotFoundError", json.dumps(saved["blocked"], ensure_ascii=False))
             self.assertIn("Yearly each-Fold", report_text)
+
+    def test_every_registered_dl_recipe_uses_canonical_training_policy(self):
+        """Execute the real profile contract through the Audit, not a mirrored mock.
+
+        This catches an accidental objective_policy.target_builder lookup even if
+        synthetic stand-ins are later changed to match the same wrong field.
+        """
+        inventory = audit._inventory()
+        self.assertTrue(inventory)
+        for model, profile in inventory:
+            with self.subTest(model=model, profile=profile):
+                recipe = get_continuous_ranker_execution_recipe(profile)
+                is_positive = (
+                    recipe.training_policy.target_builder
+                    == CONTINUOUS_RANKER_TARGET_BUILDER_BINARY_POSITIVE
+                )
+                if is_positive:
+                    self.assertEqual(recipe.training_policy.categorical_class_count, 2)
+                daily = recipe.training_sample_scope == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
+                bundle = self.fake_bundle(daily=daily)
+                with tempfile.TemporaryDirectory() as temp:
+                    root = Path(temp)
+                    base, _manifest, _paths = self.make_published_fold(root, bundle, profile=profile)
+                    fake_settings = SimpleNamespace(filter_id="test_filter", model_architecture="test_arch")
+                    # The persisted synthetic source is a fixture, but the
+                    # execution recipe is resolved from the *real* registry.
+                    with (patch.object(audit, "_source_path", return_value=(base, "test_filter", "test_arch")),
+                          patch.object(audit, "get_breakout_quality_workflow_settings", return_value=fake_settings),
+                          patch.object(audit, "resolve_feature_price_source", return_value=None),
+                          patch.object(audit, "resolve_trade_count_feature_source", return_value=None),
+                          patch.object(audit, "loader_kwargs_for_trade_path", return_value={}),
+                          patch.object(audit, "load_profile_continuous_ranker_data", return_value=bundle)):
+                        actual = audit._audit_seed(root, model=model, profile=profile, seed=7)
+                self.assertEqual(actual["status"], "VERIFIED")
+                expected_positive_rate = None
+                if is_positive:
+                    fitted_raw = bundle.raw_target[self.fold(bundle)["final_ids"]]
+                    expected_positive_rate = float(100 * (fitted_raw > 0).sum() / len(fitted_raw))
+                self.assertEqual(actual["seed_coverage"]["positive_rate"], expected_positive_rate)
+                self.assertEqual(actual["label_materialization"], recipe.target_policy.materialization_mode)
 
     def test_registry_and_report_approval(self):
         self.assertEqual(validate_approved_persistent_report_contracts(), ())
