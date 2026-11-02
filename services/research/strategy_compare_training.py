@@ -8,6 +8,7 @@ completion validation live here so the two orchestration modes cannot drift.
 from __future__ import annotations
 
 import json
+from contextlib import nullcontext
 from pathlib import Path
 import statistics
 import sys
@@ -33,7 +34,7 @@ from filters.breakout_quality.paths import (
     resolve_model_research_robustness_seed_dirs,
 )
 from services.breakout_quality.fitted_model_artifacts import (
-    pit_fold_fitting_settings_issues,
+    pit_fold_fitting_settings_issues, published_fit_contract_version_state,
 )
 from filters.breakout_quality.ranking_score_store import (
     CONTINUOUS_RANKER_REPORT_FILENAME,
@@ -45,7 +46,9 @@ from filters.breakout_quality.ranking_score_store import (
 )
 from filters.breakout_quality.strategy_compare_pit_contract import (
     load_validated_selection_pit_strategy_compare_contract,
+    resolve_strategy_compare_selection_pit_bundle_dir,
 )
+from services.breakout_quality.fit_repair_transaction import superseded_fit_publication_guard
 from services.research.training_process import run_logged_training_process
 
 STRATEGY_COMPARE_TRAINER_LOG_TAIL_CHARS = 5000
@@ -477,102 +480,129 @@ def run_strategy_compare_training_unit(
     """
 
     root = Path(project_root).resolve()
-    command, report_args, metadata = build_strategy_compare_trainer_command(
-        source=source,
-        workflow=workflow,
-        seed=int(seed),
-        score_start_date=(None if comparison_start in (None, "") else str(comparison_start)),
-        score_end_date=(None if comparison_end in (None, "") else str(comparison_end)),
-        point_in_time_dir_override=point_in_time_dir_override,
-        checkpoint_cache_root=checkpoint_cache_root,
-        fit_source_pit_dirs=(
-            resolve_strategy_compare_fit_source_dirs(
-                project_root=root, source=source, seed=int(seed),
-                target_dir=point_in_time_dir_override or model_dir,
-            ) if str(source.score_source) == SCORE_SOURCE_SELECTION_POINT_IN_TIME
-            else ()
-        ),
-        model_output_dir=model_output_dir,
-        research_output_dir=research_output_dir,
-        strategy_compare_profile_id=strategy_compare_profile_id,
-        resume=bool(resume),
-    )
-    process_result = run_logged_training_process(
-        command=command,
-        log_path=Path(log_path),
-        cwd=root,
-        registry=registry,
-        registry_lock=registry_lock,
-        registry_key=registry_key,
-        env_overrides=STRATEGY_COMPARE_TRAINER_ENV,
-        failure_prefix=str(failure_prefix),
-        log_tail_chars=STRATEGY_COMPARE_TRAINER_LOG_TAIL_CHARS,
-    )
-    audit_elapsed_sec = 0.0
+    version_rebuild_dir = None
     if str(source.score_source) == SCORE_SOURCE_SELECTION_POINT_IN_TIME:
-        from services.breakout_quality.point_in_time_audit import (
-            audit_selection_point_in_time_scores,
+        pit_dir = (
+            Path(point_in_time_dir_override)
+            if point_in_time_dir_override not in (None, "")
+            else resolve_strategy_compare_selection_pit_bundle_dir(root=root, source=source)
         )
-
-        audit_started = time.perf_counter()
-        strategy_scoped = bool(
-            getattr(source, "single_seed_strategy_conversion_authorized", False)
-            and not is_breakout_quality_model_test_profile(str(source.experiment_profile))
-        )
-        code = audit_selection_point_in_time_scores(
-            filter_id=str(source.filter_id),
-            model_architecture=str(source.model_architecture),
+        state, reason = published_fit_contract_version_state(
             experiment_profile=str(source.experiment_profile),
-            point_in_time_dir_override=(
-                None
-                if point_in_time_dir_override in (None, "")
-                else str(Path(point_in_time_dir_override).resolve())
-            ),
-            strategy_compare_profile_id=(
-                str(strategy_compare_profile_id)
-                if strategy_scoped and strategy_compare_profile_id not in (None, "")
-                else None
-            ),
-            strategy_compare_source_id=(
-                str(source.dl_id) if strategy_scoped else None
-            ),
-            strategy_compare_seed=(int(seed) if strategy_scoped else None),
+            publication_dir=pit_dir, rolling=True,
         )
-        audit_elapsed_sec = time.perf_counter() - audit_started
-        if int(code) != 0:
-            raise RuntimeError(
-                "Strategy Compare PIT audit失敗: "
-                f"profile={source.experiment_profile}, seed={int(seed)}, code={int(code)}"
+        if state == "BLOCKED":
+            raise RuntimeError(f"Strategy Compare FIT version cannot be inferred: {reason}")
+        if state == "UPGRADE_REQUIRED":
+            version_rebuild_dir = pit_dir
+            resume = False
+            checkpoint_cache_root = None
+            fit_source_pit_dirs = ()
+    guard = (
+        superseded_fit_publication_guard(version_rebuild_dir)
+        if version_rebuild_dir is not None else nullcontext()
+    )
+    # No formal version switching. A complete superseded publication is rebuilt
+    # once at its canonical location; abort restores the previous (still stale) bytes.
+    with guard:
+        command, report_args, metadata = build_strategy_compare_trainer_command(
+            source=source,
+            workflow=workflow,
+            seed=int(seed),
+            score_start_date=(None if comparison_start in (None, "") else str(comparison_start)),
+            score_end_date=(None if comparison_end in (None, "") else str(comparison_end)),
+            point_in_time_dir_override=point_in_time_dir_override,
+            checkpoint_cache_root=checkpoint_cache_root,
+            fit_source_pit_dirs=(
+                resolve_strategy_compare_fit_source_dirs(
+                    project_root=root, source=source, seed=int(seed),
+                    target_dir=point_in_time_dir_override or model_dir,
+                ) if (
+                    str(source.score_source) == SCORE_SOURCE_SELECTION_POINT_IN_TIME
+                    and version_rebuild_dir is None
+                ) else ()
+            ),
+            model_output_dir=model_output_dir,
+            research_output_dir=research_output_dir,
+            strategy_compare_profile_id=strategy_compare_profile_id,
+            resume=bool(resume),
+        )
+        process_result = run_logged_training_process(
+            command=command,
+            log_path=Path(log_path),
+            cwd=root,
+            registry=registry,
+            registry_lock=registry_lock,
+            registry_key=registry_key,
+            env_overrides=STRATEGY_COMPARE_TRAINER_ENV,
+            failure_prefix=str(failure_prefix),
+            log_tail_chars=STRATEGY_COMPARE_TRAINER_LOG_TAIL_CHARS,
+        )
+        audit_elapsed_sec = 0.0
+        if str(source.score_source) == SCORE_SOURCE_SELECTION_POINT_IN_TIME:
+            from services.breakout_quality.point_in_time_audit import (
+                audit_selection_point_in_time_scores,
             )
-    validation_start = (
-        str(comparison_start)
-        if comparison_start not in (None, "")
-        else metadata.get("score_start_date")
-    )
-    validation_end = (
-        str(comparison_end)
-        if comparison_end not in (None, "")
-        else metadata.get("score_end_date")
-    )
-    artifacts = validate_strategy_compare_training_artifacts(
-        project_root=root,
-        source=source,
-        workflow=workflow,
-        seed=int(seed),
-        model_dir=model_dir,
-        research_dir=research_dir,
-        comparison_start=(None if validation_start in (None, "") else str(validation_start)),
-        comparison_end=(None if validation_end in (None, "") else str(validation_end)),
-        point_in_time_dir_override=point_in_time_dir_override,
-    )
-    return {
-        "artifacts": artifacts,
-        "command": command,
-        "report_args": report_args,
-        "metadata": metadata,
-        "elapsed_sec": float(process_result.get("elapsed_sec", 0.0) or 0.0),
-        "audit_elapsed_sec": float(audit_elapsed_sec),
-    }
+
+            audit_started = time.perf_counter()
+            strategy_scoped = bool(
+                getattr(source, "single_seed_strategy_conversion_authorized", False)
+                and not is_breakout_quality_model_test_profile(str(source.experiment_profile))
+            )
+            code = audit_selection_point_in_time_scores(
+                filter_id=str(source.filter_id),
+                model_architecture=str(source.model_architecture),
+                experiment_profile=str(source.experiment_profile),
+                point_in_time_dir_override=(
+                    None
+                    if point_in_time_dir_override in (None, "")
+                    else str(Path(point_in_time_dir_override).resolve())
+                ),
+                strategy_compare_profile_id=(
+                    str(strategy_compare_profile_id)
+                    if strategy_scoped and strategy_compare_profile_id not in (None, "")
+                    else None
+                ),
+                strategy_compare_source_id=(
+                    str(source.dl_id) if strategy_scoped else None
+                ),
+                strategy_compare_seed=(int(seed) if strategy_scoped else None),
+            )
+            audit_elapsed_sec = time.perf_counter() - audit_started
+            if int(code) != 0:
+                raise RuntimeError(
+                    "Strategy Compare PIT audit失敗: "
+                    f"profile={source.experiment_profile}, seed={int(seed)}, code={int(code)}"
+                )
+        validation_start = (
+            str(comparison_start)
+            if comparison_start not in (None, "")
+            else metadata.get("score_start_date")
+        )
+        validation_end = (
+            str(comparison_end)
+            if comparison_end not in (None, "")
+            else metadata.get("score_end_date")
+        )
+        artifacts = validate_strategy_compare_training_artifacts(
+            project_root=root,
+            source=source,
+            workflow=workflow,
+            seed=int(seed),
+            model_dir=model_dir,
+            research_dir=research_dir,
+            comparison_start=(None if validation_start in (None, "") else str(validation_start)),
+            comparison_end=(None if validation_end in (None, "") else str(validation_end)),
+            point_in_time_dir_override=point_in_time_dir_override,
+        )
+        return {
+            "artifacts": artifacts,
+            "command": command,
+            "report_args": report_args,
+            "metadata": metadata,
+            "elapsed_sec": float(process_result.get("elapsed_sec", 0.0) or 0.0),
+            "audit_elapsed_sec": float(audit_elapsed_sec),
+        }
 
 
 __all__ = [

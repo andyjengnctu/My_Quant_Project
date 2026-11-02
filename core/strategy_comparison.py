@@ -231,6 +231,7 @@ class StrategyComparisonArm:
     dl_runtime_options: Mapping[str, Any] | None = None
     robustness_role: str = "off"
     data_source: str = "canonical"
+    replay_contract_version: int = 1
 
     def as_dict(self) -> dict[str, Any]:
         payload = {
@@ -249,6 +250,11 @@ class StrategyComparisonArm:
             ),
             "robustness_role": self.robustness_role,
         }
+        # Explicit arm-local version; version 1 is implicit for historical reuse.
+        if type(self.replay_contract_version) is not int or self.replay_contract_version < 1:
+            raise ValueError("strategy replay contract version must be a positive integer")
+        if self.replay_contract_version != 1:
+            payload["replay_contract_version"] = int(self.replay_contract_version)
         # Preserve historical fingerprints for every pre-existing canonical-data arm.
         if self.data_source != "canonical":
             payload["data_source"] = self.data_source

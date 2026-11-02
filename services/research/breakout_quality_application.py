@@ -125,11 +125,12 @@ from services.breakout_quality.model_report_extensions import (
 from services.breakout_quality.fitted_model_artifacts import (
     current_default_fitting_settings,
     fitted_model_settings_issues,
-    pit_fold_fitting_settings_issues,
+    pit_fold_fitting_settings_issues, published_fit_contract_version_state,
 )
 from services.breakout_quality.fit_origin_repair_plan import plan_fit_origin_repairs
 from services.breakout_quality.fit_repair_transaction import (
     fit_repair_journal_path, preserved_fit_publications, recover_incomplete_fit_repair,
+    superseded_fit_publication_guard,
 )
 from services.research.strategy_compare_training import (
     run_strategy_compare_training_unit,
@@ -3010,9 +3011,20 @@ def _rolling_publication_dir(settings, mode) -> Path:
 
 
 
+def _version_rebuild_required(settings, *, rolling: bool, publication_dir: Path) -> bool:
+    """Only an explicit canonical FIT version increase may rebuild an existing whole publication."""
+    state, reason = published_fit_contract_version_state(
+        experiment_profile=str(settings.experiment_profile),
+        publication_dir=publication_dir, rolling=rolling,
+    )
+    if state == "BLOCKED":
+        raise RuntimeError(f"FIT contract unverified; refusing automatic refit: {reason}")
+    return state == "UPGRADE_REQUIRED"
+
+
 def _load_reusable_continuous_forward_contract(settings):
     """Single Forward uses the same complete source owner as Robustness."""
-    return load_forward_model_source(
+    result = load_forward_model_source(
         project_root=PROJECT_ROOT, filter_id=str(settings.filter_id),
         model_architecture=str(settings.model_architecture),
         experiment_profile=str(settings.experiment_profile),
@@ -3024,6 +3036,15 @@ def _load_reusable_continuous_forward_contract(settings):
         fitting_validator=fitted_model_settings_issues,
         source_validator=_forward_source_provenance_issues,
     )
+    if result[0] is not None:
+        model_dir, _ = _forward_publication_paths(settings)
+        state, reason = published_fit_contract_version_state(
+            experiment_profile=str(settings.experiment_profile),
+            publication_dir=model_dir, rolling=False,
+        )
+        if state not in {"CURRENT", "MISSING"}:
+            return None, reason
+    return result
 
 
 def _clear_continuous_forward_reuse_caches() -> None:
@@ -3106,42 +3127,9 @@ def _probe_continuous_fitted_candidates(
 
 @contextmanager
 def _force_rebuild_publication_guard(*paths: Path):
-    """Keep current canonical publication until a fresh producer run succeeds."""
-
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S_%fZ")
-    backups: list[tuple[Path, Path]] = []
-    unique: list[Path] = []
-    for raw in paths:
-        path = Path(raw).resolve()
-        if path not in unique:
-            unique.append(path)
-    try:
-        for path in unique:
-            if not path.exists():
-                continue
-            backup = path.with_name(path.name + f".pre_force_rebuild_{stamp}")
-            if backup.exists():
-                raise RuntimeError(f"Force rebuild backup已存在: {backup}")
-            path.rename(backup)
-            backups.append((path, backup))
+    """Version-safe in-place rebuild with a single nonpersistent fallback."""
+    with superseded_fit_publication_guard(*paths):
         yield
-    except BaseException:
-        for path, backup in reversed(backups):
-            if path.exists():
-                if path.is_dir():
-                    shutil.rmtree(path)
-                else:
-                    path.unlink()
-            if backup.exists():
-                backup.rename(path)
-        raise
-    else:
-        for _path, backup in backups:
-            if backup.exists():
-                if backup.is_dir():
-                    shutil.rmtree(backup)
-                else:
-                    backup.unlink()
 
 
 def _forward_publication_paths(settings) -> tuple[Path, Path]:
@@ -3171,6 +3159,11 @@ def _ensure_continuous_forward_model_report(
     # A returned contract has already passed FIT, source lineage and Standard
     # SOP evidence checks; reimplementing their validation here would fork SSOT.
     contract, reuse_reason = _load_reusable_continuous_forward_contract(settings)
+    if not force_rebuild:
+        forward_model_dir, _ = _forward_publication_paths(settings)
+        force_rebuild = _version_rebuild_required(
+            settings, rolling=False, publication_dir=forward_model_dir,
+        )
     if contract is not None and not force_rebuild:
         if require_rolling_fit_reuse:
             raise RuntimeError("FIT repair cannot substitute an existing Forward model")
@@ -3760,12 +3753,16 @@ def _run_continuous_rolling_mode_direct(
     if prompt_for_build and not _prompt_bool("確認執行Rolling OOS（含必要自動前置）", True):
         return 0
     spec = get_continuous_ranker_research_spec(settings.experiment_profile)
+    version_upgrade = _version_rebuild_required(
+        settings, rolling=True, publication_dir=_rolling_publication_dir(settings, mode),
+    )
     return _run_continuous_pit_profile(
         program_name,
         model_id=spec.model_research_id,
         profile_name=settings.experiment_profile,
         mode=mode,
-        forward_checkpoint_source=forward_source,
+        forward_checkpoint_source=None if version_upgrade else forward_source,
+        force_rebuild=version_upgrade,
     )
 
 
@@ -4605,6 +4602,12 @@ def _load_forward_robustness_seed(settings, *, seed: int):
     """Validate one isolated seed through the same complete Forward owner."""
     model_dir, research_dir = _model_robustness_dirs(settings, seed=seed, rolling=False)
     report_path = research_dir / CONTINUOUS_RANKER_REPORT_FILENAME
+    version_state, version_reason = published_fit_contract_version_state(
+        experiment_profile=str(settings.experiment_profile),
+        publication_dir=model_dir, rolling=False,
+    )
+    if version_state not in {"CURRENT", "MISSING"}:
+        return None, report_path, version_reason
     contract, reason = load_forward_model_source(
         project_root=PROJECT_ROOT, filter_id=str(settings.filter_id),
         model_architecture=str(settings.model_architecture),
@@ -4730,8 +4733,13 @@ def _build_forward_robustness_seed(
         if code:
             return int(code)
     model_dir, research_dir = _model_robustness_dirs(settings, seed=seed, rolling=False)
-    model_dir.mkdir(parents=True, exist_ok=True)
-    research_dir.mkdir(parents=True, exist_ok=True)
+    if not force_rebuild:
+        force_rebuild = _version_rebuild_required(
+            settings, rolling=False, publication_dir=model_dir,
+        )
+    if not force_rebuild:
+        model_dir.mkdir(parents=True, exist_ok=True)
+        research_dir.mkdir(parents=True, exist_ok=True)
     args = [
         "--filter-id", str(settings.filter_id),
         "--model-architecture", str(settings.model_architecture),
@@ -4790,6 +4798,10 @@ def _build_rolling_robustness_seed(
     """
     mode = get_breakout_quality_rolling_test_mode("rolling")
     pit_dir, _unused = _model_robustness_dirs(settings, seed=seed, rolling=True)
+    if not force_rebuild:
+        force_rebuild = _version_rebuild_required(
+            settings, rolling=True, publication_dir=pit_dir,
+        )
     audit_args = [
         "--filter-id", str(settings.filter_id),
         "--model-architecture", str(settings.model_architecture),

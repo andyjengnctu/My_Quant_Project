@@ -20,6 +20,48 @@ from typing import Callable, Iterator
 from core.file_integrity import exclusive_file_lock, sibling_publication_lock_path
 
 
+@contextmanager
+def superseded_fit_publication_guard(*publication_roots: Path) -> Iterator[None]:
+    """Replace an explicitly superseded version at the same canonical path.
+
+    Same-volume rename is only crash/exception protection while rebuilding;
+    no separate version is published or retained after successful validation.
+    The backup has one stable name per publication, not timestamped history.
+    """
+    backups: list[tuple[Path, Path]] = []
+    paths = tuple(dict.fromkeys(Path(p).absolute() for p in publication_roots))
+    try:
+        # Setup is part of the rollback scope. If the second root fails its
+        # safety check, the first root must not remain displaced.
+        for path in paths:
+            if path.is_symlink() or (path.exists() and not path.is_dir()):
+                raise RuntimeError(f"Version rebuild refuses non-directory or symlink: {path}")
+            backup = path.with_name("." + path.name + ".superseded_fit_backup")
+            if backup.is_symlink():
+                raise RuntimeError("Version rebuild refuses symlink backup")
+            if backup.exists():
+                if path.exists():
+                    raise RuntimeError(f"Unresolved version rebuild backup requires recovery: {backup}")
+                # Interrupted before completion: restore previous (now stale)
+                # publication, then rebuild it using the current FIT version.
+                backup.rename(path)
+            if path.exists():
+                path.rename(backup)
+                backups.append((path, backup))
+        yield
+    except BaseException:
+        for path, backup in reversed(backups):
+            if path.exists():
+                shutil.rmtree(path)
+            if backup.exists():
+                backup.rename(path)
+        raise
+    else:
+        for _, backup in backups:
+            if backup.exists():
+                shutil.rmtree(backup)
+
+
 def selection_pit_build_lock_path(point_in_time_dir: Path) -> Path:
     """Stable per-PIT-root lock even while FIT Repair renames its parent profile.
 

@@ -238,6 +238,22 @@ def load_validated_selection_pit_strategy_compare_contract(
         raise ValueError("Strategy Compare PIT manifest沒有folds")
     if any(int(item.get("selected_epoch", 0) or 0) < 1 for item in folds):
         raise ValueError("Strategy Compare PIT fold selected_epoch不合法")
+    # The same canonical FIT-version owner validates model menus and strategy
+    # consumption. A published v1 score cannot authorize replay after v2.
+    from services.breakout_quality.fitted_model_artifacts import (
+        published_fit_contract_version_state,
+    )
+    pit_root = (
+        Path(point_in_time_dir_override)
+        if point_in_time_dir_override is not None
+        else resolve_strategy_compare_selection_pit_bundle_dir(root=root, source=source)
+    )
+    state, reason = published_fit_contract_version_state(
+        experiment_profile=str(source.experiment_profile),
+        publication_dir=pit_root, rolling=True,
+    )
+    if state != "CURRENT":
+        raise ValueError(f"Strategy Compare PIT FIT identity not current: {reason}")
     return contract
 
 

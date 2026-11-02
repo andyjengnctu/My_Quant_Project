@@ -51,7 +51,7 @@ class T40PositivePretrainingCases(TestCase):
         cp = get_breakout_quality_experiment_profile(DAILY_UNIVERSAL_NETPNL_POSITIVE_BINARY_PROFILE)
         cq = get_breakout_quality_experiment_profile(DAILY_UNIVERSAL_T40_PRETRAINED_NETPNL_POSITIVE_BINARY_PROFILE)
         for key, value in vars(cp).items():
-            if key not in {'name', 'encoder_pretraining_profile'}:
+            if key not in {'name', 'encoder_pretraining_profile', 'fit_contract_version'}:
                 self.assertEqual(getattr(cq, key), value, key)
         self.assertIsNone(cp.encoder_pretraining_profile)
         recipe = get_continuous_ranker_execution_recipe(cq.name)
@@ -62,6 +62,9 @@ class T40PositivePretrainingCases(TestCase):
         self.assertEqual(pre.target_names, ('terminal_mae_gated_t40_40d',))
         self.assertEqual(pre.source_scope, 'matured_daily_universal_asof_fitting_cutoff')
         self.assertEqual(pre.downstream_finetune, 'full_unfrozen')
+        self.assertEqual(cq.fit_contract_version, 2)
+        self.assertEqual(pre.sampling_mode, 'complete_daily_train_rows_per_epoch')
+        self.assertGreater(pre.early_stopping_patience, 0)
 
     def test_new_strategy_exact_direct_only_swap_positive_source(self):
         settings = get_strategy_comparison_settings(STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE)
@@ -196,13 +199,13 @@ class T40PositivePretrainingCases(TestCase):
         original_threads = torch.get_num_threads()
         torch.set_num_threads(1)
         try:
-            group_dates = pd.date_range('2020-01-01', periods=78, freq='D')
+            group_dates = pd.date_range('2020-01-01', periods=180, freq='D')
             table = pd.DataFrame({
                 'date': list(group_dates) * 2,
-                'ticker': ['A'] * 78 + ['B'] * 78,
+                'ticker': ['A'] * 180 + ['B'] * 180,
             })
-            fake_features = np.zeros((156, 300, 10), dtype=np.float32)
-            for j in range(156):
+            fake_features = np.zeros((360, 300, 10), dtype=np.float32)
+            for j in range(360):
                 fake_features[j, :, 3] = (j % 13) * 0.0005
             class ControlledBank:
                 shape = fake_features.shape
@@ -228,9 +231,9 @@ class T40PositivePretrainingCases(TestCase):
             plan = SimpleNamespace(device=torch.device('cpu'), device_type='cpu',
                 mixed_precision_enabled=False)
             # Two original CP-event rows from different dates and tickers.
-            sparse_ids = np.asarray([70, 148], dtype=np.int64)
+            sparse_ids = np.asarray([170, 350], dtype=np.int64)
             with patch('filters.breakout_quality.encoder_pretraining.get_breakout_quality_encoder_pretraining_profile',
-                       return_value=replace(profile, epochs=1)):
+                       return_value=replace(profile, epochs=2, validation_months=1)):
                 state, audit = pretrain_encoder_state(
                     torch, feature_bank=bank, group_table=table, fit_ids=sparse_ids,
                     feature_count=10, context_count=0,
@@ -241,9 +244,13 @@ class T40PositivePretrainingCases(TestCase):
             self.assertEqual(audit['fitting_group_count'], 2)
             self.assertGreater(audit['candidate_pretraining_group_count'], 100)
             self.assertGreater(audit['matured_fitting_group_count'], 40)
-            self.assertEqual(audit['samples_per_epoch'], 2)
+            self.assertEqual(audit['samples_per_epoch'], audit['matured_fitting_group_count'])
+            self.assertGreater(audit['pretrain_inner_train_groups'], 2)
+            self.assertGreater(audit['pretrain_validation_groups'], 2)
+            self.assertGreater(audit['pretrain_best_epoch'], 0)
+            self.assertTrue(audit['pretraining_temporal_validation_used'])
             self.assertTrue(audit['downstream_validation_used'] is False)
-            self.assertLessEqual(audit['future_path_maturity_cutoff'], '2020-03-18')
+            self.assertLessEqual(audit['future_path_maturity_cutoff'], '2020-06-19')
             # Test the actual downstream initialization handoff, not just the
             # temporary pretraining model: the binary head remains freshly built.
             from services.breakout_quality.train_continuous_ranker import _new_model_and_optimizer

@@ -543,7 +543,7 @@ DAILY_UNIVERSAL_RISK_CONTEXT_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE = "daily_univer
 TS2VEC_SELECTION_ONLY_PRETRAINING_PROFILE = "ts2vec_selection_only"
 STOCK_CODE_CLASSIFICATION_ENCODER_PRETRAINING_PROFILE = "stock_code_classification_v1"
 FUTURE_PATH_STATISTICS_ENCODER_PRETRAINING_PROFILE = "future_path_statistics_v1"
-DAILY_T40_ENCODER_PRETRAINING_PROFILE = "daily_t40_regression_encoder_v1"
+DAILY_T40_ENCODER_PRETRAINING_PROFILE = "daily_t40_regression_encoder_v2"
 FUTURE_PATH_STATISTICS_TARGET_NAMES = (
     "terminal_return_5d", "terminal_return_10d", "terminal_return_20d", "terminal_return_40d",
     "max_downside_10d", "max_downside_20d", "max_downside_40d",
@@ -647,6 +647,7 @@ class BreakoutQualityExperimentProfile:
     raw_r_huber_delta_r: float | None = None
     model_architecture: str | None = None
     encoder_pretraining_profile: str | None = None
+    fit_contract_version: int = 1
     numerical_execution_policy: str = NUMERICAL_EXECUTION_POLICY_ARCHITECTURE_DEFAULT
     bf16_backward_retry_scales: tuple[float, ...] = ()
 
@@ -701,6 +702,8 @@ class BreakoutQualityExperimentProfile:
                 raise ValueError("profile model_architecture 必須是非空白小寫名稱")
             if any(token in architecture for token in ("/", "\\", "\x00")):
                 raise ValueError("profile model_architecture 必須是安全名稱")
+        if type(self.fit_contract_version) is not int or self.fit_contract_version < 1:
+            raise ValueError("FIT contract version must be a positive integer")
         if self.encoder_pretraining_profile is not None:
             get_breakout_quality_encoder_pretraining_profile(
                 self.encoder_pretraining_profile
@@ -838,6 +841,8 @@ class BreakoutQualityExperimentProfile:
                 payload["training_label_scope"] = self.training_label_scope
         if self.model_architecture is not None:
             payload["model_architecture"] = str(self.model_architecture)
+        if self.fit_contract_version != 1:
+            payload["fit_contract_version"] = int(self.fit_contract_version)
         if self.encoder_pretraining_profile is not None:
             payload["encoder_pretraining"] = (
                 get_breakout_quality_encoder_pretraining_profile(
@@ -1023,6 +1028,8 @@ class BreakoutQualityEncoderPretrainingProfile:
     sampling_mode: str
     source_scope: str
     downstream_finetune: str
+    validation_months: int = 0
+    early_stopping_patience: int = 0
     loss_name: str = "cross_entropy"
     target_names: tuple[str, ...] = ()
     target_standardization: str | None = None
@@ -1046,11 +1053,21 @@ class BreakoutQualityEncoderPretrainingProfile:
             raise ValueError("encoder pretraining learning_rate 必須>0")
         if float(self.weight_decay) < 0.0 or float(self.gradient_clip_norm) < 0.0:
             raise ValueError("encoder pretraining weight_decay/gradient_clip_norm 必須>=0")
-        if self.sampling_mode != "ticker_balanced_one_window_per_ticker_per_epoch":
+        if self.sampling_mode not in {
+            "ticker_balanced_one_window_per_ticker_per_epoch",
+            "complete_daily_train_rows_per_epoch",
+        }:
             raise ValueError("encoder pretraining sampling mode 不符合scientific contract")
+        dense = self.sampling_mode == "complete_daily_train_rows_per_epoch"
+        if dense != (int(self.validation_months) > 0 and int(self.early_stopping_patience) > 0):
+            raise ValueError("complete Daily pretraining requires temporal validation and early stopping")
+        if type(self.validation_months) is not int or type(self.early_stopping_patience) is not int:
+            raise ValueError("pretraining validation/early stopping must be integers")
         if self.downstream_finetune != "full_unfrozen":
             raise ValueError("encoder pretraining downstream 必須full-unfrozen fine-tune")
         if self.task == "stock_code_classification":
+            if dense:
+                raise ValueError("SCC pretraining retains ticker-balanced sampling")
             if self.source_scope != "downstream_fitting_rows_only":
                 raise ValueError("SCC encoder pretraining source scope 必須限制於downstream fitting rows")
             if self.loss_name != "cross_entropy":
@@ -1063,6 +1080,8 @@ class BreakoutQualityEncoderPretrainingProfile:
             ):
                 raise ValueError("SCC encoder pretraining 不得宣告future-path regression設定")
         else:
+            if dense and self.source_scope != "matured_daily_universal_asof_fitting_cutoff":
+                raise ValueError("complete Daily pretraining requires Daily matured source")
             expected_targets = FUTURE_PATH_STATISTICS_TARGET_NAMES
             if self.source_scope not in {
                 "matured_downstream_fitting_rows_only",
@@ -1097,6 +1116,9 @@ class BreakoutQualityEncoderPretrainingProfile:
             "source_scope": self.source_scope,
             "downstream_finetune": self.downstream_finetune,
         }
+        if self.validation_months:
+            payload["validation_months"] = int(self.validation_months)
+            payload["early_stopping_patience"] = int(self.early_stopping_patience)
         if self.task == "future_path_statistics_regression":
             payload.update({
                 "loss_name": self.loss_name,
@@ -1144,12 +1166,14 @@ _ENCODER_PRETRAINING_PROFILES = {
         name=DAILY_T40_ENCODER_PRETRAINING_PROFILE,
         task="future_path_statistics_regression",
         optimizer_name="adam",
-        epochs=100,
+        epochs=200,
         batch_size=128,
         learning_rate=0.001,
         weight_decay=0.0001,
         gradient_clip_norm=1.0,
-        sampling_mode="ticker_balanced_one_window_per_ticker_per_epoch",
+        sampling_mode="complete_daily_train_rows_per_epoch",
+        validation_months=24,
+        early_stopping_patience=1,
         source_scope="matured_daily_universal_asof_fitting_cutoff",
         downstream_finetune="full_unfrozen",
         loss_name="smooth_l1",
@@ -1767,6 +1791,7 @@ _EXPERIMENT_PROFILES = {
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
         model_architecture="inception_time_v1",
         encoder_pretraining_profile=DAILY_T40_ENCODER_PRETRAINING_PROFILE,
+        fit_contract_version=2,
     ),
     DAILY_UNIVERSAL_COUNTERFACTUAL_MINTRADE40_NETR_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
         name=DAILY_UNIVERSAL_COUNTERFACTUAL_MINTRADE40_NETR_PAIRWISE_PROFILE,
