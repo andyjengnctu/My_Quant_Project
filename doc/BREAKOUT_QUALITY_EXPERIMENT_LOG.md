@@ -5251,6 +5251,28 @@ Assessment: `USER_REPORTED_ROLLING_RESULT_AVAILABLE / FULL_HORIZON_MAE_SMALL_PAI
 - **Target × DL 對照有效性**：上方 `[1]→[2]` 使用 Oracle `end_to_end_v2` **8** Seeds，模型與策略 Robustness 使用 `end_to_end_v1` **4** Seeds；Oracle RoMD 與四 Seed 真實策略 RoMD 不能直接當成同 Seed 逐對誤差。新 Positive Exact Oracle 顯示 `90.84 / 99.88%`（RoMD／Win Rate），Positive Direct 顯示 `204.88 / 99.71%`；後者 **204.88 恰為先前已被 Registry 判為舊 raw future-profit admission、不得 REUSE 的歷史 NON-PIT 數值**。在此 ZIP 沒有兩輸出 signed Replay／E13 daily/trade/cash parity 前，**不將 204.88 或 90.84 登錄為已完成的現行 E13 Oracle 正式有效績效**；保留這次 Console 觀測，現行 Oracle 正式驗收仍 `PENDING`，不可因此宣稱 CP Oracle→DL 轉換缺口已經被科學證實。
 - **研究判定**：`USER_REPORTED_11_MODEL_4SEED_ROLLING_SOP_AND_24_ARM_ROBUSTNESS_AVAILABLE / AGGREGATE_24_OF_24_CONSISTENT_WITH_SEED_SUMMARY / REUSED_SCIENTIFIC_RESULTS_NOT_REPLAYED_THIS_TURN / C106_EXACT_BEST_ROBUSTNESS_MEAN / CP_EXACT_NO_CONSISTENT_ROMD_GAIN / CP_DIRECT_POSITIVE_BUT_VARIABLE / FULL_CYCLE_LABEL_COVERAGE_AND_GENERALIZATION_WEAK / POSITIVE_ORACLE_E13_PARITY_PENDING / ITERATIVE_OOS / NO_NEW_ID / NO_TRADING / NO_PROMOTION`。舊 2026-10-30 Oracle 八 Seed 結果保留作歷史、不可用舊 raw-gate 204.88 填現行雙輸出 Oracle；本輪不改模型、Target、Score、Optimizer、Strategy Replay、Selection、報表版本或 Trading。
 
+### 2026-11-02 · MR-13CQ（Daily T40 Encoder 預訓練＋CP Positive）首次單 Seed Rolling 結果
+
+- **研究設計／可比性**：使用者提供正式 Research `[2]→[4] Rolling OOS 模型比較` 與 `[4]→[2] Rolling OOS Test` 的 Console：`貼上的文字 (1)(20261102-112650).txt`；原始程式基準 `test-branch-1_20261102_185817_a11fcffd.zip`。研究日期 `2021-01-01～2026-03-02`，單一 Research Seed=`42`，6 個 Rolling Fold、630,589 個 Score Groups。`MR-13CQ` 與 `MR-13CP` 具相同 68,701 個 Global 模型 SOP 評估 Groups，使用同一完整週期 `NetPnL>0` 二元標籤、CO NetPnL 排序、固定嚴格 `P(positive)>0.5` 與原有 Exact／Direct Selector；受控變數僅 CQ 的獨立 T40 Daily Encoder 預訓練。CQ 的六個 best epochs=`1/1/1/2/1/2`，Rolling Audit `Model Gate=PASS`、Drift `YES`。這是**反覆觀察的迭代 OOS**，非新 untouched holdout；ZIP 不含本機完整 FIT/checkpoint/Replay 物理證據。
+- **模型比較（同 Target／同 Groups，單 Seed）**：CP→CQ Global Daily ρ `0.0506→0.0972`（`+0.0466`），Global ρ `0.1199→0.0663`（`-0.0536`），Pair `51.60%→52.01%`（`+0.41pp`），Top-Bottom 原始 Target `4392.6540→1714.1058`（下降）；Breakout Daily ρ `0.0115→0.0795`；Validation→OOS Daily ρ gap `-0.3321→-0.2354`，仍為明顯泛化落差。Daily ρ 增加**不等於**實際 Positive Gate 精確率、機率校準或策略經濟效益改善。
+
+  | 同條件 Rolling 策略 | C125：CP Exact | C127：CQ Exact | C126：CP Direct | C128：CQ Direct |
+  |---|---:|---:|---:|---:|
+  | Total return | +124.01% | +95.93% | +148.64% | +48.66% |
+  | MDD | 11.16% | 11.81% | 11.42% | 9.93% |
+  | RoMD | 11.11 | 8.12 | 13.01 | 4.90 |
+  | Trades | 247 | 267 | 246 | 275 |
+  | Win rate | 44.53% | 45.32% | 46.75% | 44.00% |
+  | Payoff | 3.59 | 2.71 | 3.63 | 2.27 |
+  | EV | +0.76R | +0.86R | +1.13R | +0.37R |
+  | Avg exposure | 66.27% | 63.31% | 59.42% | 59.83% |
+  | Avg orderable | 19.64 | 5.64 | 19.38 | 5.29 |
+  | Supply gap days | 590 | 764 | 599 | 740 |
+
+- **配對結果與機制界線**：C127−C125=`-2.99` RoMD／`-28.08pp` total return，C128−C126=`-8.11` RoMD／`-99.98pp` total return。CQ 的 Avg orderable 在 Exact／Direct 各少約 71.3%／72.7%，但成交筆數分別**增加 20／29 筆**；這些平均候選數不是模型在共同 universe 上單純 `p>0.5` 的原始通過率，尚不能歸因於門檻校準。C128 的 EV、Payoff、Win Rate 皆下降，顯示成交品質亦較弱。C127 EV 略升、但報酬及 RoMD 下降，需區分候選遭 Gate 擋下、替代成交與資金使用造成的損益；本輪 Console 不含逐日 matched score／候選／fills，因此暫不宣稱已找出機制。關鍵年度：2023 C125/C127=`+32.26%/+42.61%`、C126/C128=`+48.26%/+9.75%`；2024 C125/C127=`+14.16%/+0.66%`、C126/C128=`+13.27%/+2.15%`。
+- **Oracle 與證據限制**：Target × DL 畫面的 CP/CQ 共用 Positive Target，顯示相同 `90.84` Exact／`204.88` Direct 並非兩份獨立 CQ Oracle。原 `204.88` 屬已註明不符合現行雙輸出 E13 的舊 NON-PIT 進場資格介入數值；現行雙輸出 Oracle 的 signed Replay／逐日 E13 parity 尚未取得，**不登錄為已驗證新 Oracle**。本次有單 Seed Rolling Model／Strategy 結果，**CQ 四 Seed Rolling Model Robustness 與 C127/C128 Strategy Robustness 皆尚無數值**；不可與舊 CP 四 Seed robustness 直接比較。
+- **研究決策**：`USER_REPORTED_ROLLING_SINGLE_SEED_CQ_RESULT_AVAILABLE / DAILY_RHO_IMPROVED_BUT_GATED_STRATEGY_WORSE / EXACT_AND_DIRECT_NEGATIVE_SAME_CONDITION_ROLLING_CONTRAST / GATE_CANDIDATE_DISTRIBUTION_UNVERIFIED / FOUR_SEED_ROBUSTNESS_PENDING / ITERATIVE_OOS / RESEARCH_ONLY / NO_TRADING / NO_PROMOTION`。在新增訓練／調門檻前，優先用同日同股 CO rank 及 CP/CQ Positive score 作只讀 Gate／候選／交易事件配對，核對 `>0.5` 通過率、原始機率分布、替代交易損益與 missed winners；OOS 不可回灌 threshold／calibration／epoch fitting。既有模型與策略不改動。
+
 ## 6. 後續新增規則
 
 **只有新科學證據或舊科學證據有效性更正才能增加本文件內容。** 記錄必須有實驗／Target 身分、期間／Seed、控制變數、原始結果、負結果與決策，並指向正式證據。沒有市場／模型結果的工程測試、提交紀錄、打包、格式調整或一次性 Audit 清理，不可追加研究章節。本文件不再生成封存副本或研究待辦。
