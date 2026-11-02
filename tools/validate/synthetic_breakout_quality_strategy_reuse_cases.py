@@ -1729,7 +1729,14 @@ def append_model_robustness_pit_strategy_reuse_contract_checks(*, results, case_
         arm for arm in settings.enabled_arms
         if arm.dl_enabled and arm.dl_id in settings.dl_sources
     )
-    source = settings.dl_sources[active_source_arms[0].dl_id]
+    # This case tests the *implicit* canonical anchor; choose by capability,
+    # not by the order in which enabled strategy arms happen to be registered.
+    source = next(
+        settings.dl_sources[arm.dl_id]
+        for arm in active_source_arms
+        if settings.dl_sources[arm.dl_id].point_in_time_fold_anchor_date in (None, "")
+        and not settings.dl_sources[arm.dl_id].point_in_time_single_score_block
+    )
     same_source_arms = tuple(
         arm for arm in active_source_arms if arm.dl_id == source.dl_id
     )
@@ -1752,17 +1759,46 @@ def append_model_robustness_pit_strategy_reuse_contract_checks(*, results, case_
         "score_period": {"start": "2021-01-01", "end": "2026-03-02"},
         "folds": [{"selected_epoch": 1}],
     }
-    with patch.object(
-        pit_contract, "load_selection_point_in_time_ranking_contract",
-        return_value=SimpleNamespace(seed=seed, manifest=dict(natural_manifest)),
-    ):
-        try:
-            loaded = pit_contract.load_validated_selection_pit_strategy_compare_contract(
-                root=Path("/synthetic"), source=source, workflow=workflow,
-                seed=seed, comparison_start="2021-01-01", comparison_end="2026-03-02",
-            )
-        except ValueError:
-            loaded = None
+    # AI: PIT READY validates both the score schedule and the published FIT
+    # version. Supply a real, isolated rolling fold publication so this test
+    # cannot silently skip the version owner or depend on the user's artifacts.
+    from core.breakout_quality_registry import get_breakout_quality_experiment_profile
+    fold_id = "fold_20210101_20211231"
+    persisted_manifest = dict(
+        natural_manifest,
+        experiment_profile=str(source.experiment_profile),
+        folds=[{"fold_id": fold_id, "selected_epoch": 1}],
+    )
+    with tempfile.TemporaryDirectory(prefix="strategy_pit_anchor_") as temp_dir:
+        root = Path(temp_dir)
+        publication = pit_contract.resolve_strategy_compare_selection_pit_bundle_dir(
+            root=root, source=source
+        )
+        fold_dir = publication / "folds" / fold_id
+        fold_dir.mkdir(parents=True)
+        (publication / "selection_point_in_time_manifest.json").write_text(
+            json.dumps(persisted_manifest), encoding="utf-8"
+        )
+        (fold_dir / "manifest.json").write_text(
+            json.dumps({
+                "experiment_profile": str(source.experiment_profile),
+                "experiment_settings": get_breakout_quality_experiment_profile(
+                    str(source.experiment_profile)
+                ).as_manifest_payload(),
+            }),
+            encoding="utf-8",
+        )
+        with patch.object(
+            pit_contract, "load_selection_point_in_time_ranking_contract",
+            return_value=SimpleNamespace(seed=seed, manifest=dict(persisted_manifest)),
+        ):
+            try:
+                loaded = pit_contract.load_validated_selection_pit_strategy_compare_contract(
+                    root=root, source=source, workflow=workflow, seed=seed,
+                    comparison_start="2021-01-01", comparison_end="2026-03-02",
+                )
+            except ValueError:
+                loaded = None
     changed_anchor = dict(natural_manifest, fold_anchor_date="2020-12-01")
     changed_mode = dict(natural_manifest, fold_identity=dict(
         natural_manifest["fold_identity"], stable_when_earlier_folds_are_added=False,
