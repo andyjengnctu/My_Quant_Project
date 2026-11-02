@@ -1923,6 +1923,9 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
     # Seed-isolated Forward and Rolling jobs must resolve the other mode's
     # published FIT under the SAME seed, never the standard/non-seed root.
     from services.research import breakout_quality_application as cross_mode_app
+    from core.breakout_quality_policy import get_breakout_quality_workflow_settings
+    # AI: Keep the isolated seed/path fixture but use the canonical registered profile.
+    registered_settings = get_breakout_quality_workflow_settings()
     with TemporaryDirectory() as td:
         seed_home = Path(td)
         paths = {
@@ -1930,8 +1933,9 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
             False: (seed_home / "forward_seed_101", seed_home / "forward_reports"),
         }
         seed_settings = SimpleNamespace(
-            filter_id="fixture", model_architecture="fixture_arch",
-            experiment_profile="fixture_profile", seed=101,
+            filter_id=registered_settings.filter_id,
+            model_architecture=registered_settings.model_architecture,
+            experiment_profile=registered_settings.experiment_profile, seed=101,
             point_in_time_resume=True, point_in_time_inner_validation_months=24,
             point_in_time_train_window_months=None,
         )
@@ -1943,7 +1947,7 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
             cross_mode_app, "_run_command", return_value=0,
         ) as cli:
             result = cross_mode_app._build_forward_robustness_seed(
-                "synthetic", seed_settings, seed=101,
+                "synthetic", seed_settings, seed=101, inputs_prepared=True,
             )
             forward_args = cli.call_args.args[1]
         check_true("cross_mode_forward_robustness_uses_same_seed_rolling_folds",
@@ -1969,8 +1973,9 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
     with TemporaryDirectory() as td:
         standard_home = Path(td)
         standard_settings = SimpleNamespace(
-            filter_id="fixture", model_architecture="fixture_arch",
-            experiment_profile="fixture_profile", seed=101,
+            filter_id=registered_settings.filter_id,
+            model_architecture=registered_settings.model_architecture,
+            experiment_profile=registered_settings.experiment_profile, seed=101,
             point_in_time_resume=True, point_in_time_inner_validation_months=24,
             point_in_time_train_window_months=None,
         )
@@ -1990,7 +1995,8 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
             # Producer failure is deliberate: inspect the forwarded CLI flags
             # without changing any real training / score / FIT artifacts.
             result = cross_mode_app._run_continuous_pit_profile(
-                "synthetic", model_id="fixture", profile_name="fixture_profile",
+                "synthetic", model_id="fixture",
+                profile_name=standard_settings.experiment_profile,
                 mode=standard_mode,
             )
             standard_args = cli.call_args.args[1]
@@ -3068,16 +3074,30 @@ def validate_research_model_readiness_architecture_case(_base_params):
                 )
                 check_true("seed_evidence_not_fabricated_without_audit",
                            missing_seed_evidence is None)
+                # AI: Supply current-version fold evidence to the isolated Audit-only fixture.
+                version_fold_id = "fold_20210104_20211231"
+                version_fold_dir = directory / "folds" / version_fold_id
+                version_fold_dir.mkdir(parents=True, exist_ok=True)
+                (version_fold_dir / "manifest.json").write_text(json.dumps({
+                    "experiment_profile": str(settings.experiment_profile),
+                    "experiment_settings": profile.as_manifest_payload(),
+                }), encoding="utf-8")
+                versioned_manifest = {**manifest, "folds": [{"fold_id": version_fold_id}]}
+                manifest_file.write_text(json.dumps(versioned_manifest), encoding="utf-8")
                 calls = []
                 def _capture_producer(command, _argv, **_kwargs):
                     calls.append(command)
                     return 0
-                with patch.object(
-                    app, "_load_forward_robustness_seed", return_value=(None, None, None),
-                ), patch.object(app, "_run_command", side_effect=_capture_producer):
-                    action_result = app._build_rolling_robustness_seed(
-                        "synthetic", settings, seed=int(settings.seed)
-                    )
+                try:
+                    with patch.object(
+                        app, "_load_forward_robustness_seed", return_value=(None, None, None),
+                    ), patch.object(app, "_run_command", side_effect=_capture_producer):
+                        action_result = app._build_rolling_robustness_seed(
+                            "synthetic", settings, seed=int(settings.seed)
+                        )
+                finally:
+                    # AI: Restore the score-only manifest for the subsequent checks.
+                    manifest_file.write_text(json.dumps(manifest), encoding="utf-8")
                 check("robustness_audit_only_does_not_rebuild_score",
                       (0, ["audit-point-in-time-scores"]),
                       (action_result, calls))
@@ -3821,8 +3841,8 @@ def validate_research_model_readiness_architecture_case(_base_params):
     # Phase 8: test the actual producer routing, not only the preview plan.
     # No real Dataset/Target, FIT, SCORE or Audit artifacts are modified.
     producer_settings = SimpleNamespace(
-        filter_id="synthetic", model_architecture="synthetic_arch",
-        experiment_profile="synthetic_profile", point_in_time_resume=True,
+        filter_id=settings.filter_id, model_architecture=settings.model_architecture,
+        experiment_profile=settings.experiment_profile, point_in_time_resume=True,
         point_in_time_inner_validation_months=6,
         point_in_time_train_window_months=None,
     )

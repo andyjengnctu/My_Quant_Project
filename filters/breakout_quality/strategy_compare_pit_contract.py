@@ -10,6 +10,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Mapping
 
+from core.breakout_quality_fit_contract_version import published_fit_contract_version_state
+
 from filters.breakout_quality.point_in_time_schedule import FOLD_CALENDAR_ANCHOR
 
 from filters.breakout_quality.paths import (
@@ -240,9 +242,6 @@ def load_validated_selection_pit_strategy_compare_contract(
         raise ValueError("Strategy Compare PIT fold selected_epoch不合法")
     # The same canonical FIT-version owner validates model menus and strategy
     # consumption. A published v1 score cannot authorize replay after v2.
-    from services.breakout_quality.fitted_model_artifacts import (
-        published_fit_contract_version_state,
-    )
     pit_root = (
         Path(point_in_time_dir_override)
         if point_in_time_dir_override is not None

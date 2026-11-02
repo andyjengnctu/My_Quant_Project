@@ -74,6 +74,7 @@ project/
 │  ├─ audit_registry.py               # formal/reusable Audit definitions／source／dimensions SSOT
 │  ├─ audit_policy.py                 # Audit typed definition／validation／runtime resolver
 │  ├─ breakout_quality_registry.py    # BQ scientific/profile/research-spec registry SSOT
+│  ├─ breakout_quality_fit_contract_version.py # FIT 現行版本／已發布工件版本驗證的共用唯讀 owner
 │  ├─ breakout_quality_policy.py      # BQ derived/current workflow／comparison／Rolling／PIT resolver
 │  ├─ breakout_quality_runtime.py     # Continuous-ranker generic execution capability／composition owner
 │  ├─ breakout_quality_runtime_resolver.py # scientific profile → runtime recipe 單向 resolver gateway
