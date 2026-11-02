@@ -5205,6 +5205,52 @@ Assessment: `USER_REPORTED_ROLLING_RESULT_AVAILABLE / FULL_HORIZON_MAE_SMALL_PAI
 
 **結果狀態**：`USER_REPORTED_EIGHT_SEED_MARKET_REPORT_AVAILABLE / TWENTY_TREATMENTS_8_OF_8_ROMD_OVER_C96 / ALL_160_SEED_PAIR_AGGREGATES_ARITHMETIC_VERIFIED / PHYSICAL_REPLAY_RECEIPTS_NOT_IN_UPLOAD / E13_FULL_MARKET_PARITY_PENDING / HINDSIGHT_NON_PIT / ITERATIVE_OOS / NO_PROMOTION`。
 
-## 5. 後續新增規則
+## 5. 2026-11-02 · Rolling Robustness 11 模型／24 策略與 Positive 新結果（user-reported）
+
+### 2026-11-02 · 11-model / 24-arm 共同研究結果
+
+- **證據與口徑**：使用者提供 `貼上的文字 (1)(20261102-022854).txt`，正式選單 Research `[1]→[2] Target × DL`、`[2]→[6] Rolling OOS Robustness 模型測試`、`[4]→[4] Rolling OOS Robustness Test`。Rolling 期間 `2021-01-01～2026-03-02`，2026 為部分年度，四個 Strategy/Model seeds=`693545351 / 2014432738 / 104504529 / 762252050`；Strategy benchmark=`end_to_end_v1`，24 arms ×4；model=11 profiles ×4。Strategy aggregate fingerprint=`a80b3234158dad46`；24/24 策略的報表 RoMD 均與 Across-seed mean 一致，原報表含完整 per-arm 年度、EV、交易及對照分布。`96/96` strategy scientific result REUSE、模型 `44/44` seed-level Standard SOP REUSE 皆是**本次使用者 Console 的回報**，不是此輪新 FIT／Replay。對應正式 Model 比較工件：`outputs/filters/breakout_quality/breakout_quality_v1/standard_model_comparison/rolling_oos_robustness/standard_model_comparison.json`／`.md`；本輪上傳的 source ZIP **不含**原始 `models/`／`outputs/`／逐 Seed score／Replay receipt，無法獨立認證物理工件與 PIT parity；也未提供本輪 Windows Formal Suite PASS。
+- **模型自有 Target（跨 Seed 平均）**：Global／Breakout 每項 ρ 都是**各模型自己 Target 的排序結果**，不代表在同一 Target 下的可直接能力排名。下表 `Groups` 為模型 SOP 顯示的 OOS 可評估分組數，**不是訓練樣本占比**。
+
+  | Model | Global Groups | Global Daily ρ | Global Pair | Breakout Daily ρ | Δ Validation→OOS Daily ρ |
+  |---|---:|---:|---:|---:|---:|
+  | MR-13K | 608,204 | 0.3649 | 62.59% | 0.3409 | -0.0397 |
+  | MR-13AH | 608,204 | 0.3221 | 61.02% | 0.2966 | -0.0901 |
+  | MR-13AK | 608,204 | 0.3852 | 63.30% | 0.3652 | -0.0198 |
+  | MR-13CG | 608,204 | 0.3918 | 63.49% | 0.3685 | -0.0119 |
+  | MR-13CI | 608,204 | 0.0337 | 51.27% | 0.0043 | -0.1433 |
+  | MR-13CJ | 608,204 | 0.2243 | 58.26% | 0.2095 | -0.0233 |
+  | MR-13CK | 608,204 | 0.1607 | 55.70% | 0.1548 | -0.0310 |
+  | MR-13CM | 67,127 | 0.0341 | 50.17% | 0.0343 | -0.4120 |
+  | MR-13CN | 67,396 | 0.0753 | 51.13% | 0.0428 | -0.4678 |
+  | MR-13CO | 67,396 | 0.0859 | 51.38% | 0.0494 | -0.3948 |
+  | MR-13CP | 67,396 | 0.0314 | 50.09% | 0.0226 | -0.3938 |
+
+- **Model SOP 研究限制**：CM/CN/CO/CP 的 Global 67,127／67,396 Groups 僅為 608,204 參考分組的約 11%，Breakout 為 9,431／9,436（K/CG 等為 17,346）；不同 Target 可用標籤與評估樣本不完全相同，並**不能由這個比例推論 CM 訓練階段原疑問的 7%**。新四模型 Global rho 0.0314～0.0859、Pair 約 50%～51%，Validation→OOS Daily rho 下降 0.394～0.468；全部 11 模型的 Fold/Year `Drift flag=YES`。MR-13CP 是獨立二分類 Positive Head，模型 own-target ρ／Pair 不能取代 Positive 分類校準、PR-AUC 或 PIT 門檻品質的直接檢驗；本次表中沒有足夠證據判定其分類器已達穩定實用性。
+- **Strategy robustness 關鍵觀測**：以下 Return／MDD、RoMD 與樣本 SD 均為四 Seed 報表彙總，`Exact` 有 K/R0、`Direct` 無 K/R0；不對照不同 Selector 作純 Target 效果歸因。
+
+  | Arm（DL） | Selector | Return | MDD | RoMD Mean | RoMD SD |
+  |---|---|---:|---:|---:|---:|
+  | C96（Min 無 DL） | 基準 | +137.88% | 15.05% | 9.18 | 0.49 |
+  | C103（CG） | Exact | +152.84% | 17.01% | 9.21 | 2.77 |
+  | C105（AK） | Exact | +153.18% | 15.59% | 9.90 | 1.25 |
+  | C106（CI） | Exact | +157.11% | 13.22% | 12.17 | 3.16 |
+  | C107（CJ） | Exact | +135.14% | 13.20% | 10.45 | 3.70 |
+  | C111（K） | Exact | +158.94% | 16.05% | 10.82 | 3.86 |
+  | C119（CM） | Exact | +112.42% | 14.21% | 7.93 | 1.49 |
+  | C120（CM） | Direct | +84.45% | 19.72% | 4.35 | 1.05 |
+  | C121（CN） | Exact | +139.22% | 13.64% | 10.65 | 5.64 |
+  | C122（CN） | Direct | +84.70% | 17.17% | 5.12 | 1.85 |
+  | C123（CO） | Exact | +146.88% | 13.75% | 10.81 | 2.54 |
+  | C124（CO） | Direct | +79.41% | 18.56% | 4.66 | 1.95 |
+  | C125（CO rank＋CP Positive） | Exact | +117.80% | 11.24% | 10.81 | 6.29 |
+  | C126（CO rank＋CP Positive） | Direct | +65.35% | 12.50% | 7.12 | 4.72 |
+
+- **同 Seed 配對**：C106−C96=`+2.99` RoMD、C106 `4/4` Seed 領先；C123−C121=`+0.16`（CO NetPnL vs CN NetR Exact，3/4）；C125−C123=`約 0.00`（2/4，C125 SD `6.29` 大於 C123 `2.54`）；C126−C124=`+2.46`（3/4，C126 SD `4.72`、min `0.59`）。C125/C126 相對 C123/C124 的報酬分別減少 `29.08pp`／`14.06pp`，但 MDD 改善 `2.51pp`／`6.06pp`；平均曝險 C125/C126=`62.69%/56.77%`，對照 C123/C124=`91.70%/79.82%`，交易數 `214/226` 對 `308/357`。Positive gate 主要是在減少持倉與風險，**未證明 Exact 策略 RoMD 有提升**；Direct 有正向平均但 Seed 風險偏高。`right_wins`／`left_wins` 是正式 contrast 內部左右身份，不按畫面減號的直覺直接換算（本 Log 2026-10-17 已記其口徑）。
+- **0050 年度參考**：正式報表 0050 在 2024／2025／2026*（至 03-02）分別 `+49.23% / +38.08% / +21.71%`；本次 24 策略相同年度中的最高值僅 `+20.99% / +17.42% / +16.33%`。然而 0050 是調整價 *price return*，策略是含券商帳務與現金的 equity return，**不能視為完全同費稅口徑的可交易超額報酬測試**。
+- **Target × DL 對照有效性**：上方 `[1]→[2]` 使用 Oracle `end_to_end_v2` **8** Seeds，模型與策略 Robustness 使用 `end_to_end_v1` **4** Seeds；Oracle RoMD 與四 Seed 真實策略 RoMD 不能直接當成同 Seed 逐對誤差。新 Positive Exact Oracle 顯示 `90.84 / 99.88%`（RoMD／Win Rate），Positive Direct 顯示 `204.88 / 99.71%`；後者 **204.88 恰為先前已被 Registry 判為舊 raw future-profit admission、不得 REUSE 的歷史 NON-PIT 數值**。在此 ZIP 沒有兩輸出 signed Replay／E13 daily/trade/cash parity 前，**不將 204.88 或 90.84 登錄為已完成的現行 E13 Oracle 正式有效績效**；保留這次 Console 觀測，現行 Oracle 正式驗收仍 `PENDING`，不可因此宣稱 CP Oracle→DL 轉換缺口已經被科學證實。
+- **研究判定**：`USER_REPORTED_11_MODEL_4SEED_ROLLING_SOP_AND_24_ARM_ROBUSTNESS_AVAILABLE / AGGREGATE_24_OF_24_CONSISTENT_WITH_SEED_SUMMARY / REUSED_SCIENTIFIC_RESULTS_NOT_REPLAYED_THIS_TURN / C106_EXACT_BEST_ROBUSTNESS_MEAN / CP_EXACT_NO_CONSISTENT_ROMD_GAIN / CP_DIRECT_POSITIVE_BUT_VARIABLE / FULL_CYCLE_LABEL_COVERAGE_AND_GENERALIZATION_WEAK / POSITIVE_ORACLE_E13_PARITY_PENDING / ITERATIVE_OOS / NO_NEW_ID / NO_TRADING / NO_PROMOTION`。舊 2026-10-30 Oracle 八 Seed 結果保留作歷史、不可用舊 raw-gate 204.88 填現行雙輸出 Oracle；本輪不改模型、Target、Score、Optimizer、Strategy Replay、Selection、報表版本或 Trading。
+
+## 6. 後續新增規則
 
 **只有新科學證據或舊科學證據有效性更正才能增加本文件內容。** 記錄必須有實驗／Target 身分、期間／Seed、控制變數、原始結果、負結果與決策，並指向正式證據。沒有市場／模型結果的工程測試、提交紀錄、打包、格式調整或一次性 Audit 清理，不可追加研究章節。本文件不再生成封存副本或研究待辦。
