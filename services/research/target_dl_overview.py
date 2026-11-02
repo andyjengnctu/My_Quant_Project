@@ -34,6 +34,9 @@ from core.breakout_quality_runtime import (
 )
 from core.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
 from core.breakout_quality_policy import get_breakout_quality_model_test_settings
+from core.breakout_quality_fit_contract_version import (
+    current_fit_contract_artifact_identity, published_fit_contract_version_state,
+)
 from core.report_contract_versions import load_report_contract_versions
 from core.research_report_contract import (
     format_contract_value,
@@ -47,6 +50,12 @@ from core.strategy_compare_policy import (
     get_strategy_multi_seed_robustness_settings,
 )
 from core.strategy_compare_registry import STRATEGY_COMPARE_ARMS, STRATEGY_DL_SOURCES
+from filters.breakout_quality.strategy_compare_dl_artifacts import resolve_arm_runtime_dl_source_ids
+from filters.breakout_quality.strategy_compare_pit_contract import (
+    resolve_strategy_compare_selection_pit_bundle_dir,
+    resolve_strategy_compare_selection_pit_contract_override,
+)
+from filters.breakout_quality.ranking_score_store import SCORE_SOURCE_SELECTION_POINT_IN_TIME
 from filters.breakout_quality.paths import (
     resolve_filter_point_in_time_dir,
     resolve_filter_model_output_dir,
@@ -249,6 +258,18 @@ def _published_model_report(path: Path, markdown: Path, *, profile: str,
         return None
     if digest != payload.get("markdown_sha256"):
         return None
+    lineage = current_fit_contract_artifact_identity(profile)
+    if lineage is not None:
+        # A v1 report cannot be relabeled as a v2 result, even after the v2
+        # Fold has been rebuilt. Publishing v2 EVIDENCE creates a fresh report.
+        if payload.get("fit_contract_version") != lineage["version"]:
+            return None
+        state, _ = published_fit_contract_version_state(
+            experiment_profile=profile, publication_dir=path.parent,
+            rolling=evaluation_mode == "rolling_oos",
+        )
+        if state != "CURRENT":
+            return None
     sop = payload.get("standard_model_sop") or {}
     if not isinstance(sop, dict) or sop.get("evaluation_mode") != evaluation_mode:
         return None
@@ -266,6 +287,43 @@ def _single_model_rho(path: Path, markdown: Path, *, profile: str, filter_id: st
     metrics = payload["standard_model_sop"].get("split_metrics")
     oos = metrics.get("oos") if isinstance(metrics, dict) else None
     return _number(oos.get("mean_daily_spearman")) if isinstance(oos, dict) else None
+
+
+def _rolling_fit_version_current(root: Path, *, filter_id: str, profile: str) -> bool:
+    """A v2+ model's published metrics need a current canonical FIT owner."""
+    if current_fit_contract_artifact_identity(profile) is None:
+        return True  # Preserve existing v1 publication and historical comparisons.
+    report, _ = _model_paths(root, filter_id=filter_id, profile=profile)
+    state, _ = published_fit_contract_version_state(
+        experiment_profile=profile, publication_dir=report.parent, rolling=True,
+    )
+    return state == "CURRENT"
+
+
+def _robustness_fit_versions_current(
+    root: Path, *, model: Mapping[str, Any], profile: str, seeds: tuple[int, ...],
+) -> bool:
+    """Check each isolated Robustness FIT, without requiring the Rolling main FIT.
+
+    Model Robustness can legally finish before the main Rolling evaluation. Its
+    Standard Comparison pins one audited model-report path per ordered seed.
+    """
+    paths = model.get("source_reports") or []
+    if not isinstance(paths, list) or len(paths) != len(seeds):
+        return False
+    boundary = root.resolve()
+    for raw in paths:
+        if not isinstance(raw, str) or not raw.strip():
+            return False
+        report = (boundary / raw).resolve()
+        if not report.is_relative_to(boundary) or not report.is_file():
+            return False
+        state, _ = published_fit_contract_version_state(
+            experiment_profile=profile, publication_dir=report.parent, rolling=True,
+        )
+        if state != "CURRENT":
+            return False
+    return True
 
 
 def _model_comparison_rhos(root: Path, *, filter_id: str, versions: Mapping[str, tuple],
@@ -308,6 +366,18 @@ def _model_comparison_rhos(root: Path, *, filter_id: str, versions: Mapping[str,
         if rho is None or view.get("evaluation_mode") != "rolling_oos":
             continue
         profile = str(model.get("profile") or "")
+        if profile in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES:
+            lineage = current_fit_contract_artifact_identity(profile)
+            if lineage is not None:
+                if model.get("fit_contract_version") != lineage["version"]:
+                    continue
+                if robustness:
+                    if not _robustness_fit_versions_current(
+                        root, model=model, profile=profile, seeds=seeds,
+                    ):
+                        continue
+                elif not _rolling_fit_version_current(root, filter_id=filter_id, profile=profile):
+                    continue
         identity = get_continuous_ranker_research_spec(profile) if profile in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES else None
         if identity and model.get("model_id") == identity.model_research_id and profile not in ambiguous:
             evidence = (rho, seeds)
@@ -362,6 +432,36 @@ def _strategy_bindings(*, target_names: tuple[str, ...],
     return bindings
 
 
+def _arm_fit_lineage_current(
+    *, root: Path, settings: Any, arm_id: str,
+    artifact_identities: Mapping[str, Any],
+) -> bool:
+    """Require the same FIT lineage that the replay-cache owner persists."""
+    arm = settings.arms.get(str(arm_id))
+    if arm is None:
+        return False
+    for source_id in resolve_arm_runtime_dl_source_ids(settings, arm):
+        source = settings.dl_sources[source_id]
+        if source.score_source != SCORE_SOURCE_SELECTION_POINT_IN_TIME:
+            continue
+        lineage = current_fit_contract_artifact_identity(str(source.experiment_profile))
+        if lineage is None:
+            continue
+        if artifact_identities.get(f"dl:{source_id}:fit_contract") != lineage:
+            return False
+        directory = (
+            resolve_strategy_compare_selection_pit_contract_override(root=root, source=source)
+            or resolve_strategy_compare_selection_pit_bundle_dir(root=root, source=source)
+        )
+        state, _ = published_fit_contract_version_state(
+            experiment_profile=str(source.experiment_profile),
+            publication_dir=directory, rolling=True,
+        )
+        if state != "CURRENT":
+            return False
+    return True
+
+
 def _strategy_rolling_metrics(root: Path, versions: Mapping[str, tuple]):
     # The rolling profile is from the official user-facing Strategy Compare work type.
     from config.strategy_compare import STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE
@@ -386,8 +486,14 @@ def _strategy_rolling_metrics(root: Path, versions: Mapping[str, tuple]):
         scenarios = payload.get("scenarios") or {}
         if not isinstance(scenarios, dict):
             continue
+        artifact_identities = dict(payload.get("artifact_identities") or {})
         for arm_id, row in scenarios.items():
             if arm_id in selected or arm_id not in expected or arm_id not in STRATEGY_COMPARE_ARMS:
+                continue
+            if not _arm_fit_lineage_current(
+                root=root, settings=settings, arm_id=str(arm_id),
+                artifact_identities=artifact_identities,
+            ):
                 continue
             value = _number(row.get("return_over_max_drawdown")) if isinstance(row, dict) else None
             if value is not None:
@@ -395,9 +501,32 @@ def _strategy_rolling_metrics(root: Path, versions: Mapping[str, tuple]):
     return selected
 
 
+def _robust_arm_fit_lineage_current(settings: Any, arm_id: str, pinned: Mapping[str, Any]) -> bool:
+    """Robustness pins its own per-Seed FIT profiles; it does not need Rolling FIT."""
+    arm = settings.arms.get(arm_id)
+    if arm is None:
+        return False
+    published_sources = {
+        str(source.get("dl_id") or ""): source
+        for source in pinned.get("runtime_dl_sources") or []
+        if isinstance(source, dict)
+    }
+    for source_id in resolve_arm_runtime_dl_source_ids(settings, arm):
+        source = settings.dl_sources[source_id]
+        lineage = current_fit_contract_artifact_identity(source.experiment_profile)
+        if lineage is None:
+            continue
+        published = published_sources.get(source_id) or {}
+        if (published.get("experiment_profile") != source.experiment_profile
+                or published.get("experiment_profile_manifest") != lineage["experiment_settings"]):
+            return False
+    return True
+
+
 def _strategy_robustness_metrics(root: Path, versions: Mapping[str, tuple]):
     from config.strategy_compare import STRATEGY_COMPARE_CURRENT_ROLLING_ROBUSTNESS
     cfg = get_strategy_multi_seed_robustness_settings(STRATEGY_COMPARE_CURRENT_ROLLING_ROBUSTNESS)
+    current_settings = get_strategy_comparison_settings(cfg.profile_id)
     base = root / cfg.output_root
     pointer = _json(base / "latest.json") or {}
     names = [str(pointer.get("fingerprint") or "")]
@@ -425,10 +554,22 @@ def _strategy_robustness_metrics(root: Path, versions: Mapping[str, tuple]):
         if (len(seeds) < 2 or len(seeds) != _count(contract.get("seed_count"))
                 or len(set(seeds)) != len(seeds)):
             continue
+        # Benchmark results already pin each Seed's scientific model profile
+        # manifest in its published stochastic-arm contract. Reject a pre-v2
+        # report after its consumed model FIT contract was explicitly upgraded.
+        pinned_arms = {
+            str(row.get("arm_id") or ""): dict(row)
+            for row in contract.get("stochastic_arms") or []
+            if isinstance(row, dict)
+        }
         for item in summary.get("romd_statistics") or []:
             if not isinstance(item, dict):
                 continue
             arm_id = str(item.get("arm_id") or "")
+            if not _robust_arm_fit_lineage_current(
+                current_settings, arm_id, pinned_arms.get(arm_id) or {},
+            ):
+                continue
             if arm_id in results or arm_id not in STRATEGY_COMPARE_ARMS:
                 continue
             value = _number(item.get("mean"))
@@ -488,6 +629,8 @@ def collect_target_dl_overview(project_root: Path) -> dict[str, Any]:
             comparison = comparison_rolling.get(profile)
             rolling_rho = comparison[0] if comparison else None
         robust_rho, robust_seeds = robustness_rho.get(profile, (None, ()))
+        if not _rolling_fit_version_current(root, filter_id=filter_id, profile=profile):
+            rolling_rho, robust_rho, robust_seeds = None, None, ()
         forward_json, forward_md = _model_paths(
             root, filter_id=filter_id, profile=profile, evaluation_mode="forward_oos",
         )

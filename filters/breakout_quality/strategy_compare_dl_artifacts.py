@@ -11,6 +11,7 @@ from core.research_orchestration import ResearchArtifactAction
 from pathlib import Path
 from typing import Any
 
+from core.breakout_quality_fit_contract_version import current_fit_contract_artifact_identity
 from core.breakout_quality_policy import (
     get_breakout_quality_workflow_settings,
 )
@@ -370,6 +371,13 @@ def _collect_selection_pit_source_status(
     except (OSError, ValueError, KeyError, TypeError) as exc:
         pit_validation_error = str(exc).strip() or type(exc).__name__
         pit_status = f"SELECTION_PIT_INVALID ({type(exc).__name__})"
+
+    # Versioned FIT lineage is a scientific replay input, independent of score
+    # values. The same canonical identity is used by completed-pair reuse and
+    # read-only reporting; v1 retains historical cache fingerprints.
+    fit_lineage = current_fit_contract_artifact_identity(str(source.experiment_profile))
+    if fit_lineage is not None:
+        artifact_identities[f"dl:{dl_id}:fit_contract"] = fit_lineage
 
     if pit_contract is not None:
         files = {

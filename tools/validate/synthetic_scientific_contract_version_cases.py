@@ -187,6 +187,210 @@ class ScientificVersionCases(TestCase):
                     point_in_time_dir_override=path,
                 ), record)
 
+    def test_versioned_positive_auxiliary_invalidates_both_pairs_not_cp(self):
+        from core.breakout_quality_fit_contract_version import current_fit_contract_artifact_identity
+        from services.research.strategy_compare_reuse import (
+            _versioned_replay_sources_pending, _pair_fit_lineages_match,
+            _pair_cache_fingerprint_from_payload,
+        )
+        settings = get_strategy_comparison_settings(STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE)
+        lineage = current_fit_contract_artifact_identity(CQ)
+        self.assertEqual(lineage["version"], 2)
+        self.assertIsNone(current_fit_contract_artifact_identity(CP))
+        old = {}
+        current = {"dl:CONT13CQ_ROLL:fit_contract": lineage}
+        state = {"artifact_identities": current, "dl_sources": {
+            "CONT13CO_ROLL": {"ready": True}, "CONT13CP_ROLL": {"ready": True},
+            "CONT13CQ_ROLL": {"ready": False},
+        }}
+        for arm_id in ("C127", "C128"):
+            arm = settings.arms[arm_id]
+            self.assertEqual(
+                _versioned_replay_sources_pending(settings=settings, status=state, on_arm=arm),
+                ("CONT13CQ_ROLL",),
+            )
+            self.assertFalse(_pair_fit_lineages_match(
+                settings=settings, on_arm=arm, current=current, published=old,
+            ))
+            kwargs = dict(
+                settings_payload=settings.as_dict(),
+                comparison_period={"start": "2021-01-01", "end": "2026-03-02"},
+                off_arm_payload=settings.arms["C96"].as_dict(),
+                on_arm_payload=arm.as_dict(), engine_schema_version=12,
+                parameter_evaluation_sha256="a" * 64,
+            )
+            previous = _pair_cache_fingerprint_from_payload(artifact_identities=old, **kwargs)
+            upgraded = _pair_cache_fingerprint_from_payload(artifact_identities=current, **kwargs)
+            self.assertNotEqual(previous, upgraded)  # Even identical score columns.
+            state["dl_sources"]["CONT13CQ_ROLL"]["ready"] = True
+            self.assertEqual(_versioned_replay_sources_pending(
+                settings=settings, status=state, on_arm=arm), ())
+            self.assertTrue(_pair_fit_lineages_match(
+                settings=settings, on_arm=arm, current=current, published=dict(current),
+            ))
+            state["dl_sources"]["CONT13CQ_ROLL"]["ready"] = False
+        for arm_id in ("C125", "C126"):
+            arm = settings.arms[arm_id]
+            self.assertEqual(_versioned_replay_sources_pending(
+                settings=settings, status=state, on_arm=arm), ())
+            self.assertTrue(_pair_fit_lineages_match(
+                settings=settings, on_arm=arm, current=current, published=old,
+            ))
+
+    def test_comparison_planner_waits_for_versioned_auxiliary_then_reuses(self):
+        from core.breakout_quality_fit_contract_version import current_fit_contract_artifact_identity
+        from core.research_orchestration import ResearchArtifactPlan
+        from services.research.strategy_compare_reuse import _collect_replay_cache_status
+        settings = get_strategy_comparison_settings(STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE)
+        status = {
+            "comparison_period": {"start": "2021-01-01", "end": "2026-03-02"},
+            "preparation_plan": ResearchArtifactPlan.from_actions([]),
+            "artifact_identities": {
+                "dl:CONT13CQ_ROLL:fit_contract": current_fit_contract_artifact_identity(CQ),
+            },
+            "dl_sources": {
+                "CONT13CO_ROLL": {"ready": True},
+                "CONT13CP_ROLL": {"ready": True},
+                "CONT13CQ_ROLL": {"ready": False},
+            },
+        }
+        # Simulate a cached v1 C127/C128 pair whose contents otherwise match;
+        # the planner must not allow evidence to override a pending FIT version.
+        def fake_cached_pair(*, on_arm, **_kwargs):
+            return {"source_pair_dir": Path("synthetic_completed_pair")}
+        with patch("services.research.strategy_compare_reuse._completed_reuse_run_dirs",
+                   return_value=(Path("synthetic_completed_run"),)), \
+             patch("services.research.strategy_compare_reuse._find_reusable_pair",
+                   side_effect=fake_cached_pair), \
+             patch("services.research.strategy_compare_reuse._find_reusable_baseline_source",
+                   return_value=Path("synthetic_completed_baseline")):
+            before = _collect_replay_cache_status(
+                root=Path("synthetic"), settings=settings, status=status,
+            )["arm_states"]
+            for arm in ("C127", "C128"):
+                self.assertEqual(before[arm]["action"], "WAIT")
+            for arm in ("C125", "C126"):
+                self.assertEqual(before[arm]["action"], "REUSE")
+            status["dl_sources"]["CONT13CQ_ROLL"]["ready"] = True
+            after = _collect_replay_cache_status(
+                root=Path("synthetic"), settings=settings, status=status,
+            )["arm_states"]
+            for arm in ("C127", "C128"):
+                self.assertEqual(after[arm]["action"], "REUSE")
+
+    def test_robustness_report_checks_own_seed_fit_not_main_rolling(self):
+        from services.research.target_dl_overview import _robustness_fit_versions_current
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = []
+            for index in range(2):
+                directory = root / "robustness" / f"seed_{index}"
+                _write_rolling(directory, CQ, legacy=(index == 1))
+                report = directory / "selection_point_in_time_audit.json"
+                report.write_text("{}", encoding="utf-8")
+                paths.append(report.relative_to(root).as_posix())
+            source = {"source_reports": paths}
+            self.assertFalse(_robustness_fit_versions_current(
+                root, model=source, profile=CQ, seeds=(101, 102)))
+            _write_rolling((root / paths[1]).parent, CQ)
+            self.assertTrue(_robustness_fit_versions_current(
+                root, model=source, profile=CQ, seeds=(101, 102)))
+            self.assertFalse(_robustness_fit_versions_current(
+                root, model={"source_reports": paths[:1]}, profile=CQ,
+                seeds=(101, 102)))
+
+    def test_old_cq_model_and_strategy_results_blank_until_matching_v2(self):
+        import hashlib
+        from core.breakout_quality_fit_contract_version import current_fit_contract_artifact_identity
+        from core.report_contract_versions import load_report_contract_versions
+        from core.research_report_contract import persistent_report_contract_fingerprint
+        from core.breakout_quality_registry import get_continuous_ranker_research_spec
+        from filters.breakout_quality.paths import resolve_filter_output_dir
+        from services.research.target_dl_overview import (
+            _published_model_report, _model_comparison_rhos,
+            _arm_fit_lineage_current, _robust_arm_fit_lineage_current,
+        )
+        settings = get_strategy_comparison_settings(STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE)
+        versions = load_report_contract_versions(Path(__file__).resolve().parents[2])
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            publication = root / "model_rolling"
+            _write_rolling(publication, CQ, legacy=True)
+            md = publication / "standard_model_report.md"
+            md.write_text("valid synthetic Standard SOP\n", encoding="utf-8")
+            payload = {
+                "report_id": "model.standard_sop", "report_version": versions["model.standard_sop"][-1]["version"],
+                "report_contract_fingerprint": persistent_report_contract_fingerprint("model.standard_sop"),
+                "profile": CQ, "filter_id": "breakout_quality_v1", "evaluation_mode": "rolling_oos",
+                "model_research_id": get_continuous_ranker_research_spec(CQ).model_research_id,
+                "markdown_sha256": hashlib.sha256(md.read_text().encode()).hexdigest(),
+                "standard_model_sop": {"evaluation_mode": "rolling_oos", "split_metrics": {"oos": {"mean_daily_spearman": 0.11}}},
+            }
+            report = publication / "standard_model_report.json"
+            def read():
+                return _published_model_report(
+                    report, md, profile=CQ, filter_id="breakout_quality_v1",
+                    evaluation_mode="rolling_oos", versions=versions,
+                )
+            _write_json(report, payload)
+            self.assertIsNone(read())  # Old v1 report must not appear as v2.
+            payload["fit_contract_version"] = 2
+            _write_json(report, payload)
+            self.assertIsNone(read())  # v1 Fold still invalid despite report metadata.
+            _write_rolling(publication, CQ)
+            self.assertIsNotNone(read())
+
+            source = settings.dl_sources["CONT13CQ_ROLL"]
+            lineage = current_fit_contract_artifact_identity(CQ)
+            with patch('services.research.target_dl_overview.resolve_strategy_compare_selection_pit_bundle_dir', return_value=publication):
+                self.assertFalse(_arm_fit_lineage_current(
+                    root=root, settings=settings, arm_id="C127", artifact_identities={},
+                ))
+                for arm in ("C127", "C128"):
+                    self.assertTrue(_arm_fit_lineage_current(
+                        root=root, settings=settings, arm_id=arm,
+                        artifact_identities={"dl:CONT13CQ_ROLL:fit_contract": lineage},
+                    ))
+                self.assertTrue(_arm_fit_lineage_current(
+                    root=root, settings=settings, arm_id="C125", artifact_identities={},
+                ))
+            pinned = {"runtime_dl_sources": [
+                {"dl_id": "CONT13CQ_ROLL", "experiment_profile": CQ,
+                 "experiment_profile_manifest": _manifest_settings(CQ, legacy=True)}
+            ]}
+            self.assertFalse(_robust_arm_fit_lineage_current(settings,"C127",pinned))
+            pinned["runtime_dl_sources"][0]["experiment_profile_manifest"] = _manifest_settings(CQ)
+            self.assertTrue(_robust_arm_fit_lineage_current(settings,"C127",pinned))
+            self.assertTrue(_robust_arm_fit_lineage_current(settings,"C125",{}))
+
+            out = resolve_filter_output_dir(root, filter_id="breakout_quality_v1") / "standard_model_comparison" / "rolling_oos"
+            out.mkdir(parents=True)
+            document = out / "standard_model_comparison.md"
+            document.write_text("synthetic comparison", encoding="utf-8")
+            compare = {
+                "report_id": "model.standard_comparison",
+                "report_version": versions["model.standard_comparison"][-1]["version"],
+                "report_contract_fingerprint": persistent_report_contract_fingerprint("model.standard_comparison"),
+                "evaluation_mode": "rolling_oos", "robustness": False,
+                "models": [{
+                    "model_id": get_continuous_ranker_research_spec(CQ).model_research_id,
+                    "filter_id": "breakout_quality_v1", "profile": CQ, "seed": 42,
+                    "sop_view": {"evaluation_mode": "rolling_oos", "learnability": [{
+                        "split": "oos", "mean_daily_spearman": 0.15,
+                    }]},
+                }],
+            }
+            file = out / "standard_model_comparison.json"
+            _write_json(file, compare)
+            # The comparison reader also requires the actual registered Rolling FIT path.
+            with patch('services.research.target_dl_overview._rolling_fit_version_current', return_value=True):
+                self.assertEqual(_model_comparison_rhos(root,filter_id="breakout_quality_v1",
+                    versions=versions,robustness=False),{})
+                compare["models"][0]["fit_contract_version"] = 2
+                _write_json(file, compare)
+                self.assertEqual(_model_comparison_rhos(root,filter_id="breakout_quality_v1",
+                    versions=versions,robustness=False)[CQ],(0.15,(42,)))
+
     def test_one_canonical_publication_no_unbounded_archived_versions(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

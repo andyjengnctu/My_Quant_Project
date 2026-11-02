@@ -47,6 +47,7 @@ from filters.breakout_quality.strategy_compare_contracts import (
     STRATEGY_COMPARE_SCHEMA_VERSION as STRATEGY_COMPARE_ENGINE_SCHEMA_VERSION,
 )
 from filters.breakout_quality.strategy_compare_plan import ResolvedContinuousScoreBinding
+from filters.breakout_quality.strategy_compare_dl_artifacts import resolve_arm_runtime_dl_source_ids
 from filters.breakout_quality.strategy_score_projection import (
     primary_score_column_for_source,
     runtime_score_projection_requirements,
@@ -271,6 +272,14 @@ def _pair_cache_fingerprint_from_payload(
             else ("model", "manifest", "forward_scores")
         )
         artifact_keys.extend(f"dl:{positive_dl_id}:{name}" for name in names)
+    # A versioned FIT is an input even when the replay only consumes one PIT
+    # score column. Do not let identical scores resurrect pre-upgrade trades.
+    for source_id in _selection_pit_runtime_source_ids(
+        settings_payload=settings_payload, on_arm_payload=on_arm_payload,
+    ):
+        lineage_key = f"dl:{source_id}:fit_contract"
+        if lineage_key in artifact_identities:
+            artifact_keys.append(lineage_key)
     projected_score_artifacts = _selection_pit_projection_artifacts(
         settings_payload=settings_payload,
         artifact_identities=artifact_identities,
@@ -614,6 +623,36 @@ def _research_dataset_generation_identity_matches_current(
         return False
     return stored_identity == current_identity
 
+def _versioned_replay_sources_pending(
+    *, settings: StrategyComparisonSettings, status: dict[str, Any],
+    on_arm: StrategyComparisonArm,
+) -> tuple[str, ...]:
+    """Only a verified current FIT can authorize a v2+ completed-pair REUSE.
+
+    The legacy v1 pair-pinned-score capability remains unchanged. Primary,
+    safety and Positive sources use the same runtime-dependency resolver.
+    """
+    artifacts = dict(status.get("artifact_identities") or {})
+    rows = dict(status.get("dl_sources") or {})
+    return tuple(
+        source_id for source_id in resolve_arm_runtime_dl_source_ids(settings, on_arm)
+        if f"dl:{source_id}:fit_contract" in artifacts
+        and not bool(dict(rows.get(source_id) or {}).get("ready"))
+    )
+
+
+def _pair_fit_lineages_match(
+    *, settings: StrategyComparisonSettings, on_arm: StrategyComparisonArm,
+    current: dict[str, Any], published: dict[str, Any],
+) -> bool:
+    """Prevent the legacy projection/archived fallbacks bypassing an FIT bump."""
+    return all(
+        current.get(f"dl:{source_id}:fit_contract")
+        == published.get(f"dl:{source_id}:fit_contract")
+        for source_id in resolve_arm_runtime_dl_source_ids(settings, on_arm)
+    )
+
+
 def _find_reusable_pair_with_archived_source(
     *,
     root: Path,
@@ -633,6 +672,8 @@ def _find_reusable_pair_with_archived_source(
     """
 
     if not settings.preparation.reuse_completed_results:
+        return None
+    if _versioned_replay_sources_pending(settings=settings, status=status, on_arm=on_arm):
         return None
     dl_id = str(on_arm.dl_id or "")
     if not dl_id or dl_id not in settings.dl_sources:
@@ -693,6 +734,11 @@ def _find_reusable_pair_with_archived_source(
             continue
 
         run_artifacts = dict(run_payload.get("artifact_identities") or {})
+        if not _pair_fit_lineages_match(
+            settings=settings, on_arm=on_arm,
+            current=dict(status.get("artifact_identities") or {}), published=run_artifacts,
+        ):
+            continue
         if not _archived_pair_source_is_self_contained(
             run_artifact_identities=run_artifacts,
             dl_id=dl_id,
@@ -814,6 +860,12 @@ def _legacy_pair_score_projection_matches_current(
 
     if not _research_dataset_generation_identity_matches_current(
         status=status, run_payload=run_payload
+    ):
+        return False
+    if not _pair_fit_lineages_match(
+        settings=settings, on_arm=on_arm,
+        current=dict(status.get("artifact_identities") or {}),
+        published=dict(run_payload.get("artifact_identities") or {}),
     ):
         return False
     if not _settings_core_matches_archived_pair(
@@ -968,6 +1020,8 @@ def _find_reusable_pair(
 ) -> dict[str, Any] | None:
     if not settings.preparation.reuse_completed_results:
         return None
+    if _versioned_replay_sources_pending(settings=settings, status=status, on_arm=on_arm):
+        return None
     if run_dirs is None:
         run_dirs = _completed_reuse_run_dirs(root=root, settings=settings)
     if not run_dirs:
@@ -1041,6 +1095,12 @@ def _find_reusable_pair(
         except (TypeError, ValueError):
             continue
         source_artifact_mode = "projection_identity"
+        if not _pair_fit_lineages_match(
+            settings=settings, on_arm=on_arm,
+            current=dict(status.get("artifact_identities") or {}),
+            published=dict(run_payload.get("artifact_identities") or {}),
+        ):
+            continue
         if actual != expected:
             if not _legacy_pair_score_projection_matches_current(
                 root=root,
@@ -1143,6 +1203,10 @@ def _collect_replay_cache_status(
     )
     arm_states: dict[str, Any] = {}
     for arm in settings.enabled_arms:
+        pending_dl_sources = (
+            _versioned_replay_sources_pending(settings=settings, status=status, on_arm=arm)
+            if arm.dl_enabled else ()
+        )
         parameter_dependency = action_by_key.get(f"param:{arm.param_source}")
         parameter_dependency_pending = (
             isinstance(parameter_dependency, ResearchArtifactAction)
@@ -1171,8 +1235,11 @@ def _collect_replay_cache_status(
             verified_evidence=evidence if isinstance(evidence, dict) else None,
             source_dir=source_dir,
             missing_reason=f"{arm.arm_id}尚無identity一致的completed result",
-            upstream_dependency_pending=parameter_dependency_pending,
+            upstream_dependency_pending=parameter_dependency_pending or bool(pending_dl_sources),
             upstream_dependency_reason=(
+                "等待上游DL FIT版本完成驗證／重建後重新解析: "
+                + ", ".join(pending_dl_sources)
+                if pending_dl_sources else
                 (
                     "既有completed result僅為候選；"
                     if isinstance(evidence, dict)

@@ -1005,6 +1005,10 @@ def _write_standard_model_comparison_report(
                 "seed": int(item["settings"].seed) if not robustness else None,
                 "benchmark_seeds": [int(seed) for seed in item.get("benchmark_seeds", ())],
                 "artifact_action": str(item.get("artifact_action") or "REUSE"),
+                **({"fit_contract_version": int(get_breakout_quality_experiment_profile(
+                    str(item["settings"].experiment_profile)).fit_contract_version)}
+                   if int(get_breakout_quality_experiment_profile(
+                       str(item["settings"].experiment_profile)).fit_contract_version) > 1 else {}),
                 "source_reports": source_reports(item),
                 "sop_view": _standard_model_machine_view(dict(item["payload"])),
             }
@@ -3390,6 +3394,10 @@ def _write_standard_model_sop_report(
         "architecture": str(settings.model_architecture),
         "profile": str(settings.experiment_profile),
         "model_research_id": str(payload.get("model_research_id") or ""),
+        **({"fit_contract_version": int(get_breakout_quality_experiment_profile(
+            settings.experiment_profile).fit_contract_version)}
+           if int(get_breakout_quality_experiment_profile(
+               settings.experiment_profile).fit_contract_version) > 1 else {}),
         "source_artifact": project_relative_display_path(source_path, project_root=PROJECT_ROOT),
         "standard_model_sop": standard,
         "sop_view": _standard_model_machine_view(payload),

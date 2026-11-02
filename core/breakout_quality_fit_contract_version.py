@@ -12,6 +12,24 @@ from pathlib import Path
 from core.file_integrity import load_json_object_or_none
 
 
+def current_fit_contract_artifact_identity(experiment_profile: str) -> dict | None:
+    """Immutable FIT source lineage for consumers of versioned model scores.
+
+    v1 has no additional pair/report lineage field so unchanged historical
+    scientific results retain their existing fingerprint. Explicit v2+ upgrades
+    invalidate the entire dependent result, even if a score projection happens
+    to contain identical numeric values.
+    """
+    from core.breakout_quality_registry import get_breakout_quality_experiment_profile
+
+    profile = get_breakout_quality_experiment_profile(str(experiment_profile))
+    version = int(profile.fit_contract_version)
+    return (
+        {"version": version, "experiment_settings": profile.as_manifest_payload()}
+        if version > 1 else None
+    )
+
+
 def published_fit_contract_version_state(
     *, experiment_profile: str, publication_dir: Path, rolling: bool,
 ) -> tuple[str, str]:

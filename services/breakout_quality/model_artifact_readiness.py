@@ -14,6 +14,7 @@ import json
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from core.breakout_quality_fit_contract_version import current_fit_contract_artifact_identity
 from core.research_orchestration import ResearchArtifactAction, ResearchArtifactPlan
 from core.research_report_contract import (
     persistent_report_contract_fingerprint,
@@ -92,6 +93,10 @@ def standard_model_report_matches_source(
             for key, expected in expected_identity.items()
         ):
             return False
+        if expected_identity and expected_identity.get("profile"):
+            lineage = current_fit_contract_artifact_identity(str(expected_identity["profile"]))
+            if lineage is not None and saved.get("fit_contract_version") != lineage["version"]:
+                return False
         document = markdown_file.read_text(encoding="utf-8")
         # The publisher owns the entire rendered content. The readiness reader
         # checks that exact publication, not a handful of surviving markers.
