@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import core.breakout_quality_registry as breakout_quality_registry
 import core.breakout_quality_policy as breakout_quality_policy
 from .checks import raises_expected, bind_synthetic_case, bind_checks, run_bound_checks
@@ -1751,14 +1753,20 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         and 'checkpoint selected_epoch mismatch' not in pit_score_source,
     )
 
-    rolling_settings = SimpleNamespace(
-        rolling_authorized=True,
-        filter_id="synthetic_quality",
-        model_architecture="synthetic_arch",
-        experiment_profile="synthetic_rolling_profile",
+    # Test the Forward-to-Rolling FIT bridge with a registered, Rolling-authorized
+    # profile.  The version owner rightly rejects fabricated profile identities;
+    # synthetic output paths remain isolated by the fixture filter_id.
+    rolling_settings = breakout_quality_policy.get_breakout_quality_workflow_settings(
+        experiment_profile=DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE
     )
+    rolling_settings = replace(rolling_settings, filter_id="synthetic_quality")
     forward_checkpoint_source = (Path("/synthetic/forward/model"), Path("/synthetic/forward/report.json"))
     with (
+        tempfile.TemporaryDirectory() as rolling_test_dir,
+        patch.object(
+            research_app, "_rolling_publication_dir",
+            return_value=Path(rolling_test_dir) / "unpublished_rolling",
+        ),
         patch.object(research_app, "_print_workflow_status"),
         patch.object(
             research_app, "_load_reusable_rolling_standard_report",
