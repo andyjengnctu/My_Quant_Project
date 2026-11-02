@@ -6425,6 +6425,7 @@ def validate_market_data_rounds_1_16_repair4_downstream_generation_identity_cont
         normal_pair_settings = SimpleNamespace(
             preparation=SimpleNamespace(reuse_completed_results=True),
             output_root="outputs/strategy_compare", reuse_output_roots=(),
+            dl_sources={"dl": SimpleNamespace(score_source=SCORE_SOURCE_SELECTION_POINT_IN_TIME)},
         )
         normal_pair_run = root / "normal_pair_generation_guard" / "outputs" / "strategy_compare" / "runs" / "legacy_run"
         normal_pair_run.mkdir(parents=True)
