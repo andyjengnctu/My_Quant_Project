@@ -13,11 +13,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import TestCase, main
 from unittest.mock import patch
+from core import breakout_quality_registry as model_registry
 
 from core.breakout_quality_registry import (
     DAILY_UNIVERSAL_NETPNL_POSITIVE_BINARY_PROFILE,
-    DAILY_UNIVERSAL_T40_PRETRAINED_NETPNL_POSITIVE_BINARY_PROFILE,
-    DAILY_UNIVERSAL_MFE40_PRETRAINED_NETPNL_POSITIVE_BINARY_PROFILE,
+    DAILY_UNIVERSAL_FORMAL_MINTRADE_FULLCYCLE_NETPNL_PAIRWISE_PROFILE,
     get_breakout_quality_experiment_profile,
 )
 from core.strategy_compare_policy import get_strategy_comparison_settings
@@ -35,8 +35,9 @@ from services.research import breakout_quality_application as application
 from services.research import strategy_compare_training
 
 
-CQ = DAILY_UNIVERSAL_T40_PRETRAINED_NETPNL_POSITIVE_BINARY_PROFILE
-CP = DAILY_UNIVERSAL_NETPNL_POSITIVE_BINARY_PROFILE
+# Per-test synthetic CP contract upgrade; the published CP FIT remains v1.
+VERSIONED_PROFILE = DAILY_UNIVERSAL_NETPNL_POSITIVE_BINARY_PROFILE
+UNAFFECTED_PROFILE = DAILY_UNIVERSAL_FORMAL_MINTRADE_FULLCYCLE_NETPNL_PAIRWISE_PROFILE
 FOLD = "fold_20210101_20211231"
 
 
@@ -44,13 +45,6 @@ def _manifest_settings(profile_name, *, legacy=False):
     settings = get_breakout_quality_experiment_profile(profile_name).as_manifest_payload()
     if legacy:
         settings.pop("fit_contract_version", None)
-        pretrain = settings.get("encoder_pretraining")
-        if pretrain is not None:
-            pretrain["name"] = "daily_t40_regression_encoder_v1"
-            pretrain["epochs"] = 100
-            pretrain["sampling_mode"] = "ticker_balanced_one_window_per_ticker_per_epoch"
-            pretrain.pop("validation_months", None)
-            pretrain.pop("early_stopping_patience", None)
     return settings
 
 
@@ -71,94 +65,81 @@ def _write_rolling(path: Path, profile_name: str, *, legacy=False):
 
 
 class ScientificVersionCases(TestCase):
-    def test_single_registry_owner_publishes_only_nondefault_fit_version(self):
-        cp = get_breakout_quality_experiment_profile(CP)
-        cq = get_breakout_quality_experiment_profile(CQ)
-        self.assertNotIn("fit_contract_version", cp.as_manifest_payload())
-        self.assertEqual(cq.as_manifest_payload()["fit_contract_version"], 2)
-        self.assertEqual(cq.encoder_pretraining_profile, get_breakout_quality_experiment_profile(CQ).encoder_pretraining_profile)
+    def setUp(self):
+        # The test must never change the persisted owner or any physical model FIT.
+        original = get_breakout_quality_experiment_profile(VERSIONED_PROFILE)
+        self.version_override = patch.dict(model_registry._EXPERIMENT_PROFILES, {
+            VERSIONED_PROFILE: replace(original, fit_contract_version=2),
+        })
+        self.version_override.start()
+        self.addCleanup(self.version_override.stop)
 
-    def test_new_daily_mfe40_model_defaults_v1_and_is_independently_versioned(self):
-        cr = DAILY_UNIVERSAL_MFE40_PRETRAINED_NETPNL_POSITIVE_BINARY_PROFILE
-        cp = get_breakout_quality_experiment_profile(CP)
-        cq = get_breakout_quality_experiment_profile(CQ)
-        model = get_breakout_quality_experiment_profile(cr)
-        self.assertNotIn('fit_contract_version', model.as_manifest_payload())
-        self.assertNotEqual(model.as_manifest_payload()['encoder_pretraining'],
-                            cq.as_manifest_payload()['encoder_pretraining'])
-        self.assertEqual(model.continuous_target_id, cp.continuous_target_id)
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / 'cr'
-            _write_rolling(path, cr)
-            self.assertEqual(published_fit_contract_version_state(
-                experiment_profile=cr, publication_dir=path, rolling=True)[0], 'CURRENT')
-            fold = path / 'folds' / FOLD / 'manifest.json'
-            data = json.loads(fold.read_text(encoding='utf-8'))
-            data['experiment_settings']['encoder_pretraining']['target_names'] = ['terminal_mae_gated_t40_40d']
-            _write_json(fold, data)
-            self.assertEqual(published_fit_contract_version_state(
-                experiment_profile=cr, publication_dir=path, rolling=True)[0], 'BLOCKED')
+    def test_synthetic_upgrade_only_sets_version_in_local_owner(self):
+        current = get_breakout_quality_experiment_profile(VERSIONED_PROFILE)
+        other = get_breakout_quality_experiment_profile(UNAFFECTED_PROFILE)
+        self.assertEqual(current.as_manifest_payload()["fit_contract_version"], 2)
+        self.assertNotIn("fit_contract_version", other.as_manifest_payload())
 
     def test_complete_model_staleness_and_reuse_after_rebuild(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "rolling"
-            _write_rolling(path, CQ, legacy=True)
+            _write_rolling(path, VERSIONED_PROFILE, legacy=True)
             self.assertEqual(published_fit_contract_version_state(
-                experiment_profile=CQ, publication_dir=path, rolling=True)[0], "UPGRADE_REQUIRED")
-            fake_settings = SimpleNamespace(experiment_profile=CQ)
+                experiment_profile=VERSIONED_PROFILE, publication_dir=path, rolling=True)[0], "UPGRADE_REQUIRED")
+            fake_settings = SimpleNamespace(experiment_profile=VERSIONED_PROFILE)
             self.assertTrue(application._version_rebuild_required(
                 fake_settings, rolling=True, publication_dir=path))
-            _write_rolling(path, CQ)
+            _write_rolling(path, VERSIONED_PROFILE)
             self.assertEqual(published_fit_contract_version_state(
-                experiment_profile=CQ, publication_dir=path, rolling=True)[0], "CURRENT")
+                experiment_profile=VERSIONED_PROFILE, publication_dir=path, rolling=True)[0], "CURRENT")
             self.assertFalse(application._version_rebuild_required(
                 fake_settings, rolling=True, publication_dir=path))
             # A forgotten version bump is a contract failure, not authorization to rebuild.
             fold = path / "folds" / FOLD / "manifest.json"
             modified = json.loads(fold.read_text(encoding="utf-8"))
-            modified["experiment_settings"]["encoder_pretraining"]["epochs"] += 1
+            modified["experiment_settings"]["learning_rate"] = 0.12345
             _write_json(fold, modified)
             self.assertEqual(published_fit_contract_version_state(
-                experiment_profile=CQ, publication_dir=path, rolling=True)[0], "BLOCKED")
+                experiment_profile=VERSIONED_PROFILE, publication_dir=path, rolling=True)[0], "BLOCKED")
             with self.assertRaisesRegex(RuntimeError, "FIT contract unverified"):
                 application._version_rebuild_required(fake_settings, rolling=True, publication_dir=path)
 
-    def test_unaffected_cp_v1_and_older_v1_artifacts_remain_reusable(self):
+    def test_unaffected_model_v1_and_older_v1_artifacts_remain_reusable(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "cp"
-            _write_rolling(path, CP)
+            _write_rolling(path, UNAFFECTED_PROFILE)
             self.assertEqual(published_fit_contract_version_state(
-                experiment_profile=CP, publication_dir=path, rolling=True)[0], "CURRENT")
-            forward = Path(tmp) / "cp_forward"
+                experiment_profile=UNAFFECTED_PROFILE, publication_dir=path, rolling=True)[0], "CURRENT")
+            forward = Path(tmp) / "other_forward"
             _write_json(forward / "manifest.json", {
-                "experiment_profile": CP, "experiment_settings": _manifest_settings(CP),
+                "experiment_profile": UNAFFECTED_PROFILE, "experiment_settings": _manifest_settings(UNAFFECTED_PROFILE),
             })
             self.assertEqual(published_fit_contract_version_state(
-                experiment_profile=CP, publication_dir=forward, rolling=False)[0], "CURRENT")
+                experiment_profile=UNAFFECTED_PROFILE, publication_dir=forward, rolling=False)[0], "CURRENT")
 
     def test_crash_after_rename_still_requires_full_version_rebuild(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "rolling"
-            _write_rolling(path, CQ, legacy=True)
+            _write_rolling(path, VERSIONED_PROFILE, legacy=True)
             backup = path.with_name("." + path.name + ".superseded_fit_backup")
             path.rename(backup)  # synthetic forced process termination
             self.assertEqual(published_fit_contract_version_state(
-                experiment_profile=CQ, publication_dir=path, rolling=True)[0], "UPGRADE_REQUIRED")
+                experiment_profile=VERSIONED_PROFILE, publication_dir=path, rolling=True)[0], "UPGRADE_REQUIRED")
             with superseded_fit_publication_guard(path):
                 self.assertFalse(path.exists())
-                _write_rolling(path, CQ)
+                _write_rolling(path, VERSIONED_PROFILE)
             self.assertEqual(published_fit_contract_version_state(
-                experiment_profile=CQ, publication_dir=path, rolling=True)[0], "CURRENT")
+                experiment_profile=VERSIONED_PROFILE, publication_dir=path, rolling=True)[0], "CURRENT")
             self.assertFalse(backup.exists())
 
     def test_corrupt_or_partial_source_does_not_authorize_version_rebuild(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp)
             _write_json(path / "selection_point_in_time_manifest.json", {
-                "experiment_profile": CQ, "folds": [{"fold_id": FOLD}],
+                "experiment_profile": VERSIONED_PROFILE, "folds": [{"fold_id": FOLD}],
             })
             self.assertEqual(published_fit_contract_version_state(
-                experiment_profile=CQ, publication_dir=path, rolling=True)[0], "BLOCKED")
+                experiment_profile=VERSIONED_PROFILE, publication_dir=path, rolling=True)[0], "BLOCKED")
 
     def test_unreadable_existing_manifest_cannot_look_like_missing_publication(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -166,16 +147,16 @@ class ScientificVersionCases(TestCase):
             path.mkdir()
             (path / "selection_point_in_time_manifest.json").write_text("{broken")
             self.assertEqual(published_fit_contract_version_state(
-                experiment_profile=CQ, publication_dir=path, rolling=True)[0], "BLOCKED")
+                experiment_profile=VERSIONED_PROFILE, publication_dir=path, rolling=True)[0], "BLOCKED")
             forward = Path(tmp) / "forward"
             forward.mkdir()
             (forward / "manifest.json").write_text("{broken")
             self.assertEqual(published_fit_contract_version_state(
-                experiment_profile=CQ, publication_dir=forward, rolling=False)[0], "BLOCKED")
+                experiment_profile=VERSIONED_PROFILE, publication_dir=forward, rolling=False)[0], "BLOCKED")
 
     def test_strategy_arms_inherit_current_model_version_without_bumping_replay_rules(self):
         settings = get_strategy_comparison_settings(STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE)
-        for old, new in (("C125", "C127"), ("C126", "C128")):
+        for old, new in (("C123", "C125"), ("C124", "C126")):
             old_arm = settings.arms[old]
             new_arm = settings.arms[new]
             self.assertEqual(old_arm.replay_contract_version, 1)
@@ -188,11 +169,11 @@ class ScientificVersionCases(TestCase):
     def test_strategy_consumer_rejects_superseded_auxiliary_dl_source(self):
         source = get_strategy_comparison_settings(
             STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE
-        ).dl_sources["CONT13CQ_ROLL"]
+        ).dl_sources["CONT13CP_ROLL"]
         workflow = SimpleNamespace(point_in_time_fold_months=12)
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp)
-            _write_rolling(path, CQ, legacy=True)
+            _write_rolling(path, VERSIONED_PROFILE, legacy=True)
             record = SimpleNamespace(seed=42, manifest={
                 "fold_months": 12,
                 "single_score_block": bool(source.point_in_time_single_score_block),
@@ -204,33 +185,33 @@ class ScientificVersionCases(TestCase):
                         root=path, source=source, workflow=workflow, seed=42,
                         point_in_time_dir_override=path,
                     )
-                _write_rolling(path, CQ)
+                _write_rolling(path, VERSIONED_PROFILE)
                 self.assertIs(load_validated_selection_pit_strategy_compare_contract(
                     root=path, source=source, workflow=workflow, seed=42,
                     point_in_time_dir_override=path,
                 ), record)
 
-    def test_versioned_positive_auxiliary_invalidates_both_pairs_not_cp(self):
+    def test_versioned_positive_auxiliary_invalidates_only_dependent_pairs(self):
         from core.breakout_quality_fit_contract_version import current_fit_contract_artifact_identity
         from services.research.strategy_compare_reuse import (
             _versioned_replay_sources_pending, _pair_fit_lineages_match,
             _pair_cache_fingerprint_from_payload,
         )
         settings = get_strategy_comparison_settings(STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE)
-        lineage = current_fit_contract_artifact_identity(CQ)
+        lineage = current_fit_contract_artifact_identity(VERSIONED_PROFILE)
         self.assertEqual(lineage["version"], 2)
-        self.assertIsNone(current_fit_contract_artifact_identity(CP))
+        self.assertIsNone(current_fit_contract_artifact_identity(UNAFFECTED_PROFILE))
         old = {}
-        current = {"dl:CONT13CQ_ROLL:fit_contract": lineage}
+        current = {"dl:CONT13CP_ROLL:fit_contract": lineage}
         state = {"artifact_identities": current, "dl_sources": {
-            "CONT13CO_ROLL": {"ready": True}, "CONT13CP_ROLL": {"ready": True},
-            "CONT13CQ_ROLL": {"ready": False},
+            "CONT13CO_ROLL": {"ready": True},
+            "CONT13CP_ROLL": {"ready": False},
         }}
-        for arm_id in ("C127", "C128"):
+        for arm_id in ("C125", "C126"):
             arm = settings.arms[arm_id]
             self.assertEqual(
                 _versioned_replay_sources_pending(settings=settings, status=state, on_arm=arm),
-                ("CONT13CQ_ROLL",),
+                ("CONT13CP_ROLL",),
             )
             self.assertFalse(_pair_fit_lineages_match(
                 settings=settings, on_arm=arm, current=current, published=old,
@@ -245,14 +226,14 @@ class ScientificVersionCases(TestCase):
             previous = _pair_cache_fingerprint_from_payload(artifact_identities=old, **kwargs)
             upgraded = _pair_cache_fingerprint_from_payload(artifact_identities=current, **kwargs)
             self.assertNotEqual(previous, upgraded)  # Even identical score columns.
-            state["dl_sources"]["CONT13CQ_ROLL"]["ready"] = True
+            state["dl_sources"]["CONT13CP_ROLL"]["ready"] = True
             self.assertEqual(_versioned_replay_sources_pending(
                 settings=settings, status=state, on_arm=arm), ())
             self.assertTrue(_pair_fit_lineages_match(
                 settings=settings, on_arm=arm, current=current, published=dict(current),
             ))
-            state["dl_sources"]["CONT13CQ_ROLL"]["ready"] = False
-        for arm_id in ("C125", "C126"):
+            state["dl_sources"]["CONT13CP_ROLL"]["ready"] = False
+        for arm_id in ("C123", "C124"):
             arm = settings.arms[arm_id]
             self.assertEqual(_versioned_replay_sources_pending(
                 settings=settings, status=state, on_arm=arm), ())
@@ -269,15 +250,14 @@ class ScientificVersionCases(TestCase):
             "comparison_period": {"start": "2021-01-01", "end": "2026-03-02"},
             "preparation_plan": ResearchArtifactPlan.from_actions([]),
             "artifact_identities": {
-                "dl:CONT13CQ_ROLL:fit_contract": current_fit_contract_artifact_identity(CQ),
+                "dl:CONT13CP_ROLL:fit_contract": current_fit_contract_artifact_identity(VERSIONED_PROFILE),
             },
             "dl_sources": {
                 "CONT13CO_ROLL": {"ready": True},
-                "CONT13CP_ROLL": {"ready": True},
-                "CONT13CQ_ROLL": {"ready": False},
+                "CONT13CP_ROLL": {"ready": False},
             },
         }
-        # Simulate a cached v1 C127/C128 pair whose contents otherwise match;
+        # Simulate a cached v1 C125/C126 pair whose contents otherwise match;
         # the planner must not allow evidence to override a pending FIT version.
         def fake_cached_pair(*, on_arm, **_kwargs):
             return {"source_pair_dir": Path("synthetic_completed_pair")}
@@ -290,15 +270,15 @@ class ScientificVersionCases(TestCase):
             before = _collect_replay_cache_status(
                 root=Path("synthetic"), settings=settings, status=status,
             )["arm_states"]
-            for arm in ("C127", "C128"):
-                self.assertEqual(before[arm]["action"], "WAIT")
             for arm in ("C125", "C126"):
+                self.assertEqual(before[arm]["action"], "WAIT")
+            for arm in ("C123", "C124"):
                 self.assertEqual(before[arm]["action"], "REUSE")
-            status["dl_sources"]["CONT13CQ_ROLL"]["ready"] = True
+            status["dl_sources"]["CONT13CP_ROLL"]["ready"] = True
             after = _collect_replay_cache_status(
                 root=Path("synthetic"), settings=settings, status=status,
             )["arm_states"]
-            for arm in ("C127", "C128"):
+            for arm in ("C125", "C126"):
                 self.assertEqual(after[arm]["action"], "REUSE")
 
     def test_robustness_report_checks_own_seed_fit_not_main_rolling(self):
@@ -308,18 +288,18 @@ class ScientificVersionCases(TestCase):
             paths = []
             for index in range(2):
                 directory = root / "robustness" / f"seed_{index}"
-                _write_rolling(directory, CQ, legacy=(index == 1))
+                _write_rolling(directory, VERSIONED_PROFILE, legacy=(index == 1))
                 report = directory / "selection_point_in_time_audit.json"
                 report.write_text("{}", encoding="utf-8")
                 paths.append(report.relative_to(root).as_posix())
             source = {"source_reports": paths}
             self.assertFalse(_robustness_fit_versions_current(
-                root, model=source, profile=CQ, seeds=(101, 102)))
-            _write_rolling((root / paths[1]).parent, CQ)
+                root, model=source, profile=VERSIONED_PROFILE, seeds=(101, 102)))
+            _write_rolling((root / paths[1]).parent, VERSIONED_PROFILE)
             self.assertTrue(_robustness_fit_versions_current(
-                root, model=source, profile=CQ, seeds=(101, 102)))
+                root, model=source, profile=VERSIONED_PROFILE, seeds=(101, 102)))
             self.assertFalse(_robustness_fit_versions_current(
-                root, model={"source_reports": paths[:1]}, profile=CQ,
+                root, model={"source_reports": paths[:1]}, profile=VERSIONED_PROFILE,
                 seeds=(101, 102)))
 
     def test_robustness_rho_independent_of_main_rolling_version_state(self):
@@ -336,23 +316,23 @@ class ScientificVersionCases(TestCase):
                           return_value=SimpleNamespace(source={"filter_id": "breakout_quality_v1"})), \
              patch.object(overview, "get_active_audit_module_id", return_value="synthetic"), \
              patch.object(overview, "_oracle_rows", return_value=evidence), \
-             patch.object(overview, "_strategy_bindings", return_value={(target, CQ): "C127"}), \
-             patch.object(overview, "_is_exact_supervision", side_effect=lambda profile, _label: profile == CQ), \
+             patch.object(overview, "_strategy_bindings", return_value={(target, VERSIONED_PROFILE): "C125"}), \
+             patch.object(overview, "_is_exact_supervision", side_effect=lambda profile, _label: profile == VERSIONED_PROFILE), \
              patch.object(overview, "_model_comparison_rhos",
-                          side_effect=[{}, {CQ: (0.1234, (101, 102, 103, 104))}]), \
+                          side_effect=[{}, {VERSIONED_PROFILE: (0.1234, (101, 102, 103, 104))}]), \
              patch.object(overview, "_rolling_fit_version_current", return_value=False), \
              patch.object(overview, "_single_model_rho", return_value=None), \
              patch.object(overview, "_published_model_report", return_value=None), \
              patch.object(overview, "_strategy_rolling_metrics", return_value={}), \
              patch.object(overview, "_strategy_robustness_metrics", return_value={}):
             rows = overview.collect_target_dl_overview(Path(tmp))["rows"]
-        cq_rows = [row for row in rows if row["model"] == "MR-13CQ"]
+        cq_rows = [row for row in rows if row["model"] == "MR-13CP"]
         self.assertEqual(len(cq_rows), 1)
         self.assertIsNone(cq_rows[0]["rolling_rho"])
         self.assertEqual(cq_rows[0]["robustness_rho"], 0.1234)
         self.assertEqual(cq_rows[0]["rho_seeds"], (101, 102, 103, 104))
 
-    def test_old_cq_model_and_strategy_results_blank_until_matching_v2(self):
+    def test_old_model_and_strategy_results_blank_until_matching_v2(self):
         import hashlib
         from core.breakout_quality_fit_contract_version import current_fit_contract_artifact_identity
         from core.report_contract_versions import load_report_contract_versions
@@ -368,21 +348,21 @@ class ScientificVersionCases(TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             publication = root / "model_rolling"
-            _write_rolling(publication, CQ, legacy=True)
+            _write_rolling(publication, VERSIONED_PROFILE, legacy=True)
             md = publication / "standard_model_report.md"
             md.write_text("valid synthetic Standard SOP\n", encoding="utf-8")
             payload = {
                 "report_id": "model.standard_sop", "report_version": versions["model.standard_sop"][-1]["version"],
                 "report_contract_fingerprint": persistent_report_contract_fingerprint("model.standard_sop"),
-                "profile": CQ, "filter_id": "breakout_quality_v1", "evaluation_mode": "rolling_oos",
-                "model_research_id": get_continuous_ranker_research_spec(CQ).model_research_id,
+                "profile": VERSIONED_PROFILE, "filter_id": "breakout_quality_v1", "evaluation_mode": "rolling_oos",
+                "model_research_id": get_continuous_ranker_research_spec(VERSIONED_PROFILE).model_research_id,
                 "markdown_sha256": hashlib.sha256(md.read_text().encode()).hexdigest(),
                 "standard_model_sop": {"evaluation_mode": "rolling_oos", "split_metrics": {"oos": {"mean_daily_spearman": 0.11}}},
             }
             report = publication / "standard_model_report.json"
             def read():
                 return _published_model_report(
-                    report, md, profile=CQ, filter_id="breakout_quality_v1",
+                    report, md, profile=VERSIONED_PROFILE, filter_id="breakout_quality_v1",
                     evaluation_mode="rolling_oos", versions=versions,
                 )
             _write_json(report, payload)
@@ -390,31 +370,31 @@ class ScientificVersionCases(TestCase):
             payload["fit_contract_version"] = 2
             _write_json(report, payload)
             self.assertIsNone(read())  # v1 Fold still invalid despite report metadata.
-            _write_rolling(publication, CQ)
+            _write_rolling(publication, VERSIONED_PROFILE)
             self.assertIsNotNone(read())
 
-            source = settings.dl_sources["CONT13CQ_ROLL"]
-            lineage = current_fit_contract_artifact_identity(CQ)
+            source = settings.dl_sources["CONT13CP_ROLL"]
+            lineage = current_fit_contract_artifact_identity(VERSIONED_PROFILE)
             with patch('services.research.target_dl_overview.resolve_strategy_compare_selection_pit_bundle_dir', return_value=publication):
                 self.assertFalse(_arm_fit_lineage_current(
-                    root=root, settings=settings, arm_id="C127", artifact_identities={},
-                ))
-                for arm in ("C127", "C128"):
-                    self.assertTrue(_arm_fit_lineage_current(
-                        root=root, settings=settings, arm_id=arm,
-                        artifact_identities={"dl:CONT13CQ_ROLL:fit_contract": lineage},
-                    ))
-                self.assertTrue(_arm_fit_lineage_current(
                     root=root, settings=settings, arm_id="C125", artifact_identities={},
                 ))
+                for arm in ("C125", "C126"):
+                    self.assertTrue(_arm_fit_lineage_current(
+                        root=root, settings=settings, arm_id=arm,
+                        artifact_identities={"dl:CONT13CP_ROLL:fit_contract": lineage},
+                    ))
+                self.assertTrue(_arm_fit_lineage_current(
+                    root=root, settings=settings, arm_id="C123", artifact_identities={},
+                ))
             pinned = {"runtime_dl_sources": [
-                {"dl_id": "CONT13CQ_ROLL", "experiment_profile": CQ,
-                 "experiment_profile_manifest": _manifest_settings(CQ, legacy=True)}
+                {"dl_id": "CONT13CP_ROLL", "experiment_profile": VERSIONED_PROFILE,
+                 "experiment_profile_manifest": _manifest_settings(VERSIONED_PROFILE, legacy=True)}
             ]}
-            self.assertFalse(_robust_arm_fit_lineage_current(settings,"C127",pinned))
-            pinned["runtime_dl_sources"][0]["experiment_profile_manifest"] = _manifest_settings(CQ)
-            self.assertTrue(_robust_arm_fit_lineage_current(settings,"C127",pinned))
-            self.assertTrue(_robust_arm_fit_lineage_current(settings,"C125",{}))
+            self.assertFalse(_robust_arm_fit_lineage_current(settings,"C125",pinned))
+            pinned["runtime_dl_sources"][0]["experiment_profile_manifest"] = _manifest_settings(VERSIONED_PROFILE)
+            self.assertTrue(_robust_arm_fit_lineage_current(settings,"C125",pinned))
+            self.assertTrue(_robust_arm_fit_lineage_current(settings,"C123",{}))
 
             out = resolve_filter_output_dir(root, filter_id="breakout_quality_v1") / "standard_model_comparison" / "rolling_oos"
             out.mkdir(parents=True)
@@ -426,8 +406,8 @@ class ScientificVersionCases(TestCase):
                 "report_contract_fingerprint": persistent_report_contract_fingerprint("model.standard_comparison"),
                 "evaluation_mode": "rolling_oos", "robustness": False,
                 "models": [{
-                    "model_id": get_continuous_ranker_research_spec(CQ).model_research_id,
-                    "filter_id": "breakout_quality_v1", "profile": CQ, "seed": 42,
+                    "model_id": get_continuous_ranker_research_spec(VERSIONED_PROFILE).model_research_id,
+                    "filter_id": "breakout_quality_v1", "profile": VERSIONED_PROFILE, "seed": 42,
                     "sop_view": {"evaluation_mode": "rolling_oos", "learnability": [{
                         "split": "oos", "mean_daily_spearman": 0.15,
                     }]},
@@ -442,7 +422,7 @@ class ScientificVersionCases(TestCase):
                 compare["models"][0]["fit_contract_version"] = 2
                 _write_json(file, compare)
                 self.assertEqual(_model_comparison_rhos(root,filter_id="breakout_quality_v1",
-                    versions=versions,robustness=False)[CQ],(0.15,(42,)))
+                    versions=versions,robustness=False)[VERSIONED_PROFILE],(0.15,(42,)))
 
     def test_one_canonical_publication_no_unbounded_archived_versions(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -486,11 +466,11 @@ class ScientificVersionCases(TestCase):
     def test_strategy_compare_stale_source_uses_no_resume_or_previous_checkpoint_cache(self):
         source = get_strategy_comparison_settings(
             STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE
-        ).dl_sources["CONT13CQ_ROLL"]
+        ).dl_sources["CONT13CP_ROLL"]
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             target = root / "published"
-            _write_rolling(target, CQ, legacy=True)
+            _write_rolling(target, VERSIONED_PROFILE, legacy=True)
             (target / "old_checkpoint").write_text("legacy model")
             captured = {}
             def fake_builder(**kwargs):
@@ -499,13 +479,13 @@ class ScientificVersionCases(TestCase):
                     "score_start_date": "2021-01-01", "score_end_date": "2026-03-02"}
             def fake_train(**kwargs):
                 self.assertFalse(target.exists())
-                _write_rolling(target, CQ)
+                _write_rolling(target, VERSIONED_PROFILE)
                 return {"elapsed_sec": 0.0}
             def fake_validator(**kwargs):
                 # Only a committed current publication may be used by Strategy Compare.
                 self.assertFalse((root / ".published.superseded_fit_backup").exists())
                 self.assertEqual(published_fit_contract_version_state(
-                    experiment_profile=CQ, publication_dir=target, rolling=True,
+                    experiment_profile=VERSIONED_PROFILE, publication_dir=target, rolling=True,
                 )[0], "CURRENT")
                 return {"ready": True}
             with patch.object(strategy_compare_training, 'build_strategy_compare_trainer_command', side_effect=fake_builder), patch.object(strategy_compare_training, 'run_logged_training_process', side_effect=fake_train), patch.object(strategy_compare_training, 'validate_strategy_compare_training_artifacts', side_effect=fake_validator), patch('services.breakout_quality.point_in_time_audit.audit_selection_point_in_time_scores', return_value=0):
@@ -524,20 +504,20 @@ class ScientificVersionCases(TestCase):
             self.assertFalse((target / "old_checkpoint").exists())
             self.assertFalse((root / ".published.superseded_fit_backup").exists())
             self.assertEqual(published_fit_contract_version_state(
-                experiment_profile=CQ, publication_dir=target, rolling=True)[0], "CURRENT")
+                experiment_profile=VERSIONED_PROFILE, publication_dir=target, rolling=True)[0], "CURRENT")
 
 
     def test_rolling_version_rebuild_does_not_rollback_completed_fit_for_audit_failure(self):
-        """Regression: CQ v2 six-fold FIT must survive post-training SOP/Audit work."""
+        """Regression: VERSIONED_PROFILE v2 six-fold FIT must survive post-training SOP/Audit work."""
         from core.breakout_quality_policy import get_breakout_quality_workflow_settings, get_breakout_quality_rolling_test_mode
 
-        settings = get_breakout_quality_workflow_settings(experiment_profile=CQ)
+        settings = get_breakout_quality_workflow_settings(experiment_profile=VERSIONED_PROFILE)
         mode = get_breakout_quality_rolling_test_mode("rolling")
         for scenario in ("success", "audit_failure", "producer_failure", "report_failure"):
             with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as tmp:
                 path = Path(tmp) / "rolling"
                 backup = path.with_name("." + path.name + ".superseded_fit_backup")
-                _write_rolling(path, CQ, legacy=True)
+                _write_rolling(path, VERSIONED_PROFILE, legacy=True)
                 calls = []
 
                 def fake_command(command, args, **kwargs):
@@ -545,19 +525,19 @@ class ScientificVersionCases(TestCase):
                     if command == "build-point-in-time-scores":
                         self.assertTrue(backup.is_dir(), "v1 backup needed during FIT")
                         self.assertFalse(path.exists(), "v1 cannot be reused by v2 FIT")
-                        _write_rolling(path, CQ)
+                        _write_rolling(path, VERSIONED_PROFILE)
                         return 7 if scenario == "producer_failure" else 0
                     self.assertEqual(command, "audit-point-in-time-scores")
                     self.assertFalse(backup.exists(), "readers must run after commit")
                     self.assertEqual(published_fit_contract_version_state(
-                        experiment_profile=CQ, publication_dir=path, rolling=True,
+                        experiment_profile=VERSIONED_PROFILE, publication_dir=path, rolling=True,
                     )[0], "CURRENT")
                     return 7 if scenario == "audit_failure" else 0
 
                 def fake_read_report(*args, **kwargs):
                     self.assertFalse(backup.exists())
                     self.assertEqual(published_fit_contract_version_state(
-                        experiment_profile=CQ, publication_dir=path, rolling=True,
+                        experiment_profile=VERSIONED_PROFILE, publication_dir=path, rolling=True,
                     )[0], "CURRENT")
                     if scenario == "report_failure":
                         return None, None, "SOP evidence incomplete"
@@ -574,18 +554,18 @@ class ScientificVersionCases(TestCase):
                     if scenario == "producer_failure":
                         with self.assertRaisesRegex(RuntimeError, "Force Rebuild失敗"):
                             application._run_continuous_pit_profile(
-                                "research", model_id="MR-13CQ", profile_name=CQ,
+                                "research", model_id="MR-13CP", profile_name=VERSIONED_PROFILE,
                                 mode=mode, force_rebuild=True,
                             )
                     elif scenario == "report_failure":
                         with self.assertRaisesRegex(RuntimeError, "Standard SOP仍不可REUSE"):
                             application._run_continuous_pit_profile(
-                                "research", model_id="MR-13CQ", profile_name=CQ,
+                                "research", model_id="MR-13CP", profile_name=VERSIONED_PROFILE,
                                 mode=mode, force_rebuild=True,
                             )
                     else:
                         code = application._run_continuous_pit_profile(
-                            "research", model_id="MR-13CQ", profile_name=CQ,
+                            "research", model_id="MR-13CP", profile_name=VERSIONED_PROFILE,
                             mode=mode, force_rebuild=True,
                         )
                         self.assertEqual(code, 7 if scenario == "audit_failure" else 0)
@@ -593,19 +573,19 @@ class ScientificVersionCases(TestCase):
                 self.assertEqual(calls, ["build-point-in-time-scores"] if scenario == "producer_failure"
                                  else ["build-point-in-time-scores", "audit-point-in-time-scores"])
                 self.assertEqual(published_fit_contract_version_state(
-                    experiment_profile=CQ, publication_dir=path, rolling=True,
+                    experiment_profile=VERSIONED_PROFILE, publication_dir=path, rolling=True,
                 )[0], "UPGRADE_REQUIRED" if scenario == "producer_failure" else "CURRENT")
                 self.assertEqual(render.call_count, 1 if scenario == "success" else 0)
 
     def test_forward_version_rebuild_verifies_after_backup_is_removed(self):
         from core.breakout_quality_policy import get_breakout_quality_workflow_settings
 
-        settings = get_breakout_quality_workflow_settings(experiment_profile=CQ)
+        settings = get_breakout_quality_workflow_settings(experiment_profile=VERSIONED_PROFILE)
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             model_dir, report_dir = root / "model", root / "report"
             _write_json(model_dir / "manifest.json", {
-                "experiment_profile": CQ, "experiment_settings": _manifest_settings(CQ, legacy=True),
+                "experiment_profile": VERSIONED_PROFILE, "experiment_settings": _manifest_settings(VERSIONED_PROFILE, legacy=True),
             })
             report_dir.mkdir()
             (report_dir / "old.txt").write_text("v1")
@@ -615,7 +595,7 @@ class ScientificVersionCases(TestCase):
                 self.assertEqual(command, "train-continuous-ranker")
                 self.assertTrue((root / ".model.superseded_fit_backup").exists())
                 _write_json(model_dir / "manifest.json", {
-                    "experiment_profile": CQ, "experiment_settings": _manifest_settings(CQ),
+                    "experiment_profile": VERSIONED_PROFILE, "experiment_settings": _manifest_settings(VERSIONED_PROFILE),
                 })
                 report_dir.mkdir()
                 return 0
@@ -627,7 +607,7 @@ class ScientificVersionCases(TestCase):
                 self.assertFalse((root / ".model.superseded_fit_backup").exists())
                 self.assertFalse((root / ".report.superseded_fit_backup").exists())
                 self.assertEqual(published_fit_contract_version_state(
-                    experiment_profile=CQ, publication_dir=model_dir, rolling=False,
+                    experiment_profile=VERSIONED_PROFILE, publication_dir=model_dir, rolling=False,
                 )[0], "CURRENT")
                 return SimpleNamespace(report={}), None
 
@@ -639,7 +619,7 @@ class ScientificVersionCases(TestCase):
                  patch.object(application, '_run_command', side_effect=fake_command), \
                  patch.object(application, '_clear_continuous_forward_reuse_caches'):
                 code, contract, action = application._ensure_continuous_forward_model_report(
-                    "research", model_id="MR-13CQ", settings=settings,
+                    "research", model_id="MR-13CP", settings=settings,
                     prompt_for_build=False, force_rebuild=True,
                 )
             self.assertEqual((code, action), (0, "FORCE_REBUILD"))
@@ -651,11 +631,11 @@ class ScientificVersionCases(TestCase):
     def test_strategy_compare_audit_error_keeps_completed_versioned_pit_fit(self):
         source = get_strategy_comparison_settings(
             STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE
-        ).dl_sources["CONT13CQ_ROLL"]
+        ).dl_sources["CONT13CP_ROLL"]
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             target = root / "rolling"
-            _write_rolling(target, CQ, legacy=True)
+            _write_rolling(target, VERSIONED_PROFILE, legacy=True)
 
             def fake_builder(**kwargs):
                 return ["python", "mock"], [], {
@@ -663,12 +643,12 @@ class ScientificVersionCases(TestCase):
                     "score_start_date": "2021-01-01", "score_end_date": "2026-03-02",
                 }
             def fake_train(**kwargs):
-                _write_rolling(target, CQ)
+                _write_rolling(target, VERSIONED_PROFILE)
                 return {"elapsed_sec": 0.0}
             def fake_audit(**kwargs):
                 self.assertFalse((root / ".rolling.superseded_fit_backup").exists())
                 self.assertEqual(published_fit_contract_version_state(
-                    experiment_profile=CQ, publication_dir=target, rolling=True,
+                    experiment_profile=VERSIONED_PROFILE, publication_dir=target, rolling=True,
                 )[0], "CURRENT")
                 return 1
             with patch.object(strategy_compare_training, 'build_strategy_compare_trainer_command', side_effect=fake_builder), \
@@ -684,7 +664,7 @@ class ScientificVersionCases(TestCase):
                     )
             self.assertFalse((root / ".rolling.superseded_fit_backup").exists())
             self.assertEqual(published_fit_contract_version_state(
-                experiment_profile=CQ, publication_dir=target, rolling=True,
+                experiment_profile=VERSIONED_PROFILE, publication_dir=target, rolling=True,
             )[0], "CURRENT")
 
 
@@ -692,11 +672,11 @@ class ScientificVersionCases(TestCase):
     def test_rolling_robustness_rebuild_keeps_completed_fit_on_audit_failure(self):
         from core.breakout_quality_policy import get_breakout_quality_workflow_settings
 
-        settings = get_breakout_quality_workflow_settings(experiment_profile=CQ)
+        settings = get_breakout_quality_workflow_settings(experiment_profile=VERSIONED_PROFILE)
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             path = root / "seed_693545351" / "rolling"
-            _write_rolling(path, CQ, legacy=True)
+            _write_rolling(path, VERSIONED_PROFILE, legacy=True)
             backup = path.with_name("." + path.name + ".superseded_fit_backup")
             def dirs(_settings, *, seed, rolling):
                 self.assertEqual(int(seed), 693545351)
@@ -704,12 +684,12 @@ class ScientificVersionCases(TestCase):
             def fake_command(command, args, **kwargs):
                 if command == "build-point-in-time-scores":
                     self.assertTrue(backup.exists())
-                    _write_rolling(path, CQ)
+                    _write_rolling(path, VERSIONED_PROFILE)
                     return 0
                 self.assertEqual(command, "audit-point-in-time-scores")
                 self.assertFalse(backup.exists())
                 self.assertEqual(published_fit_contract_version_state(
-                    experiment_profile=CQ, publication_dir=path, rolling=True,
+                    experiment_profile=VERSIONED_PROFILE, publication_dir=path, rolling=True,
                 )[0], "CURRENT")
                 return 9  # Audit cannot destroy a completed FIT publication.
             with patch.object(application, '_model_robustness_dirs', side_effect=dirs), \
@@ -723,7 +703,7 @@ class ScientificVersionCases(TestCase):
             self.assertEqual(code, 9)
             self.assertFalse(backup.exists())
             self.assertEqual(published_fit_contract_version_state(
-                experiment_profile=CQ, publication_dir=path, rolling=True,
+                experiment_profile=VERSIONED_PROFILE, publication_dir=path, rolling=True,
             )[0], "CURRENT")
 
 

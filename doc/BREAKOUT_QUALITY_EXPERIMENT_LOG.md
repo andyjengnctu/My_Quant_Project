@@ -5332,6 +5332,8 @@ Assessment: `USER_REPORTED_ROLLING_RESULT_AVAILABLE / FULL_HORIZON_MAE_SMALL_PAI
 - **同條件配對決策**：C129−C125 Exact=`-0.19 RoMD / +42.82pp Return / +4.12pp MDD`，C130−C126 Direct=`-4.98 RoMD / -47.26pp Return`；C129−C127=`+2.47 RoMD`，C130−C128=`-0.32 RoMD`。MFE40 使 CR Exact 的絕對報酬及 EV 高於 CP，但風險調整後仍未改善；Direct 的 RoMD、EV 與可下單候選均劣於 CP。CR 兩個策略 Avg Orderable 約 `3.23/3.39`，遠低於 CP `19.64/19.38`，**不能只由此推定概率校準或缺乏候選的因果機制**；Console 未提供 paired decision-score／成交事件明細。
 - **限制／結論**：**單 Seed 受控研究未支持 MFE40 預訓練優於 CP 無預訓練**，CR Model Gate FAIL、Drift YES；不取代 CP，不自動提升 CR、C129 或 C130 至 Trading，不因較佳個別報酬調整 Threshold、Early Stopping 或 Selector。`MR-13CR` 模型與 C129/C130 策略四 Seed Robustness **未執行**，不宣稱跨 Seed 負結果或全面否定其他研究假說；同一 2021–2026 OOS 為多次迭代研究證據。CR 與 CP/CQ 在總覽共用 Positive Target 的 Oracle 顯示，不是 CR 專屬完美預測實驗；原 Positive Direct `204.88` 仍缺現行雙輸出 E13 parity，不能當現行 signed Oracle。Decision：`USER_REPORTED_CR_V1_ROLLING_6FOLD_SOP_AND_C129_C130_SINGLE_SEED_REPLAY_AVAILABLE / MODEL_GATE_FAIL / EXPERIMENTAL_PRETRAINING_NOT_BETTER_THAN_CP_AT_S42 / ROBUSTNESS_NOT_RUN / ITERATIVE_OOS / RESEARCH_ONLY / NO_PROMOTION / NO_TRADING`。
 
+- **2026-11-03 研究結案／正式退役決策**：使用者確認將 `MR-13CQ`（T40）與 `MR-13CR`（MFE40）、`C127`～`C130` 從現行模型訓練／模型比較／Strategy Compare 完整退役；`MR-13CP`（Positive）及 `C125/C126` 保留為基準。原因：CQ v2 Single-Seed Exact／Direct RoMD=`8.45/8.35`、CR=`10.92/8.03`，未優於 CP=`11.11/13.01`；CR Model Gate=FAIL。CQ/CR 四 Seed Robustness 未完成，研究 OOS 已反覆使用，不據此作廣泛模型結論。Registry 永久保留 CQ/CR 與 C127～C130 身分和以上已報告結果；退役只移除現行執行實作，原已完成的 FIT/Replay/SOP 工件作歷史研究證據保留（不當成 current REUSE）。下一步方向轉向成熟 full-cycle NetPnL Positive 標籤的有效覆蓋與不失真擴樣，尚未核准或建立新科學身分。
+
 ## 6. 後續新增規則
 
 **只有新科學證據或舊科學證據有效性更正才能增加本文件內容。** 記錄必須有實驗／Target 身分、期間／Seed、控制變數、原始結果、負結果與決策，並指向正式證據。沒有市場／模型結果的工程測試、提交紀錄、打包、格式調整或一次性 Audit 清理，不可追加研究章節。本文件不再生成封存副本或研究待辦。
