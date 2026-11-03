@@ -49,6 +49,8 @@ from core.portfolio_fast_data import (
 )
 from core.portfolio_stats import calc_curve_stats, find_sim_start_idx
 from core.portfolio_candidates import build_daily_candidates, track_normal_setup_signals_for_day
+from core.portfolio_entry_policy import current_daily_entry_source
+from functools import partial
 from core.portfolio_entries import cleanup_extended_signals_for_day
 from core.portfolio_entry_selection import (
     reorder_candidates_for_resource_aware_quality,
@@ -139,6 +141,9 @@ def run_portfolio_timeline(
     if profile_timing_enabled:
         ticker_dates_sec = time.perf_counter() - t0
 
+    daily_source = current_daily_entry_source()
+    if daily_source is not None:
+        daily_source.configure_calendar(sorted_dates)
     t0 = time.perf_counter() if profile_timing_enabled else None
     if active_context_resolver is None:
         if pit_stats_index is None:
@@ -258,6 +263,11 @@ def run_portfolio_timeline(
         day_pit_stats_index = day_context.pit_stats_index
         day_normal_setup_index = day_context.normal_setup_index
         day_pit_stats_cursor = day_context.pit_stats_cursor
+        if daily_source is not None:
+            if use_param_ensemble:
+                raise ValueError("Daily Entry requires canonical single-member P16 replay")
+            day_normal_setup_index = daily_source.entries_for(today, day_all_dfs_fast)
+            day_context = day_context._replace(normal_setup_index=day_normal_setup_index)
 
         if today.year not in year_start_equity:
             year_start_equity[today.year] = milli_to_money(current_equity)
@@ -338,23 +348,24 @@ def run_portfolio_timeline(
             sizing_equity = resolve_portfolio_sizing_equity(current_equity_money, initial_capital, day_params)
             extended_day_market_cache = {} if not use_param_ensemble else None
             t0 = time.perf_counter() if profile_timing_enabled else None
-            activate_portfolio_reentry_for_day(
-                today=today,
-                day_context=day_context,
-                portfolio=portfolio,
-                sold_today=sold_today,
-                active_reentry_watchlist=active_reentry_watchlist,
-                active_reentry_watchlists_by_member=active_reentry_watchlists_by_member,
-                active_extended_signals=active_extended_signals,
-                active_extended_signals_by_member=active_extended_signals_by_member,
-                is_training=is_training,
-                replay_counts=replay_counts,
-                replay_execution_rows=replay_execution_rows,
-                replay_selector_trace_rows=replay_selector_trace_rows,
-                replay_phase=_run_portfolio_replay_phase,
-                single_reentry_callback=activate_breakout_reentry_signals_for_day,
-                ensemble_reentry_callback=_activate_ensemble_reentry_signals_for_day,
-            )
+            if daily_source is None:
+                activate_portfolio_reentry_for_day(
+                    today=today,
+                    day_context=day_context,
+                    portfolio=portfolio,
+                    sold_today=sold_today,
+                    active_reentry_watchlist=active_reentry_watchlist,
+                    active_reentry_watchlists_by_member=active_reentry_watchlists_by_member,
+                    active_extended_signals=active_extended_signals,
+                    active_extended_signals_by_member=active_extended_signals_by_member,
+                    is_training=is_training,
+                    replay_counts=replay_counts,
+                    replay_execution_rows=replay_execution_rows,
+                    replay_selector_trace_rows=replay_selector_trace_rows,
+                    replay_phase=_run_portfolio_replay_phase,
+                    single_reentry_callback=activate_breakout_reentry_signals_for_day,
+                    ensemble_reentry_callback=_activate_ensemble_reentry_signals_for_day,
+                )
             if profile_timing_enabled:
                 reentry_sec += time.perf_counter() - t0
             gate = resolve_portfolio_candidate_gate(
@@ -386,7 +397,8 @@ def run_portfolio_timeline(
                     active_extended_signals_by_member=active_extended_signals_by_member,
                     candidate_subprofile=candidate_subprofile,
                     replay_phase=_run_portfolio_replay_phase,
-                    single_track_callback=track_normal_setup_signals_for_day,
+                    single_track_callback=(track_normal_setup_signals_for_day if daily_source is None
+                                           else partial(track_normal_setup_signals_for_day, entry_policy="daily")),
                     ensemble_track_callback=_track_ensemble_normal_setup_signals_for_day,
                 )
                 if profile_timing_enabled and did_track:
@@ -415,7 +427,8 @@ def run_portfolio_timeline(
                     persistent_sizing_qty_cache=candidate_sizing_qty_cache,
                     candidate_subprofile=candidate_subprofile,
                     replay_phase=_run_portfolio_replay_phase,
-                    single_candidate_builder=build_daily_candidates,
+                    single_candidate_builder=(build_daily_candidates if daily_source is None
+                                              else partial(build_daily_candidates, entry_policy="daily")),
                     ensemble_candidate_builder=_build_daily_ensemble_candidates,
                 )
                 if profile_timing_enabled:

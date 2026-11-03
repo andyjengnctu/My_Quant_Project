@@ -42,6 +42,7 @@ from core.console_report import render_table, render_title
 from core.report_style import styled_workflow_status
 from core.dataset_profiles import get_dataset_dir
 from core.path_utils import project_relative_display_path
+from core.portfolio_entry_policy import DAILY_ENTRY_CONTRACT, portfolio_entry_policy_context
 from core.strategy_compare_policy import (
     get_strategy_comparison_settings, get_strategy_multi_seed_robustness_settings,
 )
@@ -369,6 +370,32 @@ def _canonical_score_map_sha256(scores: Mapping[tuple[str, str], float]) -> str:
 def _oracle_requires_direct(definition) -> bool:
     """Resolve selector dependencies from the current canonical comparison list."""
     return "direct" in _oracle_comparison_plan(definition)["selectors"].values()
+
+
+def _oracle_target_strategy(definition, target: str) -> str:
+    """Resolve the approved portfolio entry rule from the Oracle Registry.
+
+    Absent strategy metadata is the historical Breakout entry rule.  A Daily
+    treatment is never inferred from its name, Target values, or model scores.
+    """
+    if target == str(definition.source["baseline_arm_id"]):
+        return "Breakout"
+    entry = next((row for row in definition.source["oracle_comparisons"]
+                  if row["target"] == target), None)
+    if entry is None:
+        raise OracleBlockedError(f"Oracle target missing declared comparison: {target}")
+    strategy = str(entry.get("strategy", "Breakout"))
+    if strategy not in {"Breakout", "Daily"}:
+        raise OracleBlockedError(f"Unsupported Oracle portfolio strategy: {strategy}")
+    if strategy == "Daily":
+        # Only the approved actual TrueDaily source can authorize this entry
+        # counterfactual.  Score Source/Positive must stay the same as Exact.
+        definition_map = {row["target"]: row for row in definition.source["oracle_comparisons"]}
+        producer = definition_map.get(entry.get("score_source") or target)
+        if (not producer or producer.get("score") != "daily_trade_path_true_net_pnl"
+                or entry.get("positive_output") != "netpnl_positive_probability_v1"):
+            raise OracleBlockedError("Daily strategy requires signed TrueDaily NetPnL + Positive source")
+    return strategy
 
 
 def _oracle_display_name(name: str) -> str:
@@ -1659,6 +1686,8 @@ def _arm_replay_policy(definition, *, plan: Mapping[str, Any], target: str,
                        effective_context: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """One target-scoped economic/score identity for fast and normal REUSE."""
     policy = dict(replay_policy)
+    if _oracle_target_strategy(definition, target) == "Daily":
+        policy["entry_policy"] = DAILY_ENTRY_CONTRACT
     if effective_context is not None:
         from core.file_integrity import canonical_json_sha256
         policy["effective_execution_contract_sha256"] = canonical_json_sha256(effective_context)
@@ -2546,6 +2575,10 @@ def _execute_single_stage_missing(
                             score_start=_formal_dl_score_start(definition, settings),
                             positive_scores=positive_score_map,
                         ))
+                        if _oracle_target_strategy(definition, target) == "Daily":
+                            stack.enter_context(portfolio_entry_policy_context(
+                                "Daily", score_keys=score_map.keys(),
+                            ))
                         if positive_raw is not None:
                             from core.oracle_positive_gate import positive_oracle_entry_gate
                             stack.enter_context(positive_oracle_entry_gate(positive_raw))
@@ -2955,7 +2988,8 @@ def _run_single_stage_oracle(
                 ranking_policy=str(arm.dl_runtime_mode), ranking_options=dict(arm.dl_runtime_options),
                 replay_policy={**baseline_policy,
                     "oracle_parity_implementation": ORACLE_PARITY_IMPLEMENTATION,
-                    "period_stats_implementation": PERIOD_STATS_IMPLEMENTATION},
+                    "period_stats_implementation": PERIOD_STATS_IMPLEMENTATION,
+                    **({"entry_policy": DAILY_ENTRY_CONTRACT} if _oracle_target_strategy(definition, target) == "Daily" else {})},
                 score_contract=contracts.get(target), source_contract=source_spec,
                 dataset_inputs=dataset_inputs, execution_gate=gates.get(target),
             )
@@ -3526,9 +3560,11 @@ def _run_single_stage_oracle(
             "target_truth_closeout_policy": "min_natural_exit_horizon_research_cutoff",
         }
     baseline = _aggregate(observations["C96"], target="C96", period_start=start, period_end=end)
+    baseline["strategy"] = "Breakout"
     oracles = []
     for name in targets[1:]:
         item = _aggregate(observations[name], target=name, period_start=start, period_end=end)
+        item["strategy"] = _oracle_target_strategy(definition, name)
         diffs = np.array([row["delta_romd_vs_c96"] for row in observations[name]], dtype=float)
         item.update(delta_romd_vs_c96=float(np.mean(diffs)),
                     delta_romd_std=float(np.std(diffs, ddof=1)) if len(diffs) > 1 else 0.0,
@@ -3589,8 +3625,10 @@ def render_result(report: Mapping[str, Any], *, target: str) -> str:
     yearly_table = sections[2].tables[0]
     paired_table = sections[3].tables[0]
     baseline = dict(report["baseline"])
-    items = [dict(baseline, target="C96 Same-Window", wins="-"),
-             *[dict(item, target=_oracle_display_name(item["target"]), wins=f'{item["positive_seed_count"]}/{item["seeds"]}')
+    items = [dict(baseline, target="C96 Same-Window", strategy="Breakout", wins="-"),
+             *[dict(item, strategy=item.get("strategy", "Breakout"),
+                    target=_oracle_display_name(item["target"]),
+                    wins=f'{item["positive_seed_count"]}/{item["seeds"]}')
                for item in report["oracles"]]]
     # Presentation-only sort; preserve the canonical comparison/Replay order.
     items.sort(key=lambda row: (float(row["romd"]), str(row["target"])))

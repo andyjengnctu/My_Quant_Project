@@ -443,7 +443,7 @@ def _make_candidate_row(
 def _resolve_qualified_normal_setup(
     *, ticker, y_pos, portfolio, sold_today, all_dfs_fast,
     active_extended_signals, pit_stats_index, pit_stats_cursor,
-    today, params, profile_stats,
+    today, params, profile_stats, entry_policy="breakout",
 ):
     """One PIT/old-continuation gate for both orderable and full-capacity paths.
 
@@ -461,13 +461,24 @@ def _resolve_qualified_normal_setup(
     y_buy_limit, y_atr, y_close, signal_date = get_fast_normal_signal_values(
         fast_df, y_pos
     )
+    if entry_policy == "daily":
+        # The information-date close, not Breakout buy_limit, is the next-day
+        # order limit.  This is the same first-order reference as the Target.
+        y_buy_limit = y_close
+    elif entry_policy != "breakout":
+        raise ValueError("Unknown portfolio entry policy")
     security_profile = get_fast_security_profile(fast_df)
 
     pit_started = time.perf_counter() if profile_stats is not None else None
-    is_candidate, ev, win_rate, trade_count, asset_growth_pct = get_pit_stats_from_index(
-        pit_stats_index[ticker], today, params,
-        cursor_state=pit_stats_cursor, ticker=ticker,
-    )
+    if entry_policy == "daily":
+        # Daily is feature/score-universe qualified; never silently re-apply
+        # the Breakout-only historical trade filter to the Daily strategy.
+        is_candidate, ev, win_rate, trade_count, asset_growth_pct = True, 0.0, 0.0, 0, 0.0
+    else:
+        is_candidate, ev, win_rate, trade_count, asset_growth_pct = get_pit_stats_from_index(
+            pit_stats_index[ticker], today, params,
+            cursor_state=pit_stats_cursor, ticker=ticker,
+        )
     if profile_stats is not None:
         _candidate_profile_add(profile_stats, "portfolio_candidate_pit_stats_sec", pit_started)
     if not is_candidate:
@@ -526,6 +537,7 @@ def _collect_normal_candidates(
     ranking_context,
     compact_training_rows=False,
     profile_stats=None,
+    entry_policy="breakout",
 ):
     profile_enabled = profile_stats is not None
     total_started = time.perf_counter() if profile_enabled else None
@@ -542,6 +554,7 @@ def _collect_normal_candidates(
             active_extended_signals=active_extended_signals,
             pit_stats_index=pit_stats_index, pit_stats_cursor=pit_stats_cursor,
             today=today, params=params, profile_stats=profile_stats,
+            entry_policy=entry_policy,
         )
         if qualified_setup is None:
             continue
@@ -647,6 +660,7 @@ def track_normal_setup_signals_for_day(
     today,
     params,
     profile_stats=None,
+    entry_policy="breakout",
 ):
     profile_enabled = profile_stats is not None
     total_started = time.perf_counter() if profile_enabled else None
@@ -660,6 +674,7 @@ def track_normal_setup_signals_for_day(
             active_extended_signals=active_extended_signals,
             pit_stats_index=pit_stats_index, pit_stats_cursor=pit_stats_cursor,
             today=today, params=params, profile_stats=profile_stats,
+            entry_policy=entry_policy,
         )
         if qualified_setup is None:
             continue
@@ -1178,6 +1193,7 @@ def _collect_extended_candidates(
 
 def build_daily_candidates(
     *,
+    entry_policy="breakout",
     normal_setup_index,
     active_extended_signals,
     portfolio,
@@ -1234,6 +1250,7 @@ def build_daily_candidates(
         ranking_context=ranking_context,
         compact_training_rows=compact_training_rows,
         profile_stats=profile_stats,
+        entry_policy=entry_policy,
     )
     extended_candidates, extended_orderable = _collect_extended_candidates(
         active_extended_signals=active_extended_signals,
