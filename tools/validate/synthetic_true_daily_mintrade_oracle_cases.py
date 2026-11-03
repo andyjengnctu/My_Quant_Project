@@ -28,6 +28,32 @@ from tools.validate.synthetic_daily_trade40_oracle_cases import PROFILE, source_
 
 
 class TrueDailyUniversalOracleCases(TestCase):
+    def test_preflight_identifies_daily_only_in_strategy_column(self):
+        from core.audit_policy import get_active_audit_module_id
+        from services.research.target_oracle_application import get_formal_oracle_definition
+        from core.display_common import _strip_ansi
+        definition = get_formal_oracle_definition(get_active_audit_module_id())
+        targets = ["C96", "MFE40_Control", "TrueDailyUniversal_MinTrade_NetPnL_Positive",
+                   "TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct"]
+        decisions = {(seed, target): ("RUN" if target.startswith("TrueDaily") else "REUSE")
+                     for seed in (11, 22) for target in targets}
+        output = _strip_ansi(oracle.render_replay_preflight(
+            label="Fixed", seeds=[11, 22], targets=targets, decisions=decisions,
+            strategies={target: oracle._oracle_target_strategy(definition, target)
+                        for target in targets},
+        ))
+        self.assertIn("Target", output)
+        self.assertIn("Strategy", output)
+        self.assertIn("Portfolio REUSE 4 / RUN（需回放）4 / BLOCKED 0", output)
+        self.assertIn("Target 真值及 Score 另依各自簽章 REUSE／RUN", output)
+        for line in output.splitlines():
+            if "TrueDailyUniversal_MinTrade_NetPnL_Positive" in line:
+                self.assertIn("Daily", line)
+                self.assertIn("RUN", line)
+            elif "MFE40_Control" in line:
+                self.assertIn("Breakout", line)
+                self.assertIn("REUSE", line)
+
     def test_comparisons_and_previous_source_identities(self):
         definition = next(d for d in get_reusable_audit_definitions("breakout_quality")
                           if d.audit_type == oracle.SUPPORTED_AUDIT_TYPE)

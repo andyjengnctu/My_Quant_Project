@@ -124,6 +124,8 @@ def _oracle_rows(root: Path, definition, versions: Mapping[str, tuple]):
         raise ValueError("Oracle target identities are not unique")
     current_definitions = {str(item["target"]): str(item["description"])
                            for item in comparisons}
+    current_strategies = {str(item["target"]): str(item.get("strategy", "Breakout"))
+                          for item in comparisons}
     # The Audit registry is the owner of retired historical identities; a
     # previously completed signed report may include them after [1] retires
     # those rows. Do not use them as current Oracle or DL results.
@@ -185,7 +187,10 @@ def _oracle_rows(root: Path, definition, versions: Mapping[str, tuple]):
             if (target == baseline or
                     (target in current_definitions
                      and isinstance(published_definitions, dict)
-                     and published_definitions.get(target) == current_definitions[target])):
+                     and published_definitions.get(target) == current_definitions[target]
+                     # Historical reports without a Strategy field used Breakout.
+                     # Never present their TrueDaily values as new Daily results.
+                     and str(item.get("strategy", "Breakout")) == current_strategies[target])):
                 metrics[target] = {"oracle_romd": romd, "win_rate_pct": winrate}
         # A completed historical report is validated against its OWN published
         # inventory. Project only unchanged current rows; new/redefined Targets
@@ -652,6 +657,8 @@ def collect_target_dl_overview(project_root: Path) -> dict[str, Any]:
                 "robustness_rho": robust_rho,
                 "rho_seeds": robust_seeds,
             })
+    entry_strategies = {str(item["target"]): str(item.get("strategy", "Breakout"))
+                        for item in comparisons}
     rows = []
     for target in targets:
         # The canonical scientific profile registry already provides a stable
@@ -664,6 +671,7 @@ def collect_target_dl_overview(project_root: Path) -> dict[str, Any]:
             robust = robust_romd.get(arm) if arm else None
             rows.append({
                 "target": target,
+                "entry_strategy": entry_strategies.get(target, "Breakout"),
                 "oracle_romd": metrics.get("oracle_romd"),
                 "win_rate_pct": metrics.get("win_rate_pct"),
                 "model": model.get("model") or "",

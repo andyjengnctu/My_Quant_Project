@@ -30,6 +30,7 @@ from services.research.target_oracle_application import get_formal_oracle_defini
 from core.audit_policy import get_active_audit_module_id
 from core.audit_registry import resolve_current_oracle_comparisons
 from core.report_contract_versions import load_report_contract_versions
+from core.research_report_contract import table_contract
 from services.audit.target_oracle_romd import (
     _oracle_comparison_plan, _contract, _resolve_oracle_target_score_contracts,
 )
@@ -168,7 +169,7 @@ class PositiveNetPnlContractCases(TestCase):
         definition = get_formal_oracle_definition(get_active_audit_module_id())
         comparisons = resolve_current_oracle_comparisons(definition.source)
         versions = load_report_contract_versions(ROOT)
-        approved = versions["audit.target_oracle_romd"][-1]
+        approved = versions["audit.target_oracle_romd"][-2]  # Historical v11: Breakout-only.
         seeds = [693545351, 2014432738, 104504529, 762252050,
                  9734312, 1020806211, 116293459, 1234683984]
         positive_exact = "DailyUniversal_MinTrade_NetPnL_Positive"
@@ -212,9 +213,13 @@ class PositiveNetPnlContractCases(TestCase):
             self.assertEqual(values["C96"]["oracle_romd"], 9.17)
             self.assertEqual(values["MFE40_Control"]["oracle_romd"], 24.62)
             self.assertEqual(values["DailyUniversal_MinTrade_NetPnL_Direct"]["oracle_romd"], 24.62)
-            self.assertEqual(len(values), len(targets) - 2)
+            self.assertEqual(len(values), len(targets) - 4)
             self.assertNotIn(positive_exact, values)  # Never backfill a new Target.
             self.assertNotIn(positive_direct, values)  # Old raw Gate != formal dual-head.
+            true_daily = {row["target"] for row in comparisons
+                          if row.get("strategy") == "Daily"}
+            self.assertEqual(len(true_daily), 2)
+            self.assertTrue(true_daily.isdisjoint(values))  # Old Breakout != new Daily.
             ledger = Path(temp) / "doc/scientific_contracts/REPORT_CONTRACT_VERSIONS.json"
             ledger.parent.mkdir(parents=True)
             ledger.write_bytes((ROOT / "doc/scientific_contracts/REPORT_CONTRACT_VERSIONS.json").read_bytes())
@@ -226,15 +231,28 @@ class PositiveNetPnlContractCases(TestCase):
             self.assertTrue(rows)
             self.assertTrue(all(row["oracle_romd"] == 24.62 for row in rows))
             self.assertTrue(all(row["oracle_romd"] is None for row in overview["rows"]
-                                if row["target"] in {positive_exact, positive_direct}))
+                                if row["target"] in {positive_exact, positive_direct} | true_daily))
+            self.assertEqual(overview["rows"][0]["entry_strategy"], "Breakout")
+            self.assertTrue(all(row["entry_strategy"] == "Daily" for row in overview["rows"]
+                                if row["target"] in true_daily))
+            self.assertEqual(
+                table_contract("research.target_dl_validation_overview", "comparison", "target_dl").headers[:2],
+                ("Target", "Strategy"),
+            )
 
             # A newly completed, matching report may publish both Positive rows.
+            current = versions["audit.target_oracle_romd"][-1]
+            payload["report_contract_id"] = current["contract_id"]
+            payload["report_contract_fingerprint"] = current["fingerprint"]
             payload["definitions"][positive_direct] = next(
                 row["description"] for row in comparisons if row["target"] == positive_direct)
             payload["definitions"][positive_exact] = next(
                 row["description"] for row in comparisons if row["target"] == positive_exact)
             payload["oracles"].append({"target": positive_exact, "seeds": len(seeds),
                                        "romd": 25.0, "win_rate_pct": 60.0})
+            for item in payload["oracles"]:
+                if item["target"] in true_daily:
+                    item["strategy"] = "Daily"
             _, _, _, values, info = read_rows()
             self.assertEqual(len(values), len(targets))
             self.assertEqual(values[positive_direct]["oracle_romd"], 204.88)

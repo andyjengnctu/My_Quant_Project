@@ -1548,6 +1548,7 @@ def render_replay_preflight(
     targets: list[str],
     decisions: Mapping[tuple[int, str], str],
     reuse_diagnostic: str | None = None,
+    strategies: Mapping[str, str] | None = None,
 ) -> str:
     """Render the one complete identity-backed Replay authorization plan.
 
@@ -1556,9 +1557,10 @@ def render_replay_preflight(
     """
     counts = {action: sum(action == value for value in decisions.values())
               for action in ("REUSE", "RUN", "BLOCKED")}
-    headers = ("Target", *(f"S{i + 1}" for i in range(len(seeds))))
+    headers = ("Target", "Strategy", *(f"S{i + 1}" for i in range(len(seeds))))
     rows = [
-        (target, *(styled_workflow_status(decisions[(seed, target)]) for seed in seeds))
+        (target, (strategies or {}).get(target, "Breakout"),
+         *(styled_workflow_status(decisions[(seed, target)]) for seed in seeds))
         for target in targets
     ]
     return "\n".join((
@@ -1569,6 +1571,7 @@ def render_replay_preflight(
         f"BLOCKED {counts['BLOCKED']}；REUSE=零Portfolio交易重算，"
         "RUN=舊執行身分過時或合法結果缺件，由系統只計算該項；"
         "BLOCKED=資料損毀或同一執行身分證據矛盾，須停止以避免覆寫；尚未開始回放",
+        "註：本表只核對 Portfolio Replay；Target 真值及 Score 另依各自簽章 REUSE／RUN。",
         *((reuse_diagnostic,) if reuse_diagnostic else ()),
     ))
 
@@ -3410,6 +3413,7 @@ def _run_single_stage_oracle(
                 run_causes[(seed, target)] = "缺少合法 P16 參數來源"
     preflight = render_replay_preflight(
         label="Fixed", seeds=seed_set, targets=list(targets), decisions=decisions,
+        strategies={target: _oracle_target_strategy(definition, target) for target in targets},
         reuse_diagnostic=_render_reuse_run_reasons(
             decisions=decisions, reasons=run_causes),
     )
