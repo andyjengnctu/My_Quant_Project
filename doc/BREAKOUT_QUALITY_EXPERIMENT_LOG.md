@@ -5298,6 +5298,40 @@ Assessment: `USER_REPORTED_ROLLING_RESULT_AVAILABLE / FULL_HORIZON_MAE_SMALL_PAI
 - **策略配對結論／歷史 v1 邊界**：`C127−C125 = -2.66 RoMD / -24.55pp` total return；`C128−C126 = -4.66 RoMD / -53.82pp`。相較僅稀疏抽樣的歷史 CQ v1，v2 C127 RoMD `8.12→8.45`（`+0.33`）、C128 `4.90→8.35`（`+3.45`），但仍未超越 CP。v2 的 Avg Orderable 約為 CP 的 `15.1%/15.7%`，2024 年 C127/C128 分別 `-5.34%/-5.22%`，而 C125/C126 `+14.16%/+13.27%`；此欄非直接機率門檻通過率，不以單一報表反推原因。此結果已可判定「完整 Daily T40 預訓練在本次單 Seed／既定門檻／策略下，未改善 CP 實際績效」，不是證明所有 Seeds、校準或替代研究假說皆無效。
 - **REUSE／決策界線**：正式 Strategy Compare 規劃 `CONT13CQ_ROLL` 三個前置工件 `REUSE`，C127/C128 `RUN` 並均 `DONE`（約 `03:20.7/02:43.1`），其餘策略沿用合法 `REUSE`；未顯示版本污染或強迫重跑 CP／CO／CJ。CQ `4-Seed Model Robustness`、C127/C128 `4-Seed Strategy Robustness` **仍未提供**；OOS 為反覆研究的迭代 OOS，不准依本次績效反向選取門檻／Epoch。Oracle Positive Exact `90.84`／Direct `204.88` 的舊 NON-PIT E13 parity 問題**不因 CQ v2 訓練完成而解除**；不可登錄為 current signed dual-output Oracle。Decision：`USER_REPORTED_CQ_FIT_V2_ROLLING_MODEL_AND_C127_C128_SINGLE_SEED_REPLAY_AVAILABLE / FULL_DAILY_T40_IMPLEMENTED / MODEL_GATE_PASS_BUT_DRIFT / CP_EXACT_AND_DIRECT_OUTPERFORM_CQ_V2 / FOUR_SEED_ROBUSTNESS_PENDING / ITERATIVE_OOS / NO_CQ_PROMOTION / NO_TRADING / NO_NEW_ID`。不新增 Audit、Target、DL、Strategy 或報表版本。
 
+### 2026-11-03 · MR-13CR 完整 Daily MFE40 預訓練及 C129／C130 單 Seed Rolling 結果
+
+- **受控變數／證據**：`MR-13CR`／`daily_mfe40_regression_encoder_v1` 對照 `MR-13CQ` FIT v2，只將第一階段完整成熟 Daily Encoder 預訓練 Target `T40` 換成既有 canonical `max_upside_40d`（MFE40）；第二階段仍為同一 full-cycle MinTrade `NetPnL>0` Positive binary，CO 排序、`P(positive)>0.5`、策略參數／費稅／Exact／Direct 及 PIT 規則不變。使用者提供本機正式 Research Console `貼上的文字 (1)(20261103-101001).txt`（SHA256 `d379c48a45b8d0ea19e60062a7a466cbcb0b18d10b5e21edc76ac85b9335a148`），程式基準 `test-branch-1_20261103_145622_ab455d06.zip`（SHA256 `625affbdf0331ad58f94e40140fec99bc8fd1840bc5cecae90849cc6bb75fab8`）；期間 `2021-01-01～2026-03-02`、單 Seed=`42`、六個 12M Rolling Fold、Score Groups=`630,589`。來源 ZIP 不含本機完整 Checkpoint、signed Model／Replay sidecars；以下為 `USER_REPORTED` 正式流程結果，不假稱 GPT 已獨立驗證所有市場 Replay。
+- **FIT 與模型 Gate**：六個 Fold `NEW=6 / REUSE=0`，Score coverage=`630,589/630,589`（100%），完整成熟 MFE40 Encoder final-refit 每 Fold 約 `1,422,501～2,032,823` Daily samples，總 FIT／Rolling Audit 約 `02:30:11`；單模型 Standard SOP 與全模型比較已生成。Rolling Audit 全可評股票日 ρ=`-0.0256`、Daily ρ=`0.0283`；**Model Gate=`FAIL`**，Drift=`YES`（`1.9383 pooled σ`）、六年度正 ρ／Top-Bottom 各 `4/6`，Validation→OOS Daily ρ 變化=`-0.3137`。Model Gate FAIL 是品質結果，不等於 FIT／SOP 工件未產生，也不代表可升格。
+- **相同 68,701 Global SOP Groups、10,204 Breakout Groups 的模型對照**（均為各模型相同 NetPnL Positive 研究 Target，這些 Groups 為 SOP 評估樣本而非預訓練樣本量）：
+
+  | Global SOP | CP 無預訓練 | CQ v2 T40 | CR MFE40 |
+  |---|---:|---:|---:|
+  | Daily ρ | 0.0506 | 0.0722 | 0.0292 |
+  | Global ρ | 0.1199 | 0.0200 | -0.0187 |
+  | Pair | 51.60% | 52.17% | 51.24% |
+  | Top-Bottom Target | +4392.6540 | -1556.3197 | -509.9382 |
+  | Breakout Daily ρ | 0.0115 | 0.0372 | 0.0230 |
+  | Breakout Top-Bottom | +5542.2894 | -2811.6916 | -1883.4457 |
+
+- **正式 Research Rolling Strategy Compare**：正確 `REUSE` 舊 CP／CQ／CO 工件與 C125～C128；CR PIT source `REUSE` 但顯示 `WARN: Model Gate=FAIL`、僅供研究診斷、不代表 Runtime Promotion；`C129` Exact 與 `C130` Direct 各 `RUN→DONE`（約 `03:35.9 / 02:58.4`）。此診斷使用既有 Research Compare Gate 分層，不把 Model Gate FAIL 改成 PASS。
+
+  | 同條件 Rolling 策略 | C125 CP Exact | C127 CQ v2 Exact | C129 CR Exact | C126 CP Direct | C128 CQ v2 Direct | C130 CR Direct |
+  |---|---:|---:|---:|---:|---:|---:|
+  | Total Return | +124.01% | +99.46% | +166.83% | +148.64% | +94.82% | +101.38% |
+  | MDD | 11.16% | 11.77% | 15.28% | 11.42% | 11.35% | 12.63% |
+  | RoMD | 11.11 | 8.45 | 10.92 | 13.01 | 8.35 | 8.03 |
+  | Trades | 247 | 259 | 226 | 246 | 261 | 243 |
+  | Win Rate | 44.53% | 40.93% | 38.94% | 46.75% | 41.00% | 38.68% |
+  | Payoff | 3.59 | 3.81 | 5.43 | 3.63 | 3.72 | 4.26 |
+  | EV(A) | +0.76R | +0.58R | +1.01R | +1.13R | +0.53R | +0.75R |
+  | Avg Exposure | 66.27% | 58.85% | 54.09% | 59.42% | 55.46% | 49.14% |
+  | Avg Orderable | 19.64 | 2.97 | 3.23 | 19.38 | 3.05 | 3.39 |
+  | Supply Gap Days | 590 | 797 | 838 | 599 | 809 | 828 |
+  | Worst Full Year | +4.67% | -5.34% | -1.58% | +2.29% | -5.22% | -2.92% |
+
+- **同條件配對決策**：C129−C125 Exact=`-0.19 RoMD / +42.82pp Return / +4.12pp MDD`，C130−C126 Direct=`-4.98 RoMD / -47.26pp Return`；C129−C127=`+2.47 RoMD`，C130−C128=`-0.32 RoMD`。MFE40 使 CR Exact 的絕對報酬及 EV 高於 CP，但風險調整後仍未改善；Direct 的 RoMD、EV 與可下單候選均劣於 CP。CR 兩個策略 Avg Orderable 約 `3.23/3.39`，遠低於 CP `19.64/19.38`，**不能只由此推定概率校準或缺乏候選的因果機制**；Console 未提供 paired decision-score／成交事件明細。
+- **限制／結論**：**單 Seed 受控研究未支持 MFE40 預訓練優於 CP 無預訓練**，CR Model Gate FAIL、Drift YES；不取代 CP，不自動提升 CR、C129 或 C130 至 Trading，不因較佳個別報酬調整 Threshold、Early Stopping 或 Selector。`MR-13CR` 模型與 C129/C130 策略四 Seed Robustness **未執行**，不宣稱跨 Seed 負結果或全面否定其他研究假說；同一 2021–2026 OOS 為多次迭代研究證據。CR 與 CP/CQ 在總覽共用 Positive Target 的 Oracle 顯示，不是 CR 專屬完美預測實驗；原 Positive Direct `204.88` 仍缺現行雙輸出 E13 parity，不能當現行 signed Oracle。Decision：`USER_REPORTED_CR_V1_ROLLING_6FOLD_SOP_AND_C129_C130_SINGLE_SEED_REPLAY_AVAILABLE / MODEL_GATE_FAIL / EXPERIMENTAL_PRETRAINING_NOT_BETTER_THAN_CP_AT_S42 / ROBUSTNESS_NOT_RUN / ITERATIVE_OOS / RESEARCH_ONLY / NO_PROMOTION / NO_TRADING`。
+
 ## 6. 後續新增規則
 
 **只有新科學證據或舊科學證據有效性更正才能增加本文件內容。** 記錄必須有實驗／Target 身分、期間／Seed、控制變數、原始結果、負結果與決策，並指向正式證據。沒有市場／模型結果的工程測試、提交紀錄、打包、格式調整或一次性 Audit 清理，不可追加研究章節。本文件不再生成封存副本或研究待辦。
