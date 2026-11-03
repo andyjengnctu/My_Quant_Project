@@ -1374,6 +1374,7 @@ class OracleAuditContractCases(TestCase):
             "DailyUniversal_MinTrade_NetPnL_Direct": "DailyUniversal_MinTrade_NetPnL",
             "DailyUniversal_MinTrade_NetPnL_Positive": "DailyUniversal_MinTrade_NetPnL",
             "DailyUniversal_MinTrade_NetPnL_Positive_Direct": "DailyUniversal_MinTrade_NetPnL",
+            "TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct": "TrueDailyUniversal_MinTrade_NetPnL_Positive",
         })
         self.assertEqual(self.definition.output_subdir, "breakout_quality/reusable/target_oracle_romd")
         with tempfile.TemporaryDirectory() as tmp:
@@ -6874,7 +6875,13 @@ class OracleMinTradePreflightArtifactReuseCases(TestCase):
         from services.audit.mintrade_truth_source_attestation import _encoding_equivalent_mintrade_sources
         from tools.validate.synthetic_daily_trade40_oracle_cases import source_fixture
 
-        definition = _ACTIVE_ORACLE_DEFINITION
+        # Historical 128-cell signed snapshots predate TrueDaily; never
+        # fabricate a published artifact for a new Target identity.
+        active = _ACTIVE_ORACLE_DEFINITION
+        definition = replace(active, source={**active.source, "oracle_comparisons": tuple(
+            row for row in active.source["oracle_comparisons"]
+            if not str(row["target"]).startswith("TrueDailyUniversal_")
+        )})
         settings, base, exact = oracle._contract(definition)
         direct = oracle._direct_arm(definition, settings, base, exact)
         plan = oracle._oracle_comparison_plan(definition)

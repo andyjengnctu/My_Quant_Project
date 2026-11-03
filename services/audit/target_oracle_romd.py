@@ -132,7 +132,59 @@ _ORACLE_RETIRED_TARGETS = frozenset(
 # Recipe implementation is stable; WHICH recipes and providers are needed is
 # resolved from the selected comparisons, never from a second target allowlist.
 _ORACLE_SCORE_RECIPES = frozenset(PRICE_CALCULATION_REVISIONS)
-_ORACLE_DAILY_SCORE_RECIPES = {"daily_trade_path_net_r": "net_r", "daily_trade_path_net_pnl": "net_pnl"}
+_ORACLE_DAILY_SCORE_RECIPES = {
+    "daily_trade_path_net_r": "net_r",
+    "daily_trade_path_net_pnl": "net_pnl",
+    "daily_trade_path_true_net_pnl": "net_pnl",
+}
+
+
+def _daily_truth_identity(recipe: str, horizon: int | None) -> tuple[str, str]:
+    if recipe == "daily_trade_path_true_net_pnl":
+        if horizon is not None:
+            raise OracleBlockedError("TrueDaily full-cycle NetPnL cannot have a fixed-session cap")
+        from services.audit.true_daily_mintrade_oracle import TARGET_ID, LABEL_ID
+        return TARGET_ID, LABEL_ID
+    from services.audit.daily_trade40_oracle import target_identity_for_horizon
+    return target_identity_for_horizon(horizon, outcome_metric=_ORACLE_DAILY_SCORE_RECIPES[recipe])
+
+
+def _daily_truth_entry_policy(recipe: str) -> str | None:
+    if recipe == "daily_trade_path_true_net_pnl":
+        from services.audit.true_daily_mintrade_oracle import ENTRY_POLICY
+        return ENTRY_POLICY
+    return None
+
+
+def _daily_truth_fingerprint(recipe: str) -> str:
+    if recipe == "daily_trade_path_true_net_pnl":
+        from services.audit.true_daily_mintrade_oracle import truth_producer_fingerprint
+        return truth_producer_fingerprint()
+    from services.audit.daily_trade40_oracle import truth_producer_fingerprint
+    return truth_producer_fingerprint(_ORACLE_DAILY_SCORE_RECIPES[recipe])
+
+
+def _build_daily_truth(recipe: str, *, output_subdir: str, **kwargs):
+    if recipe == "daily_trade_path_true_net_pnl":
+        from services.audit.true_daily_mintrade_oracle import build_true_daily_universal_oracle_scores
+        return build_true_daily_universal_oracle_scores(output_subdir=output_subdir, **{
+            k: v for k, v in kwargs.items() if k not in ("horizon_sessions", "outcome_metric")
+        })
+    from services.audit.daily_trade40_oracle import build_daily_universal_trade40_oracle_scores
+    return build_daily_universal_trade40_oracle_scores(**kwargs)
+
+
+def _load_positive_truth_for_recipe(recipe: str, *, execution, cache_root, **kwargs):
+    if recipe == "daily_trade_path_true_net_pnl":
+        from services.audit.true_daily_mintrade_oracle import load_positive_truth
+        return load_positive_truth(**{
+            key: kwargs[key] for key in (
+                "project_root", "output_subdir", "seed", "price_sha256", "param_sha256",
+                "canonical_scores", "canonical_evidence",
+            )
+        }), None
+    from services.audit.oracle_truth_references import load_or_build_positive_truth
+    return load_or_build_positive_truth(execution=execution, cache_root=cache_root, **kwargs)
 _PROVIDER_COHORT_IDS = {
     "pure_mfe40_provider": "40d", "mfe20_d20_provider": "20d",
     "first_breach_provider": "first_breach",
@@ -495,11 +547,8 @@ def _resolve_oracle_target_score_contracts(definition, settings, plan) -> dict[s
             recipe, provider, horizon = plan["daily_recipes"][origin]
             profile_id = str(definition.source[provider])
             profile = get_breakout_quality_experiment_profile(profile_id)
-            from services.audit.daily_trade40_oracle import target_identity_for_horizon
             source_target = str(profile.continuous_target_id)
-            target_identity, _label_id = target_identity_for_horizon(
-                horizon, outcome_metric=_ORACLE_DAILY_SCORE_RECIPES[recipe],
-            )
+            target_identity, _label_id = _daily_truth_identity(recipe, horizon)
         if profile.training_sample_scope != TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS:
             raise OracleBlockedError(f"{name}: 來源不是正式Daily DL可評分母體")
         arm = _target_reference_arm(definition, settings, plan, name, exact, direct)
@@ -527,7 +576,7 @@ def _resolve_oracle_target_score_contracts(definition, settings, plan) -> dict[s
                     or not positive_dl_id
                     or str(options.get("positive_score_column")) != POSITIVE_P_CLASS_COLUMN
                     or (plan["daily_recipes"][plan["daily_sources"][name]][0]
-                        != "daily_trade_path_net_pnl")):
+                        not in {"daily_trade_path_net_pnl", "daily_trade_path_true_net_pnl"})):
                 raise OracleBlockedError(f"Oracle Positive score-contract mismatch: {name}")
             aux_source = settings.dl_sources[positive_dl_id]
             primary_target = get_breakout_quality_experiment_profile(
@@ -1658,9 +1707,7 @@ def _arm_replay_policy(definition, *, plan: Mapping[str, Any], target: str,
         # The same evidence goes into both Exact and Direct replay identities.
         if daily_evidence is None:
             raise OracleBlockedError("Daily-universal Oracle missing verified target lineage")
-        from services.audit.daily_trade40_oracle import (
-            NET_PNL_EVIDENCE, target_identity_for_horizon, truth_producer_fingerprint,
-        )
+        from services.audit.daily_trade40_oracle import NET_PNL_EVIDENCE
         source = plan["daily_sources"][target]
         recipe, provider, horizon = plan["daily_recipes"][source]
         effective_source_sha = None
@@ -1672,8 +1719,7 @@ def _arm_replay_policy(definition, *, plan: Mapping[str, Any], target: str,
             references.validate_consumption(effective_context, daily_evidence)
             effective_source_sha = canonical_json_sha256(source_context(effective_context))
         else:
-            if daily_evidence.get("truth_source_sha256") != truth_producer_fingerprint(
-                    _ORACLE_DAILY_SCORE_RECIPES[recipe]):
+            if daily_evidence.get("truth_source_sha256") != _daily_truth_fingerprint(recipe):
                 raise OracleBlockedError("Oracle Target truth has no verified executing producer lineage")
             source_summary_sha = oracle_dataset_summary_sha256(
                 root=Path(project_root) if project_root is not None else Path(__file__).resolve().parents[2],
@@ -1682,14 +1728,12 @@ def _arm_replay_policy(definition, *, plan: Mapping[str, Any], target: str,
             if ("dataset_summary_sha256" not in daily_evidence or
                     daily_evidence["dataset_summary_sha256"] != source_summary_sha):
                 raise OracleBlockedError("Oracle Target truth has no matching dataset-source evidence")
-        target_id, label_id = target_identity_for_horizon(
-            horizon, outcome_metric=_ORACLE_DAILY_SCORE_RECIPES[recipe],
-        )
+        target_id, label_id = _daily_truth_identity(recipe, horizon)
         if (daily_evidence.get("profile_id") != str(definition.source[provider])
                 or daily_evidence.get("target_id") != target_id
                 or daily_evidence.get("label_id") != label_id):
             raise OracleBlockedError("Daily-universal Target/profile does not match the requested formal Min source")
-        if recipe == "daily_trade_path_net_pnl" and any(
+        if _ORACLE_DAILY_SCORE_RECIPES[recipe] == "net_pnl" and any(
                 daily_evidence.get(key) != expected for key, expected in NET_PNL_EVIDENCE.items()):
             raise OracleBlockedError("NetPnL Target lacks the canonical reference-capital/broker-ledger contract")
         policy["hindsight_score_recipe"] = recipe
@@ -1698,12 +1742,14 @@ def _arm_replay_policy(definition, *, plan: Mapping[str, Any], target: str,
             **({"effective_calculation_contract_sha256": effective_source_sha} if effective_source_sha else {}),
             "label_id": daily_evidence["label_id"],
             "target_id": daily_evidence["target_id"],
+            **({"entry_policy": daily_evidence["entry_policy"]}
+               if recipe == "daily_trade_path_true_net_pnl" else {}),
             "profile_id": str(definition.source[provider]),
             **({"horizon_mode": "full_trade_cycle"} if horizon is None else
                {"horizon_sessions": horizon} if horizon != HORIZON_SESSIONS else {}),
             "rank_policy": daily_evidence["rank_policy"],
             **({key: daily_evidence[key] for key in NET_PNL_EVIDENCE}
-               if recipe == "daily_trade_path_net_pnl" else {}),
+               if _ORACLE_DAILY_SCORE_RECIPES[recipe] == "net_pnl" else {}),
             "rank_sha256": daily_evidence["rank_sha256"],
             "raw_label_sha256": daily_evidence["raw_label_sha256"],
             "truth_source_sha256": daily_evidence["truth_source_sha256"],
@@ -1714,9 +1760,9 @@ def _arm_replay_policy(definition, *, plan: Mapping[str, Any], target: str,
             "research_cutoff_closeout_rows": daily_evidence.get("research_cutoff_closeout_rows", 0),
             "cutoff_truncated_rows": daily_evidence.get("cutoff_truncated_rows", 0),
             "score_start_date": daily_evidence["score_start_date"],
-            ("settled_net_pnl_rows" if recipe == "daily_trade_path_net_pnl" else
+            ("settled_net_pnl_rows" if _ORACLE_DAILY_SCORE_RECIPES[recipe] == "net_pnl" else
              "settled_net_r_rows"): daily_evidence[
-                 "settled_net_pnl_rows" if recipe == "daily_trade_path_net_pnl" else "settled_net_r_rows"
+                 "settled_net_pnl_rows" if _ORACLE_DAILY_SCORE_RECIPES[recipe] == "net_pnl" else "settled_net_r_rows"
              ],
             "censored_rank_last_rows": daily_evidence["censored_rank_last_rows"],
             # Matches the canonical DL lookup: a candidate outside the
@@ -1924,12 +1970,11 @@ def _replay_attested_score_keys(
     match. The later per-arm full-identity verification is still mandatory.
     """
     from core.file_integrity import is_sha256_hex
-    from services.audit.daily_trade40_oracle import truth_producer_fingerprint
     # Source code hashes are small, read-only provenance checks: NO outcomes,
     # DL labels, 558-ticker simulation or Portfolio are materialized here.
     # Net-R and the newly added NetPnL have separate producer identities.
     producer_sha_by_recipe = {
-        recipe: truth_producer_fingerprint(_ORACLE_DAILY_SCORE_RECIPES[recipe])
+        recipe: _daily_truth_fingerprint(recipe)
         for recipe, _provider, _horizon in plan["daily_recipes"].values()
     }
     price_producer_lineage = (_price_score_replay_lineage(definition, store.project_root)
@@ -2040,10 +2085,7 @@ def _certified_saved_oracle_identity(
     A mismatched or incomplete historical receipt must BLOCK, not silently RUN.
     """
     from services.audit.oracle_replay_artifacts import replay_identity
-    from services.audit.daily_trade40_oracle import (
-        NET_PNL_EVIDENCE, NET_PNL_RANK_POLICY,
-        target_identity_for_horizon, truth_producer_fingerprint,
-    )
+    from services.audit.daily_trade40_oracle import NET_PNL_EVIDENCE, NET_PNL_RANK_POLICY
     policy = saved.get("replay_policy")
     cohort = saved.get("cohort")
     if not isinstance(policy, Mapping) or not isinstance(cohort, Mapping):
@@ -2102,25 +2144,25 @@ def _certified_saved_oracle_identity(
         if not isinstance(recorded, Mapping) or not rolling_periods:
             raise ValueError("historical daily-truth lineage missing")
         from services.audit.mintrade_truth_source_attestation import mintrade_sources_equivalent
-        current_producer = truth_producer_fingerprint(_ORACLE_DAILY_SCORE_RECIPES[recipe])
+        current_producer = _daily_truth_fingerprint(recipe)
         if not mintrade_sources_equivalent(recorded.get("truth_source_sha256"), current_producer):
             raise ValueError("historical Target outcome producer semantics not certified")
         if ("dataset_summary_sha256" not in recorded or
                 recorded["dataset_summary_sha256"] != oracle_dataset_summary_sha256(
                     root=project_root, filter_id=str(definition.source["filter_id"]))):
             raise ValueError("historical daily Target dataset-source evidence differs")
-        actual_id, label_id = target_identity_for_horizon(
-            horizon, outcome_metric=_ORACLE_DAILY_SCORE_RECIPES[recipe],
-        )
-        if recipe == "daily_trade_path_net_pnl" and any(
+        actual_id, label_id = _daily_truth_identity(recipe, horizon)
+        if _ORACLE_DAILY_SCORE_RECIPES[recipe] == "net_pnl" and any(
                 recorded.get(key) != expected for key, expected in NET_PNL_EVIDENCE.items()):
             raise ValueError("NetPnL Oracle source has no approved reference-capital/ledger contract")
         teacher = recorded.get("teacher")
         if (recorded.get("target_id") != actual_id
                 or recorded.get("label_id") != label_id
+                or (recipe == "daily_trade_path_true_net_pnl" and
+                    recorded.get("entry_policy") != _daily_truth_entry_policy(recipe))
                 or recorded.get("rank_policy") != (
                     NET_PNL_RANK_POLICY
-                    if recipe == "daily_trade_path_net_pnl" else
+                    if _ORACLE_DAILY_SCORE_RECIPES[recipe] == "net_pnl" else
                     "average_zero_based_completed_net_r_censored_rank_last_no_r_imputation"
                 )
                 or recorded.get("research_cutoff") != str(settings.end_date)
@@ -2136,7 +2178,7 @@ def _certified_saved_oracle_identity(
         if int(recorded.get("mature_eligible_rows", -1)) != n:
             raise ValueError("historical MinTrade score population differs")
         valid_row_count_field = (
-            "settled_net_pnl_rows" if recipe == "daily_trade_path_net_pnl" else "settled_net_r_rows"
+            "settled_net_pnl_rows" if _ORACLE_DAILY_SCORE_RECIPES[recipe] == "net_pnl" else "settled_net_r_rows"
         )
         if int(recorded.get(valid_row_count_field, -1)) + int(
                 recorded.get("censored_rank_last_rows", -1)) != n:
@@ -2286,7 +2328,7 @@ def _execute_single_stage_missing(
     feature_cohort_cache: dict[tuple[str, ...], tuple[pd.DataFrame, str]] = {}
     calendar_cache: dict[tuple[str, str, str], pd.DatetimeIndex] = {}
     truth_cache: dict[tuple[int, str], tuple[dict[tuple[str, str], float], dict[str, Any]]] = {}
-    positive_raw_cache: dict[int, dict[tuple[str, str], float]] = {}
+    positive_raw_cache: dict[tuple[int, str], dict[tuple[str, str], float]] = {}
     execution_gates = _validated_execution_gates(definition, plan)
     data_dir = Path(get_dataset_dir(str(project_root), settings.dataset)).resolve()
     for seed, param_sha, kind, base_params, oracle_params in prepared:
@@ -2320,7 +2362,8 @@ def _execute_single_stage_missing(
                         _recipe, provider, horizon = plan["daily_recipes"][source_name]
                         try:
                             def produce_truth():
-                                return build_daily_universal_trade40_oracle_scores(
+                                return _build_daily_truth(
+                                    _recipe, output_subdir=definition.output_subdir,
                                     project_root=project_root, dataset=str(settings.dataset),
                                     filter_id=str(definition.source["filter_id"]),
                                     profile_id=str(definition.source[provider]),
@@ -2430,9 +2473,10 @@ def _execute_single_stage_missing(
             if target in execution_gates:
                 if source_name != "DailyUniversal_MinTrade_NetPnL":
                     raise OracleBlockedError("Positive gate must consume the full-cycle NetPnL source")
-                if seed not in positive_raw_cache:
-                    from services.audit.oracle_truth_references import load_or_build_positive_truth
-                    positive_raw_cache[seed], _ = load_or_build_positive_truth(
+                positive_key = (seed, source_name)
+                if positive_key not in positive_raw_cache:
+                    positive_raw_cache[positive_key], _ = _load_positive_truth_for_recipe(
+                        plan["daily_recipes"][positive_key[1]][0],
                         execution=execution_contexts[key],
                         cache_root=project_root / AUDIT_OUTPUT_ROOT / definition.output_subdir / "truth_cache",
                         project_root=project_root, output_subdir=definition.output_subdir,
@@ -2445,21 +2489,22 @@ def _execute_single_stage_missing(
                         feature_cohort_cache=feature_cohort_cache,
                         progress=None if quiet else lambda msg: print(f"[Positive Target] {msg}", flush=True),
                     )
-                positive_raw = positive_raw_cache[seed]
+                positive_raw = positive_raw_cache[positive_key]
             positive_score_map = None
             selected = next((row for row in definition.source["oracle_comparisons"]
                              if row["target"] == target), None)
             if selected is not None and selected.get("positive_output"):
                 if target not in plan["daily_sources"]:
                     raise OracleBlockedError("Positive target requires the canonical NetPnL daily truth")
-                if seed not in positive_raw_cache:
+                positive_key = (seed, plan["daily_sources"][target])
+                if positive_key not in positive_raw_cache:
                     if schedule is None:
                         schedule, _ = build_formal_min_execution_schedule(
                             resolve_formal_min_param_records(kind, base_params),
                             seed=seed, param_sha256=param_sha,
                         )
-                    from services.audit.oracle_truth_references import load_or_build_positive_truth
-                    positive_raw_cache[seed], _ = load_or_build_positive_truth(
+                    positive_raw_cache[positive_key], _ = _load_positive_truth_for_recipe(
+                        plan["daily_recipes"][positive_key[1]][0],
                         execution=execution_contexts[key],
                         cache_root=project_root / AUDIT_OUTPUT_ROOT / definition.output_subdir / "truth_cache",
                         project_root=project_root, output_subdir=definition.output_subdir,
@@ -2472,7 +2517,7 @@ def _execute_single_stage_missing(
                         feature_cohort_cache=feature_cohort_cache,
                         progress=None if quiet else lambda msg: print(f"[Positive output] {msg}", flush=True),
                     )
-                raw_values = positive_raw_cache[seed]
+                raw_values = positive_raw_cache[positive_key]
                 positive_score_map = {
                     key: (1.0 if float(value) > 0.0 else 0.0)
                     for key, value in raw_values.items() if key in score_map
@@ -2824,7 +2869,6 @@ def _run_single_stage_oracle(
     already-attested perfect-score SHA. No archived report authorizes reuse.
     """
     from services.audit.oracle_replay_artifacts import OracleReplayStore, replay_identity
-    from services.audit.daily_trade40_oracle import truth_producer_fingerprint
     from filters.breakout_quality.daily_trade40_target import (
         build_formal_min_execution_schedule, resolve_formal_min_param_records,
     )
@@ -3057,7 +3101,7 @@ def _run_single_stage_oracle(
     # SHA. Legacy receipts without the producer closure fingerprint cannot
     # claim unchanged outcome semantics after the canonical cutoff bug fix.
     current_daily_producer_sha_by_recipe = {
-        recipe: truth_producer_fingerprint(_ORACLE_DAILY_SCORE_RECIPES[recipe])
+        recipe: _daily_truth_fingerprint(recipe)
         for recipe, _provider, _horizon in plan["daily_recipes"].values()
     } if any(target in plan["daily_sources"] for target in legacy_targets) else {}
     current_price_producer_lineage = (_price_score_replay_lineage(definition, root)
@@ -3169,13 +3213,12 @@ def _run_single_stage_oracle(
                 continue
             if not current_candidates:
                 if target in plan["daily_sources"]:
-                    from services.audit.daily_trade40_oracle import target_identity_for_horizon, _TRUTH_CACHE_SCHEMA
+                    from services.audit.daily_trade40_oracle import _TRUTH_CACHE_SCHEMA
                     from services.audit.oracle_replay_artifacts import verified_daily_truth_witness
                     source = plan["daily_sources"][target]
                     witness_key = (seed, source)
                     recipe, provider, horizon = plan["daily_recipes"][source]
-                    actual_id, _ = target_identity_for_horizon(
-                        horizon, outcome_metric=_ORACLE_DAILY_SCORE_RECIPES[recipe])
+                    actual_id, _ = _daily_truth_identity(recipe, horizon)
                     try:
                         if witness_key not in daily_witnesses:
                             daily_witnesses[witness_key] = verified_daily_truth_witness(
@@ -3184,6 +3227,8 @@ def _run_single_stage_oracle(
                                 certified_keys=signed_cohort,
                                 expected_inputs={
                                     "schema": _TRUTH_CACHE_SCHEMA, "target_id": actual_id,
+                                    **({"entry_policy": _daily_truth_entry_policy(recipe)}
+                                       if _daily_truth_entry_policy(recipe) is not None else {}),
                                     "dataset": str(settings.dataset),
                                     "filter_id": str(definition.source["filter_id"]),
                                     "profile_id": str(definition.source[provider]),

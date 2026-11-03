@@ -31,7 +31,7 @@ PRICE_CALCULATION_REVISIONS = {
     "equal_rank_mfe_safety": 1, "mfe": 1, "terminal_r": 1,
     "terminal_mae_gate": 1, "mfe_mae_gate": 1,
 }
-DAILY_CALCULATION_REVISIONS = {"daily_trade_path_net_r": 1, "daily_trade_path_net_pnl": 1}
+DAILY_CALCULATION_REVISIONS = {"daily_trade_path_net_r": 1, "daily_trade_path_net_pnl": 1, "daily_trade_path_true_net_pnl": 1}
 FEATURE_UNIVERSE_CALCULATION_REVISION = 1
 REPLAY_CALCULATION_REVISION = 1
 _SCHEMA = 1
@@ -204,7 +204,23 @@ def replay_implementation_sha256() -> str:
 def source_implementation_sha256(recipe: str, profile_id: str) -> str:
     parts = {"daily_percentile": calculation_source(
         "filters/breakout_quality/continuous_ranker_data.py", "build_same_date_percentile_targets")}
-    if recipe in DAILY_CALCULATION_REVISIONS:
+    if recipe == "daily_trade_path_true_net_pnl":
+        # New source capability uses the same canonical Min ledger but a new
+        # independent every-stock-day entry decision. Old recipes are unchanged.
+        parts.update({
+            "true_daily_entry": calculation_source(
+                "filters/breakout_quality/true_daily_mintrade_target.py",
+                "compute_true_daily_mintrade_batch"),
+            "rank_outcomes": calculation_source(
+                "filters/breakout_quality/daily_trade40_target.py", "rank_trade40_outcome_frame"),
+            "schedule": calculation_source(
+                "filters/breakout_quality/daily_trade40_target.py", "build_formal_min_execution_schedule"),
+            "active_period": calculation_source(
+                "filters/breakout_quality/daily_trade40_target.py", "resolve_historical_min_period"),
+            "broker_path": calculation_source(
+                "filters/breakout_quality/trade_path_label.py", "simulate_realized_trade_path_label"),
+        })
+    elif recipe in DAILY_CALCULATION_REVISIONS:
         parts.update({key: calculation_source("filters/breakout_quality/daily_trade40_target.py", name,
                          bound_literals=({"signal_state_reset_date": None,
                                           "include_net_pnl": recipe == "daily_trade_path_net_pnl"}

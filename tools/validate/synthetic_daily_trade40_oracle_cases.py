@@ -34,6 +34,12 @@ _ORIGINAL_SCORE_CONTRACT_RESOLVER = oracle._resolve_oracle_target_score_contract
 def definition(*, full_cycle: bool = False):
     active = next(d for d in get_reusable_audit_definitions("breakout_quality")
                   if d.audit_type == oracle.SUPPORTED_AUDIT_TYPE)
+    # Old 40D/full-cycle fixtures cover the pre-TrueDaily catalog; the new
+    # counterfactual entry capability has dedicated invariant tests.
+    active = replace(active, source={**active.source, "oracle_comparisons": tuple(
+        row for row in active.source["oracle_comparisons"]
+        if not str(row["target"]).startswith("TrueDailyUniversal_")
+    )})
     if full_cycle:
         return active
     # Prior 40D/60D behavioral fixtures isolate existing targets. Dedicated
