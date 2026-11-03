@@ -17,6 +17,7 @@ from unittest.mock import patch
 from core.breakout_quality_registry import (
     DAILY_UNIVERSAL_NETPNL_POSITIVE_BINARY_PROFILE,
     DAILY_UNIVERSAL_T40_PRETRAINED_NETPNL_POSITIVE_BINARY_PROFILE,
+    DAILY_UNIVERSAL_MFE40_PRETRAINED_NETPNL_POSITIVE_BINARY_PROFILE,
     get_breakout_quality_experiment_profile,
 )
 from core.strategy_compare_policy import get_strategy_comparison_settings
@@ -76,6 +77,27 @@ class ScientificVersionCases(TestCase):
         self.assertNotIn("fit_contract_version", cp.as_manifest_payload())
         self.assertEqual(cq.as_manifest_payload()["fit_contract_version"], 2)
         self.assertEqual(cq.encoder_pretraining_profile, get_breakout_quality_experiment_profile(CQ).encoder_pretraining_profile)
+
+    def test_new_daily_mfe40_model_defaults_v1_and_is_independently_versioned(self):
+        cr = DAILY_UNIVERSAL_MFE40_PRETRAINED_NETPNL_POSITIVE_BINARY_PROFILE
+        cp = get_breakout_quality_experiment_profile(CP)
+        cq = get_breakout_quality_experiment_profile(CQ)
+        model = get_breakout_quality_experiment_profile(cr)
+        self.assertNotIn('fit_contract_version', model.as_manifest_payload())
+        self.assertNotEqual(model.as_manifest_payload()['encoder_pretraining'],
+                            cq.as_manifest_payload()['encoder_pretraining'])
+        self.assertEqual(model.continuous_target_id, cp.continuous_target_id)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'cr'
+            _write_rolling(path, cr)
+            self.assertEqual(published_fit_contract_version_state(
+                experiment_profile=cr, publication_dir=path, rolling=True)[0], 'CURRENT')
+            fold = path / 'folds' / FOLD / 'manifest.json'
+            data = json.loads(fold.read_text(encoding='utf-8'))
+            data['experiment_settings']['encoder_pretraining']['target_names'] = ['terminal_mae_gated_t40_40d']
+            _write_json(fold, data)
+            self.assertEqual(published_fit_contract_version_state(
+                experiment_profile=cr, publication_dir=path, rolling=True)[0], 'BLOCKED')
 
     def test_complete_model_staleness_and_reuse_after_rebuild(self):
         with tempfile.TemporaryDirectory() as tmp:

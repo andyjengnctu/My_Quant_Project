@@ -285,9 +285,9 @@ def _pretrain_complete_daily_future_path_encoder_state(
     train_ids = matured_ids[train_mask]
     validation_ids = matured_ids[~train_mask]
     if len(train_ids) < 2 or len(validation_ids) < 2:
-        raise ValueError("complete Daily T40 pretraining requires nonempty temporal train/validation")
+        raise ValueError("complete Daily future-path pretraining requires nonempty temporal train/validation")
     if len(np.unique(group_table.iloc[train_ids]["ticker"].astype(str))) < 2:
-        raise ValueError("complete Daily T40 pretraining requires at least two training tickers")
+        raise ValueError("complete Daily future-path pretraining requires at least two training tickers")
     raw_targets, target_names = feature_bank.future_path_statistics(
         matured_ids,
         cutoff_date=fitting_cutoff,
@@ -298,14 +298,14 @@ def _pretrain_complete_daily_future_path_encoder_state(
     if tuple(target_names) != tuple(profile.target_names) or raw_targets.shape != (
         len(matured_ids), len(profile.target_names)
     ) or not bool(np.isfinite(raw_targets).all()):
-        raise ValueError("complete Daily T40 pretraining target schema/nonfinite invalid")
+        raise ValueError("complete Daily future-path pretraining target schema/nonfinite invalid")
 
     def normalize(reference_ids: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         reference = raw_targets[np.searchsorted(matured_ids, reference_ids)]
         mean = reference.mean(axis=0, dtype=np.float64)
         std = reference.std(axis=0, ddof=0, dtype=np.float64)
         if not bool(np.isfinite(mean).all() and np.isfinite(std).all()) or bool(np.any(std <= np.finfo(np.float32).eps)):
-            raise ValueError("complete Daily T40 pretraining target lacks variation")
+            raise ValueError("complete Daily future-path pretraining target lacks variation")
         return ((raw_targets - mean) / std).astype(np.float32), mean, std
 
     selection_targets, _, _ = normalize(train_ids)
@@ -390,7 +390,7 @@ def _pretrain_complete_daily_future_path_encoder_state(
             stale_epochs = 0
         else:
             stale_epochs += 1
-        print(f"[T40 Daily pretrain] {stage} epoch={epoch}/{profile.epochs} "
+        print(f"[Daily {profile.target_names[0]} pretrain] {stage} epoch={epoch}/{profile.epochs} "
               f"train_loss={train_loss:.6f} val_loss={val_loss:.6f} "
               f"best={selected_epoch}", flush=True)
         if stale_epochs >= int(profile.early_stopping_patience):
@@ -406,7 +406,7 @@ def _pretrain_complete_daily_future_path_encoder_state(
         shuffled = rng.permutation(matured_ids)
         final_loss = run_epoch(shuffled, final_targets,
             model=model, head=head, optimizer=optimizer, parameters=parameters, scaler=scaler)
-        print(f"[T40 Daily pretrain] {stage} full-refit epoch={epoch}/{selected_epoch} "
+        print(f"[Daily {profile.target_names[0]} pretrain] {stage} full-refit epoch={epoch}/{selected_epoch} "
               f"samples={len(matured_ids):,}", flush=True)
     encoder_state = model.export_encoder_state_dict()
     if not encoder_state:

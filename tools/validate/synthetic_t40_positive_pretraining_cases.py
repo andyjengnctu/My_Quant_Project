@@ -23,6 +23,7 @@ if str(ROOT) not in sys.path:
 from core.breakout_quality_registry import (
     DAILY_UNIVERSAL_NETPNL_POSITIVE_BINARY_PROFILE,
     DAILY_UNIVERSAL_T40_PRETRAINED_NETPNL_POSITIVE_BINARY_PROFILE,
+    DAILY_UNIVERSAL_MFE40_PRETRAINED_NETPNL_POSITIVE_BINARY_PROFILE,
     get_breakout_quality_experiment_profile,
     get_breakout_quality_encoder_pretraining_profile,
     get_continuous_ranker_research_spec,
@@ -65,6 +66,71 @@ class T40PositivePretrainingCases(TestCase):
         self.assertEqual(cq.fit_contract_version, 2)
         self.assertEqual(pre.sampling_mode, 'complete_daily_train_rows_per_epoch')
         self.assertGreater(pre.early_stopping_patience, 0)
+
+    def test_daily_mfe40_reuses_complete_daily_cp_pretraining_capability(self):
+        cp = get_breakout_quality_experiment_profile(DAILY_UNIVERSAL_NETPNL_POSITIVE_BINARY_PROFILE)
+        cq = get_breakout_quality_experiment_profile(DAILY_UNIVERSAL_T40_PRETRAINED_NETPNL_POSITIVE_BINARY_PROFILE)
+        cr = get_breakout_quality_experiment_profile(DAILY_UNIVERSAL_MFE40_PRETRAINED_NETPNL_POSITIVE_BINARY_PROFILE)
+        self.assertEqual(get_continuous_ranker_research_spec(cr.name).model_research_id, 'MR-13CR')
+        for key, value in vars(cp).items():
+            if key not in {'name', 'encoder_pretraining_profile'}:
+                self.assertEqual(getattr(cr, key), value, key)
+        for key, value in vars(cq).items():
+            if key not in {'name', 'encoder_pretraining_profile', 'fit_contract_version'}:
+                self.assertEqual(getattr(cr, key), value, key)
+        self.assertEqual(cr.fit_contract_version, 1)
+        t40 = get_breakout_quality_encoder_pretraining_profile(cq.encoder_pretraining_profile)
+        mfe = get_breakout_quality_encoder_pretraining_profile(cr.encoder_pretraining_profile)
+        self.assertEqual(mfe.target_names, ('max_upside_40d',))
+        self.assertEqual(t40.target_names, ('terminal_mae_gated_t40_40d',))
+        for key, value in t40.as_manifest_payload().items():
+            if key not in {'name', 'target_names'}:
+                self.assertEqual(mfe.as_manifest_payload()[key], value, key)
+        self.assertEqual(get_continuous_ranker_execution_recipe(cp.name).training_policy.target_builder,
+                         get_continuous_ranker_execution_recipe(cr.name).training_policy.target_builder)
+        self.assertEqual(mfe.sampling_mode, 'complete_daily_train_rows_per_epoch')
+        self.assertEqual(mfe.source_scope, 'matured_daily_universal_asof_fitting_cutoff')
+        self.assertEqual(mfe.downstream_finetune, 'full_unfrozen')
+
+    def test_mfe40_exact_direct_uses_same_co_rank_selector_and_gate(self):
+        settings = get_strategy_comparison_settings(STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE)
+        for cp_id, cq_id, cr_id in [('C125', 'C127', 'C129'), ('C126', 'C128', 'C130')]:
+            old, t40, mfe = (settings.arms[arm_id] for arm_id in (cp_id, cq_id, cr_id))
+            self.assertEqual(old.dl_id, t40.dl_id)
+            self.assertEqual(old.dl_id, mfe.dl_id)
+            self.assertEqual(old.dl_runtime_mode, mfe.dl_runtime_mode)
+            self.assertEqual(old.param_source, mfe.param_source)
+            self.assertEqual(old.param_policy, mfe.param_policy)
+            self.assertEqual(old.rule_policy, mfe.rule_policy)
+            before = dict(t40.dl_runtime_options)
+            after = dict(mfe.dl_runtime_options)
+            self.assertEqual(before.pop('positive_dl_id'), 'CONT13CQ_ROLL')
+            self.assertEqual(after.pop('positive_dl_id'), 'CONT13CR_ROLL')
+            self.assertEqual(before, after)
+            self.assertEqual(after['positive_probability_threshold'], 0.5)
+        self.assertEqual(settings.dl_sources['CONT13CR_ROLL'].experiment_profile,
+                         DAILY_UNIVERSAL_MFE40_PRETRAINED_NETPNL_POSITIVE_BINARY_PROFILE)
+        contrasts = {contrast.contrast_id for contrast in settings.enabled_contrasts}
+        self.assertTrue({'C129-C125', 'C130-C126', 'C129-C127', 'C130-C128'}.issubset(contrasts))
+        # Generic model-list filtering must also support temporary removal or
+        # reinstatement of this registered research identity without special cases.
+        from core.breakout_quality_policy import get_breakout_quality_model_test_settings
+        roster = get_breakout_quality_model_test_settings().model_profiles
+        self.assertEqual(roster[-1][0], 'MR-13CR')
+        with patch('core.strategy_compare_policy.get_breakout_quality_model_test_settings',
+                   return_value=SimpleNamespace(model_profiles=tuple(item for item in roster if item[0] != 'MR-13CR'))):
+            without_cr = get_strategy_comparison_settings(STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE)
+        self.assertFalse(without_cr.arms['C129'].enabled)
+        self.assertFalse(without_cr.arms['C130'].enabled)
+        self.assertTrue(without_cr.arms['C127'].enabled)
+        self.assertTrue(without_cr.arms['C128'].enabled)
+        with patch('core.strategy_compare_policy.get_breakout_quality_model_test_settings',
+                   return_value=SimpleNamespace(model_profiles=tuple(item for item in roster if item[0] != 'MR-13CQ'))):
+            without_cq = get_strategy_comparison_settings(STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE)
+        self.assertFalse(without_cq.arms['C127'].enabled)
+        self.assertFalse(without_cq.arms['C128'].enabled)
+        self.assertTrue(without_cq.arms['C129'].enabled)
+        self.assertTrue(without_cq.arms['C130'].enabled)
 
     def test_new_strategy_exact_direct_only_swap_positive_source(self):
         settings = get_strategy_comparison_settings(STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE)
@@ -179,6 +245,16 @@ class T40PositivePretrainingCases(TestCase):
             np.testing.assert_allclose(out[start:stop, 0], canonical.target_raw_r,
                 atol=1e-5, rtol=1e-5)
         self.assertTrue(bool(np.isclose(out[len(positions), 0], -1.0)))
+        mfe_out, mfe_names = bank.future_path_statistics(
+            all_ids, cutoff_date=dates[74], target_names=('max_upside_40d',), horizon_bars=40)
+        self.assertEqual(mfe_names, ('max_upside_40d',))
+        for ticker_id, frame in enumerate(frames):
+            expected = np.asarray([
+                frame['High'].iloc[pos+1:pos+41].max() / frame['Close'].iloc[pos] - 1.0
+                for pos in positions
+            ])
+            start, stop = ticker_id * len(positions), (ticker_id + 1) * len(positions)
+            np.testing.assert_allclose(mfe_out[start:stop, 0], expected, atol=1e-6, rtol=1e-6)
 
     def test_ticker_balanced_sampler_preserves_old_draws_and_order(self):
         table = pd.DataFrame({'ticker': ['Z', 'A', 'B', 'A', 'Z', 'B', 'A', 'B', 'Z']})
@@ -262,7 +338,29 @@ class T40PositivePretrainingCases(TestCase):
             loaded_state = model.export_encoder_state_dict()
             self.assertTrue(all(torch.equal(state[key], loaded_state[key]) for key in state))
             self.assertEqual(model.classifier.out_features, 2)
-            del optimizer, model
+            del optimizer, model, state, loaded_state
+            # The MFE40 contract must execute the same actual full-Daily encoder
+            # primitive, not merely resolve a registered profile name.
+            mfe_profile = get_breakout_quality_encoder_pretraining_profile(
+                get_breakout_quality_experiment_profile(
+                    DAILY_UNIVERSAL_MFE40_PRETRAINED_NETPNL_POSITIVE_BINARY_PROFILE
+                ).encoder_pretraining_profile
+            )
+            with patch('filters.breakout_quality.encoder_pretraining.get_breakout_quality_encoder_pretraining_profile',
+                       return_value=replace(mfe_profile, epochs=2, validation_months=1)):
+                mfe_state, mfe_evidence = pretrain_encoder_state(
+                    torch, feature_bank=bank, group_table=table,
+                    fit_ids=np.asarray([100, 280], dtype=np.int64),
+                    feature_count=10, context_count=0,
+                    model_architecture='inception_time_v1',
+                    pretraining_profile_name=mfe_profile.name,
+                    seed=42, plan=plan, stage='inner_train_epoch_selection')
+            self.assertTrue(mfe_state)
+            self.assertEqual(mfe_evidence['future_path_target_names'], ['max_upside_40d'])
+            self.assertGreater(mfe_evidence['matured_fitting_group_count'], 40)
+            self.assertEqual(mfe_evidence['samples_per_epoch'],
+                             mfe_evidence['matured_fitting_group_count'])
+            self.assertFalse(mfe_evidence['downstream_validation_used'])
         finally:
             torch.set_num_threads(original_threads)
 
