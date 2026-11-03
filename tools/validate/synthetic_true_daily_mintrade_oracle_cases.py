@@ -30,26 +30,40 @@ from tools.validate.synthetic_daily_trade40_oracle_cases import PROFILE, source_
 class TrueDailyUniversalOracleCases(TestCase):
     def test_preflight_identifies_daily_only_in_strategy_column(self):
         from core.audit_policy import get_active_audit_module_id
+        from core.audit_registry import oracle_comparison_key
         from services.research.target_oracle_application import get_formal_oracle_definition
         from core.display_common import _strip_ansi
         definition = get_formal_oracle_definition(get_active_audit_module_id())
-        targets = ["C96", "MFE40_Control", "TrueDailyUniversal_MinTrade_NetPnL_Positive",
-                   "TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct"]
-        decisions = {(seed, target): ("RUN" if target.startswith("TrueDaily") else "REUSE")
-                     for seed in (11, 22) for target in targets}
+        selected = [row for row in definition.source["oracle_comparisons"]
+                    if row["target"] in {
+                        "MFE40_Control", "TrueDailyUniversal_MinTrade_NetPnL_Positive",
+                        "TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct",
+                    }]
+        keys = ["C96", *(oracle_comparison_key(row) for row in selected)]
+        strategies = {"C96": "Breakout", **{
+            oracle_comparison_key(row): row.get("strategy", "Breakout")
+            for row in selected
+        }}
+        display_targets = {"C96": "C96", **{
+            oracle_comparison_key(row): row["target"] for row in selected
+        }}
+        decisions = {(seed, key): ("RUN" if strategies[key] == "Daily" else "REUSE")
+                     for seed in (11, 22) for key in keys}
         output = _strip_ansi(oracle.render_replay_preflight(
-            label="Fixed", seeds=[11, 22], targets=targets, decisions=decisions,
-            strategies={target: oracle._oracle_target_strategy(definition, target)
-                        for target in targets},
+            label="Fixed", seeds=[11, 22], targets=keys, decisions=decisions,
+            strategies=strategies, display_targets=display_targets,
         ))
         self.assertIn("Target", output)
         self.assertIn("Strategy", output)
-        self.assertIn("Portfolio REUSE 4 / RUN（需回放）4 / BLOCKED 0", output)
+        self.assertIn("Portfolio REUSE 8 / RUN（需回放）4 / BLOCKED 0", output)
         self.assertIn("Target 真值及 Score 另依各自簽章 REUSE／RUN", output)
         for line in output.splitlines():
             if "TrueDailyUniversal_MinTrade_NetPnL_Positive" in line:
-                self.assertIn("Daily", line)
-                self.assertIn("RUN", line)
+                if "Daily" in line.split():
+                    self.assertIn("RUN", line)
+                else:
+                    self.assertIn("Breakout", line)
+                    self.assertIn("REUSE", line)
             elif "MFE40_Control" in line:
                 self.assertIn("Breakout", line)
                 self.assertIn("REUSE", line)
@@ -60,7 +74,7 @@ class TrueDailyUniversalOracleCases(TestCase):
         plan = oracle._oracle_comparison_plan(definition)
         exact = "TrueDailyUniversal_MinTrade_NetPnL_Positive"
         direct = exact + "_Direct"
-        self.assertEqual(len(definition.source["oracle_comparisons"]), 18)
+        self.assertEqual(len(definition.source["oracle_comparisons"]), 20)
         self.assertEqual(plan["daily_recipes"][exact],
                          ("daily_trade_path_true_net_pnl", "daily_trade40_profile", None))
         self.assertEqual(plan["daily_sources"][direct], exact)

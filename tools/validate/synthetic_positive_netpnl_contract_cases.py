@@ -174,7 +174,8 @@ class PositiveNetPnlContractCases(TestCase):
                  9734312, 1020806211, 116293459, 1234683984]
         positive_exact = "DailyUniversal_MinTrade_NetPnL_Positive"
         positive_direct = positive_exact + "_Direct"
-        published = [row for row in comparisons if row["target"] != positive_exact]
+        published = [row for row in comparisons if row["target"] != positive_exact
+                     and row.get("strategy", "Breakout") == "Breakout"]
         old_definitions = {row["target"]: row["description"] for row in published}
         old_definitions[positive_direct] = (
             "NON-PIT diagnostic only: full-cycle Min NetPnL Direct with strictly "
@@ -219,7 +220,8 @@ class PositiveNetPnlContractCases(TestCase):
             true_daily = {row["target"] for row in comparisons
                           if row.get("strategy") == "Daily"}
             self.assertEqual(len(true_daily), 2)
-            self.assertTrue(true_daily.isdisjoint(values))  # Old Breakout != new Daily.
+            self.assertTrue({name + "::Daily" for name in true_daily}.isdisjoint(values))
+            self.assertTrue(true_daily.issubset(values))  # Old Breakout survives.
             ledger = Path(temp) / "doc/scientific_contracts/REPORT_CONTRACT_VERSIONS.json"
             ledger.parent.mkdir(parents=True)
             ledger.write_bytes((ROOT / "doc/scientific_contracts/REPORT_CONTRACT_VERSIONS.json").read_bytes())
@@ -231,10 +233,14 @@ class PositiveNetPnlContractCases(TestCase):
             self.assertTrue(rows)
             self.assertTrue(all(row["oracle_romd"] == 24.62 for row in rows))
             self.assertTrue(all(row["oracle_romd"] is None for row in overview["rows"]
-                                if row["target"] in {positive_exact, positive_direct} | true_daily))
+                                if row["target"] in {positive_exact, positive_direct}))
+            self.assertTrue(all(row["oracle_romd"] is None for row in overview["rows"]
+                                if row["target"] in true_daily and row["entry_strategy"] == "Daily"))
+            self.assertTrue(all(row["oracle_romd"] == 24.62 for row in overview["rows"]
+                                if row["target"] in true_daily and row["entry_strategy"] == "Breakout"))
             self.assertEqual(overview["rows"][0]["entry_strategy"], "Breakout")
-            self.assertTrue(all(row["entry_strategy"] == "Daily" for row in overview["rows"]
-                                if row["target"] in true_daily))
+            self.assertEqual({row["entry_strategy"] for row in overview["rows"]
+                              if row["target"] in true_daily}, {"Breakout", "Daily"})
             self.assertEqual(
                 table_contract("research.target_dl_validation_overview", "comparison", "target_dl").headers[:2],
                 ("Target", "Strategy"),
@@ -250,12 +256,19 @@ class PositiveNetPnlContractCases(TestCase):
                 row["description"] for row in comparisons if row["target"] == positive_exact)
             payload["oracles"].append({"target": positive_exact, "seeds": len(seeds),
                                        "romd": 25.0, "win_rate_pct": 60.0})
-            for item in payload["oracles"]:
-                if item["target"] in true_daily:
-                    item["strategy"] = "Daily"
+            # Same Target, independent Strategy results: Breakout receipts
+            # retain their old identity; Daily may only use its own evidence.
+            for target in sorted(true_daily):
+                payload["oracles"].append({
+                    "target": target, "strategy": "Daily", "seeds": len(seeds),
+                    "romd": 41.0, "win_rate_pct": 96.0,
+                })
+            payload["comparison_inventory"] = list(targets)
             _, _, _, values, info = read_rows()
             self.assertEqual(len(values), len(targets))
             self.assertEqual(values[positive_direct]["oracle_romd"], 204.88)
+            self.assertEqual(values["TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct"]["oracle_romd"], 24.62)
+            self.assertEqual(values["TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct::Daily"]["oracle_romd"], 41.0)
 
             # An incomplete/corrupt original report must not supply partial metrics.
             payload["oracles"].pop()

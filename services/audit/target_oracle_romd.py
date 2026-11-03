@@ -121,7 +121,9 @@ ORACLE_REPORT_SCHEMA_VERSION = 8
 ORACLE_PARITY_IMPLEMENTATION = "original_oracle_contract_parity_bugfix_20261027_full_research_cutoff_v4"
 PERIOD_STATS_IMPLEMENTATION = "full_year_calendar_verified_20261026"
 # Resolve comparison membership from the Audit definition on every run.
-from core.audit_registry import AUDIT_REUSABLE_REPORTS, resolve_current_oracle_comparisons
+from core.audit_registry import (
+    AUDIT_REUSABLE_REPORTS, resolve_current_oracle_comparisons, oracle_comparison_key,
+)
 
 _ORACLE_CATALOG_SOURCE = AUDIT_REUSABLE_REPORTS["breakout_quality"]["target_oracle_romd"]["source"]
 _ORACLE_DEFAULT_COMPARISONS = _ORACLE_CATALOG_SOURCE["oracle_comparisons"]
@@ -231,7 +233,17 @@ def _oracle_comparison_plan(definition) -> dict[str, Any]:
             raise OracleBlockedError("Oracle comparison設定必須是mapping")
         name, desc = str(entry.get("target") or ""), str(entry.get("description") or "")
         selector = str(entry.get("selector") or "")
-        if not name or not desc or name in selectors or name == str(definition.source["baseline_arm_id"]):
+        if name in selectors:
+            # A source plan needs each scientific score only once.  When the
+            # canonical inventory declares both strategies, they must have
+            # identical Target/score/selector semantics; Portfolio comparisons
+            # are planned separately from this source-only projection.
+            earlier = next(row for row in selected if row["target"] == name)
+            if {k: v for k, v in earlier.items() if k != "strategy"} != {
+                    k: v for k, v in entry.items() if k != "strategy"}:
+                raise OracleBlockedError(f"Oracle Target reused for different score semantics: {name}")
+            continue
+        if not name or not desc or name == str(definition.source["baseline_arm_id"]):
             raise OracleBlockedError(f"Oracle comparison name缺少、重複或非法：{name}")
         # Historical identities are owned by the canonical Audit Registry.
         # Removing a row does not free its name for a different recipe.
@@ -380,10 +392,11 @@ def _oracle_target_strategy(definition, target: str) -> str:
     """
     if target == str(definition.source["baseline_arm_id"]):
         return "Breakout"
-    entry = next((row for row in definition.source["oracle_comparisons"]
-                  if row["target"] == target), None)
-    if entry is None:
-        raise OracleBlockedError(f"Oracle target missing declared comparison: {target}")
+    matches = [row for row in definition.source["oracle_comparisons"]
+               if row["target"] == target]
+    if len(matches) != 1:
+        raise OracleBlockedError(f"Oracle target requires a single scoped Entry Strategy: {target}")
+    entry = matches[0]
     strategy = str(entry.get("strategy", "Breakout"))
     if strategy not in {"Breakout", "Daily"}:
         raise OracleBlockedError(f"Unsupported Oracle portfolio strategy: {strategy}")
@@ -1549,6 +1562,7 @@ def render_replay_preflight(
     decisions: Mapping[tuple[int, str], str],
     reuse_diagnostic: str | None = None,
     strategies: Mapping[str, str] | None = None,
+    display_targets: Mapping[str, str] | None = None,
 ) -> str:
     """Render the one complete identity-backed Replay authorization plan.
 
@@ -1559,7 +1573,8 @@ def render_replay_preflight(
               for action in ("REUSE", "RUN", "BLOCKED")}
     headers = ("Target", "Strategy", *(f"S{i + 1}" for i in range(len(seeds))))
     rows = [
-        (target, (strategies or {}).get(target, "Breakout"),
+        ((display_targets or {}).get(target, target),
+         (strategies or {}).get(target, "Breakout"),
          *(styled_workflow_status(decisions[(seed, target)]) for seed in seeds))
         for target in targets
     ]
@@ -3582,6 +3597,119 @@ def _run_single_stage_oracle(
                                    seeds=seed_set, base=result)
 
 
+def _oracle_strategy_scopes(definition) -> tuple[tuple[str, Any], ...]:
+    """Derive execution scopes from ONE canonical Target x Strategy Registry.
+
+    Per-scope Target names remain the original immutable Replay keys.  This
+    preserves all 18 historical Breakout treatment receipts.  Daily uses the
+    same target scientific identity but different signed economic policy;
+    execution-index identities distinguish the strategies.
+    """
+    comparisons = resolve_current_oracle_comparisons(definition.source)
+    ordered_strategies = tuple(dict.fromkeys(
+        str(row.get("strategy", "Breakout")) for row in comparisons
+    ))
+    definitions = []
+    for strategy in ordered_strategies:
+        subset = tuple(row for row in comparisons
+                       if str(row.get("strategy", "Breakout")) == strategy)
+        definitions.append((strategy, replace(definition, source={
+            **definition.source, "oracle_comparisons": subset,
+        })))
+    return tuple(definitions)
+
+
+def _oracle_scoped_key(target: str, strategy: str) -> str:
+    return "C96" if target == "C96" else oracle_comparison_key({
+        "target": target, "strategy": strategy,
+    })
+
+
+def _oracle_combined_preview(definition, *, project_root: Path) -> tuple[dict[str, Any], tuple]:
+    """One approval matrix for ALL scopes; zero P16/Target/Replay creation."""
+    scopes = _oracle_strategy_scopes(definition)
+    previews = tuple((strategy, _run_single_stage_oracle(
+        scoped, project_root=project_root, quiet=True,
+        preflight_approval=None, preview_only=True,
+        allow_historical_execution_input_drift=True,
+    )) for strategy, scoped in scopes)
+    seeds = tuple(previews[0][1]["seed_set"])
+    pending = tuple(previews[0][1]["missing_p16"])
+    producer_kwargs = previews[0][1]["producer_kwargs"]
+    decisions: dict[tuple[int, str], str] = {}
+    ordered_keys = ["C96"]
+    strategies = {"C96": "Breakout"}
+    display_targets = {"C96": "C96"}
+    for strategy, preview in previews:
+        if (tuple(preview["seed_set"]) != seeds or
+                tuple(preview["missing_p16"]) != pending or
+                preview["producer_kwargs"] != producer_kwargs):
+            raise OracleBlockedError("Target x Strategy scopes have different canonical P16/Seed plans")
+        for seed, target in preview["preflight"]:
+            key = _oracle_scoped_key(target, strategy)
+            value = preview["preflight"][(seed, target)]
+            if (seed, key) in decisions and decisions[(seed, key)] != value:
+                raise OracleBlockedError("Common C96 Replay identity differs across strategies")
+            decisions[(seed, key)] = value
+        for target in preview["targets"]:
+            key = _oracle_scoped_key(target, strategy)
+            if key not in strategies:
+                ordered_keys.append(key)
+                strategies[key] = strategy
+                display_targets[key] = target
+    # The visible rows follow canonical Registry order, not internal scope order.
+    registry_keys = ("C96", *(oracle_comparison_key(r) for r in
+                              resolve_current_oracle_comparisons(definition.source)))
+    if set(registry_keys) != set(ordered_keys) or len(registry_keys) != len(ordered_keys):
+        raise OracleBlockedError("Oracle Target x Strategy preview/inventory mismatch")
+    text = render_replay_preflight(
+        label="Fixed", seeds=list(seeds), targets=list(registry_keys),
+        decisions=decisions, strategies=strategies, display_targets=display_targets,
+    )
+    return {"status": "PREVIEW", "preflight": decisions, "text": text,
+            "missing_p16": pending, "seed_set": seeds,
+            "targets": registry_keys, "producer_kwargs": producer_kwargs}, scopes
+
+
+def _oracle_merge_scoped_reports(definition, reports: list[tuple[str, Mapping[str, Any]]]) -> dict[str, Any]:
+    """Publish one report; validate identical C96 and Target lineage."""
+    if not reports:
+        raise OracleBlockedError("Oracle strategy inventory empty")
+    base = dict(reports[0][1])
+    baseline = base["baseline"]
+    benchmark_fields = ("seeds", "benchmark_id", "dataset", "start_date", "end_date",
+                        "common_cohort", "param_artifacts", "strategy_profile_id")
+    by_key: dict[str, dict[str, Any]] = {}
+    descriptions: dict[str, str] = {}
+    for strategy, report in reports:
+        if any(report.get(field) != base.get(field) for field in benchmark_fields):
+            raise OracleBlockedError("Breakout/Daily Oracle cohorts or P16 evidence disagree")
+        if report["baseline"] != baseline:
+            raise OracleBlockedError("Breakout/Daily paired C96 baseline differs")
+        for target, description in report["definitions"].items():
+            if target in descriptions and descriptions[target] != description:
+                raise OracleBlockedError("Same Target has two scientific definitions")
+            descriptions[target] = description
+        for original in report["oracles"]:
+            item = dict(original)
+            if item.get("strategy") != strategy:
+                raise OracleBlockedError("Replay result assigned to the wrong Entry Strategy")
+            key = _oracle_scoped_key(str(item["target"]), strategy)
+            if key in by_key:
+                raise OracleBlockedError("Duplicate Target x Strategy result")
+            by_key[key] = item
+    registered = resolve_current_oracle_comparisons(definition.source)
+    if set(by_key) != {oracle_comparison_key(row) for row in registered}:
+        raise OracleBlockedError("Oracle completed Target x Strategy set differs from Registry")
+    base["oracles"] = [by_key[oracle_comparison_key(row)] for row in registered]
+    base["definitions"] = {str(row["target"]): descriptions[str(row["target"])]
+                            for row in registered}
+    # Explicit inventory detects an incomplete *new* mixed-strategy report.
+    # Old reports without it remain readable as historical Breakout evidence.
+    base["comparison_inventory"] = ["C96", *(oracle_comparison_key(row) for row in registered)]
+    return base
+
+
 def preview_oracle_replay_plan(
     definition, *, project_root: Path,
 ) -> dict[str, Any]:
@@ -3591,11 +3719,10 @@ def preview_oracle_replay_plan(
     receipts are checked by the same canonical code as the execution plan.
     No Target truth, Optimizer or Portfolio Replay may execute here.
     """
-    return _run_single_stage_oracle(
-        definition, project_root=project_root, quiet=True,
-        preflight_approval=None, preview_only=True,
-        allow_historical_execution_input_drift=True,
+    preview, _scopes = _oracle_combined_preview(
+        definition, project_root=Path(project_root),
     )
+    return preview
 
 
 def build_report(
@@ -3612,13 +3739,65 @@ def build_report(
     """
     if preflight_display not in {"full", "summary"}:
         raise ValueError("未知 Target Replay preflight 顯示方式")
-    return _run_single_stage_oracle(
-        definition, project_root=Path(project_root), quiet=quiet,
-        preflight_approval=preflight_approval,
-        preflight_display=preflight_display,
-        allow_historical_execution_input_drift=preflight_approval is not None,
-        approved_replay_decisions=approved_replay_decisions,
-    )
+    scopes = _oracle_strategy_scopes(definition)
+    if len(scopes) == 1:
+        # Preserve the original single-strategy behavior for scoped fixtures.
+        return _run_single_stage_oracle(
+            scopes[0][1], project_root=Path(project_root), quiet=quiet,
+            preflight_approval=preflight_approval,
+            preflight_display=preflight_display,
+            allow_historical_execution_input_drift=preflight_approval is not None,
+            approved_replay_decisions=approved_replay_decisions,
+        )
+    if approved_replay_decisions is not None:
+        if preflight_approval is None:
+            raise OracleBlockedError("Target x Strategy approval requires a canonical user confirmation")
+        keys = {oracle_comparison_key(row) for row in
+                resolve_current_oracle_comparisons(definition.source)} | {"C96"}
+        seeds = {seed for seed, _key in approved_replay_decisions}
+        if (not seeds or set(approved_replay_decisions) !=
+                {(seed, key) for seed in seeds for key in keys}):
+            raise OracleBlockedError("Target x Strategy authorized inventory changed")
+        # Every scope independently rechecks signed REUSE/RUN status before
+        # any work.  Do not repeat the two expensive preview passes here.
+    elif preflight_approval is not None:
+        approved, scopes = _oracle_combined_preview(
+            definition, project_root=Path(project_root),
+        )
+        if not preflight_approval(approved["text"]):
+            return {"status": "CANCELLED", "read_only": True,
+                    "preflight": approved["preflight"]}
+        approved_replay_decisions = approved["preflight"]
+    outputs: list[tuple[str, Mapping[str, Any]]] = []
+    for strategy, scoped in scopes:
+        scope_decisions = (None if approved_replay_decisions is None else {
+            (seed, target): value
+            for (seed, composite), value in approved_replay_decisions.items()
+            for target in (composite if composite == "C96" else next(
+                (str(row["target"]) for row in scoped.source["oracle_comparisons"]
+                 if _oracle_scoped_key(str(row["target"]), strategy) == composite), ""),)
+            if target
+        })
+        if scope_decisions is not None:
+            expected_keys = {(seed, target)
+                             for seed in {key[0] for key in approved_replay_decisions}
+                             for target in ("C96", *(str(row["target"])
+                                 for row in scoped.source["oracle_comparisons"]))}
+            if set(scope_decisions) != expected_keys:
+                raise OracleBlockedError("Authorized scope does not match Target x Strategy Registry")
+        report = _run_single_stage_oracle(
+            scoped, project_root=Path(project_root),
+            quiet=quiet or (scope_decisions is not None and
+                            all(v == "REUSE" for v in scope_decisions.values())),
+            preflight_approval=(lambda _view: True) if preflight_approval is not None else None,
+            preflight_display="summary" if preflight_approval is not None else preflight_display,
+            allow_historical_execution_input_drift=preflight_approval is not None,
+            approved_replay_decisions=scope_decisions,
+        )
+        if report.get("status") == "CANCELLED":
+            return dict(report)
+        outputs.append((strategy, report))
+    return _oracle_merge_scoped_reports(definition, outputs)
 
 
 def render_result(report: Mapping[str, Any], *, target: str) -> str:
@@ -3635,7 +3814,8 @@ def render_result(report: Mapping[str, Any], *, target: str) -> str:
                     wins=f'{item["positive_seed_count"]}/{item["seeds"]}')
                for item in report["oracles"]]]
     # Presentation-only sort; preserve the canonical comparison/Replay order.
-    items.sort(key=lambda row: (float(row["romd"]), str(row["target"])))
+    items.sort(key=lambda row: (float(row["romd"]), str(row["target"]),
+                                str(row.get("strategy", "Breakout"))))
     rows = format_comparison_rows(perf_table, items, target=target)
     intro = [
         "Target Ground Truth -> Strategy RoMD (HINDSIGHT ORACLE / NOT PIT)",
@@ -3671,8 +3851,12 @@ def render_result(report: Mapping[str, Any], *, target: str) -> str:
         yearly_table, all_years, target=target,
         groups=[str(year.get("year")) for year in all_years],
     ))
+    from collections import Counter
+    repeated_targets = Counter(str(item["target"]) for item in items)
     for item in items:
-        lines.append(f'### {_oracle_display_name(item["target"])}')
+        suffix = (f' ({item["strategy"]})'
+                  if repeated_targets[str(item["target"])] > 1 else '')
+        lines.append(f'### {_oracle_display_name(item["target"])}{suffix}')
         lines.extend(("| " + " | ".join(yearly_table.headers) + " |",
                       "|" + "|".join("---" for _ in yearly_table.headers) + "|"))
         for _year in item["yearly"]:
@@ -3682,7 +3866,9 @@ def render_result(report: Mapping[str, Any], *, target: str) -> str:
                   "|" + "|".join("---" for _ in paired_table.headers) + "|"])
     baselines = {int(x["seed"]): float(x["romd"]) for x in baseline["seed_observations"]}
     paired_rows = [
-        dict(obs, target=_oracle_display_name(item["target"]), c96_romd=baselines[int(obs["seed"])])
+        dict(obs, target=_oracle_display_name(item["target"]) + (
+            f' ({item["strategy"]})' if repeated_targets[str(item["target"])] > 1 else ''),
+             c96_romd=baselines[int(obs["seed"])])
         for item in items if item["target"] != "C96 Same-Window"
         for obs in item["seed_observations"]
     ]

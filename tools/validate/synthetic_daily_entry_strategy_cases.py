@@ -29,17 +29,102 @@ class DailyEntryStrategyCases(TestCase):
             "TrueDailyUniversal_MinTrade_NetPnL_Positive",
             "TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct",
         }
-        self.assertEqual({r["target"] for r in rows if oracle._oracle_target_strategy(definition, r["target"]) == "Daily"}, expected)
-        self.assertEqual(len(rows), 18)
-        for r in rows:
-            if r["target"] not in expected:
-                self.assertEqual(oracle._oracle_target_strategy(definition, r["target"]), "Breakout")
+        self.assertEqual(len(rows), 20)
+        self.assertEqual({r["target"] for r in rows if r.get("strategy") == "Daily"}, expected)
+        self.assertEqual(len([r for r in rows if r.get("strategy", "Breakout") == "Breakout"]), 18)
+        scoped = oracle._oracle_strategy_scopes(definition)
+        self.assertEqual([(s, len(d.source["oracle_comparisons"])) for s,d in scoped],
+                         [("Breakout", 18), ("Daily", 2)])
+        self.assertTrue(all(oracle._oracle_target_strategy(d, r["target"]) == strategy
+                            for strategy, d in scoped
+                            for r in d.source["oracle_comparisons"]))
         self.assertEqual(oracle._oracle_target_strategy(definition, "C96"), "Breakout")
         contract = require_approved_report_contract("audit.target_oracle_romd")
         self.assertEqual(contract.version, 12)
         self.assertEqual(tuple(c.label for c in contract.sections[0].tables[0].columns[:3]),
                          ("Target", "Strategy", "Return Mean"))
         self.assertTrue(DAILY_ENTRY_CONTRACT.startswith("daily_stockday_close_limit_"))
+
+    def test_single_registry_pair_identity_and_duplicate_rejection(self):
+        from core.audit_registry import oracle_comparison_key, resolve_current_oracle_comparisons
+        definition = next(d for d in get_reusable_audit_definitions("breakout_quality")
+                          if d.audit_type == oracle.SUPPORTED_AUDIT_TYPE)
+        rows = resolve_current_oracle_comparisons(definition.source)
+        keys = [oracle_comparison_key(row) for row in rows]
+        self.assertEqual(len(keys), 20)
+        self.assertEqual(len(set(keys)), 20)
+        self.assertEqual(len({row["target"] for row in rows}), 18)
+        for name in ("TrueDailyUniversal_MinTrade_NetPnL_Positive",
+                     "TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct"):
+            pair = [row for row in rows if row["target"] == name]
+            self.assertEqual({p.get("strategy", "Breakout") for p in pair},
+                             {"Breakout", "Daily"})
+            self.assertEqual({tuple(sorted((k, repr(v)) for k,v in p.items()
+                                           if k != "strategy")) for p in pair}.__len__(), 1)
+        with self.assertRaisesRegex(ValueError, "duplicate Target x Strategy"):
+            resolve_current_oracle_comparisons({
+                **definition.source, "oracle_comparisons": (*rows, dict(rows[-1])),
+            })
+        # The inventory's second dimension is not a new scientific Target ID.
+        self.assertIn("TrueDailyUniversal_MinTrade_NetPnL_Positive::Daily", keys)
+        self.assertIn("TrueDailyUniversal_MinTrade_NetPnL_Positive", keys)
+
+    def test_one_approval_matrix_and_same_engine_twenty_treatments(self):
+        from core.audit_registry import oracle_comparison_key
+        definition = next(d for d in get_reusable_audit_definitions("breakout_quality")
+                          if d.audit_type == oracle.SUPPORTED_AUDIT_TYPE)
+        seeds = tuple(range(1, 9))
+        calls = []
+        common_baseline = {"target":"C96", "strategy":"Breakout",
+                           "seed_observations": [], "romd": 9.0}
+
+        def fake_run(scoped, *, preview_only=False, **kwargs):
+            strategy = scoped.source["oracle_comparisons"][0].get("strategy", "Breakout")
+            targets = tuple(row["target"] for row in scoped.source["oracle_comparisons"])
+            calls.append((strategy, preview_only, kwargs.get("approved_replay_decisions")))
+            decisions = {(seed, name): "REUSE" if strategy == "Breakout" else "RUN"
+                         for seed in seeds for name in ("C96", *targets)}
+            for seed in seeds:
+                decisions[(seed,"C96")] = "REUSE"
+            if preview_only:
+                return {"status":"PREVIEW", "preflight": decisions,
+                        "seed_set":seeds,"missing_p16":(),
+                        "producer_kwargs":{"method":"canonical"},
+                        "targets": ("C96",*targets)}
+            self.assertTrue(kwargs["preflight_approval"]("single scope recheck"))
+            self.assertEqual(kwargs["approved_replay_decisions"], decisions)
+            return {"status":"COMPLETED", "seeds":list(seeds),
+                    "benchmark_id":"end_to_end_v2", "dataset":"full",
+                    "start_date":"2021-01-01", "end_date":"2026-03-02",
+                    "strategy_profile_id": "test", "param_artifacts":{},
+                    "common_cohort":{"cohort_rows":630589},
+                    "baseline":common_baseline,
+                    "oracles":[{"target": target, "strategy":strategy,
+                                "romd":25.0 if strategy == "Breakout" else 40.0}
+                               for target in targets],
+                    "definitions":{row["target"]:row["description"]
+                                   for row in scoped.source["oracle_comparisons"]}}
+        with patch.object(oracle,"_run_single_stage_oracle",side_effect=fake_run):
+            preview = oracle.preview_oracle_replay_plan(definition,project_root="/tmp")
+            self.assertEqual(len(preview["targets"]),21)
+            self.assertIn("Portfolio REUSE 152 / RUN（需回放）16 / BLOCKED 0", preview["text"])
+            self.assertIn("TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct", preview["text"])
+            self.assertIn("Daily",preview["text"])
+            result = oracle.build_report(
+                definition,project_root="/tmp",quiet=True,
+                preflight_approval=lambda _:True,
+                approved_replay_decisions=preview["preflight"],
+            )
+        self.assertEqual(len(result["oracles"]),20)
+        self.assertEqual(len(result["definitions"]),18)
+        self.assertEqual(len(result["comparison_inventory"]),21)
+        target = "TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct"
+        values = {(row["target"],row["strategy"]):row["romd"] for row in result["oracles"]}
+        self.assertEqual(values[(target,"Breakout")],25.0)
+        self.assertEqual(values[(target,"Daily")],40.0)
+        self.assertEqual([c[1] for c in calls], [True,True,False,False])
+        self.assertEqual([(c[0],len(c[2])) for c in calls[-2:]],
+                         [("Breakout",8*19),("Daily",8*3)])
 
     def test_scoped_daily_scores_do_not_leak_or_read_positive_truth(self):
         days = tuple(pd.Timestamp(t) for t in

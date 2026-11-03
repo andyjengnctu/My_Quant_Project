@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from core.audit_policy import get_active_audit_module_id
-from core.audit_registry import resolve_current_oracle_comparisons
+from core.audit_registry import resolve_current_oracle_comparisons, oracle_comparison_key
 from core.breakout_quality_registry import (
     SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES,
     get_predicted_upside_context_contract,
@@ -119,19 +119,23 @@ def _oracle_rows(root: Path, definition, versions: Mapping[str, tuple]):
     # The current canonical comparison inventory is the sole Target membership SSOT.
     comparisons = resolve_current_oracle_comparisons(definition.source)
     baseline = str(definition.source["baseline_arm_id"])
-    targets = (baseline, *(str(item["target"]) for item in comparisons))
+    # Comparison identity is Target x Entry Strategy; the scientific Target
+    # remains unchanged and is displayed separately.  Old Breakout report
+    # rows retain their original Target key, preserving historical REUSE.
+    targets = (baseline, *(oracle_comparison_key(item) for item in comparisons))
     if len(set(targets)) != len(targets):
-        raise ValueError("Oracle target identities are not unique")
-    current_definitions = {str(item["target"]): str(item["description"])
+        raise ValueError("Oracle Target x Strategy identities are not unique")
+    by_comparison = {oracle_comparison_key(item): item for item in comparisons}
+    current_definitions = {oracle_comparison_key(item): str(item["description"])
                            for item in comparisons}
-    current_strategies = {str(item["target"]): str(item.get("strategy", "Breakout"))
+    current_strategies = {oracle_comparison_key(item): str(item.get("strategy", "Breakout"))
                           for item in comparisons}
     # The Audit registry is the owner of retired historical identities; a
     # previously completed signed report may include them after [1] retires
     # those rows. Do not use them as current Oracle or DL results.
     retired = (set(definition.source.get("retired_oracle_targets") or ())
                | set(definition.source.get("historical_only_oracle_targets") or ()))
-    if retired.intersection(targets):
+    if retired.intersection(str(item["target"]) for item in comparisons):
         raise ValueError("Current and retired Oracle target identities overlap")
     score_targets = {}
     for item in comparisons:
@@ -152,7 +156,7 @@ def _oracle_rows(root: Path, definition, versions: Mapping[str, tuple]):
         # A hindsight-only eligibility intervention is not a deployable DL
         # model or ordinary Direct strategy, even when its score source is
         # identical. In particular Positive_Direct must NOT claim C124.
-        score_targets[str(item["target"])] = None if item.get("positive_gate") else label
+        score_targets[oracle_comparison_key(item)] = None if item.get("positive_gate") else label
     data_path = (root / "outputs" / "audit" / Path(definition.output_subdir)
                  / "latest" / "audit.json")
     doc_path = data_path.with_name("audit.md")
@@ -169,6 +173,7 @@ def _oracle_rows(root: Path, definition, versions: Mapping[str, tuple]):
             and payload.get("start_date") and payload.get("end_date")
             and payload.get("strategy_profile_id") == definition.source["strategy_profile_id"]):
         seen: set[str] = set()
+        seen_scientific_targets: set[str] = set()
         published_definitions = payload.get("definitions")
         original = [dict(payload.get("baseline") or {}), *payload["oracles"]]
         for item in original:
@@ -176,28 +181,43 @@ def _oracle_rows(root: Path, definition, versions: Mapping[str, tuple]):
                 metrics.clear()
                 break
             target = str(item.get("target") or "")
-            if (target not in targets and target not in retired) or target in seen or _count(item.get("seeds")) != len(payload["seeds"]):
+            strategy = str(item.get("strategy", "Breakout"))
+            if target == baseline:
+                key = baseline if strategy == "Breakout" else ""
+            else:
+                try:
+                    key = oracle_comparison_key({"target": target, "strategy": strategy})
+                except ValueError:
+                    metrics.clear()
+                    break
+            if ((key not in targets and target not in retired) or key in seen or
+                    _count(item.get("seeds")) != len(payload["seeds"]) or
+                    (item.get("comparison_key") not in (None, key))):
                 metrics.clear()
                 break
-            seen.add(target)
+            seen.add(key)
+            if target != baseline:
+                seen_scientific_targets.add(target)
             romd, winrate = _number(item.get("romd")), _number(item.get("win_rate_pct"))
             if romd is None or winrate is None or not 0.0 <= winrate <= 100.0:
                 metrics.clear()
                 break
-            if (target == baseline or
-                    (target in current_definitions
+            if (key == baseline or
+                    (key in current_definitions
                      and isinstance(published_definitions, dict)
-                     and published_definitions.get(target) == current_definitions[target]
-                     # Historical reports without a Strategy field used Breakout.
-                     # Never present their TrueDaily values as new Daily results.
-                     and str(item.get("strategy", "Breakout")) == current_strategies[target])):
-                metrics[target] = {"oracle_romd": romd, "win_rate_pct": winrate}
+                     and published_definitions.get(target) == current_definitions[key]
+                     and strategy == current_strategies[key])):
+                metrics[key] = {"oracle_romd": romd, "win_rate_pct": winrate}
         # A completed historical report is validated against its OWN published
         # inventory. Project only unchanged current rows; new/redefined Targets
         # must await their own completed Replay, never inherit a stale metric.
         if (baseline in seen and isinstance(published_definitions, dict)
-                and set(published_definitions) == seen - {baseline}
+                and set(published_definitions) == seen_scientific_targets
                 and all(isinstance(desc, str) and desc for desc in published_definitions.values())
+                and (payload.get("comparison_inventory") is None or (
+                    isinstance(payload["comparison_inventory"], list)
+                    and payload["comparison_inventory"] == list(targets)
+                    and seen == set(targets)))
                 and metrics):
             oracle_info = {
                 "path": str(data_path.relative_to(root).as_posix()),
@@ -399,16 +419,20 @@ def _strategy_bindings(*, target_names: tuple[str, ...],
     baseline = str(definition.source["baseline_arm_id"])
     base_arm = STRATEGY_COMPARE_ARMS[baseline]
     bindings = {(baseline, ""): baseline}
-    positive_targets = {
-        str(item["target"])
-        for item in resolve_current_oracle_comparisons(definition.source)
-        if item.get("positive_output")
-    }
+    comparisons = {oracle_comparison_key(item): item
+                   for item in resolve_current_oracle_comparisons(definition.source)}
+    positive_targets = {key for key, item in comparisons.items()
+                        if item.get("positive_output")}
     candidates: dict[tuple[str, str], set[str]] = {}
     for target in target_names:
         if target == baseline or not score_targets.get(target):
             continue
-        selector = "direct" if target.endswith("_Direct") else "exact"
+        comparison = comparisons.get(target)
+        if comparison is None or comparison.get("strategy", "Breakout") != "Breakout":
+            # No formally paired Daily DL arm exists yet.  A Breakout model
+            # cannot silently become the Daily Strategy result.
+            continue
+        selector = str(comparison["selector"])
         desired_mode = _DIRECT_MODE if selector == "direct" else _EXACT_MODE
         for arm_id, arm in STRATEGY_COMPARE_ARMS.items():
             if (not arm.get("dl_enabled") or arm.get("dl_runtime_mode") != desired_mode
@@ -611,7 +635,7 @@ def collect_target_dl_overview(project_root: Path) -> dict[str, Any]:
     }
     bindings = _strategy_bindings(target_names=targets, score_targets=score_targets, definition=definition)
     positive_targets = {
-        str(item["target"]) for item in comparisons if item.get("positive_output")
+        oracle_comparison_key(item) for item in comparisons if item.get("positive_output")
     }
     positive_profiles = {
         profile for (target, profile) in bindings if target in positive_targets
@@ -657,8 +681,10 @@ def collect_target_dl_overview(project_root: Path) -> dict[str, Any]:
                 "robustness_rho": robust_rho,
                 "rho_seeds": robust_seeds,
             })
-    entry_strategies = {str(item["target"]): str(item.get("strategy", "Breakout"))
+    entry_strategies = {oracle_comparison_key(item): str(item.get("strategy", "Breakout"))
                         for item in comparisons}
+    display_targets = {oracle_comparison_key(item): str(item["target"])
+                       for item in comparisons}
     rows = []
     for target in targets:
         # The canonical scientific profile registry already provides a stable
@@ -670,7 +696,7 @@ def collect_target_dl_overview(project_root: Path) -> dict[str, Any]:
             metrics = oracle.get(target) or {}
             robust = robust_romd.get(arm) if arm else None
             rows.append({
-                "target": target,
+                "target": display_targets.get(target, target),
                 "entry_strategy": entry_strategies.get(target, "Breakout"),
                 "oracle_romd": metrics.get("oracle_romd"),
                 "win_rate_pct": metrics.get("win_rate_pct"),

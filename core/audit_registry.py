@@ -149,7 +149,9 @@ AUDIT_REUSABLE_REPORTS: dict[str, dict[str, Any]] = {
                     {"target": "DailyUniversal_MinTrade_NetPnL_Direct", "description": "Same full-cycle Min NetPnL perfect daily ranks; canonical No-K/No-R0 selector", "score_source": "DailyUniversal_MinTrade_NetPnL", "selector": "direct"},
                     {"target": "DailyUniversal_MinTrade_NetPnL_Positive", "description": "Formal perfect dual-output NetPnL rank plus Positive membership under Exact K/R0; common model-score admission", "score_source": "DailyUniversal_MinTrade_NetPnL", "selector": "exact", "positive_output": "netpnl_positive_probability_v1", "strategy_arm_id": "C125"},
                     {"target": "DailyUniversal_MinTrade_NetPnL_Positive_Direct", "description": "Formal perfect dual-output NetPnL rank plus Positive membership under Direct No-K/No-R0; historical raw-gated 204.88 is NON-PIT evidence, not reusable", "score_source": "DailyUniversal_MinTrade_NetPnL", "selector": "direct", "positive_output": "netpnl_positive_probability_v1", "strategy_arm_id": "C126"},
+                    {"target": "TrueDailyUniversal_MinTrade_NetPnL_Positive", "description": "Every feature-eligible stock-day has an independent next-session prior-close limit buy attempt; canonical full-cycle Min broker NetPnL, perfect rank plus Positive output, Exact K/R0", "score": "daily_trade_path_true_net_pnl", "provider": "daily_trade40_profile", "horizon_mode": "full_trade_cycle", "selector": "exact", "positive_output": "netpnl_positive_probability_v1", "strategy_arm_id": "C125"},
                     {"target": "TrueDailyUniversal_MinTrade_NetPnL_Positive", "description": "Every feature-eligible stock-day has an independent next-session prior-close limit buy attempt; canonical full-cycle Min broker NetPnL, perfect rank plus Positive output, Exact K/R0", "score": "daily_trade_path_true_net_pnl", "provider": "daily_trade40_profile", "horizon_mode": "full_trade_cycle", "selector": "exact", "positive_output": "netpnl_positive_probability_v1", "strategy_arm_id": "C125", "strategy": "Daily"},
+                    {"target": "TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct", "description": "Same hypothetical daily entry full-cycle Min truth / Positive output; Direct No-K/No-R0", "score_source": "TrueDailyUniversal_MinTrade_NetPnL_Positive", "selector": "direct", "positive_output": "netpnl_positive_probability_v1", "strategy_arm_id": "C126"},
                     {"target": "TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct", "description": "Same hypothetical daily entry full-cycle Min truth / Positive output; Direct No-K/No-R0", "score_source": "TrueDailyUniversal_MinTrade_NetPnL_Positive", "selector": "direct", "positive_output": "netpnl_positive_probability_v1", "strategy_arm_id": "C126", "strategy": "Daily"},
                 ),
             },
@@ -226,13 +228,25 @@ AUDIT_MODULES: dict[str, dict[str, Any]] = {
 }
 
 
-def resolve_current_oracle_comparisons(source: dict[str, Any]) -> tuple[dict[str, Any], ...]:
-    """One canonical executable Oracle inventory, disjoint from history.
+def oracle_comparison_key(row: Mapping[str, Any]) -> str:
+    """Stable Target x Strategy comparison key, not a new Target identity.
 
-    The current Research [1] Replay plan and the Target x DL overview must
-    consume the same registry projection. Removing an item never deletes its
-    evidence; keeping historical evidence never re-enables that item. A broken
-    combination is an installation/registration error, not a RUN plan.
+    Legacy Breakout receipts retain their *exact* old Target key; Daily uses a
+    separate execution key, so neither strategy can consume the other receipt.
+    The original scientific Target remains row['target'] in both cases.
+    """
+    target = str(row.get("target") or "")
+    strategy = str(row.get("strategy", "Breakout"))
+    if not target or "::" in target or strategy not in {"Breakout", "Daily"}:
+        raise ValueError(f"Invalid Oracle Target x Strategy: {target} / {strategy}")
+    return target if strategy == "Breakout" else f"{target}::Daily"
+
+
+def resolve_current_oracle_comparisons(source: dict[str, Any]) -> tuple[dict[str, Any], ...]:
+    """One canonical executable Target x Strategy inventory for both views.
+
+    The same scientific Target may appear with two entry strategies. Duplicate
+    pairs are invalid; retired *Target* identities never become executable.
     """
     from collections.abc import Mapping
 
@@ -243,25 +257,26 @@ def resolve_current_oracle_comparisons(source: dict[str, Any]) -> tuple[dict[str
         set(source.get("retired_oracle_targets") or ())
         | set(source.get("historical_only_oracle_targets") or ())
     )
-    names: set[str] = set()
+    keys: set[str] = set()
     active: list[dict[str, Any]] = []
     for row in registered:
         if not isinstance(row, Mapping):
             raise ValueError("Canonical Oracle comparison must be a mapping")
         name = str(row.get("target") or "")
-        if not name or name in names:
-            raise ValueError(f"Canonical Oracle comparison duplicate/empty identity: {name}")
+        key = oracle_comparison_key(row)
+        if key in keys:
+            raise ValueError(f"Canonical Oracle comparison duplicate Target x Strategy: {key}")
         if name in inactive:
             raise ValueError(f"Historical-only Oracle target cannot be executable: {name}")
-        names.add(name)
+        keys.add(key)
         if row.get("enabled", True):
             active.append(dict(row))
     return tuple(active)
-
 
 __all__ = [
     "AUDIT_MODULES",
     "AUDIT_REUSABLE_REPORTS",
     "AUDIT_SCHEMA_VERSION",
     "resolve_current_oracle_comparisons",
+    "oracle_comparison_key",
 ]

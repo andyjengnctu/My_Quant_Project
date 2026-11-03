@@ -389,7 +389,7 @@ class OracleScoreParityContractCases(TestCase):
         settings, _base, exact = oracle._contract(definition)
         plan = oracle._oracle_comparison_plan(definition)
         mapping = oracle._resolve_oracle_target_score_contracts(definition, settings, plan)
-        self.assertEqual(len(mapping), len(_ACTIVE_ORACLE_DEFINITION.source["oracle_comparisons"]))
+        self.assertEqual(len(mapping), len({row["target"] for row in _ACTIVE_ORACLE_DEFINITION.source["oracle_comparisons"]}))
         self.assertEqual(mapping["T40"]["reference_arm_id"], exact.arm_id)
         self.assertNotIn("CG40_EqualRank", mapping)
         from core.audit_registry import resolve_current_oracle_comparisons
@@ -1361,7 +1361,8 @@ class OracleAuditContractCases(TestCase):
         )
         self.assertEqual(
             len(oracle._oracle_comparison_plan(self.active_definition)["targets"]),
-            len([row for row in self.active_definition.source["oracle_comparisons"] if row.get("enabled", True)]),
+            len({row["target"] for row in self.active_definition.source["oracle_comparisons"]
+                 if row.get("enabled", True)}),
         )
         self.assertNotIn("CG40_EqualRank", dict(oracle._oracle_comparison_plan(self.active_definition)["targets"]))
         self.assertNotIn("MinTrade40_NetR", dict(oracle._oracle_comparison_plan(self.active_definition)["targets"]))
@@ -6063,8 +6064,11 @@ class OracleInventoryAndSourceIsolationRegressionCases(TestCase):
         )
         definition = _ACTIVE_ORACLE_DEFINITION
         live = resolve_current_oracle_comparisons(definition.source)
-        names = [row["target"] for row in live]
-        self.assertEqual(names, [name for name, _ in oracle._oracle_comparison_plan(definition)["targets"]])
+        from core.audit_registry import oracle_comparison_key
+        names = [oracle_comparison_key(row) for row in live]
+        self.assertEqual(len(names), 20)
+        self.assertEqual(set(row["target"] for row in live),
+                         {name for name, _ in oracle._oracle_comparison_plan(definition)["targets"]})
         self.assertTrue(set(definition.source["historical_only_oracle_targets"]).isdisjoint(names))
         self.assertFalse(any("MinTrade60" in name for name in names))
         # The actual [1] -> [1] renderer and [1] -> [2] collector, not just
@@ -6074,6 +6078,8 @@ class OracleInventoryAndSourceIsolationRegressionCases(TestCase):
         visible = oracle.render_replay_preflight(
             label="Fixed", seeds=tuple(range(1, 9)), targets=["C96", *names],
             decisions=decisions,
+            strategies={oracle_comparison_key(row): row.get("strategy", "Breakout") for row in live},
+            display_targets={oracle_comparison_key(row):row["target"] for row in live},
         )
         overview = render_target_dl_overview(collect_target_dl_overview(ROOT))
         self.assertNotIn("MinTrade60", visible)
