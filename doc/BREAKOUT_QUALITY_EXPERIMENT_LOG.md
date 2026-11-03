@@ -5274,6 +5274,30 @@ Assessment: `USER_REPORTED_ROLLING_RESULT_AVAILABLE / FULL_HORIZON_MAE_SMALL_PAI
 - **研究決策**：`USER_REPORTED_ROLLING_SINGLE_SEED_CQ_RESULT_AVAILABLE / DAILY_RHO_IMPROVED_BUT_GATED_STRATEGY_WORSE / EXACT_AND_DIRECT_NEGATIVE_SAME_CONDITION_ROLLING_CONTRAST / GATE_CANDIDATE_DISTRIBUTION_UNVERIFIED / FOUR_SEED_ROBUSTNESS_PENDING / ITERATIVE_OOS / RESEARCH_ONLY / NO_TRADING / NO_PROMOTION`。在新增訓練／調門檻前，優先用同日同股 CO rank 及 CP/CQ Positive score 作只讀 Gate／候選／交易事件配對，核對 `>0.5` 通過率、原始機率分布、替代交易損益與 missed winners；OOS 不可回灌 threshold／calibration／epoch fitting。既有模型與策略不改動。
 - **2026-11-02 實作有效性更正（不改寫上述原始數據）**：後續檢查證實當時 MR-13CQ 的 T40 Encoder 預訓練雖以成熟 Daily 股票日作候選，卻僅每檔股票每 Epoch 抽一個 Window、固定 100 Epoch，未達原研究要求的完整 Daily T40 學習。使用者決定在原 MR-13CQ 身分修正為 FIT execution contract `v2`（完整成熟 Daily 遍歷、時間 Validation／Early Stopping／全樣本 Encoder refit），**v1 單 Seed Rolling 及 C127／C128 數值僅保留作原始歷史證據，不能作為 v2 正式比較結果或 REUSE**；v2 的 FIT／Replay／Robustness 須由本機正式入口重跑，結果尚未取得。未分配新 DL／Strategy ID，也未據此修改 CP Positive gate、CO ranking 或 OOS 研究選擇。
 
+
+### 2026-11-03 · MR-13CQ FIT v2 完整 Daily T40 預訓練與 C127／C128 單 Seed Rolling 結果
+
+- **研究身份／證據**：`MR-13CQ` 原科學身分、FIT execution contract `v2`（`daily_t40_regression_encoder_v2`）；對照 `MR-13CP` 與同條件 `C125/C126`，新回放為 `C127` Exact K/R0、`C128` Direct No-K/No-R0。使用者提供本機正式 Research Console `貼上的文字 (1)(20261103-051227).txt`，上傳程式 `test-branch-1_20261103_062838_861462b5.zip`（SHA256 `cda21251041b9bf5f0ccda82ddeef0ce61f4435eff608927056eba253c921a74`）；OOS=`2021-01-01～2026-03-02`、Research Seed=`42`、6 Rolling Fold、Score Groups=`630,589`。此 ZIP 僅為 source snapshot，**未包含使用者本機完整 FIT/checkpoint、SOP JSON、策略 Replay/Manifest sidecars**，故以下為 `USER_REPORTED` 正式流程觀測，不宣稱 GPT 端已獨立重播實際市場或完成 signed parity。
+- **v2 FIT 執行／有效性**：T40 預訓練已依合法時間 cutoff 遍歷完整成熟 Daily 樣本；各 Fold 最終預訓練 full-refit 樣本約 `1,422,501～2,032,823`，Validation／Early Stopping 選擇後再 refit Encoder；非 v1「每 ticker 每 Epoch 一窗」。`6/6` Fold 全新建置、`0` Fold REUSE、`630,589/630,589` Score Coverage=`100%`；Rolling 訓練及評估耗時 `02:07:01`。模型 Gate=`PASS`，但 Drift=`YES`（`1.8201 pooled σ`），6 年內 `4/6` 正 ρ／Top-Bottom；Gate PASS 不表示分類校準或下游策略獲證有效。此輪已成功生成 CQ 單模型 Standard SOP 及多模型比較，不再發生先前 FIT 發布錯誤。
+- **共同標籤樣本模型 SOP，CP→CQ v2**：Global 同 `68,701` Groups：Daily ρ `0.0506→0.0722`（`+0.0216`）、Global ρ `0.1199→0.0200`（`-0.0999`）、Pair `51.60%→52.17%`（`+0.57pp`）、Top-Bottom Target `+4392.6540→-1556.3197`；Breakout 同 `10,204` Groups：Daily ρ `0.0115→0.0372`，Top-Bottom `+5542.2894→-2811.6916`。CQ Validation→OOS Daily ρ 差=`-0.3271`，存在嚴重泛化落差。Daily ρ 的改善不可解釋成 `P(positive)>0.5` 的 Precision／Calibration 改善。
+
+  | 同條件單 Seed Rolling | C125：CP Exact | C127：CQ v2 Exact | C126：CP Direct | C128：CQ v2 Direct |
+  |---|---:|---:|---:|---:|
+  | Total Return | +124.01% | +99.46% | +148.64% | +94.82% |
+  | MDD | 11.16% | 11.77% | 11.42% | 11.35% |
+  | RoMD | 11.11 | 8.45 | 13.01 | 8.35 |
+  | Trades | 247 | 259 | 246 | 261 |
+  | Win Rate | 44.53% | 40.93% | 46.75% | 41.00% |
+  | Payoff | 3.59 | 3.81 | 3.63 | 3.72 |
+  | EV | +0.76R | +0.58R | +1.13R | +0.53R |
+  | Avg Exposure | 66.27% | 58.85% | 59.42% | 55.46% |
+  | Avg Orderable | 19.64 | 2.97 | 19.38 | 3.05 |
+  | Supply Gap Days | 590 | 797 | 599 | 809 |
+  | Worst Full Year | +4.67% | -5.34% | +2.29% | -5.22% |
+
+- **策略配對結論／歷史 v1 邊界**：`C127−C125 = -2.66 RoMD / -24.55pp` total return；`C128−C126 = -4.66 RoMD / -53.82pp`。相較僅稀疏抽樣的歷史 CQ v1，v2 C127 RoMD `8.12→8.45`（`+0.33`）、C128 `4.90→8.35`（`+3.45`），但仍未超越 CP。v2 的 Avg Orderable 約為 CP 的 `15.1%/15.7%`，2024 年 C127/C128 分別 `-5.34%/-5.22%`，而 C125/C126 `+14.16%/+13.27%`；此欄非直接機率門檻通過率，不以單一報表反推原因。此結果已可判定「完整 Daily T40 預訓練在本次單 Seed／既定門檻／策略下，未改善 CP 實際績效」，不是證明所有 Seeds、校準或替代研究假說皆無效。
+- **REUSE／決策界線**：正式 Strategy Compare 規劃 `CONT13CQ_ROLL` 三個前置工件 `REUSE`，C127/C128 `RUN` 並均 `DONE`（約 `03:20.7/02:43.1`），其餘策略沿用合法 `REUSE`；未顯示版本污染或強迫重跑 CP／CO／CJ。CQ `4-Seed Model Robustness`、C127/C128 `4-Seed Strategy Robustness` **仍未提供**；OOS 為反覆研究的迭代 OOS，不准依本次績效反向選取門檻／Epoch。Oracle Positive Exact `90.84`／Direct `204.88` 的舊 NON-PIT E13 parity 問題**不因 CQ v2 訓練完成而解除**；不可登錄為 current signed dual-output Oracle。Decision：`USER_REPORTED_CQ_FIT_V2_ROLLING_MODEL_AND_C127_C128_SINGLE_SEED_REPLAY_AVAILABLE / FULL_DAILY_T40_IMPLEMENTED / MODEL_GATE_PASS_BUT_DRIFT / CP_EXACT_AND_DIRECT_OUTPERFORM_CQ_V2 / FOUR_SEED_ROBUSTNESS_PENDING / ITERATIVE_OOS / NO_CQ_PROMOTION / NO_TRADING / NO_NEW_ID`。不新增 Audit、Target、DL、Strategy 或報表版本。
+
 ## 6. 後續新增規則
 
 **只有新科學證據或舊科學證據有效性更正才能增加本文件內容。** 記錄必須有實驗／Target 身分、期間／Seed、控制變數、原始結果、負結果與決策，並指向正式證據。沒有市場／模型結果的工程測試、提交紀錄、打包、格式調整或一次性 Audit 清理，不可追加研究章節。本文件不再生成封存副本或研究待辦。
