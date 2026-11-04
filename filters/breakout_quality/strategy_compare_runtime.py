@@ -78,6 +78,7 @@ def _execution_pairs(
             existing.dl_id == arm.dl_id
             and existing.dl_runtime_mode == arm.dl_runtime_mode
             and dict(existing.dl_runtime_options or {}) == dict(arm.dl_runtime_options or {})
+            and existing.entry_strategy == arm.entry_strategy
             for existing in on_arms
         ):
             raise ValueError(

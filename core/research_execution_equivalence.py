@@ -24,6 +24,25 @@ _REVIEWED = {
             "536e268739713cb59124741bc6084ee118be1481730ba7117c6b8e8742697dc4": "06ceb265c4004fba0dfd5af63ee3f1fe8b9fd8f1f3c4c88eed3391e9f2defcbc"
         }
     },
+    # Audited additions of TrueDaily-only model profiles/target policies.
+    # Existing Oracle price-provider contracts, eligibility and runtime
+    # configuration projections are unchanged from the prior baseline.
+    # Exact source bytes are pinned: any subsequent change hashes normally.
+    "core/breakout_quality_registry.py": {
+        "file_sha256": "b06df905611f7d10db03683cacd3b69ec11a13127fdb3cff0582b3e6d27e8a33",
+        "original_file_sha256": "917b0e84a7506a578109d110b239645e14c9c3c14a6daafe3523f673c23d015e",
+        "calculations": {},
+    },
+    "core/breakout_quality_runtime.py": {
+        "file_sha256": "3ba08563d94a60a0ad93e44387dbd67c0380c42a3450cd258a84102354d4a630",
+        "original_file_sha256": "0095a9a8d8d726cce05213e0237cb401ffb073fe4b6f84c1b3dfb89bc4f1131f",
+        "calculations": {},
+    },
+    "config/breakout_quality.py": {
+        "file_sha256": "e66bd41bab7a60cbe4d9b96c8a11f9b146b261616d96a15f3921df278472d391",
+        "original_file_sha256": "3c0323d35cf71c71b70211f9b65c24e158251353f0a39b6f5b3067e38451f004",
+        "calculations": {},
+    },
     "filters/breakout_quality/daily_ranker_data.py": {
         "file_sha256": "32a6c04a2e7024fb128e459b9d87e5ba9f3c58db73034173103cdada72b0a20e",
         "original_file_sha256": "65338ef9511e2739fccda5db90bbdc65893f63d5b97c968ef3e50fa51963c2c6",

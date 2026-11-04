@@ -5554,7 +5554,7 @@ class OraclePriceSourceExecutionPolicyIsolationCases(TestCase):
         rows[ordinary] = {**rows[ordinary], "positive_gate": "unexpected_non_pit"}
         modified = replace(definition, source={**definition.source,
             "oracle_comparisons": tuple(rows)})
-        with self.assertRaisesRegex(OracleExecutionPolicyError, "execution policy changed"):
+        with self.assertRaisesRegex(OracleExecutionPolicyError, "E13 prohibits a raw-future execution gate"):
             execution_gate_policies(modified, oracle._oracle_comparison_plan(modified))
 
     def test_generic_admission_hook_is_scoped_and_not_an_oracle_dependency(self):

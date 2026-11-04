@@ -981,6 +981,7 @@ def get_strategy_comparison_settings(profile_id: str | None = None) -> StrategyC
             robustness_role=str(raw.get("robustness_role") or "off").strip(),
             data_source=str(raw.get("data_source") or "canonical").strip(),
             replay_contract_version=int(raw.get("replay_contract_version", 1)),
+            entry_strategy=str(raw.get("entry_strategy") or "Breakout").strip(),
         )
         for arm_id in ordered_arm_ids
         for raw in (arm_catalog[arm_id],)

@@ -45,6 +45,52 @@ class DailyEntryStrategyCases(TestCase):
                          ("Target", "Strategy", "Return Mean"))
         self.assertTrue(DAILY_ENTRY_CONTRACT.startswith("daily_stockday_close_limit_"))
 
+    def test_daily_fit_has_separate_event_truth_and_cutoff_safe_cache(self):
+        """Real canonical Min settlement, not mocked Oracle truth or future FIT rows."""
+        from tempfile import TemporaryDirectory
+        from pathlib import Path
+        import numpy as np
+        from core.strategy_compare_registry import STRATEGY_COMPARE_ARMS, STRATEGY_DL_SOURCES
+        from core.breakout_quality_registry import get_breakout_quality_experiment_profile
+        from services.breakout_quality.trade_path_target_source import registered_trade_path_source
+        from services.breakout_quality.true_daily_mintrade_pit_source import (
+            materialize_true_daily_mintrade_pit_labels,
+        )
+        from tools.validate.synthetic_daily_trade40_cases import (
+            FormalMinTrade40TrainingSourcePreflightCases, fixture,
+        )
+        models = {}
+        for arm_id in ("C125", "C126", "C133", "C134"):
+            arm = STRATEGY_COMPARE_ARMS[arm_id]
+            models[arm_id] = (arm["dl_id"], arm["dl_runtime_options"]["positive_dl_id"])
+        self.assertEqual(models["C125"], models["C126"])
+        self.assertEqual(models["C133"], models["C134"])
+        self.assertNotEqual(models["C125"], models["C133"])
+        event_profile = STRATEGY_DL_SOURCES[models["C125"][0]]["experiment_profile"]
+        daily_profile = STRATEGY_DL_SOURCES[models["C133"][0]]["experiment_profile"]
+        self.assertNotEqual(registered_trade_path_source(event_profile).contract_kind,
+                            registered_trade_path_source(daily_profile).contract_kind)
+        daily_positive_profile = STRATEGY_DL_SOURCES[models["C133"][1]]["experiment_profile"]
+        self.assertEqual(get_breakout_quality_experiment_profile(daily_profile).continuous_target_id,
+                         get_breakout_quality_experiment_profile(daily_positive_profile).continuous_target_id)
+        days, source = FormalMinTrade40TrainingSourcePreflightCases._source()
+        _, frame, _, _ = fixture(count=140, start="2018-01-02")
+        args = dict(source=source, expected_seed=source.seed, frame=frame,
+                    positions=np.array([70, 71, 72, 90]), ticker="2330",
+                    exchange_calendar=days, fit_cutoff=days[110])
+        original = materialize_true_daily_mintrade_pit_labels(**args)
+        with TemporaryDirectory() as directory:
+            cached = materialize_true_daily_mintrade_pit_labels(**args, cache_project_root=directory)
+            reused = materialize_true_daily_mintrade_pit_labels(**args, cache_project_root=directory)
+            self.assertEqual(len(list(Path(directory).rglob("*.npz"))), 1)
+            for result in (cached, reused):
+                np.testing.assert_array_equal(result.completed, original.completed)
+                np.testing.assert_allclose(result.raw_net_pnl, original.raw_net_pnl, equal_nan=True)
+                np.testing.assert_array_equal(result.maturity_dates, original.maturity_dates)
+        self.assertEqual(int(original.completed.sum()), 3)
+        self.assertTrue(np.isnan(original.raw_net_pnl[~original.completed]).all())
+        self.assertTrue(np.isnat(original.maturity_dates[~original.completed]).all())
+
     def test_single_registry_pair_identity_and_duplicate_rejection(self):
         from core.audit_registry import oracle_comparison_key, resolve_current_oracle_comparisons
         definition = next(d for d in get_reusable_audit_definitions("breakout_quality")
@@ -60,7 +106,7 @@ class DailyEntryStrategyCases(TestCase):
             self.assertEqual({p.get("strategy", "Breakout") for p in pair},
                              {"Breakout", "Daily"})
             self.assertEqual({tuple(sorted((k, repr(v)) for k,v in p.items()
-                                           if k != "strategy")) for p in pair}.__len__(), 1)
+                                           if k not in {"strategy", "strategy_arm_id"})) for p in pair}.__len__(), 1)
         with self.assertRaisesRegex(ValueError, "duplicate Target x Strategy"):
             resolve_current_oracle_comparisons({
                 **definition.source, "oracle_comparisons": (*rows, dict(rows[-1])),
@@ -209,6 +255,134 @@ class DailyEntryStrategyCases(TestCase):
         self.assertEqual(int(breakout[4]), 1)
         self.assertGreater(int(daily[4]), int(breakout[4]))
         self.assertIsNone(current_daily_entry_source())
+
+    def test_pit_and_oracle_dual_score_replay_parity(self):
+        """Two score-entry sources, one real Broker-Cash replay and Daily Entry.
+
+        This synthetic case is not signed 8-seed E13 parity. It does assert
+        identical trades/equity and that a zero Positive score changes fills.
+        """
+        from core.strategy_compare_policy import get_strategy_comparison_settings
+        from core.portfolio_fast_data import prep_stock_data_and_trades, pack_prepared_stock_data
+        from core.portfolio_engine import run_portfolio_timeline
+        from filters.breakout_quality.runtime import (
+            audit_oracle_truth_score_context, breakout_quality_ranking_source_context,
+        )
+        from filters.breakout_quality.ranking_score_store import SCORE_SOURCE_SELECTION_POINT_IN_TIME
+        from tools.validate.synthetic_daily_trade40_oracle_cases import source_fixture
+
+        definition = next(d for d in get_reusable_audit_definitions("breakout_quality")
+                          if d.audit_type == oracle.SUPPORTED_AUDIT_TYPE)
+        settings = get_strategy_comparison_settings(definition.source["strategy_profile_id"])
+        days, frames, _bundle, schedule = source_fixture()
+        params = schedule[0].params
+        params.use_breakout_quality_ranking = True
+        params.breakout_quality_filter_id = definition.source["filter_id"]
+        market, logs = {}, {}
+        for ticker, frame in frames.items():
+            prepared, standalone = prep_stock_data_and_trades(frame, params)
+            market[ticker] = pack_prepared_stock_data(prepared)
+            logs[ticker] = standalone
+        scores = {(ticker, str(day.date())): (0.9 if ticker == "2330" else 0.1)
+                  for ticker in market for day in days}
+        arguments = dict(
+            all_dfs_fast=market, all_standalone_logs=logs, sorted_dates=list(days),
+            start_year=2021, params=params, max_positions=10, enable_rotation=False,
+            benchmark_ticker="2330", benchmark_data=market["2330"],
+            is_training=False, verbose=False, profile_stats={},
+        )
+        for arm_id in ("C131", "C132"):
+            arm = settings.arms[arm_id]
+            self.assertEqual(arm.entry_strategy, "Daily")
+            self.assertTrue(arm.enabled)
+            primary = settings.dl_sources[arm.dl_id]
+            auxiliary = settings.dl_sources[arm.dl_runtime_options["positive_dl_id"]]
+            options = {
+                **arm.dl_runtime_options,
+                "positive_filter_id": definition.source["filter_id"],
+                "positive_score_source": SCORE_SOURCE_SELECTION_POINT_IN_TIME,
+                "positive_model_architecture": auxiliary.model_architecture,
+                "positive_experiment_profile": auxiliary.experiment_profile,
+            }
+            for excluded in (False, True):
+                positives = {key: (0.0 if excluded and key[0] == "2330" else 1.0)
+                             for key in scores}
+
+                def pit_score(*, ticker, signal_date, filter_id, **kwargs):
+                    key = (str(ticker), pd.Timestamp(signal_date).strftime("%Y-%m-%d"))
+                    is_positive = kwargs.get("score_column") == "positive_p_positive"
+                    number = (positives if is_positive else scores).get(key)
+                    return {
+                        "score": number, "available": number is not None,
+                        "score_date": key[1], "filter_id": filter_id,
+                        "score_source": SCORE_SOURCE_SELECTION_POINT_IN_TIME,
+                    }
+
+                with portfolio_entry_policy_context("Daily", score_keys=scores.keys()), \
+                        audit_oracle_truth_score_context(
+                            scores, ranking_policy=arm.dl_runtime_mode,
+                            ranking_options=options, key_mode="information_date",
+                            positive_scores=positives,
+                        ):
+                    oracle_result = run_portfolio_timeline(**arguments)
+                with portfolio_entry_policy_context("Daily", score_keys=scores.keys()), \
+                        breakout_quality_ranking_source_context(
+                            score_source=SCORE_SOURCE_SELECTION_POINT_IN_TIME,
+                            model_architecture=primary.model_architecture,
+                            experiment_profile=primary.experiment_profile,
+                            ranking_policy=arm.dl_runtime_mode, ranking_options=options,
+                        ), patch(
+                            "filters.breakout_quality.runtime.lookup_selection_point_in_time_candidate_score",
+                            side_effect=pit_score,
+                        ):
+                    pit_result = run_portfolio_timeline(**arguments)
+
+                with self.subTest(arm=arm_id, positive_zero_exclusion=excluded):
+                    self.assertEqual(len(oracle_result), len(pit_result))
+                    for index, (observed, expected) in enumerate(zip(oracle_result, pit_result)):
+                        if isinstance(observed, pd.DataFrame):
+                            pd.testing.assert_frame_equal(observed, expected, check_exact=True)
+                        elif isinstance(observed, float) and pd.isna(observed) and pd.isna(expected):
+                            continue
+                        else:
+                            self.assertEqual(observed, expected, f"portfolio output index {index}")
+                    self.assertEqual(int(oracle_result[4]), 3 if excluded else 4)
+                self.assertIsNone(current_daily_entry_source())
+
+    def test_formal_daily_arm_identity_and_old_breakout_reuse_payload(self):
+        from core.strategy_compare_policy import get_strategy_comparison_settings
+        from core.strategy_compare_registry import STRATEGY_COMPARE_ARMS
+        definition = next(d for d in get_reusable_audit_definitions("breakout_quality")
+                          if d.audit_type == oracle.SUPPORTED_AUDIT_TYPE)
+        settings = get_strategy_comparison_settings(definition.source["strategy_profile_id"])
+        for old_id, new_id in (("C125", "C131"), ("C126", "C132")):
+            old_arm, new_arm = settings.arms[old_id], settings.arms[new_id]
+            self.assertEqual(old_arm.entry_strategy, "Breakout")
+            self.assertNotIn("entry_strategy", old_arm.as_dict())
+            self.assertEqual(new_arm.entry_strategy, "Daily")
+            self.assertEqual(new_arm.as_dict()["entry_strategy"], "Daily")
+            self.assertEqual(old_arm.dl_runtime_options, new_arm.dl_runtime_options)
+            self.assertEqual(old_arm.dl_id, new_arm.dl_id)
+            self.assertEqual(old_arm.param_source, new_arm.param_source)
+            self.assertEqual(old_arm.rule_policy, new_arm.rule_policy)
+            self.assertEqual(old_arm.replay_contract_version, new_arm.replay_contract_version)
+            self.assertNotIn("entry_strategy", STRATEGY_COMPARE_ARMS[old_id])
+        for strategy, scoped in oracle._oracle_strategy_scopes(definition):
+            plan = oracle._oracle_comparison_plan(scoped)
+            resolved, base, exact = oracle._contract(scoped)
+            direct = oracle._direct_arm(scoped, resolved, base, exact)
+            for target in (
+                "TrueDailyUniversal_MinTrade_NetPnL_Positive",
+                "TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct",
+            ):
+                if target not in plan["selectors"]:
+                    continue
+                arm = oracle._target_reference_arm(scoped, resolved, plan, target, exact, direct)
+                self.assertEqual(arm.entry_strategy, strategy)
+                expected = ("C133" if strategy == "Daily" else "C125") if (
+                    plan["selectors"][target] == "exact") else (
+                    "C134" if strategy == "Daily" else "C126")
+                self.assertEqual(arm.arm_id, expected)
 
     def test_declared_strategy_rejects_wrong_scientific_target(self):
         definition = next(d for d in get_reusable_audit_definitions("breakout_quality")

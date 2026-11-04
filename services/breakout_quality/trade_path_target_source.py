@@ -80,6 +80,32 @@ def _min40_historical_execute(*, project_root: str | Path, seed: int):
 # All formal Min paths share the original, seed-verified Optimizer/P16 teacher.
 # Outcome horizon and currency/R units are declared by the *Target* capability,
 # never inferred from the model name at the data/training consumer.
+def _true_daily_loader(*, project_root: str | Path, seed: int, authorized_build: bool):
+    from functools import partial
+    from services.breakout_quality.formal_mintrade40_training_source import (
+        resolve_formal_mintrade40_loader_kwargs,
+    )
+    from services.breakout_quality.true_daily_mintrade_pit_source import (
+        materialize_true_daily_mintrade_pit_labels,
+    )
+    loader = resolve_formal_mintrade40_loader_kwargs(
+        project_root=project_root, seed=seed, authorized_build=authorized_build,
+        horizon_sessions=None, outcome_metric="net_pnl",
+    )
+    teacher = loader["target_materializer"].keywords["source"]
+    loader["target_materializer"] = partial(
+        materialize_true_daily_mintrade_pit_labels,
+        source=teacher, expected_seed=int(seed),
+        cache_project_root=str(Path(project_root).resolve()),
+    )
+    loader["target_lineage"] = {
+        **loader["target_lineage"],
+        "target_kind": "true_daily_seed_mintrade_fullcycle_broker_net_pnl",
+        "maturity_policy": "natural_exit_or_research_terminal_closeout_pit_v1",
+    }
+    return loader
+
+
 def _fullcycle_loader(outcome_metric: str):
     def load(*, project_root: str | Path, seed: int, authorized_build: bool):
         from services.breakout_quality.formal_mintrade40_training_source import (
@@ -118,10 +144,16 @@ _TRADE_PATH_SOURCES: dict[str, TradePathSource] = {
         loader=_fullcycle_loader("net_pnl"),
         dependencies=(),
     ),
+    "true_daily_seed_mintrade_fullcycle_netpnl": TradePathSource(
+        contract_kind="true_daily_seed_mintrade_fullcycle_netpnl",
+        loader=_true_daily_loader,
+        dependencies=(),
+    ),
 }
 # Same canonical producer requirements for each realized Min target.
 _ORIGINAL_MIN_REQUIREMENTS = _TRADE_PATH_SOURCES["formal_seed_mintrade40_netr"].dependencies
-for _kind in ("formal_seed_mintrade_fullcycle_netr", "formal_seed_mintrade_fullcycle_netpnl"):
+for _kind in ("formal_seed_mintrade_fullcycle_netr", "formal_seed_mintrade_fullcycle_netpnl",
+              "true_daily_seed_mintrade_fullcycle_netpnl"):
     _source = _TRADE_PATH_SOURCES[_kind]
     _TRADE_PATH_SOURCES[_kind] = TradePathSource(
         contract_kind=_source.contract_kind,

@@ -9,7 +9,6 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 from core.audit_registry import AUDIT_REUSABLE_REPORTS
-from core.oracle_positive_gate import POSITIVE_FULLCYCLE_NETPNL_GATE
 
 
 class OracleExecutionPolicyError(ValueError):
@@ -17,11 +16,10 @@ class OracleExecutionPolicyError(ValueError):
 
 
 def execution_gate_policies(definition, plan: Mapping[str, Any]) -> dict[str, str]:
-    """Return target-specific approved gates, independent of score producers.
+    """Reject any extra non-score execution gate under formal E13 Oracle.
 
-    A Direct full-cycle broker-ledger NetPnL rank can opt into the hindsight
-    gate. Adding one such arm changes neither any producer function source nor
-    any other arm's execution policy, score, or Replay identity.
+    Future raw broker NetPnL may construct the signed perfect Positive *score*,
+    but it must never be consulted again by the Portfolio candidate gate.
     """
     canonical = AUDIT_REUSABLE_REPORTS["breakout_quality"]["target_oracle_romd"]["source"]
     approved = {str(row["target"]): row for row in canonical["oracle_comparisons"]}
@@ -29,25 +27,10 @@ def execution_gate_policies(definition, plan: Mapping[str, Any]) -> dict[str, st
                 definition.source.get("oracle_comparisons", ()) if row.get("enabled", True)}
     if set(selected) != set(plan["selectors"]):
         raise OracleExecutionPolicyError("selected Oracle target/selector contract differs")
-    gates = {}
     for target, entry in selected.items():
-        gate = entry.get("positive_gate")
-        precedent = approved.get(target)
-        if precedent is None:
+        if target not in approved:
             raise OracleExecutionPolicyError(f"unregistered Oracle execution target: {target}")
-        if gate != precedent.get("positive_gate"):
-            raise OracleExecutionPolicyError(f"Oracle execution policy changed for registered target: {target}")
-        if gate is None:
-            continue
-        score_source = plan["daily_sources"].get(target)
-        recipe = plan["daily_recipes"].get(score_source)
-        if (gate != POSITIVE_FULLCYCLE_NETPNL_GATE or
-                entry.get("selector") != "direct" or
-                plan["selectors"].get(target) != "direct" or
-                entry.get("score_source") != score_source or
-                recipe is None or recipe[0] != "daily_trade_path_net_pnl" or
-                recipe[2] is not None):
+        if entry.get("positive_gate") is not None or approved[target].get("positive_gate") is not None:
             raise OracleExecutionPolicyError(
-                f"NON-PIT admission requires canonical full-cycle MinTrade NetPnL Direct: {target}")
-        gates[target] = gate
-    return gates
+                f"E13 prohibits a raw-future execution gate: {target}")
+    return {}

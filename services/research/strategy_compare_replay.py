@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import ExitStack
+from core.portfolio_entry_policy import portfolio_entry_policy_context
 import json
 from pathlib import Path
 from typing import Any
@@ -107,13 +108,14 @@ def _run_scenario(
     *, name, data_dir, param_source_kind, params, start_date, end_date,
     max_positions, enable_rotation, quiet, replay_counts=None,
     replay_execution_rows=None, replay_selector_trace_rows=None, ranking_source=None, filter_source=None,
-    replay_preparation_cache=None,
+    replay_preparation_cache=None, entry_strategy="Breakout", entry_score_keys=None,
 ):
     if not quiet:
         action = ("核對／共用本輪市場與參數準備" if replay_preparation_cache is not None
                   else "建立市場與訊號快取")
         print(f"\n[{name}] {action}")
     with ExitStack() as stack:
+        stack.enter_context(portfolio_entry_policy_context(entry_strategy, score_keys=entry_score_keys))
         if ranking_source:
             stack.enter_context(breakout_quality_ranking_source_context(**ranking_source))
         if filter_source:

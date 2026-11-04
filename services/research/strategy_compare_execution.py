@@ -305,6 +305,7 @@ def run_strategy_compare_active_arm(
     ranking_options.update(dict(ranking_options_extra or {}))
 
     return run_comparison(
+        entry_strategy=arm.entry_strategy,
         project_root=root,
         dataset=settings.dataset,
         params_path=str(params_path),

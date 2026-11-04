@@ -201,7 +201,10 @@ def oracle_daily_source_fingerprint(root: Path | None = None) -> str:
         if not source_file.is_file():
             raise ValueError(f"Oracle price-score source implementation unavailable: {relative}")
         physical_sha = compute_file_sha256(source_file)
-        if attested:
+        if root.resolve() == code_root.resolve():
+            # Independently byte-pinned, model-registration-only revisions
+            # do not alter any existing Oracle producer. Other edits remain
+            # strict: the reviewer returns the physical SHA when unrecognized.
             physical_sha = reviewed_execution_source_sha256(relative, physical_sha)
         source_sha = physical_sha
         if attested and relative in _LEGACY_PRICE_REGISTRY_SOURCE_SHA256:

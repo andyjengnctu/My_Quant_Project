@@ -27,6 +27,7 @@ from core.breakout_quality_runtime import (
     DAILY_FORMAL_MINTRADE40_NETR_TARGET_ID,
     DAILY_FORMAL_MINTRADE_FULLCYCLE_NETR_TARGET_ID,
     DAILY_FORMAL_MINTRADE_FULLCYCLE_NETPNL_TARGET_ID,
+    TRUE_DAILY_MINTRADE_FULLCYCLE_NETPNL_TARGET_ID,
     CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_ALL,
     CONTINUOUS_RANKER_TARGET_POSTPROCESS_NONE,
     CONTINUOUS_RANKER_TARGET_CONTEXT_TRANSFORM_NONE,
@@ -153,6 +154,9 @@ def _oracle_rows(root: Path, definition, versions: Mapping[str, tuple]):
         elif (raw.get("score") == "daily_trade_path_net_pnl"
               and raw.get("horizon_mode") == "full_trade_cycle"):
             label = DAILY_FORMAL_MINTRADE_FULLCYCLE_NETPNL_TARGET_ID
+        elif (raw.get("score") == "daily_trade_path_true_net_pnl"
+              and raw.get("horizon_mode") == "full_trade_cycle"):
+            label = TRUE_DAILY_MINTRADE_FULLCYCLE_NETPNL_TARGET_ID
         # A hindsight-only eligibility intervention is not a deployable DL
         # model or ordinary Direct strategy, even when its score source is
         # identical. In particular Positive_Direct must NOT claim C124.
@@ -242,7 +246,12 @@ def _is_exact_supervision(profile: str, target_id: str) -> bool:
         and (
             policy.component_target_id == target_id
             or (policy.materialization_mode == CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH
-                and policy.contract_kind.startswith("formal_seed_mintrade"))
+                and policy.contract_kind in {
+                    "formal_seed_mintrade40_netr",
+                    "formal_seed_mintrade_fullcycle_netr",
+                    "formal_seed_mintrade_fullcycle_netpnl",
+                    "true_daily_seed_mintrade_fullcycle_netpnl",
+                })
         )
         and policy.postprocess == CONTINUOUS_RANKER_TARGET_POSTPROCESS_NONE
         and policy.context_transform == CONTINUOUS_RANKER_TARGET_CONTEXT_TRANSFORM_NONE
@@ -428,14 +437,19 @@ def _strategy_bindings(*, target_names: tuple[str, ...],
         if target == baseline or not score_targets.get(target):
             continue
         comparison = comparisons.get(target)
-        if comparison is None or comparison.get("strategy", "Breakout") != "Breakout":
-            # No formally paired Daily DL arm exists yet.  A Breakout model
-            # cannot silently become the Daily Strategy result.
+        if comparison is None:
             continue
+        entry_strategy = str(comparison.get("strategy", "Breakout"))
         selector = str(comparison["selector"])
         desired_mode = _DIRECT_MODE if selector == "direct" else _EXACT_MODE
-        for arm_id, arm in STRATEGY_COMPARE_ARMS.items():
+        declared_arm_id = str(comparison.get("strategy_arm_id") or "")
+        arm_choices = (
+            ((declared_arm_id, STRATEGY_COMPARE_ARMS[declared_arm_id]),)
+            if declared_arm_id else STRATEGY_COMPARE_ARMS.items()
+        )
+        for arm_id, arm in arm_choices:
             if (not arm.get("dl_enabled") or arm.get("dl_runtime_mode") != desired_mode
+                    or str(arm.get("entry_strategy", "Breakout")) != entry_strategy
                     or arm.get("param_source") != base_arm["param_source"]
                     or arm.get("param_policy") != base_arm["param_policy"]
                     or arm.get("rule_policy") != base_arm["rule_policy"]):
@@ -447,12 +461,14 @@ def _strategy_bindings(*, target_names: tuple[str, ...],
             dl = STRATEGY_DL_SOURCES.get(arm.get("dl_id")) or {}
             primary_profile = str(dl.get("experiment_profile") or "")
             if (primary_profile not in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES
-                    or not _is_exact_supervision(primary_profile, str(score_targets[target]))):
+                    or (not declared_arm_id and
+                        not _is_exact_supervision(primary_profile, str(score_targets[target])))):
                 continue
             reporting_source = (STRATEGY_DL_SOURCES.get(positive_dl_id) or {}) if positive_dl_id else dl
             profile = str(reporting_source.get("experiment_profile") or "")
             if (profile not in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES
-                    or not _is_exact_supervision(profile, str(score_targets[target]))):
+                    or (not declared_arm_id and
+                        not _is_exact_supervision(profile, str(score_targets[target])))):
                 continue
             candidates.setdefault((target, profile), set()).add(str(arm_id))
     # Ambiguous historical strategies must never be selected by ID order.
@@ -645,8 +661,10 @@ def collect_target_dl_overview(project_root: Path) -> dict[str, Any]:
     model_map: dict[str, list[dict[str, Any]]] = {}
     for profile in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES:
         possible_targets = [name for name, label_id in score_targets.items()
-                            if label_id and _is_exact_supervision(profile, label_id)
-                            and ((name in positive_targets and profile in positive_profiles)
+                            if label_id and (
+                                _is_exact_supervision(profile, label_id) or (name, profile) in bindings
+                            )
+                            and ((name in positive_targets and (name, profile) in bindings)
                                  or (name not in positive_targets and profile not in positive_profiles))]
         if not possible_targets:
             continue

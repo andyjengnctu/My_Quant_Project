@@ -583,6 +583,7 @@ def run_comparison(
     verified_real_path_diagnostic_loader: Callable[..., Any] | None = None,
     progress_callback: Callable[[str, dict[str, Any]], None] | None = None,
     param_evaluation_mode="rolling",
+    entry_strategy="Breakout",
 ):
     root = Path(project_root).resolve()
     runtime = resolve_strategy_compare_runtime_contract(
@@ -770,6 +771,22 @@ def run_comparison(
     active_timing_started = time.perf_counter()
     if progress_callback is not None:
         progress_callback("active_start", {})
+    entry_score_keys = None
+    if entry_strategy == "Daily":
+        from filters.breakout_quality.ranking_score_store import (
+            load_selection_point_in_time_score_table_from_path,
+        )
+        if comparison_mode != COMPARISON_MODE_SCORE_RANKING or (
+            score_source != SCORE_SOURCE_SELECTION_POINT_IN_TIME or pit_contract is None
+        ):
+            raise ValueError("Daily arm requires verified Selection PIT score universe")
+        entry_score_keys = load_selection_point_in_time_score_table_from_path(
+            str(pit_contract.score_path),
+            manifest_path=str(pit_contract.manifest_path),
+            experiment_profile=str(pit_contract.experiment_profile),
+        ).index
+    elif entry_strategy != "Breakout":
+        raise ValueError(f"Unknown formal entry strategy: {entry_strategy}")
     quality_payload = _run_scenario(
         name=labels["active_name"], data_dir=data_dir,
         param_source_kind=param_source_kind, params=quality_params,
@@ -778,6 +795,7 @@ def run_comparison(
         replay_counts=quality_replay_counts, replay_execution_rows=quality_execution_rows,
         replay_selector_trace_rows=quality_selector_trace_rows,
         ranking_source=ranking_source, filter_source=filter_source,
+        entry_strategy=entry_strategy, entry_score_keys=entry_score_keys,
     )
     active_elapsed_sec = time.perf_counter() - active_timing_started
     if progress_callback is not None:

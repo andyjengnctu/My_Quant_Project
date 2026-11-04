@@ -232,6 +232,7 @@ class StrategyComparisonArm:
     robustness_role: str = "off"
     data_source: str = "canonical"
     replay_contract_version: int = 1
+    entry_strategy: str = "Breakout"
 
     def as_dict(self) -> dict[str, Any]:
         payload = {
@@ -258,6 +259,10 @@ class StrategyComparisonArm:
         # Preserve historical fingerprints for every pre-existing canonical-data arm.
         if self.data_source != "canonical":
             payload["data_source"] = self.data_source
+        if self.entry_strategy not in {"Breakout", "Daily"}:
+            raise ValueError("Unrecognized entry strategy")
+        if self.entry_strategy != "Breakout":
+            payload["entry_strategy"] = self.entry_strategy
         return payload
 
 
@@ -1387,6 +1392,10 @@ def _validate_strategy_comparison_arms(settings: StrategyComparisonSettings) -> 
     if len(settings.enabled_arms) < 2:
         raise ValueError("至少必須啟用兩個策略比較對象")
     for key, arm in settings.arms.items():
+        if arm.entry_strategy not in {"Breakout", "Daily"}:
+            raise ValueError(f"Unsupported strategy entry mode: {key}")
+        if arm.entry_strategy == "Daily" and (not arm.dl_enabled or not (arm.dl_runtime_options or {}).get("selection_only")):
+            raise ValueError(f"Daily entry requires the verified PIT selection-score contract: {key}")
         _validate_strategy_comparison_arm(settings, key, arm)
 
 
@@ -1436,7 +1445,7 @@ def _validate_strategy_comparison_groups(settings: StrategyComparisonSettings) -
             sort_keys=True,
             separators=(",", ":"),
         )
-        runtime_key = (dl_id, runtime_mode, runtime_options_key)
+        runtime_key = (dl_id, runtime_mode, runtime_options_key, arm.entry_strategy)
         if runtime_key in on_arms:
             raise ValueError(
                 "同一param_source／param_policy／rule_policy不得重複定義相同DL source/runtime contract: "

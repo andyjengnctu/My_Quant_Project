@@ -43,6 +43,7 @@ FORMAL_MIN_REALIZED_TARGET_KINDS = frozenset({
     'formal_seed_mintrade40_broker_net_r',
     'formal_seed_mintrade_fullcycle_broker_net_r',
     'formal_seed_mintrade_fullcycle_broker_net_pnl',
+    'true_daily_seed_mintrade_fullcycle_broker_net_pnl',
 })
 
 

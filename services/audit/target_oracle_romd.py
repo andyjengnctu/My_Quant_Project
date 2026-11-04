@@ -42,7 +42,7 @@ from core.console_report import render_table, render_title
 from core.report_style import styled_workflow_status
 from core.dataset_profiles import get_dataset_dir
 from core.path_utils import project_relative_display_path
-from core.portfolio_entry_policy import DAILY_ENTRY_CONTRACT, portfolio_entry_policy_context
+from core.portfolio_entry_policy import DAILY_ENTRY_CONTRACT
 from core.strategy_compare_policy import (
     get_strategy_comparison_settings, get_strategy_multi_seed_robustness_settings,
 )
@@ -239,8 +239,8 @@ def _oracle_comparison_plan(definition) -> dict[str, Any]:
             # identical Target/score/selector semantics; Portfolio comparisons
             # are planned separately from this source-only projection.
             earlier = next(row for row in selected if row["target"] == name)
-            if {k: v for k, v in earlier.items() if k != "strategy"} != {
-                    k: v for k, v in entry.items() if k != "strategy"}:
+            if {k: v for k, v in earlier.items() if k not in {"strategy", "strategy_arm_id"}} != {
+                    k: v for k, v in entry.items() if k not in {"strategy", "strategy_arm_id"}}:
                 raise OracleBlockedError(f"Oracle Target reused for different score semantics: {name}")
             continue
         if not name or not desc or name == str(definition.source["baseline_arm_id"]):
@@ -435,6 +435,9 @@ def _target_reference_arm(definition, settings, plan, target, exact, direct):
     """Use the declared formal arm when a Target adds a common score-output head."""
     selected = next((item for item in definition.source["oracle_comparisons"]
                      if item["target"] == target), None)
+    # Each source scope has exactly one entry policy per scientific Target.
+    # The arm must agree with that policy, not merely with the selector.
+
     if selected is None:
         return direct if plan["selectors"].get(target) == "direct" else exact
     arm_id = str(selected.get("strategy_arm_id") or "").strip()
@@ -443,6 +446,8 @@ def _target_reference_arm(definition, settings, plan, target, exact, direct):
     if arm_id not in settings.arms:
         raise OracleBlockedError(f"Oracle registered strategy arm unavailable: {arm_id}")
     arm = settings.arms[arm_id]
+    if arm.entry_strategy != str(selected.get("strategy", "Breakout")):
+        raise OracleBlockedError(f"Oracle formal arm entry strategy mismatch: {target}/{arm_id}")
     base = direct if plan["selectors"].get(target) == "direct" else exact
     if base is None or not arm.dl_enabled or arm.dl_runtime_mode != base.dl_runtime_mode:
         raise OracleBlockedError(f"Oracle matching selector unavailable: {target}/{arm_id}")
@@ -465,10 +470,23 @@ def _target_reference_arm(definition, settings, plan, target, exact, direct):
                       and not (item.dl_runtime_options or {}).get("positive_dl_id")
                       and _unqualified_selector_options(item.dl_runtime_options)
                           == _unqualified_selector_options(arm.dl_runtime_options)]
-        if len(companions) != 1:
-            raise OracleBlockedError(f"Oracle Positive rank lacks unique original DL arm: {arm_id}")
+        if len(companions) > 1:
+            raise OracleBlockedError(f"Oracle Positive rank has ambiguous original DL arms: {arm_id}")
         positive_source = settings.dl_sources[str(options["positive_dl_id"])]
         primary_source = settings.dl_sources[arm.dl_id]
+        # A formally declared two-model arm need not also register a second,
+        # rank-only trading arm. If such a comparator is absent, verify that
+        # both independently FIT models have the same scientific Target and
+        # stock-day sample scope before accepting their score-consumption pair.
+        if not companions:
+            from core.breakout_quality_registry import get_breakout_quality_experiment_profile
+            rank = get_breakout_quality_experiment_profile(primary_source.experiment_profile)
+            positive = get_breakout_quality_experiment_profile(positive_source.experiment_profile)
+            if (rank.continuous_target_id != positive.continuous_target_id
+                    or rank.training_sample_scope != positive.training_sample_scope
+                    or options.get("positive_score_column") != "positive_p_positive"
+                    or options.get("positive_probability_threshold") != 0.5):
+                raise OracleBlockedError(f"Oracle Positive sources lack a shared fitting target: {arm_id}")
         if (positive_source.score_source != "selection_point_in_time"
                 or positive_source.filter_id != primary_source.filter_id
                 or positive_source.point_in_time_score_start_date != primary_source.point_in_time_score_start_date
@@ -1725,24 +1743,6 @@ def _arm_replay_policy(definition, *, plan: Mapping[str, Any], target: str,
             "shared_admission_code_sha256": compute_file_sha256(
                 code_root / "core/positive_netpnl_contract.py"),
         }
-    # The unscored C96 baseline is deliberately built with a minimal plan;
-    # neither it nor any non-selected recipient has an execution-only gate.
-    execution_gate = (_validated_execution_gates(definition, plan).get(target)
-                      if target in plan.get("selectors", {}) else None)
-    if execution_gate is not None:
-        from core.file_integrity import compute_file_sha256
-        code_root = Path(__file__).resolve().parents[2]
-        policy["hindsight_extra_gate"] = {
-            "policy": execution_gate,
-            "raw_truth_source": "canonical_fullcycle_min_broker_ledger_net_pnl",
-            "null_and_nonpositive": "reject_all_orders",
-            "execution_policy_code_sha256": compute_file_sha256(
-                code_root / "services/audit/oracle_execution_policy.py"),
-            "gate_code_sha256": compute_file_sha256(code_root / "core/oracle_positive_gate.py"),
-            "raw_witness_code_sha256": compute_file_sha256(code_root / "services/audit/fullcycle_positive_truth.py"),
-            "selector_code_sha256": compute_file_sha256(code_root / "core/portfolio_entry_selection_max_dl.py"),
-            "admission_code_sha256": compute_file_sha256(code_root / "core/portfolio_candidate_admission.py"),
-        }
     if target != str(definition.source["baseline_arm_id"]):
         if not score_sha256 or len(score_sha256) != 64 or not score_contract:
             raise OracleBlockedError("Oracle per-target score SHA and canonical DL score contract required")
@@ -2376,7 +2376,7 @@ def _execute_single_stage_missing(
     calendar_cache: dict[tuple[str, str, str], pd.DatetimeIndex] = {}
     truth_cache: dict[tuple[int, str], tuple[dict[tuple[str, str], float], dict[str, Any]]] = {}
     positive_raw_cache: dict[tuple[int, str], dict[tuple[str, str], float]] = {}
-    execution_gates = _validated_execution_gates(definition, plan)
+    _validated_execution_gates(definition, plan)  # E13: fail closed on raw-future candidate gates
     data_dir = Path(get_dataset_dir(str(project_root), settings.dataset)).resolve()
     for seed, param_sha, kind, base_params, oracle_params in prepared:
         seed_run = [target for target in ("C96", *(name for name, _ in plan["targets"]))
@@ -2516,27 +2516,6 @@ def _execute_single_stage_missing(
                     raise OracleBlockedError(
                         f"Oracle {target} seed={seed} changed before win-rate evidence Replay"
                     )
-            positive_raw = None
-            if target in execution_gates:
-                if source_name != "DailyUniversal_MinTrade_NetPnL":
-                    raise OracleBlockedError("Positive gate must consume the full-cycle NetPnL source")
-                positive_key = (seed, source_name)
-                if positive_key not in positive_raw_cache:
-                    positive_raw_cache[positive_key], _ = _load_positive_truth_for_recipe(
-                        plan["daily_recipes"][positive_key[1]][0],
-                        execution=execution_contexts[key],
-                        cache_root=project_root / AUDIT_OUTPUT_ROOT / definition.output_subdir / "truth_cache",
-                        project_root=project_root, output_subdir=definition.output_subdir,
-                        dataset=str(settings.dataset), filter_id=str(definition.source["filter_id"]),
-                        profile_id=str(definition.source["daily_trade40_profile"]),
-                        seed=seed, price_sha256=price_sha, param_sha256=param_sha,
-                        canonical_schedule=schedule, research_cutoff=str(settings.end_date),
-                        score_start=_formal_dl_score_start(definition, settings), evaluation_end=end,
-                        canonical_scores=score_map, canonical_evidence=evidence,
-                        feature_cohort_cache=feature_cohort_cache,
-                        progress=None if quiet else lambda msg: print(f"[Positive Target] {msg}", flush=True),
-                    )
-                positive_raw = positive_raw_cache[positive_key]
             positive_score_map = None
             selected = next((row for row in definition.source["oracle_comparisons"]
                              if row["target"] == target), None)
@@ -2569,7 +2548,7 @@ def _execute_single_stage_missing(
                     key: (1.0 if float(value) > 0.0 else 0.0)
                     for key, value in raw_values.items() if key in score_map
                 }
-            replay_execution_rows = [] if positive_raw is not None else None
+            replay_execution_rows = None
             replay_kwargs = dict(
                 replay_execution_rows=replay_execution_rows,
                 data_dir=data_dir, start_date=start, end_date=end,
@@ -2593,26 +2572,15 @@ def _execute_single_stage_missing(
                             score_start=_formal_dl_score_start(definition, settings),
                             positive_scores=positive_score_map,
                         ))
-                        if _oracle_target_strategy(definition, target) == "Daily":
-                            stack.enter_context(portfolio_entry_policy_context(
-                                "Daily", score_keys=score_map.keys(),
-                            ))
-                        if positive_raw is not None:
-                            from core.oracle_positive_gate import positive_oracle_entry_gate
-                            stack.enter_context(positive_oracle_entry_gate(positive_raw))
                         played = _run_scenario(
                             name=f"Oracle {target} seed={seed}",
                             params=oracle_params, param_source_kind=kind, **replay_kwargs,
+                            entry_strategy=_oracle_target_strategy(definition, target),
+                            entry_score_keys=(score_map.keys()
+                                              if _oracle_target_strategy(definition, target) == "Daily"
+                                              else None),
                         )
                 result = _metrics(played, target=target)
-                if positive_raw is not None:
-                    from services.audit.positive_gate_evidence import save_positive_replay_evidence
-                    save_positive_replay_evidence(
-                        project_root=project_root, output_subdir=definition.output_subdir,
-                        seed=seed, replay_identity=identity, portfolio=played,
-                        execution_rows=replay_execution_rows,
-                        raw_net_pnl=positive_raw, summary=result,
-                    )
                 result["seed"] = seed
                 if target != "C96":
                     baseline = out.get((seed, "C96")) or preflight_cached.get((seed, "C96"))

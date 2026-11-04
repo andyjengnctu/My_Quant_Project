@@ -398,6 +398,7 @@ class StrategyRobustnessUnitCases(unittest.TestCase):
                     with self.subTest(arm=arm.arm_id, gate_allows=gate_allows):
                         pit = SimpleNamespace(available_from=start, available_through=end,
                                               manifest_path=score_file, score_path=score_file,
+                                              experiment_profile=source.experiment_profile,
                                               audit_path=None, model_validation_gate={}, manifest={})
                         runtime = SimpleNamespace(
                             comparison_mode=engine.COMPARISON_MODE_SCORE_RANKING,
@@ -438,11 +439,16 @@ class StrategyRobustnessUnitCases(unittest.TestCase):
                             patch.object(engine, "get_dataset_dir", return_value=str(data)),
                             patch.object(engine, "_run_scenario", side_effect=observe),
                             patch("filters.breakout_quality.runtime.lookup_selection_point_in_time_candidate_score", side_effect=score),
+                            patch("filters.breakout_quality.ranking_score_store.load_selection_point_in_time_score_table_from_path",
+                                  return_value=pd.DataFrame(index=pd.MultiIndex.from_tuples(
+                                      [(ticker, str(day)[:10]) for ticker, frame in fixture["frames"].items()
+                                       for day in frame["Date"]], names=["ticker", "date"]))),
                             patch.object(engine, "materialize_strategy_pair_readable_report"),
                         ):
                             paired_dir = root / f"paired_{arm.arm_id}_{gate_allows}"
                             active_dir = root / f"active_{arm.arm_id}_{gate_allows}"
                             common = dict(project_root=root, params_path=str(params_path),
+                                          entry_strategy=arm.entry_strategy,
                                           allow_static_diagnostic=True, quiet=True,
                                           max_positions=fixture["max_positions"],
                                           enable_rotation=fixture["enable_rotation"],
