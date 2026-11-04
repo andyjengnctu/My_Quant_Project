@@ -63,6 +63,11 @@ def scientific_unit_signature(
             "identity_schema", "family", "evaluation_mode", "param_policy", "sha256",
         ) if parameter.get(key) not in (None, "")},
     }
+    # These are economic replay inputs, but not fields of model FIT identity.
+    # Keep the implicit historical Breakout/v1 representation unchanged.
+    for key in ("entry_strategy", "replay_contract_version"):
+        if key in arm:
+            signature["arm"][key] = arm[key]
     if model:
         signature["training_defaults"] = dict(contract.get("training_defaults") or {})
     return signature

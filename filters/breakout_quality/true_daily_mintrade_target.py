@@ -105,6 +105,24 @@ def compute_true_daily_mintrade_batch(
         if not math.isfinite(entry_limit) or entry_limit <= 0:
             reasons.append("invalid_information_date_close_limit")
             continue
+        # The first evaluation isolates the next *exchange* session.  An
+        # unfilled order expires there: never let the canonical Breakout Min
+        # continuation logic turn it into a later TrueDaily trade.  Reuse the
+        # same broker entry primitive; the second call is only for the genuine
+        # initial fills and follows the unchanged full-cycle Min exit/ledger.
+        first_session = simulate_realized_trade_path_label(
+            frame, ticker=ticker, signal_pos=position, params=period.params,
+            teacher_effective_date=str(period.start.date()),
+            precomputed_signals=cache_on(trade_day),
+            counterfactual_entry_limit=entry_limit,
+            horizon_end_date=trade_day,
+            active_signal_cache_resolver=cache_on,
+            prepared_inputs=prepped,
+        )
+        if (first_session.fill_type != "INITIAL_FILL" or
+                first_session.fill_date != str(trade_day.date())):
+            reasons.append(str(first_session.reason))
+            continue
         result = simulate_realized_trade_path_label(
             frame, ticker=ticker, signal_pos=position, params=period.params,
             teacher_effective_date=str(period.start.date()),
@@ -114,6 +132,10 @@ def compute_true_daily_mintrade_batch(
             active_signal_cache_resolver=cache_on,
             prepared_inputs=prepped,
         )
+        if (result.fill_date is not None and
+                (result.fill_type != "INITIAL_FILL" or
+                 result.fill_date != str(trade_day.date()))):
+            raise ValueError("TrueDaily full-cycle replay disagrees with first-session fill")
         reasons.append(str(result.reason))
         # Only the canonical completed broker-ledger outcome is supervision.
         if result.realized_net_pnl is None:

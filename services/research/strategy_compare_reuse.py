@@ -138,6 +138,16 @@ def _replay_arm_contract(raw: dict[str, Any]) -> dict[str, Any]:
         "dl_id": raw.get("dl_id"),
         "dl_runtime_mode": raw.get("dl_runtime_mode"),
     }
+    # Reuse the arm owner's normal v1/Breakout defaults.  The two fields
+    # affect economic execution and must not disappear from pair identity.
+    entry = str(raw.get("entry_strategy") or "Breakout")
+    version = int(raw.get("replay_contract_version", 1))
+    if entry not in {"Breakout", "Daily"} or version < 1:
+        raise ValueError("Invalid replay entry policy/version")
+    if entry != "Breakout":
+        contract["entry_strategy"] = entry
+    if version != 1:
+        contract["replay_contract_version"] = version
     runtime_options = dict(raw.get("dl_runtime_options") or {})
     if runtime_options:
         # 歷史arm沒有runtime options時維持既有pair fingerprint；

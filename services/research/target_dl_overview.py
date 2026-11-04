@@ -540,8 +540,11 @@ def _strategy_rolling_metrics(root: Path, versions: Mapping[str, tuple]):
         if not isinstance(scenarios, dict):
             continue
         artifact_identities = dict(payload.get("artifact_identities") or {})
+        stored_arms = dict((payload.get("settings") or {}).get("arms") or {})
         for arm_id, row in scenarios.items():
             if arm_id in selected or arm_id not in expected or arm_id not in STRATEGY_COMPARE_ARMS:
+                continue
+            if not _replay_policy_current(STRATEGY_COMPARE_ARMS[arm_id], stored_arms.get(arm_id)):
                 continue
             if not _arm_fit_lineage_current(
                 root=root, settings=settings, arm_id=str(arm_id),
@@ -554,10 +557,26 @@ def _strategy_rolling_metrics(root: Path, versions: Mapping[str, tuple]):
     return selected
 
 
+def _replay_policy_current(current: Mapping[str, Any], published: Any) -> bool:
+    if not isinstance(published, Mapping):
+        return False
+    try:
+        current_version = int(current.get("replay_contract_version", 1))
+        published_version = int(published.get("replay_contract_version", 1))
+    except (TypeError, ValueError):
+        return False
+    return bool(
+        str(current.get("entry_strategy") or "Breakout") ==
+        str(published.get("entry_strategy") or "Breakout")
+        and current_version == published_version
+        and current_version >= 1
+    )
+
+
 def _robust_arm_fit_lineage_current(settings: Any, arm_id: str, pinned: Mapping[str, Any]) -> bool:
-    """Robustness pins its own per-Seed FIT profiles; it does not need Rolling FIT."""
+    """Robustness pins its own per-Seed FIT and Replay contract."""
     arm = settings.arms.get(arm_id)
-    if arm is None:
+    if arm is None or not _replay_policy_current(arm.as_dict(), pinned):
         return False
     published_sources = {
         str(source.get("dl_id") or ""): source

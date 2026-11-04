@@ -1768,7 +1768,7 @@ _EXPERIMENT_PROFILES = {
         training_label_scope=TRAINING_LABEL_SCOPE_ALL,
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
         model_architecture="inception_time_v1",
-        fit_contract_version=2,
+        fit_contract_version=3,
         score_calibration="positive_rank_isotonic_validation_v1",
     ),
     DAILY_UNIVERSAL_COUNTERFACTUAL_MINTRADE40_NETR_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(

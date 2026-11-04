@@ -266,6 +266,9 @@ def run_portfolio_timeline(
         if daily_source is not None:
             if use_param_ensemble:
                 raise ValueError("Daily Entry requires canonical single-member P16 replay")
+            # Daily orders expire after the next exchange session.  Clear any
+            # stale order state *before* the candidate/capacity/idle gates.
+            active_extended_signals.clear()
             day_normal_setup_index = daily_source.entries_for(today, day_all_dfs_fast)
             day_context = day_context._replace(normal_setup_index=day_normal_setup_index)
 

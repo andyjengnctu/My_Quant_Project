@@ -31,7 +31,7 @@ PRICE_CALCULATION_REVISIONS = {
     "equal_rank_mfe_safety": 1, "mfe": 1, "terminal_r": 1,
     "terminal_mae_gate": 1, "mfe_mae_gate": 1,
 }
-DAILY_CALCULATION_REVISIONS = {"daily_trade_path_net_r": 1, "daily_trade_path_net_pnl": 1, "daily_trade_path_true_net_pnl": 1}
+DAILY_CALCULATION_REVISIONS = {"daily_trade_path_net_r": 1, "daily_trade_path_net_pnl": 1, "daily_trade_path_true_net_pnl": 2}
 FEATURE_UNIVERSE_CALCULATION_REVISION = 1
 REPLAY_CALCULATION_REVISION = 1
 _SCHEMA = 1

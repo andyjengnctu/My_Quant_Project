@@ -394,6 +394,10 @@ class ScientificVersionCases(TestCase):
             ]}
             self.assertFalse(_robust_arm_fit_lineage_current(settings,"C125",pinned))
             pinned["runtime_dl_sources"][0]["experiment_profile_manifest"] = _manifest_settings(VERSIONED_PROFILE)
+            # An otherwise-current FIT without the v2 Replay contract is not
+            # a current C125 Robustness result.
+            self.assertFalse(_robust_arm_fit_lineage_current(settings,"C125",pinned))
+            pinned["replay_contract_version"] = settings.arms["C125"].replay_contract_version
             self.assertTrue(_robust_arm_fit_lineage_current(settings,"C125",pinned))
             self.assertTrue(_robust_arm_fit_lineage_current(settings,"C123",{}))
 

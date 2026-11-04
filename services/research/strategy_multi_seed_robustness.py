@@ -2546,6 +2546,9 @@ def build_multi_seed_robustness_contract(
             "strategy_seed_sensitive": arm.arm_id in set(robustness.benchmark_strategy_arm_ids),
             "model_seed_sensitive": arm.arm_id in set(robustness.model_seed_sensitive_arm_ids),
         }
+        for key in ("entry_strategy", "replay_contract_version"):
+            if key in arm.as_dict():
+                payload[key] = arm.as_dict()[key]
         if arm.dl_enabled and arm.dl_id:
             payload.update({
                 "dl_id": arm.dl_id,
@@ -2589,6 +2592,9 @@ def build_multi_seed_robustness_contract(
                 "param_source": arm.param_source,
                 "param_policy": resolve_strategy_comparison_arm_param_policy(settings, arm),
                 "rule_policy": arm.rule_policy,
+                **{key: arm.as_dict()[key]
+                   for key in ("entry_strategy", "replay_contract_version")
+                   if key in arm.as_dict()},
             }
             for arm in fixed
         ],
@@ -3509,6 +3515,9 @@ def _current_strategy_only_unit_scientific_signature(
         "rule_policy": arm.rule_policy,
         "strategy_seed_sensitive": arm.arm_id in set(robustness.benchmark_strategy_arm_ids),
         "model_seed_sensitive": False,
+        **{key: arm.as_dict()[key]
+           for key in ("entry_strategy", "replay_contract_version")
+           if key in arm.as_dict()},
     }
     return {
         "unit_result_identity_schema": "robustness_strategy_seed_result_v1",

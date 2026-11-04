@@ -2692,7 +2692,7 @@ STRATEGY_COMPARE_ARMS = {
         "robustness_role": "off",
     },
     "C133": {
-        "replay_contract_version": 2,
+        "replay_contract_version": 3,
         "name": "Daily Min MR-13CT NetPnL Rank + PIT Positive Exact K/R0 / Broker-Cash",
         "description": "Single MR-13CT NetPnL rank and same-checkpoint PIT Positive calibration; canonical Min selector, costs and cash.",
         "param_source": "min_best_broker_cash_rolling_experiment",
@@ -2708,7 +2708,7 @@ STRATEGY_COMPARE_ARMS = {
         "robustness_role": "off", "entry_strategy": "Daily",
     },
     "C134": {
-        "replay_contract_version": 2,
+        "replay_contract_version": 3,
         "name": "Daily Min MR-13CT NetPnL Rank + PIT Positive Direct No-K No-R0 / Broker-Cash",
         "description": "Single MR-13CT NetPnL rank and same-checkpoint PIT Positive calibration; canonical Min selector, costs and cash.",
         "param_source": "min_best_broker_cash_rolling_experiment",

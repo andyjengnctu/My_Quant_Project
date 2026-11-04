@@ -5335,6 +5335,13 @@ Assessment: `USER_REPORTED_ROLLING_RESULT_AVAILABLE / FULL_HORIZON_MAE_SMALL_PAI
 
 - **2026-11-03 研究結案／正式退役決策**：使用者確認將 `MR-13CQ`（T40）與 `MR-13CR`（MFE40）、`C127`～`C130` 從現行模型訓練／模型比較／Strategy Compare 完整退役；`MR-13CP`（Positive）及 `C125/C126` 保留為基準。原因：CQ v2 Single-Seed Exact／Direct RoMD=`8.45/8.35`、CR=`10.92/8.03`，未優於 CP=`11.11/13.01`；CR Model Gate=FAIL。CQ/CR 四 Seed Robustness 未完成，研究 OOS 已反覆使用，不據此作廣泛模型結論。Registry 永久保留 CQ/CR 與 C127～C130 身分和以上已報告結果；退役只移除現行執行實作，原已完成的 FIT/Replay/SOP 工件作歷史研究證據保留（不當成 current REUSE）。下一步方向轉向成熟 full-cycle NetPnL Positive 標籤的有效覆蓋與不失真擴樣，尚未核准或建立新科學身分。
 
+### 2026-11-04 — TrueDaily 次一交易日未成交續掛的既有結果有效性更正
+
+- **原始目標／決策不變：** `TrueDailyUniversal_MinTrade_NetPnL_Positive`／`_Direct` 的每一個資訊日，以資訊日收盤價僅嘗試次一**市場交易日**買入；未成交者 NULL，成交後的 Min P16／Broker-Cash 出場與費稅不變。此為已核准定義的執行 Bug，更正後不新增 Target、模型或策略 ID。
+- **重現證據（合成行情，非市場績效）：** 資訊日 2021-01-04 收盤 90.10、01-05 最低 90.30 不成交；舊程式仍以 01-04 原單在 01-06 最低 88.70 成交，產生 −8,089 TWD 的錯誤 NetPnL 標籤。新版 Target 對 01-04 回傳 NULL；正式 Daily Portfolio 舊流程在 01-06 錯誤成交 1 筆，新流程為 0 筆（除非 01-05 有新且合法 PIT Score，才可建立另一張 01-06 新單）。
+- **歷史結果與依賴：** TrueDaily Producer revision 1→2；此前四組 Oracle（Breakout／Daily × Exact／Direct）共 32 個 8-Seed 單位的舊收據不可視為 current；CT FIT v2→v3 且 PIT Scores 失效；Daily C133/C134 Replay v2→v3；CT Breakout C135/C136 下游 Scores 失效但其 Breakout 入場算法不變。Event-driven DailyUniversal、CO／CP、其他非受影響 Truth／Oracle／策略工件仍依正式簽章 REUSE。舊結果留存為歷史，不被新總覽當成當前績效。
+- **隔離驗證：** 原版 168 份**合成**正式簽章收據在新 Oracle 身分下為 136 REUSE／32 RUN／0 BLOCKED；完成同鏈單元／合成 Replay 回歸，未執行使用者 Windows 正式完整 Test Suite 或全市場價格資料的 E13 parity。本次修正不得被解讀為新 Market RoMD 成果或自動升格 Trading。
+
 ## 6. 後續新增規則
 
 **只有新科學證據或舊科學證據有效性更正才能增加本文件內容。** 記錄必須有實驗／Target 身分、期間／Seed、控制變數、原始結果、負結果與決策，並指向正式證據。沒有市場／模型結果的工程測試、提交紀錄、打包、格式調整或一次性 Audit 清理，不可追加研究章節。本文件不再生成封存副本或研究待辦。

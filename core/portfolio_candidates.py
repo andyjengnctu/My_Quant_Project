@@ -491,7 +491,7 @@ def _resolve_qualified_normal_setup(
 
 def _record_normal_setup_tracking_state(
     *, ticker, y_buy_limit, y_atr, signal_date, security_profile,
-    params, active_extended_signals, profile_stats,
+    params, active_extended_signals, profile_stats, entry_policy="breakout",
 ):
     """Share the exact PIT ranking and continuation-state transition.
 
@@ -508,6 +508,11 @@ def _record_normal_setup_tracking_state(
             _candidate_profile_add(profile_stats, "portfolio_candidate_quality_rank_sec", quality_started)
     else:
         quality_rank = None
+    if entry_policy == "daily":
+        # The next-session limit has no continuation/order lifecycle.
+        return quality_rank
+    if entry_policy != "breakout":
+        raise ValueError("Unknown portfolio entry policy")
     signal_state = create_signal_tracking_state(
         y_buy_limit, y_atr, params, ticker=ticker,
         security_profile=security_profile, signal_date=signal_date,
@@ -616,7 +621,7 @@ def _collect_normal_candidates(
             ticker=ticker, y_buy_limit=y_buy_limit, y_atr=y_atr,
             signal_date=signal_date, security_profile=security_profile,
             params=params, active_extended_signals=active_extended_signals,
-            profile_stats=profile_stats,
+            profile_stats=profile_stats, entry_policy=entry_policy,
         )
 
         if (not collect_all_candidates) and (not is_orderable):
@@ -686,7 +691,7 @@ def track_normal_setup_signals_for_day(
             ticker=ticker, y_buy_limit=y_buy_limit, y_atr=y_atr,
             signal_date=signal_date, security_profile=security_profile,
             params=params, active_extended_signals=active_extended_signals,
-            profile_stats=profile_stats,
+            profile_stats=profile_stats, entry_policy=entry_policy,
         )
     if profile_enabled:
         _candidate_profile_add(profile_stats, "portfolio_candidate_normal_sec", total_started)

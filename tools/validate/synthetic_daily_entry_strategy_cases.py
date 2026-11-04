@@ -259,6 +259,85 @@ class DailyEntryStrategyCases(TestCase):
         self.assertGreater(int(daily[4]), int(breakout[4]))
         self.assertIsNone(current_daily_entry_source())
 
+    def test_daily_unfilled_buy_expires_and_next_day_needs_own_score(self):
+        # Real Portfolio Engine, not a mocked candidate cache. Only 1/4 has
+        # a score; 1/5 low > 1/4 close; 1/6 would fill the *expired* order.
+        from tools.validate.synthetic_daily_trade40_oracle_cases import source_fixture
+        from core.portfolio_fast_data import prep_stock_data_and_trades, pack_prepared_stock_data
+        from core.portfolio_engine import run_portfolio_timeline
+        dates, frames, _, schedule = source_fixture()
+        frame = frames["2317"].copy()
+        frame.loc["2021-01-05", ["Open", "High", "Low", "Close"]] = [90.9, 91.5, 90.3, 90.7]
+        frame.loc["2021-01-06", ["Open", "High", "Low", "Close"]] = [89.7, 91.8, 88.7, 89.8]
+        ready, trades = prep_stock_data_and_trades(frame, schedule[0].params)
+        market = {"2317": pack_prepared_stock_data(ready)}
+        args = dict(
+            all_dfs_fast=market, all_standalone_logs={"2317": trades},
+            sorted_dates=list(dates), start_year=2021,
+            params=schedule[0].params, max_positions=10, enable_rotation=False,
+            benchmark_ticker="2317", benchmark_data=market["2317"],
+            is_training=False, verbose=False, profile_stats={},
+        )
+        rows = []
+        with portfolio_entry_policy_context("Daily", score_keys={("2317", "2021-01-04")}):
+            result = run_portfolio_timeline(**args, replay_execution_rows=rows)
+        self.assertEqual(int(result[4]), 0)
+        self.assertFalse(any(
+            str(row.get("trade_date")) == "2021-01-06" and row.get("entry_source") == "extended"
+            for row in rows
+        ))
+        # A *fresh* 1/5 score is allowed to submit a different next-day limit.
+        fresh_rows = []
+        with portfolio_entry_policy_context("Daily", score_keys={("2317", "2021-01-05")}):
+            fresh = run_portfolio_timeline(**args, replay_execution_rows=fresh_rows)
+        self.assertEqual(int(fresh[4]), 1)
+        self.assertTrue(any(
+            str(row.get("signal_date")) == "2021-01-05" and
+            str(row.get("candidate_date")) == "2021-01-06"
+            for row in fresh_rows
+        ))
+
+    def test_entry_policy_and_replay_version_are_economic_cache_inputs(self):
+        from copy import deepcopy
+        from services.research.strategy_compare_reuse import _pair_cache_fingerprint_from_payload
+        from services.research.strategy_robustness_units import scientific_unit_signature
+        from services.research.target_dl_overview import _replay_policy_current
+        from core.strategy_compare_registry import STRATEGY_COMPARE_ARMS
+        current = STRATEGY_COMPARE_ARMS["C133"]
+        self.assertTrue(_replay_policy_current(current, current))
+        self.assertFalse(_replay_policy_current(current, dict(current, replay_contract_version=2)))
+        self.assertFalse(_replay_policy_current(current, dict(current, entry_strategy="Breakout")))
+        self.assertFalse(_replay_policy_current(current, dict(current, replay_contract_version="invalid")))
+        self.assertTrue(_replay_policy_current(STRATEGY_COMPARE_ARMS["C135"],
+                                               STRATEGY_COMPARE_ARMS["C135"]))
+        settings = {"dataset": "full", "parameter_sources": {}, "dl_sources": {}}
+        base = {"arm_id": "C133", "param_source": "p", "param_policy": "base-finalist-best", "rule_policy": "all_off",
+                "dl_enabled": False, "dl_runtime_mode": "", "dl_id": None}
+        def cache(on):
+            return _pair_cache_fingerprint_from_payload(
+                settings_payload=settings, artifact_identities={}, comparison_period={},
+                off_arm_payload=base, on_arm_payload=on, engine_schema_version=1,
+            )
+        breakout = cache(base)
+        daily = cache(dict(base, entry_strategy="Daily"))
+        v2 = cache(dict(base, entry_strategy="Daily", replay_contract_version=2))
+        v3 = cache(dict(base, entry_strategy="Daily", replay_contract_version=3))
+        self.assertEqual(len({breakout, daily, v2, v3}), 4)
+        unit_base = {"stochastic_arms": [dict(base, param_policy="p", param_source="p",
+                                             strategy_seed_sensitive=True, model_seed_sensitive=False)],
+                     "benchmark_parameter_artifact_identities": {"C133:seed=42": {
+                         "sha256": "a"*64, "family": "x", "identity_schema": "x",
+                         "evaluation_mode": "rolling", "param_policy": "p"}}}
+        contract = dict(unit_base)
+        before = scientific_unit_signature(contract=contract, arm_id="C133", seed=42)
+        contract = deepcopy(unit_base)
+        contract["stochastic_arms"][0]["entry_strategy"] = "Daily"
+        contract["stochastic_arms"][0]["replay_contract_version"] = 3
+        after = scientific_unit_signature(contract=contract, arm_id="C133", seed=42)
+        self.assertNotEqual(before, after)
+        self.assertEqual(after["arm"]["entry_strategy"], "Daily")
+        self.assertEqual(after["arm"]["replay_contract_version"], 3)
+
     def test_six_single_ranker_arms_pit_and_oracle_replay_parity(self):
         """PIT and perfect-output sources use one real Broker-Cash replay owner.
 
@@ -370,7 +449,7 @@ class DailyEntryStrategyCases(TestCase):
             self.assertEqual(old_arm.dl_id, new_arm.dl_id)
             self.assertEqual(old_arm.param_source, new_arm.param_source)
             self.assertEqual(old_arm.rule_policy, new_arm.rule_policy)
-            self.assertEqual(new_arm.replay_contract_version, 2)
+            self.assertEqual(new_arm.replay_contract_version, 3)
             self.assertEqual(old_arm.replay_contract_version, 1)  # New registered arm, not a recycled ID.
             self.assertNotIn("entry_strategy", STRATEGY_COMPARE_ARMS[old_id])
         for strategy, scoped in oracle._oracle_strategy_scopes(definition):

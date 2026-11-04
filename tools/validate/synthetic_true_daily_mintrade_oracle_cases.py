@@ -116,6 +116,27 @@ class TrueDailyUniversalOracleCases(TestCase):
         self.assertEqual(new.valid_mask.tolist(), [True, True])
         self.assertTrue((new.target_raw_pnl < 0).all())
 
+    def test_next_exchange_session_unfilled_cannot_become_later_continuation_fill(self):
+        # 1/4 info-close 90.10; 1/5 never touches limit; 1/6 does.
+        # Old Min continuation wrongly produced a completed 1/6 trade.
+        calendar, frames, _, schedule = source_fixture()
+        frame = frames["2317"].copy()
+        frame.loc["2021-01-05", ["Open", "High", "Low", "Close"]] = [90.9, 91.5, 90.3, 90.7]
+        frame.loc["2021-01-06", ["Open", "High", "Low", "Close"]] = [89.7, 91.8, 88.7, 89.8]
+        info_day = pd.Timestamp("2021-01-04")
+        self.assertEqual(float(frame.loc[info_day, "Close"]), 90.10)
+        self.assertGreater(float(frame.loc["2021-01-05", "Low"]), 90.10)
+        self.assertLess(float(frame.loc["2021-01-06", "Low"]), 90.10)
+        observed = compute_true_daily_mintrade_batch(
+            frame, frame.index.get_indexer(pd.DatetimeIndex([info_day])),
+            ticker="2317", schedule=schedule,
+            exchange_calendar=calendar, research_cutoff="2021-05-15",
+        )
+        self.assertEqual(observed.reasons, ("unfilled_at_horizon",))
+        self.assertEqual(observed.valid_mask.tolist(), [False])
+        self.assertTrue(np.isnan(observed.target_raw_pnl).all())
+        self.assertTrue(np.isnat(observed.maturity_dates).all())
+
     def test_unavailable_next_market_session_stays_null(self):
         calendar, frames, _, schedule = source_fixture()
         frame = frames["2317"].drop(pd.Timestamp("2021-01-05"))
@@ -540,7 +561,8 @@ class OraclePerfectOutputReuseCases(TestCase):
                 ("score_contract", "score_start_date", "2021-01-04"),
                 ("replay_policy", "entry_policy", "breakout"),
                 ("replay_policy", "oracle_parity_implementation", "changed_implementation"),
-                ("source_contract", "calculation_revision", 2),
+                ("source_contract", "calculation_revision",
+                 int(context["source_contract"]["calculation_revision"]) + 1),
             ):
                 with self.subTest(field=field, key=key):
                     changed = copy.deepcopy(context)
