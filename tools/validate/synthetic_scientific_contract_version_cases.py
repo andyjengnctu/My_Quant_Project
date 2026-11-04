@@ -35,7 +35,7 @@ from services.research import breakout_quality_application as application
 from services.research import strategy_compare_training
 
 
-# Per-test synthetic CP contract upgrade; the published CP FIT remains v1.
+# Synthetic publication versions are built locally; no real FIT artifact is read.
 VERSIONED_PROFILE = DAILY_UNIVERSAL_NETPNL_POSITIVE_BINARY_PROFILE
 UNAFFECTED_PROFILE = DAILY_UNIVERSAL_FORMAL_MINTRADE_FULLCYCLE_NETPNL_PAIRWISE_PROFILE
 FOLD = "fold_20210101_20211231"
@@ -160,13 +160,14 @@ class ScientificVersionCases(TestCase):
             old_arm = settings.arms[old]
             new_arm = settings.arms[new]
             self.assertEqual(old_arm.replay_contract_version, 1)
-            self.assertEqual(new_arm.replay_contract_version, 1)
-            self.assertNotIn("replay_contract_version", new_arm.as_dict())
-            v2 = replace(new_arm, replay_contract_version=2)
-            self.assertEqual(v2.as_dict()["replay_contract_version"], 2)
-            self.assertNotEqual(v2.as_dict(), new_arm.as_dict())
+            from core.strategy_compare_registry import STRATEGY_COMPARE_ARMS
+            declared = STRATEGY_COMPARE_ARMS[new].get("replay_contract_version", 1)
+            self.assertEqual(new_arm.replay_contract_version, declared)
+            next_version = replace(new_arm, replay_contract_version=declared + 1)
+            self.assertEqual(next_version.as_dict()["replay_contract_version"], declared + 1)
+            self.assertNotEqual(next_version.as_dict(), new_arm.as_dict())
 
-    def test_strategy_consumer_rejects_superseded_auxiliary_dl_source(self):
+    def test_strategy_consumer_rejects_superseded_primary_dl_source(self):
         source = get_strategy_comparison_settings(
             STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE
         ).dl_sources["CONT13CP_ROLL"]

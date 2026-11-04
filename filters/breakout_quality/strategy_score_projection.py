@@ -60,12 +60,11 @@ def runtime_score_projection_requirements(
     if safety_dl_id and safety_score_column:
         requirements.setdefault(safety_dl_id, set()).add(safety_score_column)
 
-    positive_dl_id = str(options.get("positive_dl_id") or "").strip()
-    positive_column = str(options.get("positive_score_column") or "").strip()
-    if positive_dl_id:
-        if not positive_column:
-            raise ValueError("positive model requires a named PIT score column")
-        requirements.setdefault(positive_dl_id, set()).add(positive_column)
+    from core.positive_netpnl_contract import requires_positive_score
+    if requires_positive_score(options):
+        if not dl_id:
+            raise ValueError("Positive score column requires the primary model source")
+        requirements.setdefault(dl_id, set()).add(str(options["positive_score_column"]))
 
     return {
         source_id: tuple(sorted(columns))

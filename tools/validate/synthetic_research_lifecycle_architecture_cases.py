@@ -4454,12 +4454,12 @@ def validate_research_model_readiness_architecture_case(_base_params):
     witness = {"model_research_id": "SYNTHETIC", "standard_model_sop": standard}
     check("independent_standard_evidence_ready", (),
           standard_model_sop_completeness_issues(witness))
-    # Exercise the real Registry owner; synthetic model names are not legal
-    # production FIT identities and would bypass the version publication check.
-    from core.breakout_quality_registry import DAILY_UNIVERSAL_NETPNL_POSITIVE_BINARY_PROFILE
+    # Report-only fixture uses an unchanged registered model; FIT-v2
+    # publication and rejection are independently covered by version tests.
+    from core.breakout_quality_registry import DAILY_UNIVERSAL_FORMAL_MINTRADE_FULLCYCLE_NETPNL_PAIRWISE_PROFILE
     settings = SimpleNamespace(
         filter_id="breakout_quality_v1", model_architecture="inception_time_v1",
-        experiment_profile=DAILY_UNIVERSAL_NETPNL_POSITIVE_BINARY_PROFILE,
+        experiment_profile=DAILY_UNIVERSAL_FORMAL_MINTRADE_FULLCYCLE_NETPNL_PAIRWISE_PROFILE,
     )
     identity = {
         "filter_id": settings.filter_id, "architecture": settings.model_architecture,

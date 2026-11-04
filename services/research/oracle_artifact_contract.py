@@ -46,11 +46,13 @@ def oracle_score_contract(contract: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def oracle_ranking_options(options: Mapping[str, Any]) -> dict[str, Any]:
-    """Keep auxiliary admission enabled without binding it to a fitted DL route."""
-    result = dict(options)
-    if result.get("positive_dl_id"):
-        result["positive_dl_id"] = "oracle_perfect_positive_output"
-    return result
+    """Preserve executable option fields, including obsolete historical schemas.
+
+    Current arms are validated before execution. History must remain comparable:
+    a well-formed old schema is stale (RUN), not corrupt (BLOCKED), and its
+    retired fields must never be projected away into a current REUSE identity.
+    """
+    return dict(options)
 
 
 def oracle_replay_policy(policy: Mapping[str, Any]) -> dict[str, Any]:
@@ -611,9 +613,8 @@ def _reference_arm_payload(arm_id, settings, *, effective):
         raise ValueError(f"Oracle reference arm missing: {arm_id}")
     arm = settings.arms[arm_id]
     source_ids = [str(arm.dl_id)]
-    auxiliary = str((arm.dl_runtime_options or {}).get("positive_dl_id") or "")
-    if auxiliary:
-        source_ids.append(auxiliary)
+    from core.positive_netpnl_contract import requires_positive_score
+    requires_positive_score(arm.dl_runtime_options or {})
     sources = {}
     for index, source_id in enumerate(source_ids):
         if source_id not in settings.dl_sources:

@@ -141,11 +141,6 @@ def resolve_arm_runtime_dl_source_ids(
             )
         source_ids.append(safety_dl_id)
 
-    positive_dl_id = str(dict(arm.dl_runtime_options or {}).get("positive_dl_id") or "").strip()
-    if positive_dl_id:
-        if positive_dl_id not in settings.dl_sources:
-            raise ValueError(f"positive-filter arm引用不存在的dl_id: {arm.arm_id}/{positive_dl_id}")
-        source_ids.append(positive_dl_id)
 
     unique = tuple(dict.fromkeys(source_ids))
     if len(unique) > 1:

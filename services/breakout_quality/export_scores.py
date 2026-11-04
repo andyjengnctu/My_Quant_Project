@@ -540,6 +540,8 @@ def _run_daily_continuous_workflow_export(*, root: Path, args, profile) -> int:
         model_spec=expected_spec,
     )
     model.load_state_dict(checkpoint["model_state_dict"])
+    from filters.breakout_quality.positive_rank_calibration import restore_score_calibration, calibrated_score_columns
+    restore_score_calibration(model, profile, checkpoint)
     model.to(execution_plan.device)
     model.eval()
 
@@ -568,6 +570,8 @@ def _run_daily_continuous_workflow_export(*, root: Path, args, profile) -> int:
     scored["ticker"] = scored["ticker"].astype(str)
     scored["date"] = pd.to_datetime(scored["date"], errors="raise").dt.strftime("%Y-%m-%d")
     scored["model_score"] = np.asarray(scores, dtype=np.float32)
+    for column, values in calibrated_score_columns(model, profile, scores).items():
+        scored[column] = values
     scored = scored.sort_values(["ticker", "date"], kind="mergesort").reset_index(drop=True)
     if scored.duplicated(["ticker", "date"]).any():
         raise ValueError("workflow runtime daily score ticker/date必須唯一")

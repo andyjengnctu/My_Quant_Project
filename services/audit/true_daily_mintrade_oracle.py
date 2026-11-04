@@ -62,10 +62,18 @@ def _raw_path(root, subdir, seed, price_sha, param_sha, evidence):
 
 def load_positive_truth(*, project_root: Path, output_subdir: str, seed: int,
                         price_sha256: str, param_sha256: str,
-                        canonical_scores: dict, canonical_evidence: dict) -> dict:
-    """Only a signed raw PnL witness can establish Positive; ranks cannot."""
+                        canonical_scores: dict, canonical_evidence: dict,
+                        execution=None, cache_root: Path | None = None) -> dict:
+    """Read the original raw witness; only a signed effective reference permits provenance drift."""
+    effective = canonical_evidence.get("effective_source_reference")
+    if effective:
+        if execution is None or cache_root is None:
+            raise DailyTrade40OracleBlockedError("TrueDaily effective truth requires its signed input context")
+        from services.audit.oracle_truth_references import OracleTruthReferences
+        OracleTruthReferences(cache_root).validate_consumption(execution, canonical_evidence)
     if (canonical_evidence.get("target_id") != TARGET_ID or
-            canonical_evidence.get("truth_source_sha256") != truth_producer_fingerprint() or
+            (not effective and
+             canonical_evidence.get("truth_source_sha256") != truth_producer_fingerprint()) or
             canonical_evidence.get("entry_policy") != ENTRY_POLICY):
         raise DailyTrade40OracleBlockedError("TrueDaily raw NetPnL provenance mismatch")
     path, identity = _raw_path(Path(project_root), output_subdir, seed,

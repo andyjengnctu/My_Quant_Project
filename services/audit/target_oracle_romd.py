@@ -180,7 +180,7 @@ def _build_daily_truth(recipe: str, *, output_subdir: str, **kwargs):
 def _load_positive_truth_for_recipe(recipe: str, *, execution, cache_root, **kwargs):
     if recipe == "daily_trade_path_true_net_pnl":
         from services.audit.true_daily_mintrade_oracle import load_positive_truth
-        return load_positive_truth(**{
+        return load_positive_truth(execution=execution, cache_root=cache_root, **{
             key: kwargs[key] for key in (
                 "project_root", "output_subdir", "seed", "price_sha256", "param_sha256",
                 "canonical_scores", "canonical_evidence",
@@ -426,13 +426,13 @@ class OracleTruthBuildRequired(RuntimeError):
 
 
 def _unqualified_selector_options(options: Mapping[str, Any] | None) -> dict[str, Any]:
-    """One selector comparison baseline: Positive score admission is an optional head."""
+    """Compare selector economics independently of the Positive score capability."""
     return {key: val for key, val in dict(options or {}).items()
             if not str(key).startswith("positive_")}
 
 
 def _target_reference_arm(definition, settings, plan, target, exact, direct):
-    """Use the declared formal arm when a Target adds a common score-output head."""
+    """Resolve the declared entry/selector arm and its single-source score capability."""
     selected = next((item for item in definition.source["oracle_comparisons"]
                      if item["target"] == target), None)
     # Each source scope has exactly one entry policy per scientific Target.
@@ -456,42 +456,17 @@ def _target_reference_arm(definition, settings, plan, target, exact, direct):
             base.param_source, base.param_policy, base.rule_policy,
             _unqualified_selector_options(base.dl_runtime_options)):
         raise OracleBlockedError(f"Oracle target-scoped strategy differs from formal selector: {arm_id}")
+    from core.positive_netpnl_contract import requires_positive_score, POSITIVE_RANK_CALIBRATION
     qualified = bool(selected.get("positive_output"))
     options = dict(arm.dl_runtime_options or {})
-    if qualified != bool(options.get("positive_dl_id")):
+    if qualified != requires_positive_score(options):
         raise OracleBlockedError(f"Oracle Positive output does not match arm source: {arm_id}")
     if qualified:
-        # The canonical Exact/Direct selector is source-agnostic; verify the
-        # Positive arm reuses the SAME source and rank options as its own
-        # unqualified companion, not the first arbitrarily registered model.
-        companions = [item for item in settings.enabled_arms
-                      if item.dl_enabled and item.dl_id == arm.dl_id
-                      and item.dl_runtime_mode == arm.dl_runtime_mode
-                      and not (item.dl_runtime_options or {}).get("positive_dl_id")
-                      and _unqualified_selector_options(item.dl_runtime_options)
-                          == _unqualified_selector_options(arm.dl_runtime_options)]
-        if len(companions) > 1:
-            raise OracleBlockedError(f"Oracle Positive rank has ambiguous original DL arms: {arm_id}")
-        positive_source = settings.dl_sources[str(options["positive_dl_id"])]
         primary_source = settings.dl_sources[arm.dl_id]
-        # A formally declared two-model arm need not also register a second,
-        # rank-only trading arm. If such a comparator is absent, verify that
-        # both independently FIT models have the same scientific Target and
-        # stock-day sample scope before accepting their score-consumption pair.
-        if not companions:
-            from core.breakout_quality_registry import get_breakout_quality_experiment_profile
-            rank = get_breakout_quality_experiment_profile(primary_source.experiment_profile)
-            positive = get_breakout_quality_experiment_profile(positive_source.experiment_profile)
-            if (rank.continuous_target_id != positive.continuous_target_id
-                    or rank.training_sample_scope != positive.training_sample_scope
-                    or options.get("positive_score_column") != "positive_p_positive"
-                    or options.get("positive_probability_threshold") != 0.5):
-                raise OracleBlockedError(f"Oracle Positive sources lack a shared fitting target: {arm_id}")
-        if (positive_source.score_source != "selection_point_in_time"
-                or positive_source.filter_id != primary_source.filter_id
-                or positive_source.point_in_time_score_start_date != primary_source.point_in_time_score_start_date
-                or positive_source.model_architecture != primary_source.model_architecture):
-            raise OracleBlockedError(f"Oracle Positive output source does not match PIT rank: {arm_id}")
+        rank = get_breakout_quality_experiment_profile(primary_source.experiment_profile)
+        if (primary_source.score_source != "selection_point_in_time"
+                or rank.score_calibration != POSITIVE_RANK_CALIBRATION):
+            raise OracleBlockedError(f"Oracle Positive requires one calibrated PIT rank source: {arm_id}")
     return arm
 
 
@@ -626,29 +601,29 @@ def _resolve_oracle_target_score_contracts(definition, settings, plan) -> dict[s
         if positive_output:
             options = dict(arm.dl_runtime_options or {})
             threshold = options.get("positive_probability_threshold")
-            positive_dl_id = str(options.get("positive_dl_id") or "")
-            from core.positive_netpnl_contract import POSITIVE_P_CLASS_COLUMN
+            from core.positive_netpnl_contract import (
+                POSITIVE_P_CLASS_COLUMN, POSITIVE_SCORE_CONTRACT, requires_positive_score,
+            )
             if (positive_output != "netpnl_positive_probability_v1"
-                    or not isinstance(threshold, (int,float)) or isinstance(threshold,bool)
+                    or not isinstance(threshold, (int, float)) or isinstance(threshold, bool)
                     or not 0.0 < float(threshold) < 1.0
-                    or not positive_dl_id
-                    or str(options.get("positive_score_column")) != POSITIVE_P_CLASS_COLUMN
+                    or not requires_positive_score(options)
                     or (plan["daily_recipes"][plan["daily_sources"][name]][0]
                         not in {"daily_trade_path_net_pnl", "daily_trade_path_true_net_pnl"})):
                 raise OracleBlockedError(f"Oracle Positive score-contract mismatch: {name}")
-            aux_source = settings.dl_sources[positive_dl_id]
-            primary_target = get_breakout_quality_experiment_profile(
-                settings.dl_sources[arm.dl_id].experiment_profile).continuous_target_id
-            aux_target = get_breakout_quality_experiment_profile(aux_source.experiment_profile).continuous_target_id
-            if primary_target != aux_target:
-                raise OracleBlockedError(f"Oracle Positive/rank models supervise different raw targets: {name}")
+            primary_profile = get_breakout_quality_experiment_profile(arm_source.experiment_profile)
+            from core.audit_registry import oracle_supervised_target_id
+            raw_comparison = next(item for item in definition.source["oracle_comparisons"]
+                                  if item["target"] == origin)
+            if primary_profile.continuous_target_id != oracle_supervised_target_id(raw_comparison):
+                raise OracleBlockedError(f"Oracle and Positive ranker supervise different raw targets: {name}")
             positive_contract = {
                 "perfect_positive_output": positive_output,
                 "positive_probability_threshold": float(threshold),
                 "positive_score_column": POSITIVE_P_CLASS_COLUMN,
-                "positive_score_source_id": positive_dl_id,
-                "positive_profile_id": str(aux_source.experiment_profile),
-                "positive_score_contract_revision": "positive_netpnl_dual_output_v1",
+                "positive_score_source_id": str(arm.dl_id),
+                "positive_profile_id": str(arm_source.experiment_profile),
+                "positive_score_contract_revision": POSITIVE_SCORE_CONTRACT,
             }
         result[name] = {
             **({"hindsight_extra_gate": extra_gate} if extra_gate is not None else {}),

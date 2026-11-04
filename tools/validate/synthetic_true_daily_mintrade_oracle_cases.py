@@ -217,6 +217,24 @@ class TrueDailyUniversalOracleCases(TestCase):
                 self.assertEqual(scores, score4)
                 self.assertEqual(attested["effective_source_reference"],
                                  attested2["effective_source_reference"])
+                # Model/runtime-only edits change file provenance, not Min
+                # arithmetic. Preserve signed original NPZ + raw witness.
+                with patch("services.audit.true_daily_mintrade_oracle.truth_producer_fingerprint",
+                           return_value="9" * 64):
+                    preserved = load_positive_truth(
+                        project_root=root, output_subdir="audit", seed=693545351,
+                        price_sha256="b" * 64, param_sha256="a" * 64,
+                        canonical_scores=score4, canonical_evidence=attested2,
+                        execution=execution, cache_root=root / "truth_cache")
+                    self.assertEqual(preserved, raw)
+                    with self.assertRaises(ValueError):
+                        load_positive_truth(
+                            project_root=root, output_subdir="audit", seed=693545351,
+                            price_sha256="b" * 64, param_sha256="a" * 64,
+                            canonical_scores=score4,
+                            canonical_evidence={**attested2, "effective_source_reference": "0" * 64},
+                            execution=execution, cache_root=root / "truth_cache")
+
 
 
 class OraclePerfectOutputReuseCases(TestCase):
@@ -250,13 +268,8 @@ class OraclePerfectOutputReuseCases(TestCase):
         index = OracleExecutionIndex(store)
         contexts = {}
         for strategy, scoped in oracle._oracle_strategy_scopes(definition):
-            # Reproduce the pre-CS/CT publisher, including all old reference
-            # fields that the original digest hashed. Never fabricate REUSE
-            # decisions or mock the cache/index/identity resolver itself.
-            if strategy == "Daily":
-                scoped = replace(scoped, source={**scoped.source, "oracle_comparisons": tuple(
-                    {**row, "strategy_arm_id": ("C131" if row["selector"] == "exact" else "C132")}
-                    for row in scoped.source["oracle_comparisons"])})
+            # Recover current certified receipts without scientific recomputation.
+            # Retired dual-source evidence is exercised separately below.
             plan = oracle._oracle_comparison_plan(scoped)
             contracts = oracle._resolve_oracle_target_score_contracts(scoped, settings, plan)
             direct = oracle._direct_arm(scoped, settings, base, exact)
@@ -477,18 +490,34 @@ class OraclePerfectOutputReuseCases(TestCase):
         )
         settings = get_strategy_comparison_settings(STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE)
         before = original_fingerprint("net_pnl"), new_fingerprint()
-        for old, current in (("C131", "C133"), ("C132", "C134")):
+        from dataclasses import replace
+        from copy import deepcopy
+        for current in ("C133", "C134"):
+            alias = "TEST_ALIAS_" + current
+            local = replace(settings, arms={**settings.arms,
+                alias: replace(settings.arms[current], arm_id=alias)})
             comparison = {"strategy_arm_id": current}
-            receipt = {"arm_id": old, "execution_sha256": canonical_json_sha256(
-                _reference_arm_payload(old, settings, effective=False))}
-            self.assertTrue(reference_arm_execution_matches(receipt, comparison, settings))
+            receipt = {"arm_id": alias, "execution_sha256": canonical_json_sha256(
+                _reference_arm_payload(alias, local, effective=False))}
+            self.assertTrue(reference_arm_execution_matches(receipt, comparison, local))
             receipt["execution_sha256"] = "f" * 64
-            self.assertFalse(reference_arm_execution_matches(receipt, comparison, settings))
-            published = reference_arm_execution_binding({"strategy_arm_id": old}, settings)
-            self.assertTrue(reference_arm_execution_matches(published, comparison, settings))
-            published["execution_contract"]["arm"]["dl_runtime_options"]["positive_probability_threshold"] = .6
-            published["execution_sha256"] = canonical_json_sha256(published["execution_contract"])
-            self.assertFalse(reference_arm_execution_matches(published, comparison, settings))
+            self.assertFalse(reference_arm_execution_matches(receipt, comparison, local))
+            published = reference_arm_execution_binding({"strategy_arm_id": alias}, local)
+            self.assertTrue(reference_arm_execution_matches(published, comparison, local))
+            for change in ("threshold", "old_version", "dual_source"):
+                old = deepcopy(published)
+                arm = old["execution_contract"]["arm"]
+                if change == "threshold":
+                    arm["dl_runtime_options"]["positive_probability_threshold"] = .6
+                elif change == "old_version":
+                    arm["replay_contract_version"] = 1
+                else:
+                    arm["dl_runtime_options"]["positive_dl_id"] = "CONT13CT_ROLL"
+                    arm["dl_runtime_options"].pop("positive_prediction_contract")
+                old["execution_sha256"] = canonical_json_sha256(old["execution_contract"])
+                self.assertFalse(reference_arm_execution_matches(old, comparison, local))
+            self.assertFalse(reference_arm_execution_matches(
+                {"arm_id": "C131", "execution_sha256": "f" * 64}, comparison, local))
         original_fingerprint.cache_clear()
         new_fingerprint.cache_clear()
         self.assertEqual(before, (original_fingerprint("net_pnl"), new_fingerprint()))

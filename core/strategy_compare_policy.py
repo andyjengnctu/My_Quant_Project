@@ -641,13 +641,7 @@ def get_strategy_compare_suite(suite_id: str) -> dict[str, object]:
             dl_id = str(arm.get("dl_id") or "").strip()
             source = dict(STRATEGY_DL_SOURCES.get(dl_id) or {})
             selected_primary = str(source.get("experiment_profile") or "") in selected_profiles
-            auxiliary_id = str((arm.get("dl_runtime_options") or {}).get("positive_dl_id") or "")
-            auxiliary = STRATEGY_DL_SOURCES.get(auxiliary_id) if auxiliary_id else None
-            selected_auxiliary = (not auxiliary_id or (
-                auxiliary is not None
-                and str(auxiliary.get("experiment_profile") or "") in selected_profiles
-            ))
-            if selected_primary and selected_auxiliary:
+            if selected_primary:
                 active_arm_ids.append(arm_id)
         active = tuple(active_arm_ids)
         active_set = set(active)

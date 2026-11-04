@@ -387,7 +387,6 @@ BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES = (
     ("MR-13CN", "daily_universal_formal_mintrade_fullcycle_netr_per_seed_full_list_ndcg_pairwise"),
     ("MR-13CO", "daily_universal_formal_mintrade_fullcycle_netpnl_per_seed_full_list_ndcg_pairwise"),
     ("MR-13CP", "daily_universal_formal_mintrade_fullcycle_netpnl_positive_binary"),
-    ("MR-13CS", "true_daily_universal_mintrade_fullcycle_netpnl_rank"),
     ("MR-13CT", "true_daily_universal_mintrade_fullcycle_netpnl_positive_binary"),
     # Archived AO/CH and historical identities/artifacts remain retained; CI is active for R40 comparison.
 )

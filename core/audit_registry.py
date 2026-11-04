@@ -149,9 +149,9 @@ AUDIT_REUSABLE_REPORTS: dict[str, dict[str, Any]] = {
                     {"target": "DailyUniversal_MinTrade_NetPnL_Direct", "description": "Same full-cycle Min NetPnL perfect daily ranks; canonical No-K/No-R0 selector", "score_source": "DailyUniversal_MinTrade_NetPnL", "selector": "direct"},
                     {"target": "DailyUniversal_MinTrade_NetPnL_Positive", "description": "Formal perfect dual-output NetPnL rank plus Positive membership under Exact K/R0; common model-score admission", "score_source": "DailyUniversal_MinTrade_NetPnL", "selector": "exact", "positive_output": "netpnl_positive_probability_v1", "strategy_arm_id": "C125"},
                     {"target": "DailyUniversal_MinTrade_NetPnL_Positive_Direct", "description": "Formal perfect dual-output NetPnL rank plus Positive membership under Direct No-K/No-R0; historical raw-gated 204.88 is NON-PIT evidence, not reusable", "score_source": "DailyUniversal_MinTrade_NetPnL", "selector": "direct", "positive_output": "netpnl_positive_probability_v1", "strategy_arm_id": "C126"},
-                    {"target": "TrueDailyUniversal_MinTrade_NetPnL_Positive", "description": "Every feature-eligible stock-day has an independent next-session prior-close limit buy attempt; canonical full-cycle Min broker NetPnL, perfect rank plus Positive output, Exact K/R0", "score": "daily_trade_path_true_net_pnl", "provider": "daily_trade40_profile", "horizon_mode": "full_trade_cycle", "selector": "exact", "positive_output": "netpnl_positive_probability_v1", "strategy_arm_id": "C125"},
+                    {"target": "TrueDailyUniversal_MinTrade_NetPnL_Positive", "description": "Every feature-eligible stock-day has an independent next-session prior-close limit buy attempt; canonical full-cycle Min broker NetPnL, perfect rank plus Positive output, Exact K/R0", "score": "daily_trade_path_true_net_pnl", "provider": "daily_trade40_profile", "horizon_mode": "full_trade_cycle", "selector": "exact", "positive_output": "netpnl_positive_probability_v1", "strategy_arm_id": "C135"},
                     {"target": "TrueDailyUniversal_MinTrade_NetPnL_Positive", "description": "Every feature-eligible stock-day has an independent next-session prior-close limit buy attempt; canonical full-cycle Min broker NetPnL, perfect rank plus Positive output, Exact K/R0", "score": "daily_trade_path_true_net_pnl", "provider": "daily_trade40_profile", "horizon_mode": "full_trade_cycle", "selector": "exact", "positive_output": "netpnl_positive_probability_v1", "strategy_arm_id": "C133", "strategy": "Daily"},
-                    {"target": "TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct", "description": "Same hypothetical daily entry full-cycle Min truth / Positive output; Direct No-K/No-R0", "score_source": "TrueDailyUniversal_MinTrade_NetPnL_Positive", "selector": "direct", "positive_output": "netpnl_positive_probability_v1", "strategy_arm_id": "C126"},
+                    {"target": "TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct", "description": "Same hypothetical daily entry full-cycle Min truth / Positive output; Direct No-K/No-R0", "score_source": "TrueDailyUniversal_MinTrade_NetPnL_Positive", "selector": "direct", "positive_output": "netpnl_positive_probability_v1", "strategy_arm_id": "C136"},
                     {"target": "TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct", "description": "Same hypothetical daily entry full-cycle Min truth / Positive output; Direct No-K/No-R0", "score_source": "TrueDailyUniversal_MinTrade_NetPnL_Positive", "selector": "direct", "positive_output": "netpnl_positive_probability_v1", "strategy_arm_id": "C134", "strategy": "Daily"},
                 ),
             },
@@ -280,3 +280,38 @@ __all__ = [
     "resolve_current_oracle_comparisons",
     "oracle_comparison_key",
 ]
+
+
+def oracle_supervised_target_id(comparison):
+    """Resolve the canonical supervised label for a raw Oracle score recipe.
+
+    Oracle truth artifacts and supervised FIT artifacts can have different
+    artifact IDs; their economic target correspondence is owned here, not
+    inferred from model names by each consumer. Callers resolve score_source
+    to its raw recipe before using this function.
+    """
+    from core.breakout_quality_runtime import (
+        DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
+        DAILY_TERMINAL_R40_TARGET_ID, DAILY_TERMINAL_MAE_GATED_T40_TARGET_ID,
+        DAILY_FULL_HORIZON_MAE_GATED_MFE_T40_TARGET_ID,
+        DAILY_FORMAL_MINTRADE40_NETR_TARGET_ID,
+        DAILY_FORMAL_MINTRADE_FULLCYCLE_NETR_TARGET_ID,
+        DAILY_FORMAL_MINTRADE_FULLCYCLE_NETPNL_TARGET_ID,
+        TRUE_DAILY_MINTRADE_FULLCYCLE_NETPNL_TARGET_ID,
+    )
+    recipe = comparison.get("score")
+    if comparison.get("horizon_mode") == "full_trade_cycle":
+        return {
+            "daily_trade_path_net_r": DAILY_FORMAL_MINTRADE_FULLCYCLE_NETR_TARGET_ID,
+            "daily_trade_path_net_pnl": DAILY_FORMAL_MINTRADE_FULLCYCLE_NETPNL_TARGET_ID,
+            "daily_trade_path_true_net_pnl": TRUE_DAILY_MINTRADE_FULLCYCLE_NETPNL_TARGET_ID,
+        }.get(recipe)
+    if recipe == "daily_trade_path_net_r":
+        return (DAILY_FORMAL_MINTRADE40_NETR_TARGET_ID
+                if comparison.get("horizon_sessions") in (None, 40) else None)
+    return {
+        "mfe": DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
+        "terminal_r": DAILY_TERMINAL_R40_TARGET_ID,
+        "terminal_mae_gate": DAILY_TERMINAL_MAE_GATED_T40_TARGET_ID,
+        "mfe_mae_gate": DAILY_FULL_HORIZON_MAE_GATED_MFE_T40_TARGET_ID,
+    }.get(recipe)

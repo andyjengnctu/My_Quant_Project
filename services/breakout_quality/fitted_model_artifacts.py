@@ -2386,6 +2386,8 @@ def load_model_from_fitted_checkpoint(torch, *, contract: FittedModelContract, b
         model_spec=checkpoint.get("model_spec"),
     ).to(plan.device)
     model.load_state_dict(dict(checkpoint.get("model_state_dict") or {}), strict=True)
+    from filters.breakout_quality.positive_rank_calibration import restore_score_calibration
+    restore_score_calibration(model, bundle.profile, checkpoint)
     model.eval()
     if count_trainable_parameters(model) != int(
         dict(contract.manifest.get("fitting_result") or {}).get("trainable_parameter_count", count_trainable_parameters(model))

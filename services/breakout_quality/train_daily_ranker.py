@@ -1313,6 +1313,7 @@ def run(args) -> int:
             args=args,
             plan=plan,
             evaluate_train_metrics=False,
+            information_cutoff=str(bundle.outer_policy["selection_end_date"]),
         )
         selected_epoch = int(epoch_selection["best_epoch"])
         model, final_history = ranker_api.fit_final(
@@ -1327,12 +1328,15 @@ def run(args) -> int:
             args=args,
             plan=plan,
             phase_label="Daily Selection完整重訓",
+            epoch_selection=epoch_selection,
         )
+        from filters.breakout_quality.positive_rank_calibration import checkpoint_calibration_payload
         fitted_model_action = "BUILD"
         trainable_parameter_count = count_trainable_parameters(model)
         total_parameter_count = sum(int(parameter.numel()) for parameter in model.parameters())
         torch.save(
             {
+                **checkpoint_calibration_payload(model, bundle.profile),
                 "model_state_dict": {key: value.detach().cpu() for key, value in model.state_dict().items()},
                 "feature_count": int(bundle.feature_bank.shape[2]),
                 "context_count": int(bundle.group_context.shape[1]),
@@ -1515,7 +1519,7 @@ def run(args) -> int:
             forward_components["predicted_adverse_r"][oos_component_positions],
         )
     else:
-        if training_policy.categorical_class_count is not None:
+        if training_policy.categorical_class_count is not None or bundle.profile.score_calibration is not None:
             validation_scores, validation_sidecars = predict_score_output_payload(
                 torch, model, bundle, split.validation_ids,
                 batch_size=int(args.evaluation_batch_size), plan=plan,

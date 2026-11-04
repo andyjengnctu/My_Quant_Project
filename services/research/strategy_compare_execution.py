@@ -98,24 +98,6 @@ def resolve_strategy_compare_ranking_options(
     """
 
     options = dict(arm.dl_runtime_options or {})
-    positive_dl_id = str(options.get("positive_dl_id") or "").strip()
-    if positive_dl_id:
-        if positive_dl_id not in settings.dl_sources:
-            raise ValueError(f"positive-filter arm缺少合法positive_dl_id: {arm.arm_id}")
-        source = settings.dl_sources[positive_dl_id]
-        positive_override = dict((score_overrides or {}).get(positive_dl_id) or {})
-        if not positive_override and str(source.score_source) == SCORE_SOURCE_SELECTION_POINT_IN_TIME:
-            mode_paths = selection_pit_mode_paths(source, project_root=project_root)
-            if mode_paths is not None:
-                positive_override = {"score_path": mode_paths["score"], "manifest_path": mode_paths["manifest"]}
-        options.update({
-            "positive_filter_id": str(source.filter_id),
-            "positive_score_source": str(source.score_source),
-            "positive_model_architecture": str(source.model_architecture),
-            "positive_experiment_profile": str(source.experiment_profile),
-            "positive_score_path_override": str(positive_override.get("score_path") or ""),
-            "positive_score_manifest_path_override": str(positive_override.get("manifest_path") or ""),
-        })
     if arm.dl_runtime_mode not in {
         STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_SAFETY_CONSTRAINED_OPTIMAL,
         STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_RESIDUAL_SAFETY_CONSTRAINED_OPTIMAL,

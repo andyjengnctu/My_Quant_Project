@@ -2632,7 +2632,7 @@ class RealPathStrategyCompareDiagnosticsRegressionCases(unittest.TestCase):
         )
         arm = SimpleNamespace(
             dl_id='CM', rule_policy='current', dl_runtime_options={},
-            dl_runtime_mode='unconstrained_ranking',
+            dl_runtime_mode='unconstrained_ranking', entry_strategy='Breakout',
         )
         with patch.object(execution, 'run_comparison', return_value={'done': True}) as replay, \
              patch.object(execution, '_arm_runtime_spec', return_value={

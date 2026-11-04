@@ -4214,6 +4214,7 @@ def select_epoch(
     evaluate_train_metrics: bool = True,
     selection_metrics_only: bool = False,
     progress_callback=None,
+    information_cutoff: str | None = None,
 ) -> dict[str, Any]:
     profile = get_breakout_quality_experiment_profile(args.experiment_profile)
     research_spec = get_continuous_ranker_research_spec(str(args.experiment_profile))
@@ -4273,6 +4274,11 @@ def select_epoch(
         plan=plan,
         stage="inner_train_epoch_selection",
     )
+    from filters.breakout_quality.positive_rank_calibration import calibration_enabled, fit_score_calibration
+    calibrate = calibration_enabled(profile)
+    if calibrate and not information_cutoff:
+        raise ValueError("Positive rank calibration requires the canonical FIT information cutoff")
+    best_validation_scores = None
     best_epoch = 0
     best_daily_spearman = -math.inf
     best_primary_mfe_daily_spearman = -math.inf
@@ -4491,6 +4497,8 @@ def select_epoch(
         )
 
         if improved:
+            if calibrate:
+                best_validation_scores = np.array(validation_scores, dtype=np.float32, copy=True)
             best_epoch = int(epoch)
             best_daily_spearman = float(daily_spearman)
             if primary_daily_spearman is not None and math.isfinite(float(primary_daily_spearman)):
@@ -4762,6 +4770,12 @@ def select_epoch(
     }
     if encoder_pretraining_summary is not None:
         result["encoder_pretraining"] = encoder_pretraining_summary
+    if calibrate:
+        result["score_calibration"] = fit_score_calibration(
+            best_validation_scores, raw_target, group_table,
+            train_ids=train_ids, validation_ids=validation_ids,
+            information_cutoff=information_cutoff, selected_epoch=best_epoch, profile=profile,
+        )
     return result
 
 
@@ -4779,6 +4793,7 @@ def fit_final(
     plan,
     phase_label: str = "完整Selection重訓",
     progress_callback=None,
+    epoch_selection: dict | None = None,
 ):
     profile = get_breakout_quality_experiment_profile(args.experiment_profile)
     research_spec = get_continuous_ranker_research_spec(str(args.experiment_profile))
@@ -4806,6 +4821,8 @@ def fit_final(
         plan=plan,
         stage="full_selection_final_refit",
     )
+    from filters.breakout_quality.positive_rank_calibration import attach_score_calibration
+    attach_score_calibration(model, profile, epoch_selection, selected_epoch=int(epochs))
     history: list[dict[str, Any]] = []
     compact_console = compact_console_enabled()
     if not compact_console:

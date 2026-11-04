@@ -368,11 +368,10 @@ class StrategyRobustnessUnitCases(unittest.TestCase):
         from tools.validate.synthetic_frame_utils import write_synthetic_csv_bundle
 
         settings, _, arms, _, _ = _registered_fixture()
-        dual_arms = [arm for arm in arms if arm.dl_enabled
-                     and len(resolve_arm_runtime_dl_source_ids(settings, arm)) > 1]
-        self.assertGreaterEqual(len(dual_arms), 2)
-        # The currently registered dual-source Exact/Direct arms exercise both
-        # selector modes without embedding their experiment IDs into production.
+        positive_arms = [arm for arm in arms if arm.dl_enabled
+                         and (arm.dl_runtime_options or {}).get("positive_score_column")]
+        self.assertGreaterEqual(len(positive_arms), 2)
+        # Registered same-source Positive arms exercise both selector modes.
         fixture = build_synthetic_competing_candidates_case(V16StrategyParams())
         dates = sorted({str(day)[:10] for frame in fixture["frames"].values() for day in frame["Date"]})
         start, end = dates[0], dates[-1]
@@ -385,15 +384,10 @@ class StrategyRobustnessUnitCases(unittest.TestCase):
             params_path.write_text("{}")
             score_file = root / "scores.csv"
             score_file.write_text("fixture")
-            for arm in dual_arms[-2:]:
+            for arm in positive_arms[-2:]:
                 source = settings.dl_sources[arm.dl_id]
                 options = dict(arm.dl_runtime_options or {})
-                secondary = settings.dl_sources[options["positive_dl_id"]]
-                options.update(positive_filter_id=secondary.filter_id,
-                               positive_score_source=secondary.score_source,
-                               positive_model_architecture=secondary.model_architecture,
-                               positive_experiment_profile=secondary.experiment_profile,
-                               positive_score_column="positive_p_positive")
+                self.assertEqual(resolve_arm_runtime_dl_source_ids(settings, arm), (arm.dl_id,))
                 for gate_allows in (True, False):
                     with self.subTest(arm=arm.arm_id, gate_allows=gate_allows):
                         pit = SimpleNamespace(available_from=start, available_through=end,
@@ -572,33 +566,34 @@ class StrategyRobustnessUnitCases(unittest.TestCase):
             )
         self.assertEqual(found[unit]["row"]["score_sha256"], "score-current")
 
-    def test_positive_dual_source_legacy_collision_uses_both_heads(self):
-        """CP's Positive score distinguishes two outcomes with identical CO rank."""
+    def test_positive_single_source_collision_checks_combined_score_artifact(self):
+        """Changed calibrated sidecar cannot reuse an equal-rank old score artifact."""
         from services.research import strategy_multi_seed_robustness as robust
         settings, cfg, arms, seeds, contract = _registered_fixture()
         arm = next(a for a in arms if a.dl_enabled and
-                   len(resolve_arm_runtime_dl_source_ids(settings, a)) == 2)
+                   (a.dl_runtime_options or {}).get("positive_score_column"))
         dl_ids = resolve_arm_runtime_dl_source_ids(settings, arm)
+        self.assertEqual(dl_ids, (arm.dl_id,))
         seed = seeds[0]
         cfg = SimpleNamespace(
             reuse_completed=True, benchmark_id=cfg.benchmark_id,
             model_seed_sensitive_arm_ids=(arm.arm_id,), resolved_seeds=(seed,),
-            output_root="outputs/test_dual_score_revision",
+            output_root="outputs/test_inline_positive_score_revision",
         )
         rank = {"selected_epoch": 2, "fold_count": 6, "model_sha256": "same-rank-model",
                 "score_sha256": "same-rank-score", "score_available_from": "2021-01-01",
                 "score_available_through": "2026-03-02"}
-        gate = dict(rank, model_sha256="gate-current-model", score_sha256="gate-current-score")
-        old_gate = dict(gate, model_sha256="gate-old-model", score_sha256="gate-old-score")
+        current = dict(rank, score_sha256="rank-plus-current-calibration")
+        previous = dict(rank, score_sha256="rank-plus-previous-calibration")
         sources = []
         attributions = {}
-        for label, positive in (("current", gate), ("old", old_gate)):
-            root = Path("/tmp") / ("signed_dual_" + label)
+        for label, combined in (("current", current), ("old", previous)):
+            root = Path("/tmp") / ("signed_inline_" + label)
             source_contract = deepcopy(contract)
             source_contract["fingerprint"] = label
-            runtime_sources = {dl_ids[0]: rank, dl_ids[1]: positive}
+            runtime_sources = {dl_ids[0]: combined}
             row = {"arm_id": arm.arm_id, "seed": seed,
-                   "score_sha256": rank["score_sha256"],
+                   "score_sha256": combined["score_sha256"],
                    "runtime_source_identity_sha256": canonical_json_sha256(runtime_sources)}
             attributions[str(root)] = {"runtime_training_identities": runtime_sources,
                                        "training_identity": dict(row),
@@ -610,7 +605,7 @@ class StrategyRobustnessUnitCases(unittest.TestCase):
                                        "return_pct": 2.0, "is_complete_year": True,
                                    }]), "evidence": {"artifacts": {}}}))
         def canonical_score(*, source, **_kw):
-            return ((rank if source.dl_id == dl_ids[0] else gate), "READY")
+            return (current, "READY")
         with (
             patch.object(robust, "_iter_registered_robustness_scientific_runs",
                          return_value=iter(reversed(sources))),

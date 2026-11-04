@@ -985,6 +985,8 @@ def _rescore_fold_from_compatible_checkpoint(
             model_spec=checkpoint["model_spec"],
         )
         model.load_state_dict(checkpoint["model_state_dict"], strict=True)
+        from filters.breakout_quality.positive_rank_calibration import restore_score_calibration
+        restore_score_calibration(model, bundle.profile, checkpoint)
         model.to(plan.device)
         model.eval()
         scores, score_extras = _predict_primary_score_payload(
@@ -1736,6 +1738,7 @@ def _train_fold(
             BREAKOUT_QUALITY_PIT_EPOCH_SELECTION_LIGHTWEIGHT_METRICS
         ),
         progress_callback=progress_callback,
+        information_cutoff=fold_contract["model_information_cutoff"],
     )
     selected_epoch = int(epoch_selection["best_epoch"])
     model, final_history = fit_final(
@@ -1747,6 +1750,7 @@ def _train_fold(
         args=args,
         plan=plan,
         progress_callback=progress_callback,
+        epoch_selection=epoch_selection,
     )
     scores, score_extras = _predict_primary_score_payload(
         torch, model, bundle, ids["score_ids"], args=args, plan=plan

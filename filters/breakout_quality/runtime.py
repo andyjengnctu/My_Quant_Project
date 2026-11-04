@@ -220,7 +220,8 @@ def audit_oracle_truth_score_context(
             raise ValueError("Oracle score start requires an information-date lookup")
     if _ORACLE_TRUTH_SCORES.get() is not None:
         raise RuntimeError("Oracle Audit不得巢狀覆寫未來真值score")
-    requires_positive = bool(dict(ranking_options or {}).get("positive_dl_id"))
+    from core.positive_netpnl_contract import requires_positive_score
+    requires_positive = requires_positive_score(dict(ranking_options or {}))
     if requires_positive != (positive_scores is not None):
         raise ValueError("Oracle dual-output score requires matching Positive score map")
     with audit_oracle_ranking_policy_context(
@@ -326,7 +327,8 @@ def resolve_breakout_quality_candidate_rank(
             "score_date": date, "filter_id": str(filter_id),
             "score_source": SCORE_SOURCE_AUDIT_ORACLE_FUTURE_TRUTH,
         }
-        if dict(context.ranking_options or {}).get("positive_dl_id"):
+        from core.positive_netpnl_contract import requires_positive_score
+        if requires_positive_score(dict(context.ranking_options or {})):
             positive_values = _ORACLE_POSITIVE_SCORES.get()
             if positive_values is None:
                 raise RuntimeError("Oracle Positive score output is missing")
@@ -467,35 +469,24 @@ def resolve_breakout_quality_candidate_rank(
                 "safety_model_architecture": safety_architecture,
                 "safety_experiment_profile": safety_profile,
             })
-        positive_dl_id = str(options.get("positive_dl_id") or "").strip()
-        if positive_dl_id:
-            required = (
-                "positive_filter_id", "positive_score_source", "positive_model_architecture",
-                "positive_experiment_profile", "positive_score_column",
-            )
-            if any(not str(options.get(key) or "").strip() for key in required):
-                raise ValueError("positive ranking options lack complete secondary source identity")
-            source = str(options["positive_score_source"])
+        from core.positive_netpnl_contract import requires_positive_score
+        if requires_positive_score(options):
             arguments = dict(
                 project_root=root, ticker=str(ticker), signal_date=lookup_date,
-                filter_id=str(options["positive_filter_id"]),
-                model_architecture=str(options["positive_model_architecture"]),
-                experiment_profile=str(options["positive_experiment_profile"]),
-                score_path_override=str(options.get("positive_score_path_override") or "") or None,
+                filter_id=str(filter_id),
+                model_architecture=str(context.model_architecture),
+                experiment_profile=str(context.experiment_profile),
+                score_path_override=context.score_path_override,
                 score_column=str(options["positive_score_column"]),
             )
-            if source == SCORE_SOURCE_SELECTION_POINT_IN_TIME:
+            if context.score_source == SCORE_SOURCE_SELECTION_POINT_IN_TIME:
                 positive_payload = lookup_selection_point_in_time_candidate_score(
-                    **arguments,
-                    manifest_path_override=str(options.get("positive_score_manifest_path_override") or "") or None,
+                    **arguments, manifest_path_override=context.score_manifest_path_override,
                 )
-            elif source == SCORE_SOURCE_CONTINUOUS_RANKER_OOS:
-                positive_payload = lookup_continuous_ranker_oos_candidate_score(**arguments)
             else:
-                raise ValueError("positive secondary model must use PIT or OOS score source")
+                positive_payload = lookup_continuous_ranker_oos_candidate_score(**arguments)
             payload = dict(payload)
             payload.update({
-                "positive_dl_id": positive_dl_id,
                 "positive_probability": positive_payload.get("score"),
                 "positive_available": bool(positive_payload.get("available", False)),
                 "positive_score_date": str(positive_payload.get("score_date") or ""),

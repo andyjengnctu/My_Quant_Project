@@ -1177,23 +1177,20 @@ def _validate_strategy_comparison_arm_runtime(settings: StrategyComparisonSettin
                 )
             if options.get("selection_only") is not True:
                 raise ValueError(f"arm {key} Excess-Alpha constrained必須selection_only=True")
-        positive_dl_id = str(options.get("positive_dl_id") or "").strip()
-        if positive_dl_id:
-            from core.positive_netpnl_contract import POSITIVE_PROBABILITY_THRESHOLD, POSITIVE_P_CLASS_COLUMN
+        from core.positive_netpnl_contract import requires_positive_score, POSITIVE_PROBABILITY_THRESHOLD
+        if requires_positive_score(options):
+            from core.breakout_quality_registry import get_breakout_quality_experiment_profile
             if arm.dl_runtime_mode not in {
                 STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL,
                 STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0,
             }:
-                raise ValueError(f"arm {key} Positive filter requires Exact or Direct score mode")
-            if positive_dl_id not in settings.dl_sources or arm.dl_id not in settings.dl_sources:
-                raise ValueError(f"arm {key} Positive filter requires both registered PIT score sources")
+                raise ValueError(f"arm {key} Positive filter requires Exact or Direct mode")
             primary = settings.dl_sources[arm.dl_id]
-            secondary = settings.dl_sources[positive_dl_id]
+            profile = get_breakout_quality_experiment_profile(primary.experiment_profile)
             if (primary.score_source != "selection_point_in_time"
-                    or secondary.score_source != primary.score_source
-                    or options.get("positive_score_column") != POSITIVE_P_CLASS_COLUMN
+                    or profile.score_calibration is None
                     or options.get("positive_probability_threshold") != POSITIVE_PROBABILITY_THRESHOLD):
-                raise ValueError(f"arm {key} Positive filter source/threshold contract inconsistent")
+                raise ValueError(f"arm {key} requires a calibrated single-model PIT score contract")
         if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL:
             if options.get("preserve_k_r0") is not True:
                 raise ValueError(f"arm {key} Score constrained必須preserve_k_r0=True")

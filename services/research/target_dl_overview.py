@@ -13,7 +13,8 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from core.audit_policy import get_active_audit_module_id
-from core.audit_registry import resolve_current_oracle_comparisons, oracle_comparison_key
+from core.audit_registry import (resolve_current_oracle_comparisons, oracle_comparison_key,
+                                 oracle_supervised_target_id)
 from core.breakout_quality_registry import (
     SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES,
     get_predicted_upside_context_contract,
@@ -21,14 +22,6 @@ from core.breakout_quality_registry import (
     get_continuous_ranker_research_spec,
 )
 from core.breakout_quality_runtime import (
-    DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
-    DAILY_TERMINAL_R40_TARGET_ID,
-    DAILY_TERMINAL_MAE_GATED_T40_TARGET_ID,
-    DAILY_FULL_HORIZON_MAE_GATED_MFE_T40_TARGET_ID,
-    DAILY_FORMAL_MINTRADE40_NETR_TARGET_ID,
-    DAILY_FORMAL_MINTRADE_FULLCYCLE_NETR_TARGET_ID,
-    DAILY_FORMAL_MINTRADE_FULLCYCLE_NETPNL_TARGET_ID,
-    TRUE_DAILY_MINTRADE_FULLCYCLE_NETPNL_TARGET_ID,
     CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_ALL,
     CONTINUOUS_RANKER_TARGET_POSTPROCESS_NONE,
     CONTINUOUS_RANKER_TARGET_CONTEXT_TRANSFORM_NONE,
@@ -69,12 +62,6 @@ from config.strategy_compare import STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE
 
 
 REPORT_ID = "research.target_dl_validation_overview"
-_ORACLE_SCORE_TARGETS = {
-    "mfe": DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
-    "terminal_r": DAILY_TERMINAL_R40_TARGET_ID,
-    "terminal_mae_gate": DAILY_TERMINAL_MAE_GATED_T40_TARGET_ID,
-    "mfe_mae_gate": DAILY_FULL_HORIZON_MAE_GATED_MFE_T40_TARGET_ID,
-}
 _EXACT_MODE = "resource-aware-continuous-score-constrained-optimal"
 _DIRECT_MODE = "resource-aware-continuous-score-no-k-no-r0"
 
@@ -146,20 +133,7 @@ def _oracle_rows(root: Path, definition, versions: Mapping[str, tuple]):
         raw = item
         if item.get("score_source"):
             raw = next((other for other in comparisons if other["target"] == item["score_source"]), {})
-        label = _ORACLE_SCORE_TARGETS.get(raw.get("score"))
-        # Trade-path truth is not a single generic label: distinguish the
-        # fixed 40-session NetR from 60-session and full-cycle NetR/NetPnL.
-        if raw.get("score") == "daily_trade_path_net_r":
-            if raw.get("horizon_mode") == "full_trade_cycle":
-                label = DAILY_FORMAL_MINTRADE_FULLCYCLE_NETR_TARGET_ID
-            elif raw.get("horizon_sessions") in (None, 40):
-                label = DAILY_FORMAL_MINTRADE40_NETR_TARGET_ID
-        elif (raw.get("score") == "daily_trade_path_net_pnl"
-              and raw.get("horizon_mode") == "full_trade_cycle"):
-            label = DAILY_FORMAL_MINTRADE_FULLCYCLE_NETPNL_TARGET_ID
-        elif (raw.get("score") == "daily_trade_path_true_net_pnl"
-              and raw.get("horizon_mode") == "full_trade_cycle"):
-            label = TRUE_DAILY_MINTRADE_FULLCYCLE_NETPNL_TARGET_ID
+        label = oracle_supervised_target_id(raw)
         # A hindsight-only eligibility intervention is not a deployable DL
         # model or ordinary Direct strategy, even when its score source is
         # identical. In particular Positive_Direct must NOT claim C124.
@@ -233,7 +207,7 @@ def _oracle_rows(root: Path, definition, versions: Mapping[str, tuple]):
                     # Historical v11/v12 results have no proof of which Daily
                     # strategy arm generated them.  Never present one as a
                     # current C133/C134 Oracle score-consumption result.
-                    consumer_matches = strategy == "Breakout"
+                    consumer_matches = False  # Explicit current consumer requires signed evidence.
                 else:
                     consumer_matches = reference_arm_execution_matches(
                         published_references.get(key), current_comparison, settings)
@@ -486,8 +460,8 @@ def _strategy_bindings(*, target_names: tuple[str, ...],
                     or arm.get("rule_policy") != base_arm["rule_policy"]):
                 continue
             options = dict(arm.get("dl_runtime_options") or {})
-            positive_dl_id = str(options.get("positive_dl_id") or "")
-            if bool(positive_dl_id) != (target in positive_targets):
+            from core.positive_netpnl_contract import requires_positive_score
+            if requires_positive_score(options) != (target in positive_targets):
                 continue
             dl = STRATEGY_DL_SOURCES.get(arm.get("dl_id")) or {}
             primary_profile = str(dl.get("experiment_profile") or "")
@@ -500,7 +474,7 @@ def _strategy_bindings(*, target_names: tuple[str, ...],
             if (primary_profile not in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES
                     or not _is_exact_supervision(primary_profile, str(score_targets[target]))):
                 continue
-            reporting_source = (STRATEGY_DL_SOURCES.get(positive_dl_id) or {}) if positive_dl_id else dl
+            reporting_source = dl
             profile = str(reporting_source.get("experiment_profile") or "")
             if (profile not in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES
                     or not _is_exact_supervision(profile, str(score_targets[target]))):

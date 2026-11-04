@@ -342,6 +342,7 @@ def select_epoch(
     plan,
     selection_metrics_only: bool = False,
     progress_callback=None,
+    information_cutoff: str | None = None,
 ) -> dict[str, Any]:
     evaluate_train_metrics = (
         bundle.profile.training_sample_scope
@@ -361,6 +362,7 @@ def select_epoch(
         evaluate_train_metrics=evaluate_train_metrics,
         selection_metrics_only=bool(selection_metrics_only),
         progress_callback=progress_callback,
+        information_cutoff=information_cutoff,
     )
 
 
@@ -374,6 +376,7 @@ def fit_final(
     args,
     plan,
     progress_callback=None,
+    epoch_selection: dict | None = None,
 ):
     return ranker_api.fit_final(
         torch,
@@ -388,6 +391,7 @@ def fit_final(
         plan=plan,
         phase_label="Fold歷史資料重訓",
         progress_callback=progress_callback,
+        epoch_selection=epoch_selection,
     )
 
 
@@ -444,13 +448,12 @@ def predict_score_output_payload(
             {column: probs[:, i].copy() for i, column in enumerate(training_policy.categorical_score_columns)},
         )
     if output_policy is None:
-        return (
-            predict_scores(
-                torch, model, bundle, group_ids,
-                batch_size=int(batch_size), plan=plan,
-            ),
-            {},
+        from filters.breakout_quality.positive_rank_calibration import calibrated_score_columns
+        primary = predict_scores(
+            torch, model, bundle, group_ids,
+            batch_size=int(batch_size), plan=plan,
         )
+        return primary, calibrated_score_columns(model, bundle.profile, primary)
 
     ids = np.asarray(group_ids, dtype=np.int64)
     logits = strict_parallel_batched_logits(
@@ -598,7 +601,9 @@ def build_checkpoint_payload(
 ) -> dict[str, Any]:
     trainable_parameter_count = count_trainable_parameters(model)
     total_parameter_count = sum(int(parameter.numel()) for parameter in model.parameters())
+    from filters.breakout_quality.positive_rank_calibration import checkpoint_calibration_payload
     return {
+        **checkpoint_calibration_payload(model, bundle.profile),
         "model_state_dict": {
             key: value.detach().cpu() for key, value in model.state_dict().items()
         },

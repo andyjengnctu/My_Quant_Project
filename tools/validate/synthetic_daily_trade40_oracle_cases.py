@@ -52,6 +52,7 @@ def definition(*, full_cycle: bool = False):
                                    "DailyUniversal_MinTrade_NetPnL_Direct",
                                    "DailyUniversal_MinTrade60_NetPnL",
                                    "DailyUniversal_MinTrade60_NetPnL_Direct",
+                                   "DailyUniversal_MinTrade_NetPnL_Positive",
                                    "DailyUniversal_MinTrade_NetPnL_Positive_Direct"})})
 
 
@@ -422,7 +423,7 @@ class FormalMinDailyOracleCases(TestCase):
         rows = active.source["oracle_comparisons"]
         self.assertEqual(len(rows), 16)
         self.assertFalse(any("MinTrade60" in str(row["target"]) for row in rows))
-        self.assertEqual(len(definition().source["oracle_comparisons"]), 11)
+        self.assertEqual(len(definition().source["oracle_comparisons"]), 10)
         # Retired from the menu, NOT deleted from the canonical 60D primitive.
         source, evidence = run_source(horizon_sessions=60)
         self.assertTrue(source)
@@ -431,7 +432,7 @@ class FormalMinDailyOracleCases(TestCase):
     def test_existing_comparisons_are_preserved_and_report_contract_unchanged(self):
         d=definition()
         p=oracle._oracle_comparison_plan(d)
-        self.assertEqual(len(p["targets"]),11)
+        self.assertEqual(len(p["targets"]),10)
         self.assertEqual(p["daily_recipes"], {
             EXACT: ("daily_trade_path_net_r", "daily_trade40_profile", 40),
         })
@@ -1110,9 +1111,9 @@ class FormalMinReplayIntegrationCases(TestCase):
         self.addCleanup(worker_override.stop)
         synthetic_score_parity_setup(self)
 
-    def test_four_seed_existing_48_reuse_new_8_runs_same_2021_window(self):
+    def test_existing_targets_reuse_only_two_added_targets_run_per_seed(self):
         # An exact replay-cache regression: adding a stock-day target must NOT
-        # change the original time window or force old 48 treatments to RUN.
+        # change the original time window or force unaffected treatments to RUN.
         from dataclasses import replace
         from filters.breakout_quality.runtime import resolve_breakout_quality_candidate_rank
         from core.breakout_quality_ranking_context import get_breakout_quality_ranking_source_context
@@ -1198,12 +1199,12 @@ class FormalMinReplayIntegrationCases(TestCase):
              patch.object(oracle,"_metrics",side_effect=metrics):
             root=Path(tmp)
             previous=oracle.run_formal_audit(old,project_root=root,quiet=True)
-            self.assertEqual(len(previous["oracles"]),9)
-            self.assertEqual(run.call_count,40)
+            self.assertEqual(len(previous["oracles"]),8)
+            self.assertEqual(run.call_count,36)
             updated=oracle.run_formal_audit(active,project_root=root,quiet=True)
-            self.assertEqual(run.call_count,48,"40 certified reuses + only 8 new replay runs")
+            self.assertEqual(run.call_count,44,"36 certified reuses + only 8 new replay runs")
             self.assertEqual({call.kwargs["start_date"] for call in run.call_args_list},{"2021-01-01"})
-            self.assertEqual(len(updated["oracles"]),11)
+            self.assertEqual(len(updated["oracles"]),10)
             self.assertEqual(len(observed),8)
             self.assertTrue(all(score==.625 and dt=="2025-01-03" for _,score,dt,_ in observed))
             exact_mode={mode for name,_,_,mode in observed if "_Direct" not in name}
@@ -1214,7 +1215,7 @@ class FormalMinReplayIntegrationCases(TestCase):
             self.assertEqual(rows[EXACT]["delta_romd_vs_c96"],2.0)
             self.assertEqual(rows[DIRECT]["delta_romd_vs_c96"],-1.0)
             oracle.run_formal_audit(active,project_root=root,quiet=True)
-            self.assertEqual(run.call_count,48,"second run must REUSE all 48")
+            self.assertEqual(run.call_count,44,"second run must REUSE all 44")
             self.assertEqual(source.call_count,4,"warm Replay never regenerates Min truth")
             # A new calculation revision must build its new truth and preserve the
             # previous completed identities; unchanged warm receipts need no
@@ -1230,7 +1231,7 @@ class FormalMinReplayIntegrationCases(TestCase):
             with patch("services.audit.daily_trade40_oracle.truth_producer_fingerprint",return_value="f"*64), \
                  patch.dict(DAILY_CALCULATION_REVISIONS, {"daily_trade_path_net_r": 2}):
                 oracle.run_formal_audit(active,project_root=root,quiet=True)
-            self.assertEqual(run.call_count,56,"only changed Min source replays need RUN")
+            self.assertEqual(run.call_count,52,"only changed Min source replays need RUN")
             self.assertEqual(source.call_count,8)
 
 
@@ -1346,7 +1347,7 @@ class FullcyclePositiveNetPnLDiagnosticCases(TestCase):
             with self.assertRaisesRegex(ValueError, 'digest mismatch'):
                 read_evidence(output)
 
-    def test_positive_target_alone_adds_gate_and_keeps_original_score_contract(self):
+    def test_positive_target_uses_score_boundary_not_future_outcome_gate(self):
         from core.oracle_positive_gate import POSITIVE_FULLCYCLE_NETPNL_GATE
         from services.audit.catalog import AUDIT_CATALOG, AUDIT_METHOD_CATALOG
         from core.audit_policy import get_audit_definitions
@@ -1358,12 +1359,15 @@ class FullcyclePositiveNetPnLDiagnosticCases(TestCase):
         self.assertEqual(plan['aliases'][original], plan['aliases'][diagnostic])
         self.assertEqual(plan['selectors'][diagnostic], 'direct')
         from services.audit.oracle_execution_policy import execution_gate_policies
-        self.assertEqual(execution_gate_policies(definition, plan),
-                         {diagnostic: POSITIVE_FULLCYCLE_NETPNL_GATE})
+        self.assertEqual(execution_gate_policies(definition, plan), {})
         settings, _, _ = oracle._contract(definition)
         contracts = oracle._resolve_oracle_target_score_contracts(definition, settings, plan)
         self.assertNotIn('hindsight_extra_gate', contracts[original])
-        self.assertEqual(contracts[diagnostic]['hindsight_extra_gate'], POSITIVE_FULLCYCLE_NETPNL_GATE)
+        self.assertNotIn('hindsight_extra_gate', contracts[diagnostic])
+        self.assertEqual(contracts[diagnostic]['perfect_positive_output'],
+                         'netpnl_positive_probability_v1')
+        self.assertEqual(contracts[diagnostic]['positive_score_source_id'],
+                         contracts[diagnostic]['reference_score_source_id'])
         self.assertEqual(get_audit_definitions('breakout_quality'), ())
         self.assertNotIn('fullcycle_positive_direct_trade_attribution', AUDIT_CATALOG)
         self.assertNotIn('fullcycle_positive_direct_trade_attribution', AUDIT_METHOD_CATALOG)
