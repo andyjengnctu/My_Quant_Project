@@ -63,6 +63,8 @@ from filters.breakout_quality.paths import (
     resolve_filter_output_dir,
 )
 from services.research.target_oracle_application import get_formal_oracle_definition
+from services.research.oracle_artifact_contract import reference_arm_execution_binding
+from config.strategy_compare import STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE
 
 
 REPORT_ID = "research.target_dl_validation_overview"
@@ -179,6 +181,13 @@ def _oracle_rows(root: Path, definition, versions: Mapping[str, tuple]):
         seen: set[str] = set()
         seen_scientific_targets: set[str] = set()
         published_definitions = payload.get("definitions")
+        published_references = payload.get("comparison_reference_arms")
+        if published_references is not None and not isinstance(published_references, dict):
+            return targets, comparisons, score_targets, {}, oracle_info
+        # Legacy Breakout results predate arm receipts and keep their original
+        # result identities.  Daily results require explicit matching evidence
+        # after changing the formal reference from C131/C132 to C133/C134.
+        settings = get_strategy_comparison_settings(str(definition.source["strategy_profile_id"]))
         original = [dict(payload.get("baseline") or {}), *payload["oracles"]]
         for item in original:
             if not isinstance(item, dict):
@@ -206,11 +215,22 @@ def _oracle_rows(root: Path, definition, versions: Mapping[str, tuple]):
             if romd is None or winrate is None or not 0.0 <= winrate <= 100.0:
                 metrics.clear()
                 break
-            if (key == baseline or
+            current_comparison = by_comparison.get(key)
+            consumer_matches = True
+            if current_comparison is not None and current_comparison.get("strategy_arm_id"):
+                required_receipt = reference_arm_execution_binding(current_comparison, settings)
+                if published_references is None:
+                    # Historical v11/v12 results have no proof of which Daily
+                    # strategy arm generated them.  Never present one as a
+                    # current C133/C134 Oracle score-consumption result.
+                    consumer_matches = strategy == "Breakout"
+                else:
+                    consumer_matches = published_references.get(key) == required_receipt
+            if (consumer_matches and (key == baseline or
                     (key in current_definitions
                      and isinstance(published_definitions, dict)
                      and published_definitions.get(target) == current_definitions[key]
-                     and strategy == current_strategies[key])):
+                     and strategy == current_strategies[key]))):
                 metrics[key] = {"oracle_romd": romd, "win_rate_pct": winrate}
         # A completed historical report is validated against its OWN published
         # inventory. Project only unchanged current rows; new/redefined Targets
@@ -460,15 +480,19 @@ def _strategy_bindings(*, target_names: tuple[str, ...],
                 continue
             dl = STRATEGY_DL_SOURCES.get(arm.get("dl_id")) or {}
             primary_profile = str(dl.get("experiment_profile") or "")
+            # An explicit Oracle reference arm defines the selector/entry
+            # semantics, not proof that its fitted DL learns this Target.
+            # Both ranking and Positive supervision must match the actual
+            # scientific Target before [1][2] may publish model/strategy SOP
+            # metrics.  In particular CO/CP event NetPnL cannot impersonate
+            # a TrueDaily independently-entered NetPnL model.
             if (primary_profile not in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES
-                    or (not declared_arm_id and
-                        not _is_exact_supervision(primary_profile, str(score_targets[target])))):
+                    or not _is_exact_supervision(primary_profile, str(score_targets[target]))):
                 continue
             reporting_source = (STRATEGY_DL_SOURCES.get(positive_dl_id) or {}) if positive_dl_id else dl
             profile = str(reporting_source.get("experiment_profile") or "")
             if (profile not in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES
-                    or (not declared_arm_id and
-                        not _is_exact_supervision(profile, str(score_targets[target])))):
+                    or not _is_exact_supervision(profile, str(score_targets[target]))):
                 continue
             candidates.setdefault((target, profile), set()).add(str(arm_id))
     # Ambiguous historical strategies must never be selected by ID order.
@@ -509,7 +533,6 @@ def _arm_fit_lineage_current(
 
 def _strategy_rolling_metrics(root: Path, versions: Mapping[str, tuple]):
     # The rolling profile is from the official user-facing Strategy Compare work type.
-    from config.strategy_compare import STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE
     settings = get_strategy_comparison_settings(STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE)
     base = root / settings.output_root
     files = [base / "latest" / "strategy_comparison.json"]

@@ -3675,6 +3675,15 @@ def _oracle_merge_scoped_reports(definition, reports: list[tuple[str, Mapping[st
     # Explicit inventory detects an incomplete *new* mixed-strategy report.
     # Old reports without it remain readable as historical Breakout evidence.
     base["comparison_inventory"] = ["C96", *(oracle_comparison_key(row) for row in registered)]
+    # The aggregate report must identify the formal score consumer that
+    # actually produced each completed Target x Strategy result.  Changing
+    # C131/C132 -> C133/C134 must not silently re-label old Daily returns.
+    from services.research.oracle_artifact_contract import reference_arm_execution_binding
+    settings, _baseline, _exact = _contract(definition)
+    base["comparison_reference_arms"] = {
+        oracle_comparison_key(row): reference_arm_execution_binding(row, settings)
+        for row in registered if row.get("strategy_arm_id")
+    }
     return base
 
 

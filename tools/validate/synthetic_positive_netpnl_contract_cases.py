@@ -28,12 +28,14 @@ from core.strategy_compare_policy import get_strategy_comparison_settings
 from config.strategy_compare import STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE
 from services.research.target_oracle_application import get_formal_oracle_definition
 from core.audit_policy import get_active_audit_module_id
-from core.audit_registry import resolve_current_oracle_comparisons
+from core.audit_registry import resolve_current_oracle_comparisons, oracle_comparison_key
 from core.report_contract_versions import load_report_contract_versions
 from core.research_report_contract import table_contract
 from services.audit.target_oracle_romd import (
     _oracle_comparison_plan, _contract, _resolve_oracle_target_score_contracts,
+    _oracle_merge_scoped_reports,
 )
+from services.research.oracle_artifact_contract import reference_arm_execution_binding
 from services.research.target_dl_overview import (
     _oracle_rows, _strategy_bindings, collect_target_dl_overview, render_target_dl_overview,
 )
@@ -264,11 +266,32 @@ class PositiveNetPnlContractCases(TestCase):
                     "romd": 41.0, "win_rate_pct": 96.0,
                 })
             payload["comparison_inventory"] = list(targets)
+            # Legacy aggregate reports have no per-row source-arm receipt.
+            # Old Breakout remains readable, but previous C131/C132 Daily
+            # results must not be re-labelled as C133/C134 evidence.
+            _, _, _, values, info = read_rows()
+            self.assertEqual(len(values), len(targets) - 2)
+            self.assertNotIn("TrueDailyUniversal_MinTrade_NetPnL_Positive::Daily", values)
+            self.assertNotIn("TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct::Daily", values)
+            settings = get_strategy_comparison_settings(STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE)
+            payload["comparison_reference_arms"] = {
+                oracle_comparison_key(row): reference_arm_execution_binding(row, settings)
+                for row in comparisons if row.get("strategy_arm_id")
+            }
             _, _, _, values, info = read_rows()
             self.assertEqual(len(values), len(targets))
             self.assertEqual(values[positive_direct]["oracle_romd"], 204.88)
             self.assertEqual(values["TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct"]["oracle_romd"], 24.62)
             self.assertEqual(values["TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct::Daily"]["oracle_romd"], 41.0)
+            daily_direct_key = "TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct::Daily"
+            original_receipt = payload["comparison_reference_arms"][daily_direct_key]
+            payload["comparison_reference_arms"][daily_direct_key] = {
+                "arm_id": "C132", "execution_sha256": original_receipt["execution_sha256"],
+            }
+            _, _, _, values, info = read_rows()
+            self.assertNotIn(daily_direct_key, values)
+            self.assertEqual(values["TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct"]["oracle_romd"], 24.62)
+            payload["comparison_reference_arms"][daily_direct_key] = original_receipt
 
             # An incomplete/corrupt original report must not supply partial metrics.
             payload["oracles"].pop()
@@ -285,6 +308,37 @@ class PositiveNetPnlContractCases(TestCase):
             payload["report_contract_fingerprint"] = "incorrect"
             self.assertEqual(read_rows()[3], {})
 
+    def test_scoped_publisher_signs_actual_reference_arm_for_each_strategy(self):
+        definition = get_formal_oracle_definition(get_active_audit_module_id())
+        comparisons = resolve_current_oracle_comparisons(definition.source)
+        baseline = {"target": "C96", "seeds": 8, "romd": 9.17}
+        reports = []
+        for strategy in ("Breakout", "Daily"):
+            subset = [row for row in comparisons if row.get("strategy", "Breakout") == strategy]
+            report = {
+                "baseline": baseline,
+                "seeds": list(range(8)), "benchmark_id": "end_to_end_v2",
+                "dataset": "full", "start_date": "2021-01-01", "end_date": "2026-03-02",
+                "common_cohort": {"cohort_rows": 630589}, "param_artifacts": {},
+                "strategy_profile_id": definition.source["strategy_profile_id"],
+                "definitions": {row["target"]: row["description"] for row in subset},
+                "oracles": [{"target": row["target"], "strategy": strategy} for row in subset],
+            }
+            reports.append((strategy, report))
+        merged = _oracle_merge_scoped_reports(definition, reports)
+        settings = get_strategy_comparison_settings(STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE)
+        references = merged["comparison_reference_arms"]
+        for row in comparisons:
+            if not row.get("strategy_arm_id"):
+                continue
+            key = oracle_comparison_key(row)
+            self.assertEqual(references[key], reference_arm_execution_binding(row, settings))
+        true_daily = "TrueDailyUniversal_MinTrade_NetPnL_Positive"
+        self.assertEqual(references[true_daily]["arm_id"], "C125")
+        self.assertEqual(references[true_daily + "::Daily"]["arm_id"], "C133")
+        self.assertNotEqual(references[true_daily]["execution_sha256"],
+                            references[true_daily + "::Daily"]["execution_sha256"])
+
     def test_report_resolves_positive_exact_and_direct_without_ambiguity(self):
         definition = get_formal_oracle_definition(get_active_audit_module_id())
         targets,_,score_targets,_,_=_oracle_rows(ROOT,definition,{})
@@ -297,6 +351,20 @@ class PositiveNetPnlContractCases(TestCase):
         }
         for key,value in expected.items():
             self.assertEqual(bindings.get(key),value)
+        # A strategy-arm reference in the Oracle registry is not proof of
+        # matching fitted-model supervision. CO/CP use event Min NetPnL, not
+        # TrueDaily's independently-entered stock-day NetPnL. Their existing
+        # C125/C126 Rolling/Robustness must never appear as TrueDaily results.
+        for suffix in ("", "_Direct"):
+            name = "TrueDailyUniversal_MinTrade_NetPnL_Positive" + suffix
+            self.assertFalse(any(target == name for target, _ in bindings))
+            daily_key = name + "::Daily"
+            expected_arm = "C134" if suffix else "C133"
+            self.assertEqual(
+                [(profile, arm) for (target, profile), arm in bindings.items()
+                 if target == daily_key],
+                [("true_daily_universal_mintrade_fullcycle_netpnl_positive_binary", expected_arm)],
+            )
 
 if __name__ == '__main__':
     main(verbosity=2)

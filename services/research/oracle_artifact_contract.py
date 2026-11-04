@@ -527,3 +527,41 @@ class OracleExecutionIndex:
             finally:
                 temporary.unlink(missing_ok=True)
         self.read(context)
+
+
+def reference_arm_execution_binding(
+    comparison: Mapping[str, Any], settings: Any,
+) -> dict[str, str] | None:
+    """Bind a published Oracle row to the exact formal score consumer.
+
+    Oracle target truth need not be trained by this DL.  This receipt proves
+    only which formal arm/score-consumption contract produced the hindsight
+    replay, not that the arm has a matching fitted predictor.  User-facing
+    descriptions are deliberately excluded from execution identity.
+    """
+    arm_id = str(comparison.get("strategy_arm_id") or "").strip()
+    if not arm_id:
+        return None
+    if arm_id not in settings.arms:
+        raise ValueError(f"Oracle reference arm missing: {arm_id}")
+    arm = settings.arms[arm_id]
+    source_ids = [str(arm.dl_id)]
+    auxiliary = str((arm.dl_runtime_options or {}).get("positive_dl_id") or "")
+    if auxiliary:
+        source_ids.append(auxiliary)
+    sources = {}
+    for source_id in source_ids:
+        if source_id not in settings.dl_sources:
+            raise ValueError(f"Oracle reference DL source missing: {source_id}")
+        sources[source_id] = {
+            key: value for key, value in settings.dl_sources[source_id].as_dict().items()
+            if key != "description"
+        }
+    arm_contract = {
+        key: value for key, value in arm.as_dict().items()
+        if key not in {"name", "description"}
+    }
+    return {
+        "arm_id": arm_id,
+        "execution_sha256": canonical_json_sha256({"arm": arm_contract, "sources": sources}),
+    }
