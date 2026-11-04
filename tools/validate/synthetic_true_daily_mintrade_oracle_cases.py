@@ -407,6 +407,93 @@ class OraclePerfectOutputReuseCases(TestCase):
             self.assertEqual(set(preview["preflight"].values()), {"REUSE"})
             self.assertEqual(before, {p: p.read_bytes() for p in root.rglob("*") if p.is_file()})
 
+    def test_legacy_dual_positive_receipts_reuse_single_ranker_oracle_without_replay(self):
+        """Signed old output schema and signed new output schema mean one Oracle.
+
+        This exercises the actual immutable-origin index and its no-index
+        recovery. The old replay is not rewritten, and no target or portfolio
+        producer is called merely to display the REUSE plan.
+        """
+        from services.research.oracle_artifact_contract import (
+            OracleExecutionIndex, oracle_execution_contract,
+        )
+        from core.file_integrity import canonical_json_sha256
+        legacy_sha = "56fdce12e331011e7423c7fa0f1c8b27563b43bbd731fcff938c6a0c602edd05"
+        with TemporaryDirectory() as folder:
+            root = Path(folder)
+            fixture = self._fixture(root, seed_count=1)
+            seed = fixture[1][0]
+            store = fixture[5]
+            index = OracleExecutionIndex(store)
+            contexts = fixture[6]
+            positives = [key for key in contexts if "Positive" in key[1]]
+            self.assertEqual(len(positives), 6)
+            for key in positives:
+                current = contexts[key]
+                native_identity, result = index.read(current)
+                old_context = copy.deepcopy(current)
+                old_options = old_context["ranking_options"]
+                self.assertEqual(old_options.pop("positive_prediction_contract"),
+                                 "single_ranker_calibrated_positive_v2")
+                old_options["positive_dl_id"] = "oracle_perfect_positive_output"
+                old_context["score_contract"]["positive_score_contract_revision"] = (
+                    "positive_netpnl_dual_output_v1")
+                self.assertEqual(oracle_execution_contract(old_context),
+                                 oracle_execution_contract(current))
+                legacy_identity = copy.deepcopy(native_identity)
+                legacy_identity["ranking_options"] = copy.deepcopy(old_options)
+                policy = legacy_identity["replay_policy"]
+                policy["canonical_dl_score_contract"]["positive_score_contract_revision"] = (
+                    "positive_netpnl_dual_output_v1")
+                policy["effective_execution_contract_sha256"] = canonical_json_sha256(old_context)
+                policy["formal_positive_score_output"]["shared_admission_code_sha256"] = legacy_sha
+                store._path(native_identity).unlink()
+                index._path(current).unlink()
+                store.write(legacy_identity, result, origin="verified_legacy_dual_predictor_fixture")
+                index.publish(old_context, legacy_identity, result)
+                restored = index.read(current)
+                self.assertEqual(restored[1], result)
+                self.assertEqual(restored[0], legacy_identity)
+                for field, value in (("price_sha256", "c" * 64),
+                                     ("param_sha256", "e" * 64)):
+                    incompatible = dict(current, **{field: value})
+                    self.assertIsNone(index.read(incompatible))
+                    self.assertIsNone(index.native_completed(incompatible))
+                for field, value in (("positive_probability_threshold", .6),
+                                     ("positive_score_column", "wrong_column"),
+                                     ("positive_prediction_contract", "unknown_v3")):
+                    incompatible = copy.deepcopy(current)
+                    incompatible["ranking_options"][field] = value
+                    self.assertIsNone(index.read(incompatible))
+                    self.assertIsNone(index.native_completed(incompatible))
+                incompatible = copy.deepcopy(current)
+                incompatible["score_contract"]["positive_score_contract_revision"] = "unknown_v3"
+                self.assertIsNone(index.read(incompatible))
+                self.assertIsNone(index.native_completed(incompatible))
+                invalid_producer = copy.deepcopy(legacy_identity)
+                invalid_producer["replay_policy"]["formal_positive_score_output"][
+                    "shared_admission_code_sha256"] = "9" * 64
+                with self.assertRaisesRegex(ValueError, "Positive admission producer not certified"):
+                    index._validate_binding(current, invalid_producer, result)
+                # A future executable gate edit cannot silently inherit this
+                # old signed 0/1 admission semantics with unchanged price/P16.
+                with patch("services.research.oracle_artifact_contract."
+                           "_positive_admission_source_certificate",
+                           return_value=("f" * 64, False)):
+                    with self.assertRaisesRegex(ValueError, "Positive admission producer not certified"):
+                        index._validate_binding(current, legacy_identity, result)
+            before = {p: p.read_bytes() for p in root.rglob("*") if p.is_file()}
+            with self._environment(root, fixture):
+                preview = oracle.preview_oracle_replay_plan(fixture[0], project_root=root)
+            self.assertEqual(set(preview["preflight"].values()), {"REUSE"})
+            self.assertEqual(before, {p: p.read_bytes() for p in root.rglob("*") if p.is_file()})
+            shutil.rmtree(store.cache_root.parent / "execution_index")
+            before = {p: p.read_bytes() for p in root.rglob("*") if p.is_file()}
+            with self._environment(root, fixture):
+                preview = oracle.preview_oracle_replay_plan(fixture[0], project_root=root)
+            self.assertEqual(set(preview["preflight"].values()), {"REUSE"})
+            self.assertEqual(before, {p: p.read_bytes() for p in root.rglob("*") if p.is_file()})
+
     def test_one_missing_daily_seed_hides_only_its_aggregate_without_replay(self):
         from services.research.oracle_artifact_contract import OracleExecutionIndex
         from services.research.target_dl_overview import _oracle_rows

@@ -39,29 +39,102 @@ _REFERENCE_FIELDS = {"reference_arm_id", "reference_score_source_id", "reference
 _SCORE_REFERENCE_FIELDS = _REFERENCE_FIELDS | {"positive_score_source_id", "positive_profile_id"}
 _SCORE_WITNESS_FIELDS = {"canonical_feature_eligible_keys_sha256", "oracle_scored_rows", "source_evidence"}
 
+# The perfect-Positive intervention supplies the *same* signed, continuous
+# Target-percentile rank and exact Positive 0/1 column before and after a
+# predictor-topology change. These are approved Oracle output interfaces,
+# NOT an equivalence of the historical fitted models or their PIT scores.
+_ORACLE_PERFECT_POSITIVE_INTERFACE = "oracle_perfect_netpnl_rank_and_positive_v1"
+_LEGACY_POSITIVE_INTERFACE = "positive_netpnl_dual_output_v1"
+_SINGLE_RANKER_POSITIVE_INTERFACE = "single_ranker_calibrated_positive_v2"
+_POSITIVE_OUTPUT_COLUMN = "positive_p_positive"
+_POSITIVE_OUTPUT_ID = "netpnl_positive_probability_v1"
+_LEGACY_POSITIVE_SOURCE_SHA256 = "56fdce12e331011e7423c7fa0f1c8b27563b43bbd731fcff938c6a0c602edd05"
+# Reviewed executable AST of requires_positive_score, positive_score_admitted,
+# and admit_positive_score_rows, *not* training/label-calibration code. An
+# executable gate change fails this check and cannot inherit the old Replay.
+_REVIEWED_POSITIVE_ADMISSION_AST_SHA256 = "172b6c09afc9d36e4a3844e0e1cd364cafc7e8c85fd37b3d8fa9ab3c20765a12"
+
+
+@lru_cache(maxsize=1)
+def _positive_admission_source_certificate() -> tuple[str, bool]:
+    root = Path(__file__).resolve().parents[2]
+    path = root / "core/positive_netpnl_contract.py"
+    tree = ast.parse(path.read_text(encoding="utf-8-sig"))
+    names = {"requires_positive_score", "positive_score_admitted", "admit_positive_score_rows"}
+    selected = [node for node in tree.body
+                if isinstance(node, ast.FunctionDef) and node.name in names]
+    if len(selected) != len(names):
+        return sha256(path.read_bytes()).hexdigest(), False
+    projected = _CalculationSyntax().visit(ast.Module(body=selected, type_ignores=[]))
+    digest = canonical_json_sha256(_syntax_payload(projected))
+    return sha256(path.read_bytes()).hexdigest(), digest == _REVIEWED_POSITIVE_ADMISSION_AST_SHA256
+
+
+def _approved_perfect_positive_admission(value: Any) -> bool:
+    # Historical binary/dual-model routing is accepted only for the original
+    # reviewed signed producer. The current score-admission function must
+    # retain its reviewed executable meaning; unrelated FIT-only edits do not
+    # affect that check. Unknown historical revisions cannot be asserted equal.
+    current_sha, approved = _positive_admission_source_certificate()
+    return (approved and
+            (value == _ORACLE_PERFECT_POSITIVE_INTERFACE
+             or (is_sha256_hex(value) and value in {
+                 _LEGACY_POSITIVE_SOURCE_SHA256, current_sha})))
+
 
 def oracle_score_contract(contract: Mapping[str, Any]) -> dict[str, Any]:
-    """Perfect outputs replace predictors; predictor names remain provenance only."""
-    return {key: value for key, value in contract.items() if key not in _SCORE_REFERENCE_FIELDS}
+    """Only predictor topology is erased from the signed perfect-score interface."""
+    result = {key: value for key, value in contract.items() if key not in _SCORE_REFERENCE_FIELDS}
+    if (result.get("perfect_positive_output") == _POSITIVE_OUTPUT_ID
+            and result.get("positive_score_column") == _POSITIVE_OUTPUT_COLUMN
+            and result.get("positive_score_contract_revision") in {
+                _LEGACY_POSITIVE_INTERFACE, _SINGLE_RANKER_POSITIVE_INTERFACE}):
+        result["positive_score_contract_revision"] = _ORACLE_PERFECT_POSITIVE_INTERFACE
+    return result
 
 
 def oracle_ranking_options(options: Mapping[str, Any]) -> dict[str, Any]:
-    """Preserve executable option fields, including obsolete historical schemas.
+    """Canonicalize *only* two certified perfect-Positive score-consumers.
 
-    Current arms are validated before execution. History must remain comparable:
-    a well-formed old schema is stale (RUN), not corrupt (BLOCKED), and its
-    retired fields must never be projected away into a current REUSE identity.
+    Ordinary strategy FIT/Score/Replay identities are not affected; they still
+    distinguish independent binary predictors from calibrated rankers. Unknown
+    or malformed Positive options are retained as distinct economic inputs.
     """
-    return dict(options)
+    result = dict(options)
+    positive_keys = {str(key) for key in result if str(key).startswith("positive_")}
+    if not positive_keys:
+        return result
+    allowed = {"positive_dl_id", "positive_prediction_contract", "positive_probability_threshold",
+               "positive_score_column"}
+    old = result.get("positive_dl_id")
+    current = result.get("positive_prediction_contract")
+    threshold = result.get("positive_probability_threshold")
+    valid_threshold = (isinstance(threshold, (int, float)) and not isinstance(threshold, bool)
+                       and 0.0 < float(threshold) < 1.0)
+    if (positive_keys <= allowed and valid_threshold
+            and result.get("positive_score_column") == _POSITIVE_OUTPUT_COLUMN
+            and (("positive_dl_id" in result and "positive_prediction_contract" not in result
+                  and isinstance(old, str) and bool(old.strip()))
+                 or ("positive_dl_id" not in result and "positive_prediction_contract" in result
+                     and current == _SINGLE_RANKER_POSITIVE_INTERFACE))):
+        result.pop("positive_dl_id", None)
+        result.pop("positive_prediction_contract", None)
+        result["oracle_positive_output_interface"] = _ORACLE_PERFECT_POSITIVE_INTERFACE
+    return result
 
 
 def oracle_replay_policy(policy: Mapping[str, Any]) -> dict[str, Any]:
-    """Project reference labels out once, retaining every economic/score input."""
+    """Remove reference names, not score values, effective gates or economics."""
     result = {key: value for key, value in policy.items() if key not in {"exact_arm", "direct_arm"}}
     positive = result.get("formal_positive_score_output")
     if isinstance(positive, Mapping):
-        result["formal_positive_score_output"] = {
-            key: value for key, value in positive.items() if key != "selector_arm_id"}
+        positive = {key: value for key, value in positive.items() if key != "selector_arm_id"}
+        if (positive.get("contract") == _POSITIVE_OUTPUT_ID
+                and set(positive) == {"contract", "shared_admission_code_sha256"}
+                and _approved_perfect_positive_admission(
+                    positive["shared_admission_code_sha256"])):
+            positive["shared_admission_code_sha256"] = _ORACLE_PERFECT_POSITIVE_INTERFACE
+        result["formal_positive_score_output"] = positive
     contract = result.get("canonical_dl_score_contract")
     if isinstance(contract, Mapping):
         result["canonical_dl_score_contract"] = oracle_score_contract(contract)
@@ -537,6 +610,14 @@ class OracleExecutionIndex:
             if policy.get(key) != value:
                 raise ValueError(f"execution reference economic policy differs: {key}")
         if context["score_contract"] is not None:
+            expected_score = context["score_contract"]
+            if expected_score.get("perfect_positive_output") == _POSITIVE_OUTPUT_ID:
+                producer = (identity.get("replay_policy") or {}).get("formal_positive_score_output")
+                if (not isinstance(producer, Mapping)
+                        or producer.get("contract") != _POSITIVE_OUTPUT_ID
+                        or not _approved_perfect_positive_admission(
+                            producer.get("shared_admission_code_sha256"))):
+                    raise ValueError("execution reference Positive admission producer not certified")
             if self.keys(identity) is None:
                 raise ValueError("execution reference missing certified stock-day membership")
             original = oracle_score_contract(policy.get("canonical_dl_score_contract") or {})
@@ -640,7 +721,10 @@ def _reference_arm_payload(arm_id, settings, *, effective):
     if effective:
         arm_contract = {key: value for key, value in arm_contract.items() if key not in {
             "arm_id", "dl_id", "enabled", "robustness_role"}}
-        arm_contract["dl_runtime_options"] = oracle_ranking_options(arm_contract["dl_runtime_options"])
+        # The published reference binding describes the *actual* Research
+        # consumer, not the hypothetical perfect-score substitution. Retain
+        # model-output topology and Replay version in this independent proof.
+        arm_contract["dl_runtime_options"] = dict(arm_contract["dl_runtime_options"])
     return json.loads(json.dumps({"arm": arm_contract, "sources": sources}, sort_keys=True))
 
 
