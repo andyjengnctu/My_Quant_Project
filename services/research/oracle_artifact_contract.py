@@ -36,6 +36,44 @@ FEATURE_UNIVERSE_CALCULATION_REVISION = 1
 REPLAY_CALCULATION_REVISION = 1
 _SCHEMA = 1
 _REFERENCE_FIELDS = {"reference_arm_id", "reference_score_source_id", "reference_profile_id"}
+_SCORE_REFERENCE_FIELDS = _REFERENCE_FIELDS | {"positive_score_source_id", "positive_profile_id"}
+_SCORE_WITNESS_FIELDS = {"canonical_feature_eligible_keys_sha256", "oracle_scored_rows", "source_evidence"}
+
+
+def oracle_score_contract(contract: Mapping[str, Any]) -> dict[str, Any]:
+    """Perfect outputs replace predictors; predictor names remain provenance only."""
+    return {key: value for key, value in contract.items() if key not in _SCORE_REFERENCE_FIELDS}
+
+
+def oracle_ranking_options(options: Mapping[str, Any]) -> dict[str, Any]:
+    """Keep auxiliary admission enabled without binding it to a fitted DL route."""
+    result = dict(options)
+    if result.get("positive_dl_id"):
+        result["positive_dl_id"] = "oracle_perfect_positive_output"
+    return result
+
+
+def oracle_replay_policy(policy: Mapping[str, Any]) -> dict[str, Any]:
+    """Project reference labels out once, retaining every economic/score input."""
+    result = {key: value for key, value in policy.items() if key not in {"exact_arm", "direct_arm"}}
+    positive = result.get("formal_positive_score_output")
+    if isinstance(positive, Mapping):
+        result["formal_positive_score_output"] = {
+            key: value for key, value in positive.items() if key != "selector_arm_id"}
+    contract = result.get("canonical_dl_score_contract")
+    if isinstance(contract, Mapping):
+        result["canonical_dl_score_contract"] = oracle_score_contract(contract)
+    return result
+
+
+def oracle_execution_contract(context: Mapping[str, Any]) -> dict[str, Any]:
+    """The same effective projection serves planning, recovery and publication."""
+    result = dict(context)
+    result["ranking_options"] = oracle_ranking_options(context["ranking_options"])
+    result["replay_policy"] = oracle_replay_policy(context["replay_policy"])
+    if context.get("score_contract") is not None:
+        result["score_contract"] = oracle_score_contract(context["score_contract"])
+    return result
 
 
 class _CalculationSyntax(ast.NodeTransformer):
@@ -291,6 +329,23 @@ def dataset_input_contract(root: Path, filter_id: str) -> dict[str, Any] | None:
     ) if key in data}
 
 
+def _feature_input_requirements(architecture: str) -> dict[str, Any]:
+    from filters.breakout_quality.contract import DEFAULT_LABEL_POLICY
+    from filters.breakout_quality.models.spec import get_model_spec
+    from filters.breakout_quality.models.architectures import get_architecture_descriptor
+    spec = get_model_spec(architecture)
+    descriptor = get_architecture_descriptor(spec.architecture)
+    return {
+        "window_bars": int(spec.input_window_bars or DEFAULT_LABEL_POLICY.feature_window_bars),
+        "dataset_context": bool(spec.use_dataset_context),
+        "requires_market_set": bool(spec.requires_market_set),
+        "derived_context_features": list(spec.derived_context_features),
+        "eligibility_capabilities": {name: descriptor.has_capability(name) for name in (
+            "raw_unadjusted_price_input", "lagged_trade_count_input", "risk_context",
+            "predicted_upside_context", "predicted_safety_context")},
+    }
+
+
 def source_calculation_contract(*, recipe: str, profile_id: str,
                                 horizon: int | None = None,
                                 model_architecture: str | None = None) -> dict[str, Any]:
@@ -299,13 +354,9 @@ def source_calculation_contract(*, recipe: str, profile_id: str,
     profile = get_breakout_quality_experiment_profile(profile_id)
     from dataclasses import asdict
     from core.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
-    from filters.breakout_quality.models.spec import get_model_spec
-    from filters.breakout_quality.models.architectures import get_architecture_descriptor
     architecture = profile.model_architecture or model_architecture
     if not architecture:
         raise ValueError("Oracle feature provider requires the canonical source architecture")
-    input_spec = get_model_spec(architecture)
-    descriptor = get_architecture_descriptor(input_spec.architecture)
     revisions = DAILY_CALCULATION_REVISIONS if recipe in DAILY_CALCULATION_REVISIONS else PRICE_CALCULATION_REVISIONS
     if recipe not in revisions:
         raise ValueError(f"Oracle unregistered source calculation capability: {recipe}")
@@ -323,15 +374,7 @@ def source_calculation_contract(*, recipe: str, profile_id: str,
             # Only requirements consumed by the daily eligibility loader.
             # Head widths, channels, dropout and training objectives do not
             # determine the Oracle's feature-eligible stock-day population.
-            "input_requirements": {
-                "window_bars": int(input_spec.input_window_bars or DEFAULT_LABEL_POLICY.feature_window_bars),
-                "dataset_context": bool(input_spec.use_dataset_context),
-                "requires_market_set": bool(input_spec.requires_market_set),
-                "derived_context_features": list(input_spec.derived_context_features),
-                "eligibility_capabilities": {name: descriptor.has_capability(name) for name in (
-                    "raw_unadjusted_price_input", "lagged_trade_count_input", "risk_context",
-                    "predicted_upside_context", "predicted_safety_context")},
-            },
+            "input_requirements": _feature_input_requirements(architecture),
         },
         "label_policy": DEFAULT_LABEL_POLICY.as_manifest_payload(),
         "score_mapping": "canonical_daily_truth_percentile_v2",
@@ -349,8 +392,7 @@ def execution_context(*, dataset: str, price_sha256: str, param_sha256: str,
                       execution_gate: str | None) -> dict[str, Any]:
     if not is_sha256_hex(price_sha256) or not is_sha256_hex(param_sha256):
         raise ValueError("Oracle execution context requires verified price/P16 identity")
-    policy = dict(replay_policy)
-    policy.pop("exact_arm", None)
+    policy = oracle_replay_policy(replay_policy)
     payload = {
         "schema": _SCHEMA, "purpose": "hindsight_oracle_completed_replay",
         "replay_calculation_revision": REPLAY_CALCULATION_REVISION,
@@ -360,8 +402,8 @@ def execution_context(*, dataset: str, price_sha256: str, param_sha256: str,
         "start_date": start, "end_date": end, "research_cutoff": cutoff,
         "max_positions": int(max_positions), "rotation": "off",
         "evaluation_mode": evaluation_mode, "ranking_policy": ranking_policy,
-        "ranking_options": dict(ranking_options), "replay_policy": policy,
-        "score_contract": ({k: v for k, v in score_contract.items() if k not in _REFERENCE_FIELDS}
+        "ranking_options": oracle_ranking_options(ranking_options), "replay_policy": policy,
+        "score_contract": (oracle_score_contract(score_contract)
                            if score_contract is not None else None),
         "source_contract": dict(source_contract) if source_contract is not None else None,
         "dataset_inputs": dict(dataset_inputs) if dataset_inputs is not None and source_contract is not None else None,
@@ -437,15 +479,33 @@ class OracleExecutionIndex:
         return digest, rows, first, last
 
     def read(self, context: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any]] | None:
-        path = self._path(context)
-        if not path.is_file():
-            return None
+        wanted = oracle_execution_contract(context)
+        path = self._path(wanted)
+        prefix = str(wanted["target"]) + "_"
+        matches = []
+        # Old indexes may contain predictor routing names. Validate their
+        # original SHA and receipt before comparing the effective contracts.
+        # This is a generic projection, never an arm-ID/source-SHA allowlist.
+        for candidate in sorted(path.parent.glob(prefix + "*.json")):
+            if not is_sha256_hex(candidate.stem[len(prefix):]):
+                continue
+            completed = self._read_reference(candidate, wanted)
+            if completed is not None:
+                matches.append(completed)
+        if matches and any(item[1] != matches[0][1] for item in matches[1:]):
+            raise ValueError("Oracle equivalent execution references have conflicting completed results")
+        return matches[0] if matches else None
+
+    def _read_reference(self, path, wanted):
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
             payload = {k: raw[k] for k in ("schema", "context", "origin_identity", "observation_sha256")}
-            if (payload["schema"] != _SCHEMA or payload["context"] != dict(context)
+            recorded = payload["context"]
+            if (payload["schema"] != _SCHEMA or self._path(recorded) != path
                     or raw.get("reference_sha256") != canonical_json_sha256(payload)):
                 raise ValueError("execution reference identity/SHA mismatch")
+            if oracle_execution_contract(recorded) != wanted:
+                return None
             identity = payload["origin_identity"]
             observation = self.store.read(identity)
             if observation is None:
@@ -453,21 +513,23 @@ class OracleExecutionIndex:
             complete = self.store.with_win_rate(identity, observation)
             if complete is None or canonical_json_sha256(complete) != payload["observation_sha256"]:
                 raise ValueError("execution reference completed metrics differ")
-            self._validate_binding(context, identity, complete)
+            self._validate_binding(recorded, identity, complete)
             return dict(identity), complete
         except (OSError, ValueError, KeyError, TypeError) as exc:
             raise ValueError(f"Oracle completed execution reference corrupt: {path.name}: {exc}") from exc
 
     def _validate_binding(self, context, identity, observation):
         for key in ("target", "seed", "start_date", "end_date", "max_positions", "evaluation_mode",
-                    "ranking_policy", "ranking_options", "rotation", "dataset"):
+                    "ranking_policy", "rotation", "dataset"):
             if identity.get(key) != context.get(key):
                 raise ValueError(f"execution reference origin mismatch: {key}")
         if (identity.get("dataset_sha256") != context["price_sha256"]
                 or identity.get("param_sha256") != context["param_sha256"]):
             raise ValueError("execution reference price/P16 differs")
-        policy = identity.get("replay_policy") or {}
-        for key, value in context["replay_policy"].items():
+        if oracle_ranking_options(identity["ranking_options"]) != oracle_ranking_options(context["ranking_options"]):
+            raise ValueError("execution reference selector options differ")
+        policy = oracle_replay_policy(identity.get("replay_policy") or {})
+        for key, value in oracle_replay_policy(context["replay_policy"]).items():
             if key == "oracle_parity_implementation" and context["target"] == "C96":
                 continue
             if policy.get(key) != value:
@@ -475,11 +537,27 @@ class OracleExecutionIndex:
         if context["score_contract"] is not None:
             if self.keys(identity) is None:
                 raise ValueError("execution reference missing certified stock-day membership")
-            original = policy.get("canonical_dl_score_contract") or {}
-            for key, value in context["score_contract"].items():
+            original = oracle_score_contract(policy.get("canonical_dl_score_contract") or {})
+            for key, value in oracle_score_contract(context["score_contract"]).items():
                 if original.get(key) != value:
                     raise ValueError(f"execution reference score consumption differs: {key}")
         self.store.validate_completed_origin(identity, observation)
+
+    @staticmethod
+    def _native_context_matches(context, identity):
+        digest = (identity.get("replay_policy") or {}).get("effective_execution_contract_sha256")
+        if digest == canonical_json_sha256(context):
+            return True
+        # Recover a missing old index only if the signed origin's exact
+        # effective-context SHA can be reconstructed. Unknown calculation,
+        # source, eligibility or economic drift cannot pass this proof.
+        recorded = dict(context, ranking_options=identity["ranking_options"])
+        original = (identity.get("replay_policy") or {}).get("canonical_dl_score_contract")
+        if original is not None:
+            recorded["score_contract"] = {key: value for key, value in original.items()
+                                          if key not in _REFERENCE_FIELDS | _SCORE_WITNESS_FIELDS}
+        return (canonical_json_sha256(recorded) == digest
+                and oracle_execution_contract(recorded) == oracle_execution_contract(context))
 
     def native_completed(self, context):
         """Recover an index from a native effective-contract signed receipt.
@@ -487,10 +565,9 @@ class OracleExecutionIndex:
         Source-byte aliases and numerical artifacts are unnecessary: native
         receipts already name this exact execution-effective contract.
         """
-        digest = canonical_json_sha256(context)
         matches = []
         for identity in self.store.existing_completed_identities(seed=context["seed"], target=context["target"]):
-            if (identity.get("replay_policy") or {}).get("effective_execution_contract_sha256") != digest:
+            if not self._native_context_matches(context, identity):
                 continue
             complete = self.store.with_win_rate(identity, self.store.read(identity))
             if complete is not None:
@@ -529,19 +606,7 @@ class OracleExecutionIndex:
         self.read(context)
 
 
-def reference_arm_execution_binding(
-    comparison: Mapping[str, Any], settings: Any,
-) -> dict[str, str] | None:
-    """Bind a published Oracle row to the exact formal score consumer.
-
-    Oracle target truth need not be trained by this DL.  This receipt proves
-    only which formal arm/score-consumption contract produced the hindsight
-    replay, not that the arm has a matching fitted predictor.  User-facing
-    descriptions are deliberately excluded from execution identity.
-    """
-    arm_id = str(comparison.get("strategy_arm_id") or "").strip()
-    if not arm_id:
-        return None
+def _reference_arm_payload(arm_id, settings, *, effective):
     if arm_id not in settings.arms:
         raise ValueError(f"Oracle reference arm missing: {arm_id}")
     arm = settings.arms[arm_id]
@@ -550,18 +615,67 @@ def reference_arm_execution_binding(
     if auxiliary:
         source_ids.append(auxiliary)
     sources = {}
-    for source_id in source_ids:
+    for index, source_id in enumerate(source_ids):
         if source_id not in settings.dl_sources:
             raise ValueError(f"Oracle reference DL source missing: {source_id}")
-        sources[source_id] = {
+        source = settings.dl_sources[source_id]
+        payload = {
             key: value for key, value in settings.dl_sources[source_id].as_dict().items()
             if key != "description"
         }
+        if effective:
+            from core.breakout_quality_registry import get_breakout_quality_experiment_profile
+            profile = get_breakout_quality_experiment_profile(source.experiment_profile)
+            payload = {key: value for key, value in payload.items() if key not in {
+                "dl_id", "experiment_profile", "model_architecture", "forward_scores_builder",
+                "single_seed_strategy_conversion_authorized", "point_in_time_dirname"}}
+            payload.update(sample_scope=profile.training_sample_scope,
+                           input_requirements=_feature_input_requirements(source.model_architecture))
+        sources[("rank" if index == 0 else "positive") if effective else source_id] = payload
     arm_contract = {
         key: value for key, value in arm.as_dict().items()
         if key not in {"name", "description"}
     }
-    return {
-        "arm_id": arm_id,
-        "execution_sha256": canonical_json_sha256({"arm": arm_contract, "sources": sources}),
-    }
+    if effective:
+        arm_contract = {key: value for key, value in arm_contract.items() if key not in {
+            "arm_id", "dl_id", "enabled", "robustness_role"}}
+        arm_contract["dl_runtime_options"] = oracle_ranking_options(arm_contract["dl_runtime_options"])
+    return json.loads(json.dumps({"arm": arm_contract, "sources": sources}, sort_keys=True))
+
+
+def reference_arm_execution_binding(
+    comparison: Mapping[str, Any], settings: Any,
+) -> dict[str, Any] | None:
+    """Record the inspected arm separately from its effective perfect-score consumer.
+
+    Fitted predictors are substituted by the declared Oracle outputs. Their
+    identities cannot invalidate those outputs; eligibility, timing, selector,
+    Positive admission and trading semantics must still match exactly.
+    """
+    arm_id = str(comparison.get("strategy_arm_id") or "").strip()
+    if not arm_id:
+        return None
+    contract = _reference_arm_payload(arm_id, settings, effective=True)
+    return {"arm_id": arm_id, "execution_contract": contract,
+            "execution_sha256": canonical_json_sha256(contract)}
+
+
+def reference_arm_execution_matches(published, comparison, settings) -> bool:
+    """Accept old evidence only after proving the same execution contract."""
+    if not isinstance(published, Mapping):
+        return False
+    required = reference_arm_execution_binding(comparison, settings)
+    if required is None:
+        return False
+    contract = published.get("execution_contract")
+    if isinstance(contract, Mapping):
+        return (published.get("execution_sha256") == canonical_json_sha256(contract)
+                and contract == required["execution_contract"])
+    arm_id = str(published.get("arm_id") or "")
+    if arm_id not in settings.arms:
+        return False
+    legacy = _reference_arm_payload(arm_id, settings, effective=False)
+    effective = _reference_arm_payload(arm_id, settings, effective=True)
+    return (published.get("execution_sha256") in {
+                canonical_json_sha256(legacy), canonical_json_sha256(effective)}
+            and effective == required["execution_contract"])

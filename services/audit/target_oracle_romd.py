@@ -2083,10 +2083,10 @@ def _replay_attested_score_keys(
                         cohort.get("research_cutoff") != str(settings.end_date) or
                         not is_sha256_hex(policy.get("perfect_score_sha256"))):
                     continue
-                for field, value in expected.items():
-                    if field in {"reference_arm_id", "reference_score_source_id", "reference_profile_id"}:
-                        continue
-                    if source_contract.get(field) != value:
+                from services.research.oracle_artifact_contract import oracle_score_contract
+                consumed = oracle_score_contract(source_contract)
+                for field, value in oracle_score_contract(expected).items():
+                    if consumed.get(field) != value:
                         break
                 else:
                     if source_contract.get("source_evidence") != (
@@ -2167,12 +2167,13 @@ def _certified_saved_oracle_identity(
     )
     # Arm/model labels are evidence of the reference selector, not its executable
     # score. The actual runtime ranking policy/options remain strictly checked.
-    for field, value in expected_score.items():
-        if field in {"reference_arm_id", "reference_score_source_id", "reference_profile_id"}:
-            continue
-        if source_contract.get(field) != value:
+    from services.research.oracle_artifact_contract import oracle_score_contract
+    consumed = oracle_score_contract(source_contract)
+    required = oracle_score_contract(expected_score)
+    for field, value in required.items():
+        if consumed.get(field) != value:
             raise ValueError(f"historical perfect-score contract mismatch: {field}")
-    if set(source_contract) - set(expected_score):
+    if set(consumed) - set(required):
         raise ValueError("historical score contract contains unknown executable fields")
     score_sha = policy.get("perfect_score_sha256")
     from core.file_integrity import is_sha256_hex
@@ -3446,6 +3447,9 @@ def _run_single_stage_oracle(
             "missing_p16": pending_p16, "seed_set": tuple(seed_set),
             "targets": tuple(targets),
             "producer_kwargs": dict(parameter_plan["producer_kwargs"]),
+            "completed_observations": dict(cached),
+            "benchmark_id": str(robustness.benchmark_id),
+            "start_date": start, "end_date": end,
         }
     if approved_replay_decisions is not None:
         # The Research user authorized the (seed, Target) plan before missing
@@ -3605,13 +3609,16 @@ def _oracle_combined_preview(definition, *, project_root: Path) -> tuple[dict[st
     pending = tuple(previews[0][1]["missing_p16"])
     producer_kwargs = previews[0][1]["producer_kwargs"]
     decisions: dict[tuple[int, str], str] = {}
+    completed = {}
     ordered_keys = ["C96"]
     strategies = {"C96": "Breakout"}
     display_targets = {"C96": "C96"}
     for strategy, preview in previews:
         if (tuple(preview["seed_set"]) != seeds or
                 tuple(preview["missing_p16"]) != pending or
-                preview["producer_kwargs"] != producer_kwargs):
+                preview["producer_kwargs"] != producer_kwargs or
+                any(preview[field] != previews[0][1][field]
+                    for field in ("benchmark_id", "start_date", "end_date"))):
             raise OracleBlockedError("Target x Strategy scopes have different canonical P16/Seed plans")
         for seed, target in preview["preflight"]:
             key = _oracle_scoped_key(target, strategy)
@@ -3619,6 +3626,11 @@ def _oracle_combined_preview(definition, *, project_root: Path) -> tuple[dict[st
             if (seed, key) in decisions and decisions[(seed, key)] != value:
                 raise OracleBlockedError("Common C96 Replay identity differs across strategies")
             decisions[(seed, key)] = value
+        for (seed, target), observation in preview["completed_observations"].items():
+            key = (seed, _oracle_scoped_key(target, strategy))
+            if key in completed and completed[key] != observation:
+                raise OracleBlockedError("Common C96 completed observations differ across strategies")
+            completed[key] = observation
         for target in preview["targets"]:
             key = _oracle_scoped_key(target, strategy)
             if key not in strategies:
@@ -3636,7 +3648,10 @@ def _oracle_combined_preview(definition, *, project_root: Path) -> tuple[dict[st
     )
     return {"status": "PREVIEW", "preflight": decisions, "text": text,
             "missing_p16": pending, "seed_set": seeds,
-            "targets": registry_keys, "producer_kwargs": producer_kwargs}, scopes
+            "targets": registry_keys, "producer_kwargs": producer_kwargs,
+            "completed_observations": completed,
+            **{field: previews[0][1][field] for field in
+               ("benchmark_id", "start_date", "end_date")}}, scopes
 
 
 def _oracle_merge_scoped_reports(definition, reports: list[tuple[str, Mapping[str, Any]]]) -> dict[str, Any]:
@@ -3675,9 +3690,8 @@ def _oracle_merge_scoped_reports(definition, reports: list[tuple[str, Mapping[st
     # Explicit inventory detects an incomplete *new* mixed-strategy report.
     # Old reports without it remain readable as historical Breakout evidence.
     base["comparison_inventory"] = ["C96", *(oracle_comparison_key(row) for row in registered)]
-    # The aggregate report must identify the formal score consumer that
-    # actually produced each completed Target x Strategy result.  Changing
-    # C131/C132 -> C133/C134 must not silently re-label old Daily returns.
+    # Keep the inspected arm as provenance and bind the effective consumer
+    # separately; equivalent fitted-model references share perfect outputs.
     from services.research.oracle_artifact_contract import reference_arm_execution_binding
     settings, _baseline, _exact = _contract(definition)
     base["comparison_reference_arms"] = {
@@ -3700,6 +3714,37 @@ def preview_oracle_replay_plan(
         definition, project_root=Path(project_root),
     )
     return preview
+
+
+def collect_completed_oracle_results(definition, *, project_root: Path) -> dict[str, Any]:
+    """Read certified results from the SAME plan as [1], with zero production.
+
+    Publication files and reference-model bindings may lag completed receipts.
+    A row is available only when every configured seed is certified REUSE;
+    no historical partial-seed average or report number can substitute for it.
+    """
+    preview = preview_oracle_replay_plan(definition, project_root=project_root)
+    rows = {}
+    observations = preview["completed_observations"]
+    seeds = preview["seed_set"]
+    for key in preview["targets"]:
+        if any(preview["preflight"][(seed, key)] != "REUSE" for seed in seeds):
+            continue
+        records = [observations[(seed, key)] for seed in seeds]
+        if key != "C96":
+            if any((int(row["seed"]), "C96") not in observations for row in records):
+                continue
+            for row in records:
+                baseline = observations[(int(row["seed"]), "C96")]
+                if not math.isclose(float(row["delta_romd_vs_c96"]),
+                                    float(row["romd"]) - float(baseline["romd"]),
+                                    rel_tol=1e-9, abs_tol=1e-9):
+                    raise OracleBlockedError("Oracle completed observation has inconsistent paired C96")
+        result = _aggregate(records, target=str(records[0]["target"]),
+                            period_start=preview["start_date"], period_end=preview["end_date"])
+        rows[key] = {"oracle_romd": result["romd"], "win_rate_pct": result["win_rate_pct"]}
+    return {"metrics": rows, "benchmark": preview["benchmark_id"], "seeds": tuple(seeds),
+            "period": f'{preview["start_date"]} ~ {preview["end_date"]}'}
 
 
 def build_report(

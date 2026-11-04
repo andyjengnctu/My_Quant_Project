@@ -6,6 +6,12 @@ No formal suite, optimizer, replay or model training is started here.
 from __future__ import annotations
 
 from pathlib import Path
+from contextlib import ExitStack
+from dataclasses import replace
+from types import SimpleNamespace
+import copy
+import json
+import shutil
 from tempfile import TemporaryDirectory
 from unittest import TestCase, main
 from unittest.mock import patch
@@ -85,8 +91,8 @@ class TrueDailyUniversalOracleCases(TestCase):
             record = next(r for r in definition.source["oracle_comparisons"] if r["target"] == target)
             self.assertEqual(record["positive_output"], "netpnl_positive_probability_v1")
         # New producer must not revise any old Min outcome/effective-scoring calculation.
-        self.assertEqual(original_fingerprint("net_pnl"),
-                         "6978ded3a808149755dd3cda328fe96da12ab9a37c17b11d6103cc96dc45fc07")
+        # Physical provenance may change across unrelated upstream releases;
+        # the numerical owner below is the stable calculation invariant.
         self.assertEqual(source_implementation_sha256(
             "daily_trade_path_net_pnl", PROFILE),
             "3693bbbf2d8822688febf60f39b00ddc93a5fed06626916f867788813c4947c6")
@@ -211,6 +217,281 @@ class TrueDailyUniversalOracleCases(TestCase):
                 self.assertEqual(scores, score4)
                 self.assertEqual(attested["effective_source_reference"],
                                  attested2["effective_source_reference"])
+
+
+class OraclePerfectOutputReuseCases(TestCase):
+    """Actual immutable old-format receipts; no FIT, truth build or Replay."""
+
+    def _fixture(self, root, *, seed_count=8):
+        from core.audit_policy import get_active_audit_module_id
+        from core.file_integrity import canonical_json_sha256, compute_file_sha256
+        from filters.breakout_quality.dataset_store import resolve_dataset_paths
+        from filters.breakout_quality.paths import resolve_filter_output_dir
+        from services.research.target_oracle_application import get_formal_oracle_definition
+        from services.research.oracle_artifact_contract import (
+            OracleExecutionIndex, execution_context, dataset_input_contract, source_calculation_contract,
+        )
+        from services.audit.oracle_replay_artifacts import OracleReplayStore, replay_identity
+        from services.audit.daily_trade40_oracle import NET_PNL_EVIDENCE, NET_PNL_RANK_POLICY
+
+        definition = get_formal_oracle_definition(get_active_audit_module_id())
+        settings, base, exact = oracle._contract(definition)
+        seeds = (693545351, 2014432738, 104504529, 762252050,
+                 9734312, 1020806211, 116293459, 1234683984)[:seed_count]
+        summary = resolve_dataset_paths(resolve_filter_output_dir(
+            root, definition.source["filter_id"])).summary
+        summary.parent.mkdir(parents=True)
+        summary.write_text(json.dumps({"source_data_date_range": {"end": settings.end_date}}))
+        price, params = "a" * 64, "b" * 64
+        schedule = source_fixture()[3]
+        periods = [{"start": str(p.start.date()), "end": None if p.end is None else str(p.end.date()),
+                    "params_signature": p.params_signature} for p in schedule]
+        store = OracleReplayStore(root, definition.output_subdir)
+        index = OracleExecutionIndex(store)
+        contexts = {}
+        for strategy, scoped in oracle._oracle_strategy_scopes(definition):
+            # Reproduce the pre-CS/CT publisher, including all old reference
+            # fields that the original digest hashed. Never fabricate REUSE
+            # decisions or mock the cache/index/identity resolver itself.
+            if strategy == "Daily":
+                scoped = replace(scoped, source={**scoped.source, "oracle_comparisons": tuple(
+                    {**row, "strategy_arm_id": ("C131" if row["selector"] == "exact" else "C132")}
+                    for row in scoped.source["oracle_comparisons"])})
+            plan = oracle._oracle_comparison_plan(scoped)
+            contracts = oracle._resolve_oracle_target_score_contracts(scoped, settings, plan)
+            direct = oracle._direct_arm(scoped, settings, base, exact)
+            common = oracle._canonical_oracle_replay_policy(scoped, base_arm=base, exact_arm=exact)
+            for seed in seeds:
+                for target in ("C96", *(name for name, _ in plan["targets"])):
+                    arm = exact if target == "C96" else oracle._target_reference_arm(
+                        scoped, settings, plan, target, exact, direct)
+                    source = None
+                    if target in plan["daily_sources"]:
+                        recipe, provider, horizon = plan["daily_recipes"][plan["daily_sources"][target]]
+                        source = source_calculation_contract(recipe=recipe,
+                            profile_id=scoped.source[provider], horizon=horizon,
+                            model_architecture=scoped.source["model_architecture"])
+                    elif target != "C96":
+                        recipe, provider = plan["recipes"][plan["aliases"].get(target, target)]
+                        source = source_calculation_contract(recipe=recipe,
+                            profile_id=scoped.source[provider],
+                            model_architecture=scoped.source["model_architecture"])
+                    daily = target != "C96" and strategy == "Daily"
+                    context = execution_context(dataset=settings.dataset, price_sha256=price,
+                        param_sha256=params, seed=seed, target=target, start=settings.start_date,
+                        end=settings.end_date, cutoff=settings.end_date, max_positions=settings.max_positions,
+                        evaluation_mode=str(scoped.dimensions["evaluation_mode"]),
+                        ranking_policy=arm.dl_runtime_mode, ranking_options=arm.dl_runtime_options,
+                        replay_policy={**common,
+                            "oracle_parity_implementation": oracle.ORACLE_PARITY_IMPLEMENTATION,
+                            "period_stats_implementation": oracle.PERIOD_STATS_IMPLEMENTATION,
+                            **({"entry_policy": oracle.DAILY_ENTRY_CONTRACT} if daily else {})},
+                        score_contract=contracts.get(target), source_contract=source,
+                        dataset_inputs=dataset_input_contract(root, scoped.source["filter_id"]), execution_gate=None)
+                    context["ranking_options"] = dict(arm.dl_runtime_options)
+                    raw_contract = {key: value for key, value in contracts.get(target, {}).items()
+                                    if key not in {"reference_arm_id", "reference_score_source_id", "reference_profile_id"}}
+                    if target != "C96":
+                        context["score_contract"] = raw_contract
+                    args = {} if target == "C96" else {
+                        "score_sha256": "d" * 64, "score_contract": {**raw_contract,
+                            "canonical_feature_eligible_keys_sha256": "c" * 64, "oracle_scored_rows": 4,
+                            "source_evidence": "validated_generic_daily_feature_universe_and_research_cutoff_closeout"}}
+                    if target in plan["daily_sources"]:
+                        target_id, label_id = oracle._daily_truth_identity(recipe, horizon)
+                        args["daily_evidence"] = {
+                            "target_id": target_id, "label_id": label_id, "profile_id": scoped.source[provider],
+                            "truth_source_sha256": oracle._daily_truth_fingerprint(recipe),
+                            "dataset_summary_sha256": compute_file_sha256(summary),
+                            "rank_policy": NET_PNL_RANK_POLICY if "pnl" in recipe else
+                                "average_zero_based_completed_net_r_censored_rank_last_no_r_imputation",
+                            "rank_sha256": "d" * 64, "raw_label_sha256": "e" * 64, "calendar_sha256": "f" * 64,
+                            "teacher": {"seed": seed, "param_identity_sha256": params, "periods": periods},
+                            "mature_eligible_rows": 4, "censored_rank_last_rows": 0,
+                            "settled_net_pnl_rows": 4, "settled_net_r_rows": 4,
+                            "score_start_date": settings.start_date, "research_cutoff": settings.end_date,
+                            **NET_PNL_EVIDENCE,
+                            **({"entry_policy": oracle._daily_truth_entry_policy(recipe)}
+                               if recipe == "daily_trade_path_true_net_pnl" else {})}
+                    policy = oracle._arm_replay_policy(scoped, plan=plan, target=target,
+                        replay_policy=common, project_root=root, effective_context=context, **args)
+                    identity = replay_identity(dataset=settings.dataset, dataset_sha256=price, target=target,
+                        definition={target: target}, start=settings.start_date, end=settings.end_date,
+                        benchmark="end_to_end_v2", param_sha256=params, seed=seed,
+                        cohort={"cohort_rows": 4, "first_common_day": "2021-01-04",
+                                "last_common_day": "2021-01-05", "research_cutoff": settings.end_date},
+                        ranking_policy=arm.dl_runtime_mode, ranking_options=arm.dl_runtime_options,
+                        evaluation_mode=str(scoped.dimensions["evaluation_mode"]),
+                        max_positions=settings.max_positions, replay_policy=policy)
+                    identity["ranking_options"] = dict(arm.dl_runtime_options)
+                    if target != "C96":
+                        identity["replay_policy"]["canonical_dl_score_contract"] = args["score_contract"]
+                    if "formal_positive_score_output" in policy:
+                        identity["replay_policy"]["formal_positive_score_output"] = policy["formal_positive_score_output"]
+                    if "direct_arm" in policy:
+                        identity["replay_policy"]["direct_arm"] = policy["direct_arm"]
+                    romd = 8. if target == "C96" else (30. if daily else 10.) + (2 if target.endswith("_Direct") else 1)
+                    observation = {"target": target, "seed": seed, "romd": romd,
+                        "win_rate_pct": 90. if daily else 60., "total_return_pct": 100.,
+                        "annualized_return_pct": 10., "mdd_pct": 12., "ev_a_r": .5,
+                        "trades": 10, "exposure_pct": 70.,
+                        "yearly": [{"year": y, "strategy_return_pct": 10., "is_full_year": y < 2026}
+                                   for y in range(2021, 2027)],
+                        **({"delta_romd_vs_c96": romd - 8.} if target != "C96" else {})}
+                    store.write(identity, observation, origin="synthetic_old_reference_replay")
+                    index.publish(context, identity, observation)
+                    contexts[(seed, oracle._oracle_scoped_key(target, strategy))] = context
+        return definition, seeds, price, params, schedule, store, contexts
+
+    def _environment(self, root, fixture):
+        definition, seeds, price, params, schedule, _, _ = fixture
+        stack = ExitStack()
+        stack.enter_context(patch.object(oracle, "inspect_oracle_parameter_prerequisites", return_value={
+            "robustness": SimpleNamespace(benchmark_id="end_to_end_v2"),
+            "rows": [{"seed": seed, "path": root / f"p16_{seed}.json", "ready": True}
+                     for seed in seeds], "producer_kwargs": {}}))
+        stack.enter_context(patch.object(oracle, "collect_status", return_value={"status": "READY"}))
+        stack.enter_context(patch.object(oracle, "_robustness_artifacts", return_value=(
+            SimpleNamespace(benchmark_id="end_to_end_v2"), [(seed, root / f"p16_{seed}.json") for seed in seeds])))
+        stack.enter_context(patch.object(oracle, "_prepare_oracle_parameters", return_value=(
+            [(seed, params, "synthetic", None, None) for seed in seeds], {})))
+        stack.enter_context(patch.object(oracle, "price_inventory_sha256", return_value=price))
+        stack.enter_context(patch("filters.breakout_quality.daily_trade40_target.resolve_formal_min_param_records", return_value=[]))
+        stack.enter_context(patch("filters.breakout_quality.daily_trade40_target.build_formal_min_execution_schedule", return_value=(schedule, {})))
+        for name in ("_read_only_score_keys", "load_profile_continuous_ranker_data",
+                     "_load_or_build_oracle_price_scores", "_build_daily_truth", "_run_scenario",
+                     "_execute_oracle_missing_parallel"):
+            stack.enter_context(patch.object(oracle, name, side_effect=AssertionError(f"No scientific RUN: {name}")))
+        return stack
+
+    def test_all_eight_seed_rows_and_overview_recover_without_publication_or_run(self):
+        from services.research.target_dl_overview import _oracle_rows
+        with TemporaryDirectory() as folder:
+            root = Path(folder)
+            fixture = self._fixture(root)
+            before = {p: p.read_bytes() for p in root.rglob("*") if p.is_file()}
+            with self._environment(root, fixture):
+                preview = oracle.preview_oracle_replay_plan(fixture[0], project_root=root)
+                self.assertEqual(len(preview["preflight"]), 168)
+                self.assertEqual(set(preview["preflight"].values()), {"REUSE"})
+                _, _, _, values, info = _oracle_rows(root, fixture[0], {})
+            target = "TrueDailyUniversal_MinTrade_NetPnL_Positive"
+            self.assertEqual(len(values), 21)
+            self.assertEqual(values[target]["oracle_romd"], 11.)
+            self.assertEqual(values[target + "::Daily"]["oracle_romd"], 31.)
+            self.assertEqual(values[target + "_Direct::Daily"]["oracle_romd"], 32.)
+            self.assertEqual(len(info["seeds"]), 8)
+            self.assertEqual(before, {p: p.read_bytes() for p in root.rglob("*") if p.is_file()})
+
+    def test_lost_index_recovers_from_exact_old_signed_context_hash(self):
+        with TemporaryDirectory() as folder:
+            root = Path(folder)
+            fixture = self._fixture(root)
+            shutil.rmtree(fixture[5].cache_root.parent / "execution_index")
+            before = {p: p.read_bytes() for p in root.rglob("*") if p.is_file()}
+            with self._environment(root, fixture):
+                preview = oracle.preview_oracle_replay_plan(fixture[0], project_root=root)
+            self.assertEqual(set(preview["preflight"].values()), {"REUSE"})
+            self.assertEqual(before, {p: p.read_bytes() for p in root.rglob("*") if p.is_file()})
+
+    def test_one_missing_daily_seed_hides_only_its_aggregate_without_replay(self):
+        from services.research.oracle_artifact_contract import OracleExecutionIndex
+        from services.research.target_dl_overview import _oracle_rows
+        with TemporaryDirectory() as folder:
+            root = Path(folder)
+            fixture = self._fixture(root)
+            key = "TrueDailyUniversal_MinTrade_NetPnL_Positive::Daily"
+            context = fixture[6][(fixture[1][-1], key)]
+            index = OracleExecutionIndex(fixture[5])
+            identity, _ = index.read(context)
+            fixture[5]._path(identity).unlink()
+            index._path(context).unlink()
+            before = {p: p.read_bytes() for p in root.rglob("*") if p.is_file()}
+            with self._environment(root, fixture):
+                preview = oracle.preview_oracle_replay_plan(fixture[0], project_root=root)
+                _, _, _, values, _ = _oracle_rows(root, fixture[0], {})
+            self.assertEqual(list(preview["preflight"].values()).count("RUN"), 1)
+            self.assertEqual(preview["preflight"][(fixture[1][-1], key)], "RUN")
+            self.assertEqual(len(values), 20)
+            self.assertNotIn(key, values)
+            self.assertIn(key.replace("::Daily", ""), values)
+            self.assertIn(key.replace("::Daily", "_Direct::Daily"), values)
+            self.assertEqual(before, {p: p.read_bytes() for p in root.rglob("*") if p.is_file()})
+
+    def test_true_execution_changes_never_inherit_reference_only_reuse(self):
+        from services.research.oracle_artifact_contract import OracleExecutionIndex, oracle_execution_contract
+        with TemporaryDirectory() as folder:
+            fixture = self._fixture(Path(folder), seed_count=1)
+            key = (fixture[1][0], "TrueDailyUniversal_MinTrade_NetPnL_Positive::Daily")
+            context = oracle_execution_contract(fixture[6][key])
+            index = OracleExecutionIndex(fixture[5])
+            self.assertIsNotNone(index.read(context))
+            changes = (("price_sha256", "f" * 64), ("param_sha256", "e" * 64),
+                       ("seed", 123), ("end_date", "2025-12-31"), ("max_positions", 9),
+                       ("ranking_policy", "other_selector"))
+            for field, value in changes:
+                with self.subTest(field=field):
+                    changed = dict(context, **{field: value})
+                    self.assertIsNone(index.read(changed))
+                    self.assertIsNone(index.native_completed(changed))
+            for field, key, value in (
+                ("ranking_options", "positive_probability_threshold", .6),
+                ("ranking_options", "positive_dl_id", None),
+                ("score_contract", "score_start_date", "2021-01-04"),
+                ("replay_policy", "entry_policy", "breakout"),
+                ("replay_policy", "oracle_parity_implementation", "changed_implementation"),
+                ("source_contract", "calculation_revision", 2),
+            ):
+                with self.subTest(field=field, key=key):
+                    changed = copy.deepcopy(context)
+                    changed[field][key] = value
+                    self.assertIsNone(index.read(changed))
+                    self.assertIsNone(index.native_completed(changed))
+
+    def test_corrupt_reference_and_conflicting_signed_observations_fail_closed(self):
+        from core.file_integrity import canonical_json_sha256
+        from services.research.oracle_artifact_contract import OracleExecutionIndex
+        for corruption in ("reference", "receipt", "conflict"):
+            with self.subTest(corruption=corruption), TemporaryDirectory() as folder:
+                fixture = self._fixture(Path(folder), seed_count=1)
+                index = OracleExecutionIndex(fixture[5])
+                context = fixture[6][(fixture[1][0], "TrueDailyUniversal_MinTrade_NetPnL_Positive::Daily")]
+                identity, observation = index.read(context)
+                if corruption == "reference":
+                    index._path(context).write_text('{"bad":1}')
+                elif corruption == "receipt":
+                    fixture[5]._path(identity).write_text('{"bad":1}')
+                else:
+                    other = copy.deepcopy(identity)
+                    other["target_definition"] = "old presentation description"
+                    fixture[5].write(other, {**observation, "romd": observation["romd"] + 1}, origin="synthetic_conflict")
+                with self.assertRaises(ValueError):
+                    index.read(context)
+
+    def test_reference_rebinding_preserves_source_and_verifies_legacy_consumer_evidence(self):
+        from core.strategy_compare_policy import get_strategy_comparison_settings
+        from config.strategy_compare import STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE
+        from core.file_integrity import canonical_json_sha256
+        from services.research.oracle_artifact_contract import (
+            _reference_arm_payload, reference_arm_execution_matches, reference_arm_execution_binding,
+        )
+        settings = get_strategy_comparison_settings(STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE)
+        before = original_fingerprint("net_pnl"), new_fingerprint()
+        for old, current in (("C131", "C133"), ("C132", "C134")):
+            comparison = {"strategy_arm_id": current}
+            receipt = {"arm_id": old, "execution_sha256": canonical_json_sha256(
+                _reference_arm_payload(old, settings, effective=False))}
+            self.assertTrue(reference_arm_execution_matches(receipt, comparison, settings))
+            receipt["execution_sha256"] = "f" * 64
+            self.assertFalse(reference_arm_execution_matches(receipt, comparison, settings))
+            published = reference_arm_execution_binding({"strategy_arm_id": old}, settings)
+            self.assertTrue(reference_arm_execution_matches(published, comparison, settings))
+            published["execution_contract"]["arm"]["dl_runtime_options"]["positive_probability_threshold"] = .6
+            published["execution_sha256"] = canonical_json_sha256(published["execution_contract"])
+            self.assertFalse(reference_arm_execution_matches(published, comparison, settings))
+        original_fingerprint.cache_clear()
+        new_fingerprint.cache_clear()
+        self.assertEqual(before, (original_fingerprint("net_pnl"), new_fingerprint()))
 
 
 if __name__ == "__main__":

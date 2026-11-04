@@ -289,7 +289,12 @@ class PositiveNetPnlContractCases(TestCase):
                 "arm_id": "C132", "execution_sha256": original_receipt["execution_sha256"],
             }
             _, _, _, values, info = read_rows()
-            self.assertNotIn(daily_direct_key, values)
+            # Equivalent reference names do not change perfect-score results.
+            self.assertEqual(values[daily_direct_key]["oracle_romd"], 41.0)
+            payload["comparison_reference_arms"][daily_direct_key] = {
+                "arm_id": "C132", "execution_sha256": "f" * 64,
+            }
+            self.assertNotIn(daily_direct_key, read_rows()[3])
             self.assertEqual(values["TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct"]["oracle_romd"], 24.62)
             payload["comparison_reference_arms"][daily_direct_key] = original_receipt
 

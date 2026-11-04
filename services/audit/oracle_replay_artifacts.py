@@ -25,6 +25,9 @@ from core.file_integrity import (
 )
 from filters.breakout_quality.workflow_io import discover_dataset_csv_inputs
 from core.training_policy import benchmark_seed_execution_equivalent
+from services.research.oracle_artifact_contract import (
+    oracle_score_contract, oracle_ranking_options, oracle_replay_policy,
+)
 
 # AI: V1 accidentally hashed Strategy Compare presentation/membership metadata.
 # AI: V2 keys only execution inputs; V1 is retained read-only for verified reuse.
@@ -60,26 +63,12 @@ def _execution_cohort(cohort: Mapping[str, Any]) -> dict[str, Any]:
             if key in _REPLAY_COHORT_FIELDS}
 
 
-# Research comparison arm IDs are evidence of which equivalent selector was
-# inspected, not computational replay inputs. The actual selector is already
-# identified by ranking_policy/options, while the injected stock-day values
-# and feature eligibility are certified by the score/keys SHA256 fingerprints.
-_REFERENCE_ONLY_SCORE_FIELDS = frozenset((
-    "reference_arm_id", "reference_score_source_id", "reference_profile_id",
-))
-
-
-def _execution_score_contract(contract: Mapping[str, Any]) -> dict[str, Any]:
-    return {key: value for key, value in contract.items()
-            if key not in _REFERENCE_ONLY_SCORE_FIELDS}
+_execution_score_contract = oracle_score_contract
 
 
 def _execution_replay_policy(policy: Mapping[str, Any], *,
                              truth_source_reference: str | None = None) -> dict[str, Any]:
-    result = dict(policy)
-    # No dependency may infer or reconstruct the selected model from this key;
-    # the formal Exact selection mode and options are recorded independently.
-    result.pop("exact_arm", None)
+    result = oracle_replay_policy(policy)
     # These counts describe the already executed label producer; they do not
     # affect the submitted score, stock-day eligibility or Broker-Cash Replay.
     # Historical records legitimately omit them. Keep their original bytes,
@@ -147,6 +136,7 @@ def _v2_presentation_identity(stored: Mapping[str, Any], expected: Mapping[str, 
         normalized_policy["hindsight_target_contract"] = dict(
             wanted_policy["hindsight_target_contract"])
     result["replay_policy"] = normalized_policy
+    result["ranking_options"] = oracle_ranking_options(result["ranking_options"])
     if isinstance(result.get("target_definition"), str):
         result["target_definition"] = expected.get("target_definition")
     if isinstance(result.get("cohort"), Mapping):
@@ -203,6 +193,7 @@ def _same_producer_different_score(previous: Mapping[str, Any],
                 lineage.pop(name, None)
             policy["hindsight_target_contract"] = lineage
         result["replay_policy"] = policy
+        result["ranking_options"] = oracle_ranking_options(result["ranking_options"])
         return result
     return (source_only(previous) == source_only(expected) and
             dict(previous) != dict(expected))
@@ -420,7 +411,7 @@ def replay_identity(*, dataset: str, dataset_sha256: str, target: str,
         "rotation": "off",
         "evaluation_mode": str(evaluation_mode),
         "ranking_policy": str(ranking_policy),
-        "ranking_options": dict(ranking_options),
+        "ranking_options": oracle_ranking_options(ranking_options),
         "replay_policy": _execution_replay_policy(replay_policy),
         "cohort": _execution_cohort(cohort),
     }
@@ -964,11 +955,15 @@ class OracleReplayStore:
         """
         candidates = self.existing_completed_identities(seed=seed, target=target)
         expected = dict(expected_inputs)
+        if isinstance(expected.get("ranking_options"), Mapping):
+            expected["ranking_options"] = oracle_ranking_options(expected["ranking_options"])
         if isinstance(expected.get("replay_policy"), Mapping):
             expected["replay_policy"] = _execution_replay_policy(expected["replay_policy"])
         normalized = []
         for candidate in candidates:
             inputs = dict(candidate)
+            if isinstance(inputs.get("ranking_options"), Mapping):
+                inputs["ranking_options"] = oracle_ranking_options(inputs["ranking_options"])
             if (inputs.get("benchmark") != expected.get("benchmark")
                     and benchmark_seed_execution_equivalent(
                         recorded_benchmark=str(inputs.get("benchmark") or ""),

@@ -1,7 +1,8 @@
-"""Read-only Target x DL evidence overview from published local research reports.
+"""Read-only Target x DL evidence overview from certified local research results.
 
 No training, replay, target materialization, output writing or result backfill.
-Registries define membership/identities; approved reports alone supply metrics.
+Registries define membership/identities; certified Oracle receipts and approved
+model/strategy reports supply metrics through their canonical result owners.
 """
 
 from __future__ import annotations
@@ -63,7 +64,7 @@ from filters.breakout_quality.paths import (
     resolve_filter_output_dir,
 )
 from services.research.target_oracle_application import get_formal_oracle_definition
-from services.research.oracle_artifact_contract import reference_arm_execution_binding
+from services.research.oracle_artifact_contract import reference_arm_execution_matches
 from config.strategy_compare import STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE
 
 
@@ -169,6 +170,17 @@ def _oracle_rows(root: Path, definition, versions: Mapping[str, tuple]):
     payload = _json(data_path)
     oracle_info: dict[str, Any] = {"path": None, "benchmark": "", "seeds": (), "period": ""}
     metrics: dict[str, dict[str, float | None]] = {}
+    # Signed per-seed results are the canonical truth shared with [1][1].
+    # Rebuilding a human-read publication or changing its model references
+    # must not make certified Oracle metrics disappear from [1][2].
+    receipt_root = data_path.parent.parent / "replay_cache"
+    if any(receipt_root.glob("*/*.json")):
+        from services.audit.target_oracle_romd import collect_completed_oracle_results
+        completed = collect_completed_oracle_results(definition, project_root=root)
+        metrics = completed.pop("metrics")
+        return targets, comparisons, score_targets, metrics, {
+            "path": receipt_root.relative_to(root).as_posix(), **completed,
+        }
     if (payload and doc_path.is_file() and payload.get("status") == "COMPLETED"
             and payload.get("read_only") is True and payload.get("hindsight_non_pit") is True
             and _approved(payload, "audit.target_oracle_romd", versions)
@@ -184,9 +196,8 @@ def _oracle_rows(root: Path, definition, versions: Mapping[str, tuple]):
         published_references = payload.get("comparison_reference_arms")
         if published_references is not None and not isinstance(published_references, dict):
             return targets, comparisons, score_targets, {}, oracle_info
-        # Legacy Breakout results predate arm receipts and keep their original
-        # result identities.  Daily results require explicit matching evidence
-        # after changing the formal reference from C131/C132 to C133/C134.
+        # Reference labels are provenance. The shared Oracle contract owner
+        # verifies the actual score consumer, including historical receipts.
         settings = get_strategy_comparison_settings(str(definition.source["strategy_profile_id"]))
         original = [dict(payload.get("baseline") or {}), *payload["oracles"]]
         for item in original:
@@ -218,14 +229,14 @@ def _oracle_rows(root: Path, definition, versions: Mapping[str, tuple]):
             current_comparison = by_comparison.get(key)
             consumer_matches = True
             if current_comparison is not None and current_comparison.get("strategy_arm_id"):
-                required_receipt = reference_arm_execution_binding(current_comparison, settings)
                 if published_references is None:
                     # Historical v11/v12 results have no proof of which Daily
                     # strategy arm generated them.  Never present one as a
                     # current C133/C134 Oracle score-consumption result.
                     consumer_matches = strategy == "Breakout"
                 else:
-                    consumer_matches = published_references.get(key) == required_receipt
+                    consumer_matches = reference_arm_execution_matches(
+                        published_references.get(key), current_comparison, settings)
             if (consumer_matches and (key == baseline or
                     (key in current_definitions
                      and isinstance(published_definitions, dict)
