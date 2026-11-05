@@ -265,6 +265,24 @@ class StrategyPromotionMVPTest(unittest.TestCase):
         )
         self.assertFalse(next(arm for arm in current_strategy_rules() if arm["arm_id"] == "C97")["trading_supported"])
 
+    def test_research_only_fixed_min_is_visible_but_not_trading_capable(self):
+        """Do not borrow a canonical Optimizer profile for fixed constants."""
+        from core.strategy_promotion import current_strategy_rule
+        settings = get_strategy_comparison_settings(STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE)
+        enabled = {arm.arm_id for arm in settings.enabled_arms}
+        for arm_id in ("C139", "C140", "C141"):
+            if arm_id not in enabled:
+                continue
+            rule = current_strategy_rule(arm_id)
+            self.assertFalse(rule["trading_supported"])
+            self.assertIsNone(rule["training_profile_id"])
+            self.assertIsNone(rule["parameter_set_identity"])
+            self.assertTrue(any("Research-only" in msg for msg in rule["trading_blockers"]))
+            approve_current_strategy_rule(self.root, arm_id)
+            with self.assertRaisesRegex(RuntimeError, "Research-only"):
+                stage_trading_strategy_rule(self.root, arm_id)
+            self.assertIsNone(load_trading_release_state(self.root)["pending"])
+
     def test_approval_requires_rolling_evidence_and_pins_run(self):
         approval = approve_current_strategy_rule(self.root, "C98")
         self.assertIn("/runs/", approval["evidence_path"])

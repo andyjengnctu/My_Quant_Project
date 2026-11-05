@@ -220,6 +220,46 @@ class FixedMinContractTests(TestCase):
             self.assertTrue(fixed_min_producer_manifest_path(root).is_file())
             self.assertEqual(ensure_fixed_min_robustness_parameter_artifact(root)['action'], 'REUSE')
 
+    def test_fixed_min_manifest_exclusive_create_race_is_verified(self):
+        """Concurrent identical publication may REUSE; altered bytes must fail closed."""
+        import json
+        from unittest.mock import patch
+        from core.fixed_min_policy import (
+            fixed_min_producer_manifest_path,
+            inspect_fixed_min_robustness_parameter_artifact,
+            ensure_fixed_min_robustness_parameter_artifact,
+            _fixed_min_producer_manifest_payload,
+        )
+        original_open = Path.open
+        for tamper in (False, True):
+            with self.subTest(tamper=tamper), TemporaryDirectory() as temp:
+                root = Path(temp)
+                source_path = ensure_fixed_min_param_artifact(root)
+                manifest_path = fixed_min_producer_manifest_path(root)
+                payload = _fixed_min_producer_manifest_payload(source_path)
+                if tamper:
+                    payload["parameter_file_sha256"] = "0" * 64
+
+                def racing_open(path, mode="r", *args, **kwargs):
+                    if path == manifest_path and mode == "x":
+                        # Another publisher won between exists() and open('x').
+                        with original_open(path, "w", encoding="utf-8") as f:
+                            json.dump(payload, f)
+                        raise FileExistsError("simulated concurrent manifest creation")
+                    return original_open(path, mode, *args, **kwargs)
+
+                with patch.object(Path, "open", racing_open):
+                    if tamper:
+                        with self.assertRaisesRegex(ValueError, "concurrent manifest publication invalid"):
+                            ensure_fixed_min_robustness_parameter_artifact(root)
+                    else:
+                        result = ensure_fixed_min_robustness_parameter_artifact(root)
+                        self.assertEqual(result["action"], "REPAIR")
+                self.assertEqual(
+                    inspect_fixed_min_robustness_parameter_artifact(root)["action"],
+                    "BLOCKED" if tamper else "REUSE",
+                )
+
     def test_fixed_min_robustness_manifest_tamper_rejected(self):
         from core.fixed_min_policy import (
             fixed_min_producer_manifest_path,

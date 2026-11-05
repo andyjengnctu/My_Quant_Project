@@ -3741,6 +3741,17 @@
       "entry": "`config/strategy_params.py`, `core/strategy_param_scientific_contract.py`, `services/optimizer/strategy_param_service.py`, `services/optimizer/strategy_param_repository.py`, `tools/validate/synthetic_strategy_cases.py`",
       "category": "Non-validation Strategy Parameter fitting-protocol ownership / robustness scientific identity",
       "status": "DONE"
+    },
+    {
+      "id": "B425",
+      "section": "B2",
+      "priority": "P1",
+      "category": "Fixed Min research SSOT / promotion boundary",
+      "item": "固定 Min 常數 Target 與策略必須共用同一份非 Optimizer 參數身分及合法 PIT 成熟樣本；不得回流年度參數排程或冒用 Trading fitting profile",
+      "gap": "固定參數、完整交易週期標籤、MR-13CV、C139-C141、Robustness REUSE 及 Trading promotion fail-closed 由正式合成測試一致驗證。",
+      "entry": "`core/fixed_min_policy.py`, `services/breakout_quality/formal_mintrade40_pit_source.py`, `services/breakout_quality/fixed_min_source.py`, `core/strategy_promotion.py`, `tools/validate/synthetic_fixed_min_cases.py`, `tools/validate/synthetic_strategy_promotion_cases.py`",
+      "status": "DONE",
+      "order": 413
     }
   ],
   "tests": [
@@ -7110,6 +7121,13 @@
       "b_id": "B351",
       "order": 564,
       "status": "DONE"
+    },
+    {
+      "id": "T575",
+      "description": "`validate_fixed_min_end_to_end_contract_case`：Fixed Min 常數／PIT／策略／REUSE 同源契約",
+      "b_id": "B425",
+      "status": "DONE",
+      "order": 565
     }
   ]
 }

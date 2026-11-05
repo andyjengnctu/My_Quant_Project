@@ -37,31 +37,38 @@ def current_strategy_rules() -> tuple[dict, ...]:
             canonical = STRATEGY_PARAM_CANONICAL_PROFILE_BY_FAMILY_POLICY.get((family, str(arm.param_policy)))
             if canonical:
                 profile_id = canonical
-        if not profile_id or not family:
-            raise ValueError(f"Compare arm 缺少 canonical Strategy Parameter source: {arm.arm_id}")
-        fitting_profile = get_strategy_param_training_profile(profile_id)
-        seed_protocol = get_strategy_param_fitting_seed_protocol(fitting_profile.fitting_seed_protocol)
-        # This is a capability test, NOT a second promotion membership filter.
-        # Single-seed or DL work still appears in the same list, but the current
-        # Trading multi-seed producer cannot silently reinterpret its contract.
+        # Every Research Compare arm stays visible in this derived list. An arm
+        # without a canonical Optimizer fitting profile (e.g. immutable research
+        # constants) is not promotable; never borrow a different family/profile
+        # merely to make the Trading menu render.
+        fitting_profile = (
+            get_strategy_param_training_profile(profile_id)
+            if profile_id and family else None
+        )
+        # Capability checking is NOT a second membership filter. Unsupported
+        # Research arms are listed but fail closed before Trading staging.
         problems = []
+        if fitting_profile is None:
+            problems.append("Trading 尚不支援 Research-only 非 Optimizer 參數來源")
+        else:
+            seed_protocol = get_strategy_param_fitting_seed_protocol(fitting_profile.fitting_seed_protocol)
+            if str(fitting_profile.price_basis) != "adjusted":
+                problems.append("Trading 僅支援 adjusted-price")
+            if bool(fitting_profile.validation_enabled):
+                problems.append("Trading 尚不支援 validation fitting")
+            if not seed_protocol.enabled or seed_protocol.seed_count < 2:
+                problems.append("Trading 目前只支援 multi-seed fitting producer")
+            if not str(fitting_profile.registered_scientific_fingerprint_sha256 or ""):
+                problems.append("參數研究未註冊 scientific fingerprint")
         if arm.dl_enabled:
             problems.append("Trading 尚不支援這個 DL source adapter")
-        if str(fitting_profile.price_basis) != "adjusted":
-            problems.append("Trading 僅支援 adjusted-price")
-        if bool(fitting_profile.validation_enabled):
-            problems.append("Trading 尚不支援 validation fitting")
-        if not seed_protocol.enabled or seed_protocol.seed_count < 2:
-            problems.append("Trading 目前只支援 multi-seed fitting producer")
-        if not str(fitting_profile.registered_scientific_fingerprint_sha256 or ""):
-            problems.append("參數研究未註冊 scientific fingerprint")
         rule_payload = {
             "schema_version": PROMOTION_SCHEMA_VERSION,
             "rule_version": PROMOTION_RULE_VERSION,
             "rule_policy": str(arm.rule_policy),
             "parameter_policy": str(arm.param_policy),
-            "filter_family": family,
-            "price_basis": str(fitting_profile.price_basis),
+            "filter_family": family or str(arm.param_source),
+            "price_basis": str(fitting_profile.price_basis) if fitting_profile is not None else None,
             "dl_enabled": bool(arm.dl_enabled),
             "dl_id": str(arm.dl_id or "") if arm.dl_enabled else None,
             "consensus": (
@@ -78,9 +85,12 @@ def current_strategy_rules() -> tuple[dict, ...]:
             "rolling_profile_id": str(settings.profile_id),
             "rule": rule_payload,
             "rule_sha256": canonical_json_sha256(rule_payload),
-            "training_profile_id": profile_id,
-            "parameter_set_identity": str(fitting_profile.parameter_set_identity),
-            "registered_scientific_fingerprint_sha256": str(fitting_profile.registered_scientific_fingerprint_sha256 or ""),
+            "training_profile_id": profile_id or None,
+            "parameter_set_identity": str(fitting_profile.parameter_set_identity) if fitting_profile is not None else None,
+            "registered_scientific_fingerprint_sha256": (
+                str(fitting_profile.registered_scientific_fingerprint_sha256 or "")
+                if fitting_profile is not None else ""
+            ),
             "trading_supported": not problems,
             "trading_blockers": tuple(problems),
         })

@@ -51,6 +51,29 @@ def fixed_min_scientific_sha256() -> str:
     })
 
 
+
+def verify_fixed_min_source(source: object) -> bool:
+    """Verify a Fixed Min PIT teacher without importing the service that builds it.
+
+    The canonical source is fixed parameters for all time; only the FIT seed may
+    differ. This policy-layer validator must not depend on the PIT source class.
+    """
+    if source.source_id != FIXED_MIN_ID:
+        return False
+    if (source.param_sha256 != fixed_min_scientific_sha256()
+            or source.publication_dates != (FIXED_MIN_FIRST_EFFECTIVE_DATE,)
+            or source.oos_start_date is not None
+            or len(source.schedule) != 1):
+        return False
+    period = source.schedule[0]
+    return bool(
+        period.source_id == FIXED_MIN_ID
+        and str(period.start.date()) == FIXED_MIN_FIRST_EFFECTIVE_DATE
+        and period.params_signature == fixed_min_signature()
+        and build_portfolio_params_signature(period.params) == fixed_min_signature()
+    )
+
+
 def fixed_min_param_payload() -> dict:
     params = params_to_json_dict(fixed_min_params())
     return {
@@ -169,8 +192,14 @@ def ensure_fixed_min_robustness_parameter_artifact(project_root: Path) -> dict:
             with manifest_path.open("x", encoding="utf-8") as f:
                 json.dump(expected_manifest, f, ensure_ascii=False, sort_keys=True, indent=2)
                 f.write("\n")
-        except FileExistsError:
-            pass
+        except FileExistsError as exc:
+            # Another process may have published the same manifest concurrently.
+            # Accept only an independently verified exact canonical publication.
+            concurrent = inspect_fixed_min_robustness_parameter_artifact(project_root)
+            if concurrent["action"] != "REUSE":
+                raise ValueError(
+                    f"Fixed Min concurrent manifest publication invalid: {concurrent['status']}"
+                ) from exc
     state = inspect_fixed_min_robustness_parameter_artifact(project_root)
     if state["action"] != "REUSE":
         raise ValueError(f"Fixed Min benchmark publication invalid: {state['status']}")

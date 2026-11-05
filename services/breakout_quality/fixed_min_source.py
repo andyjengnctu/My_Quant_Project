@@ -8,8 +8,8 @@ from __future__ import annotations
 from core.fixed_min_policy import (
     FIXED_MIN_ID, FIXED_MIN_FIRST_EFFECTIVE_DATE,
     fixed_min_params, fixed_min_signature, fixed_min_scientific_sha256,
+    verify_fixed_min_source,
 )
-from core.portfolio_param_runtime import build_portfolio_params_signature
 
 def fixed_min_source(seed: int):
     """The same immutable constant params as the strategy (no Optimizer/P16)."""
@@ -30,19 +30,3 @@ def fixed_min_source(seed: int):
     )
 
 
-def verify_fixed_min_source(source) -> bool:
-    """Strictly prove one identical constant, without accepting fake Optimizer lineage."""
-    if source.source_id != FIXED_MIN_ID:
-        return False
-    if (source.param_sha256 != fixed_min_scientific_sha256()
-            or source.publication_dates != (FIXED_MIN_FIRST_EFFECTIVE_DATE,)
-            or source.oos_start_date is not None
-            or len(source.schedule) != 1):
-        return False
-    period = source.schedule[0]
-    return bool(
-        period.source_id == FIXED_MIN_ID
-        and str(period.start.date()) == FIXED_MIN_FIRST_EFFECTIVE_DATE
-        and period.params_signature == fixed_min_signature()
-        and build_portfolio_params_signature(period.params) == fixed_min_signature()
-    )
