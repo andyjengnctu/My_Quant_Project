@@ -417,7 +417,8 @@ def replay_identity(*, dataset: str, dataset_sha256: str, target: str,
     }
 
 
-def _validate_observation(observation: Mapping[str, Any], *, target: str, seed: int) -> dict[str, Any]:
+def _validate_observation(observation: Mapping[str, Any], *, target: str, seed: int,
+                          baseline_target: str = "C96") -> dict[str, Any]:
     row = dict(observation)
     if row.get("target") != target or int(row.get("seed", -1)) != int(seed):
         raise ValueError("Oracle cached observation has mismatched target / seed")
@@ -430,11 +431,17 @@ def _validate_observation(observation: Mapping[str, Any], *, target: str, seed: 
     for item in row["yearly"]:
         if not isinstance(item, dict) or not item.get("year") or not math.isfinite(float(item["strategy_return_pct"])):
             raise ValueError("Oracle cached yearly evidence incomplete")
+    if not isinstance(row["trades"], int) or isinstance(row["trades"], bool):
+        raise ValueError("Oracle cached trade count must be an integer")
+    for field in ("mdd_pct", "exposure_pct"):
+        if not 0.0 <= float(row[field]) <= 100.0:
+            raise ValueError(f"Oracle cached {field} outside valid percentage range")
     if "win_rate_pct" in row:
         win_rate = float(row["win_rate_pct"])
         if not math.isfinite(win_rate) or not 0.0 <= win_rate <= 100.0:
             raise ValueError("Oracle cached win rate must be a finite percentage in [0, 100]")
-    if target != "C96" and not math.isfinite(float(row["delta_romd_vs_c96"])):
+    contrast_field = "delta_romd_vs_" + baseline_target.lower()
+    if target != baseline_target and not math.isfinite(float(row[contrast_field])):
         raise ValueError("Oracle cached contrast is incomplete")
     return row
 

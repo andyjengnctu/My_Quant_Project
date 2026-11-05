@@ -187,15 +187,15 @@ class FixedMinContractTests(TestCase):
     def test_fixed_min_oracle_receipt_identity_includes_portfolio_engine(self):
         from unittest.mock import patch
         from services.audit import fixed_min_oracle_scope as fixed
+        from services.research.oracle_artifact_contract import portfolio_candidate_execution_sha256
 
-        with patch.object(fixed, 'compute_file_sha256',
-                          wraps=fixed.compute_file_sha256) as fingerprint:
-            digest = fixed._source_sha()
-        checked = {str(call.args[0].relative_to(Path(fixed.__file__).resolve().parents[2]))
-                   for call in fingerprint.call_args_list}
-        self.assertEqual(len(digest), 64)
-        self.assertIn('services/portfolio_replay.py', checked)
-        self.assertIn('core/portfolio_engine.py', checked)
+        owner = portfolio_candidate_execution_sha256()
+        self.assertEqual(len(owner), 64)
+        digest = fixed._source_sha()
+        with patch.object(fixed, 'portfolio_candidate_execution_sha256', return_value='f' * 64):
+            changed = fixed._source_sha()
+        self.assertNotEqual(digest, changed,
+                            'Fixed Oracle must bind the shared Portfolio candidate/capital owner')
 
     def test_immutable_artifact_reuse_and_drift_rejection(self):
         with TemporaryDirectory() as temp:

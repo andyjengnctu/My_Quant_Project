@@ -371,7 +371,7 @@ def _run_reusable_audit_method(module_id: str, method_id: str) -> int:
         # Existing signed P16 cells are not re-identified or re-executed.
         from services.audit.fixed_min_oracle_scope import (
             preview_fixed_min_oracle, execute_fixed_min_oracle,
-            render_fixed_min_oracle_result,
+            render_fixed_min_oracle_result, BASELINE as FIXED_MIN_BASELINE,
         )
         from services.audit.target_oracle_romd import render_replay_preflight
         from core.audit_registry import (
@@ -388,9 +388,9 @@ def _run_reusable_audit_method(module_id: str, method_id: str) -> int:
         decisions = {**preview["preflight"], **fixed_preview["preflight"]}
         if len(decisions) != len(preview["preflight"]) + len(fixed_preview["preflight"]):
             raise ValueError("FixedMin Oracle target collides with historical Replay key")
-        names = {"C96": "C96", "C139": "Fixed Min (無 DL)"}
-        strategies = {"C96": "Breakout", "C139": "Breakout"}
-        selectors = {"C96": "-", "C139": "-"}
+        names = {"C96": "C96", FIXED_MIN_BASELINE: "Fixed Min (無 DL)"}
+        strategies = {"C96": "Breakout", FIXED_MIN_BASELINE: "Breakout"}
+        selectors = {"C96": "-", FIXED_MIN_BASELINE: "-"}
         for key, (name, selector, entry_strategy) in descriptions.items():
             names[key], selectors[key], strategies[key] = name, selector, entry_strategy
         for row in definition.source["fixed_min_oracle_comparisons"]:

@@ -7625,6 +7625,18 @@ class OracleEffectiveArtifactContractCases(TestCase):
 class FixedMinOracleResearchContractCases(TestCase):
     """Fixed constants must not borrow P16 Oracle receipts or score sources."""
 
+    def setUp(self):
+        # No full Dataset artifact in these isolated temporary roots. Supply the
+        # exact shared effective-input projection, never disable its verifier.
+        from services.audit import fixed_min_oracle_scope as fixed
+        owner = patch.object(fixed, "dataset_input_contract", return_value={
+            "dataset": "full", "filter_id": str(fixed.SOURCE["filter_id"]),
+            "source_data_end_date": "2026-03-02",
+            "policy": {"synthetic": "fixed_min_oracle_fixture"},
+        })
+        owner.start()
+        self.addCleanup(owner.stop)
+
     def _signed_metrics(self, target, seed):
         romd = 8.0 if target == "C139" else 16.0
         yearly = [
@@ -7709,7 +7721,7 @@ class FixedMinOracleResearchContractCases(TestCase):
                               return_value=("rolling_active_param_ensemble", "BASE", "RANK")), \
                  patch.object(fixed, "get_dataset_dir", return_value=str(root)), \
                  patch.object(fixed, "_build_truth", return_value=(
-                     {("2330", "2021-01-04"): 1.0}, "score-sha", "cohort-sha")) as truth, \
+                     {("2330", "2021-01-04"): 1.0}, "a" * 64, "b" * 64)) as truth, \
                  patch.object(fixed, "_run_scenario", side_effect=fake_scenario), \
                  patch.object(fixed, "_metrics", side_effect=fake_metrics), \
                  patch.object(fixed, "audit_oracle_truth_score_context", side_effect=fake_ctx):
@@ -7783,7 +7795,7 @@ class FixedMinOracleResearchContractCases(TestCase):
                 reused = fixed._build_truth(root, identity)
                 self.assertEqual(reused, (scores, score_sha, cohort_sha))
                 self.assertEqual(producer.call_count, 1, "Signed same identity must reuse truth")
-                self.assertEqual(loader.call_count, 1, "Truth REUSE must not reload cohort")
+                self.assertEqual(loader.call_count, 2, "Truth REUSE rechecks canonical cohort membership")
 
     def test_fixed_min_oracle_rejects_trade_path_profile_as_cohort(self):
         from services.audit import fixed_min_oracle_scope as fixed
@@ -7825,6 +7837,197 @@ class FixedMinOracleResearchContractCases(TestCase):
                                             "compatible non-trade-path provider"):
                     fixed._build_truth(root, identity)
                 loader.assert_not_called()
+
+
+    def test_fixed_min_dataset_effective_policy_invalidates_reuse_without_touching_old_oracle(self):
+        from services.audit import fixed_min_oracle_scope as fixed
+        from services.research.oracle_artifact_contract import replay_implementation_sha256
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.object(fixed, "price_inventory_sha256", return_value="a" * 64), \
+             patch.object(fixed, "_source_state", return_value="REUSE"):
+            root = Path(tmp)
+            policy = {"dataset": "full", "filter_id": str(fixed.SOURCE["filter_id"]),
+                      "source_data_end_date": "2026-03-02"}
+            with patch.object(fixed, "dataset_input_contract", return_value=policy):
+                before = fixed.preview_fixed_min_oracle(project_root=root)
+                key = (before["seed_set"][0], fixed.BASELINE)
+                fixed._write_receipt(root, before["identities"][key],
+                    metrics=self._signed_metrics(*reversed(key)),
+                    score_sha="baseline_no_score", cohort_sha="baseline_no_score")
+                self.assertEqual(fixed.preview_fixed_min_oracle(project_root=root)["preflight"][key], "REUSE")
+            old_replay_owner = replay_implementation_sha256()
+            policy["source_data_end_date"] = "2025-12-31"
+            with patch.object(fixed, "dataset_input_contract", return_value=policy):
+                after = fixed.preview_fixed_min_oracle(project_root=root)
+            self.assertNotEqual(before["identities"][key], after["identities"][key])
+            self.assertEqual(after["preflight"][key], "RUN")
+            self.assertEqual(old_replay_owner, replay_implementation_sha256())
+
+    def test_fixed_min_candidate_calculation_source_changes_identity_but_not_legacy_oracle(self):
+        from services.audit import fixed_min_oracle_scope as fixed
+        from services.research import oracle_artifact_contract as shared
+        original_read = Path.read_text
+        def mutated_read(path, *args, **kwargs):
+            value = original_read(path, *args, **kwargs)
+            if path.name == "portfolio_day_candidates.py":
+                old = "occupied = len(portfolio) + len(sold_today)"
+                if old not in value:
+                    raise AssertionError("Portfolio candidate fixture no longer matches")
+                return value.replace(old, "occupied = 1 + len(portfolio) + len(sold_today)", 1)
+            return value
+        before = shared.portfolio_candidate_execution_sha256()
+        old_replay = shared.replay_implementation_sha256()
+        with patch.object(Path, "read_text", autospec=True, side_effect=mutated_read):
+            changed = shared.portfolio_candidate_execution_sha256()
+            self.assertNotEqual(before, changed)
+            # Previous P16 Replay witness does not gain a new dependency.
+            shared.replay_implementation_sha256.cache_clear()
+            self.assertEqual(old_replay, shared.replay_implementation_sha256())
+        with patch.object(fixed, "portfolio_candidate_execution_sha256", return_value="f" * 64):
+            changed_identity = fixed._source_sha()
+        self.assertNotEqual(fixed._source_sha(), changed_identity)
+
+    def test_fixed_min_forged_self_signed_receipts_fail_shared_validation(self):
+        from services.audit import fixed_min_oracle_scope as fixed
+        from core.file_integrity import canonical_json_sha256
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.object(fixed, "price_inventory_sha256", return_value="a" * 64):
+            root = Path(tmp)
+            identity = fixed._identity(root=root, seed=fixed._seeds()[0], target=fixed.BASELINE)
+            path = fixed._receipt_path(root, identity)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            normal = self._signed_metrics(fixed.BASELINE, identity["seed"])
+            for label, edit in (
+                ("win_over_100", lambda row: row.update(win_rate_pct=101.0)),
+                ("negative_trades", lambda row: row.update(trades=-1)),
+                ("missing_yearly", lambda row: row.update(yearly=[])),
+                ("invalid_drawdown", lambda row: row.update(mdd_pct=-1.0)),
+                ("annual_gap", lambda row: row.update(yearly=row["yearly"][1:])),
+            ):
+                with self.subTest(label=label):
+                    forged = dict(normal)
+                    forged["yearly"] = [dict(y) for y in normal["yearly"]]
+                    edit(forged)
+                    payload = {"identity": identity, "metrics": forged,
+                               "rank_sha256": "baseline_no_score",
+                               "cohort_sha256": "baseline_no_score"}
+                    path.write_text(json.dumps({**payload,
+                        "signature": canonical_json_sha256(payload)}), encoding="utf-8")
+                    with self.assertRaises(fixed.OracleBlockedError):
+                        fixed._read_receipt(root, identity)
+            # A valid signed observation still REUSEs.
+            payload["metrics"] = normal
+            path.write_text(json.dumps({**payload,
+                "signature": canonical_json_sha256(payload)}), encoding="utf-8")
+            self.assertIsNotNone(fixed._read_receipt(root, identity))
+
+    def test_fixed_min_authorization_rejects_price_identity_change_before_producer(self):
+        from services.audit import fixed_min_oracle_scope as fixed
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.object(fixed, "_source_state", return_value="BUILD"):
+            root = Path(tmp)
+            with patch.object(fixed, "price_inventory_sha256", return_value="a" * 64):
+                approval = fixed.preview_fixed_min_oracle(project_root=root)
+            with patch.object(fixed, "price_inventory_sha256", return_value="b" * 64), \
+                 patch.object(fixed, "ensure_fixed_min_robustness_parameter_artifact") as producer:
+                with self.assertRaisesRegex(fixed.OracleBlockedError, "approval identity changed"):
+                    fixed.execute_fixed_min_oracle(project_root=root, approved_plan=approval)
+                producer.assert_not_called()
+
+    def test_fixed_min_authorization_rejects_execution_source_change_before_producer(self):
+        from services.audit import fixed_min_oracle_scope as fixed
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.object(fixed, "_source_state", return_value="BUILD"), \
+             patch.object(fixed, "price_inventory_sha256", return_value="a" * 64):
+            root = Path(tmp)
+            approval = fixed.preview_fixed_min_oracle(project_root=root)
+            with patch.object(fixed, "portfolio_candidate_execution_sha256", return_value="f" * 64), \
+                 patch.object(fixed, "ensure_fixed_min_robustness_parameter_artifact") as producer:
+                with self.assertRaisesRegex(fixed.OracleBlockedError, "approval identity changed"):
+                    fixed.execute_fixed_min_oracle(project_root=root, approved_plan=approval)
+                producer.assert_not_called()
+
+    def test_fixed_min_authorization_rejects_missing_signed_identity(self):
+        from services.audit import fixed_min_oracle_scope as fixed
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.object(fixed, "_source_state", return_value="BUILD"), \
+             patch.object(fixed, "price_inventory_sha256", return_value="a" * 64):
+            root = Path(tmp)
+            approval = fixed.preview_fixed_min_oracle(project_root=root)
+            unsigned = {**approval, "identities": {}}
+            with patch.object(fixed, "ensure_fixed_min_robustness_parameter_artifact") as producer:
+                with self.assertRaisesRegex(fixed.OracleBlockedError, "approval identity changed"):
+                    fixed.execute_fixed_min_oracle(project_root=root, approved_plan=unsigned)
+                producer.assert_not_called()
+
+    def test_fixed_min_truth_reader_rejects_forged_self_signed_membership(self):
+        from services.audit import fixed_min_oracle_scope as fixed
+        from core.file_integrity import canonical_json_sha256
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.object(fixed, "price_inventory_sha256", return_value="a" * 64):
+            root = Path(tmp)
+            identity = fixed._truth_identity(root)
+            correct_group = pd.DataFrame([{
+                "ticker": "2330", "date": pd.Timestamp("2021-01-04")
+            }])
+            cohort_sha = fixed._cohort_sha(correct_group)
+            # Forged NPZ is self-consistent, but keys are not the certified source cohort.
+            wrong = {("9999", "2021-01-04"): 1.0}
+            payload = {"identity": identity,
+                       "score_sha256": fixed._rank_sha(wrong),
+                       "cohort_sha256": cohort_sha, "rows": 1}
+            path = fixed._truth_path(root, identity)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("wb") as target:
+                np.savez_compressed(target,
+                    metadata=np.asarray(json.dumps({**payload,
+                        "signature": canonical_json_sha256(payload)})),
+                    ticker=np.asarray(["9999"]), day=np.asarray(["2021-01-04"]),
+                    score=np.asarray([1.0]))
+            with patch.object(fixed, "_eligible_group", return_value=correct_group):
+                with self.assertRaisesRegex(fixed.OracleBlockedError,
+                                            "truth corrupt, cannot reuse"):
+                    fixed._read_truth(root, identity)
+
+    def test_fixed_min_truth_worker_rejects_equal_count_wrong_ticker(self):
+        from services.audit import fixed_min_oracle_scope as fixed
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.object(fixed, "price_inventory_sha256", return_value="a" * 64):
+            root = Path(tmp)
+            identity = fixed._truth_identity(root)
+            correct_group = pd.DataFrame([{"ticker": "2330", "date": pd.Timestamp("2021-01-04")}])
+            inputs = [("2330", root / "2330.csv")]
+            path_result = pd.DataFrame([{"ticker": "9999",
+                "date": "2021-01-04", "realized_net_pnl": 123.0}])
+            with patch.object(fixed, "_eligible_group", return_value=correct_group), \
+                 patch.object(fixed, "discover_dataset_csv_inputs", return_value=(inputs, ())), \
+                 patch.object(fixed, "collect_canonical_exchange_sessions",
+                              return_value=pd.DatetimeIndex([pd.Timestamp("2021-01-04")])), \
+                 patch.object(fixed, "_run_ticker_outcomes",
+                              return_value=([path_result], 0, 0)):
+                with self.assertRaisesRegex(fixed.OracleBlockedError,
+                                            "worker ticker/date membership differs"):
+                    fixed._build_truth(root, identity)
+
+    def test_fixed_min_shared_economics_changes_identity(self):
+        from services.audit import fixed_min_oracle_scope as fixed
+        from config import broker_accounting as broker
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.object(fixed, "price_inventory_sha256", return_value="a" * 64):
+            root = Path(tmp)
+            seed = fixed._seeds()[0]
+            base = fixed._identity(root=root, seed=seed, target=fixed.BASELINE)
+            from decimal import Decimal
+            with patch.object(broker, "BROKER_ODD_LOT_MIN_FEE_TWD", Decimal("2")):
+                mutated = fixed._identity(root=root, seed=seed, target=fixed.BASELINE)
+            self.assertNotEqual(base, mutated)
+
+    def test_fixed_min_registry_missing_selector_fails_closed(self):
+        from services.audit import fixed_min_oracle_scope as fixed
+        with patch.object(fixed, "COMPARISONS", fixed.COMPARISONS[:1]):
+            with self.assertRaisesRegex(fixed.OracleBlockedError, "one Exact and one Direct"):
+                fixed._rows()
+
 
 if __name__ == "__main__":
     main(verbosity=2)

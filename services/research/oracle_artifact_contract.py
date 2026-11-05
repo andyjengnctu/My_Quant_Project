@@ -319,6 +319,71 @@ def replay_implementation_sha256() -> str:
         ast.parse((code_root / relative).read_text(encoding="utf-8-sig")))) for relative in owners})
 
 
+def broker_cash_economics_contract() -> dict[str, Any]:
+    """Economic terms actually consumed by Research Broker-Cash replay.
+
+    Do not include the electronic-discount reference ratio: refunds are manual
+    Trading cash operations, not current Research fee receivables.
+    """
+    from config import broker_accounting as broker
+    from config.execution_policy import EXECUTION_POLICY_PARAM_SPECS
+    return {
+        "broker_policy_id": broker.BROKER_ACCOUNTING_POLICY_ID,
+        "fee_rate": str(broker.BROKER_FEE_RATE),
+        "min_fee_twd": str(broker.BROKER_MIN_FEE_TWD),
+        "odd_lot_min_fee_twd": str(broker.BROKER_ODD_LOT_MIN_FEE_TWD),
+        "board_lot_shares": int(broker.BROKER_BOARD_LOT_SHARES),
+        "stock_tax_rate": str(broker.BROKER_STOCK_TAX_RATE),
+        "rounding_mode": broker.BROKER_CHARGE_ROUNDING_MODE,
+        "strategy_param_defaults": {
+            name: spec["default"] for name, spec in EXECUTION_POLICY_PARAM_SPECS.items()
+        },
+    }
+
+
+def portfolio_candidate_execution_sha256() -> str:
+    """Executable Broker-Cash portfolio capabilities for newly registered scopes.
+
+    This extends the shared replay witness without revising the frozen
+    ``replay_implementation_sha256`` consumed by existing P16 Oracle receipts.
+    The dependency inventory covers the candidate/capacity/entry/exit/equity
+    owners reached through ``run_portfolio_timeline`` and its replay adapter.
+    AST projection ignores comments and docstrings but captures executable
+    changes, including daily candidate capacity and selector decisions.
+    """
+    code_root = Path(__file__).resolve().parents[2]
+    owners = (
+        "core/portfolio_engine.py", "core/portfolio_day_candidates.py",
+        "core/portfolio_candidate_admission.py", "core/portfolio_candidates.py",
+        "core/portfolio_day_context.py", "core/portfolio_day_events.py",
+        "core/portfolio_replay_support.py", "core/portfolio_benchmark.py",
+        "core/portfolio_day_equity.py", "core/portfolio_day_signal_lifecycle.py",
+        "core/portfolio_capacity_rows.py", "core/portfolio_terminal_equity.py",
+        "core/portfolio_terminal_statistics.py",
+        "core/portfolio_terminal_reporting.py", "core/portfolio_run_result.py",
+        "core/portfolio_entries.py",
+        "core/portfolio_exits.py", "core/portfolio_entry_selection.py",
+        "core/portfolio_entry_selection_common.py",
+        "core/portfolio_entry_selection_max_dl.py",
+        "core/portfolio_ensemble.py", "core/portfolio_entry_plans.py",
+        "core/portfolio_entry_policy.py", "core/portfolio_param_runtime.py",
+        "core/portfolio_fast_data.py", "core/portfolio_stats.py",
+        "core/portfolio_fast_access.py",
+        "core/buy_sort.py", "core/backtest_core.py", "core/backtest_finalize.py",
+        "core/seed_ensemble_policy.py", "core/history_filters.py",
+        "services/portfolio_replay.py", "services/portfolio_replay_runtime.py",
+    )
+    parts = {}
+    for relative in dict.fromkeys(owners):
+        path = code_root / relative
+        if not path.is_file():
+            raise ValueError(f"Oracle replay numerical owner missing: {relative}")
+        parsed = ast.parse(path.read_text(encoding="utf-8-sig"))
+        parts[relative] = canonical_json_sha256(
+            _syntax_payload(_CalculationSyntax().visit(parsed)))
+    return canonical_json_sha256(parts)
+
+
 @lru_cache(maxsize=32)
 def source_implementation_sha256(recipe: str, profile_id: str) -> str:
     parts = {"daily_percentile": calculation_source(
