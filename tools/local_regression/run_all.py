@@ -59,7 +59,11 @@ from tools.local_regression.shared_prep_cache import (
 SCRIPT_ORDER = list(FORMAL_COMMAND_ORDER)
 SCRIPT_TIMEOUT_GRACE_SEC = 30
 STEP_NAMES = list(FORMAL_STEP_ORDER)
-PARALLEL_STEP_NAMES = {"quick_gate", "consistency", "chain_checks", "ml_smoke"}
+# AI: Consistency is a long-running coverage workload. Running it alongside
+# ML Smoke increases parent wall-time variance without making it complete any
+# earlier. Run the three short independent checks concurrently first, then
+# Consistency alone; retain actual parent wall-time and the unchanged budgets.
+PARALLEL_STEP_NAMES = {"quick_gate", "chain_checks", "ml_smoke"}
 ProgressCallback = Callable[[str, Dict[str, Any]], None]
 
 
@@ -1100,10 +1104,15 @@ def execute_all(
         for script_offset, (name, relative_script, summary_name) in enumerate(selected_script_order, start=next_major_index):
             timeout_sec = _resolve_step_timeout(name, manifest)
             spec = (script_offset, name, relative_script, summary_name, timeout_sec)
-            if parallel_workers > 1 and name in PARALLEL_STEP_NAMES:
+            # AI: Do not queue more subprocesses than the executor can run
+            # concurrently. Queued work belongs to the serial critical path.
+            if parallel_workers > 1 and name in PARALLEL_STEP_NAMES and len(parallel_specs) < parallel_workers:
                 parallel_specs.append(spec)
             else:
                 serial_specs.append(spec)
+
+        # AI: Parent timing must reflect actual concurrency, including single-worker runs.
+        effective_parallel_step_names = {spec[1] for spec in parallel_specs}
 
         if parallel_specs:
             for script_offset, name, _relative_script, _summary_name, timeout_sec in parallel_specs:
@@ -1217,7 +1226,7 @@ def execute_all(
                 parent_wall_summary = build_parent_wall_time_summary(
                     script_summaries_by_name=parent_timing_inputs,
                     selected_step_names=selected_step_names,
-                    parallel_step_names=PARALLEL_STEP_NAMES,
+                    parallel_step_names=effective_parallel_step_names,
                     manifest=manifest,
                 )
                 merge_parent_wall_time_into_meta_quality_summary(run_dir, parent_wall_summary)
@@ -1243,7 +1252,7 @@ def execute_all(
             parent_wall_summary = build_parent_wall_time_summary(
                 script_summaries_by_name=script_summaries_by_name,
                 selected_step_names=selected_step_names,
-                parallel_step_names=PARALLEL_STEP_NAMES,
+                parallel_step_names=effective_parallel_step_names,
                 manifest=manifest,
             )
         for failed_step_name in parent_wall_summary.get("failed_budget_steps", []):

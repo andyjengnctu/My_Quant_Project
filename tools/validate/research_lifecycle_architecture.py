@@ -8,6 +8,7 @@ Its behavioral counterpart exercises the canonical owner with mutation cases.
 from __future__ import annotations
 
 import ast
+from collections import OrderedDict
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -52,7 +53,10 @@ def _parse_snapshot_source(filename: str, source: str) -> ast.Module:
     A path-only or mtime-only cache would hide regressions; source-keyed entries
     cannot mistake an injected variant for the original snapshot.
     """
-    return ast.parse(source, filename=filename)
+    tree = ast.parse(source, filename=filename)
+    tree._snapshot_source = source  # AI: content-keyed structural probe reuse
+    tree._snapshot_filename = filename
+    return tree
 
 
 @dataclass(frozen=True)
@@ -65,12 +69,32 @@ class _FunctionFacts:
     value_return: bool
 
 
+# AI: Structural mutation tests make many in-memory variants of a large
+# producer module. Key each function by its actual source bytes, not by its
+# module path or timestamp, so untouched functions need not be walked again.
+# Keep a bounded cache and include decorators/defaults in the source slice.
+_FUNCTION_FACT_CACHE: OrderedDict[tuple[str, str, str], _FunctionFacts] = OrderedDict()
+_FUNCTION_FACT_CACHE_LIMIT = 512
+
+
 @lru_cache(maxsize=24)
 def _top_level_function_facts(filename: str, source: str) -> dict[str, _FunctionFacts]:
-    """Scan each top-level function once for all independent owner guards."""
-    facts = {}
+    """Preserve source-mutation detection while reusing unchanged function facts."""
+    facts: dict[str, _FunctionFacts] = {}
     tree = _parse_snapshot_source(filename, source)
+    lines = source.splitlines(keepends=True)
     for name, fn in _defs(tree).items():
+        first_line = min(
+            [fn.lineno, *(decorator.lineno for decorator in fn.decorator_list)]
+        )
+        last_line = fn.end_lineno or fn.lineno
+        segment = "".join(lines[first_line - 1:last_line])
+        key = (filename, name, segment)
+        cached = _FUNCTION_FACT_CACHE.get(key)
+        if cached is not None:
+            _FUNCTION_FACT_CACHE.move_to_end(key)
+            facts[name] = cached
+            continue
         calls: set[str] = set()
         tokens: set[str] = set()
         attributes: set[str] = set()
@@ -91,10 +115,14 @@ def _top_level_function_facts(filename: str, source: str) -> dict[str, _Function
                 attributes.add(node.attr)
             elif isinstance(node, ast.Return) and node.value is not None:
                 value_return = True
-        facts[name] = _FunctionFacts(
+        function_facts = _FunctionFacts(
             frozenset(calls), frozenset(tokens), frozenset(attributes),
             frozenset(attribute_calls), path_probe, value_return,
         )
+        _FUNCTION_FACT_CACHE[key] = function_facts
+        if len(_FUNCTION_FACT_CACHE) > _FUNCTION_FACT_CACHE_LIMIT:
+            _FUNCTION_FACT_CACHE.popitem(last=False)
+        facts[name] = function_facts
     return facts
 
 
@@ -105,20 +133,69 @@ class _ModuleFacts:
     absolute_imports: frozenset[str]
 
 
+# AI: Whole-module AST walks were repeated for each one-function mutation.
+# Cache each top-level statement's facts by the exact source range (including
+# decorators), so an altered statement is rescanned and unrelated statements
+# do not pay another AST walk. No filesystem/path-only reuse is permitted.
+_MODULE_NODE_FACT_CACHE: OrderedDict[
+    tuple[str, str, int, int, str],
+    tuple[frozenset[str], dict[str, frozenset[str]], frozenset[str]],
+] = OrderedDict()
+_MODULE_NODE_FACT_CACHE_LIMIT = 1024
+
+
 @lru_cache(maxsize=24)
 def _module_facts(tree: ast.AST) -> _ModuleFacts:
-    """Scan unchanged snapshot AST imports/calls once across mutation checks."""
+    """Scan the complete module while memoizing unchanged syntax subtrees."""
     calls: set[str] = set()
     imports: dict[str, set[str]] = {}
     absolute_imports: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom):
-            if node.module:
-                imports.setdefault(node.module, set()).update(a.name for a in node.names)
-        elif isinstance(node, ast.Import):
-            absolute_imports.update(a.name for a in node.names)
-        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-            calls.add(node.func.id)
+    source = getattr(tree, "_snapshot_source", None)
+    filename = getattr(tree, "_snapshot_filename", "")
+    lines = source.splitlines(keepends=True) if isinstance(source, str) else None
+    for top_level in getattr(tree, "body", (tree,)):
+        key = None
+        cached = None
+        if lines is not None and hasattr(top_level, "lineno"):
+            decorators = getattr(top_level, "decorator_list", ())
+            first_line = min([top_level.lineno, *(d.lineno for d in decorators)])
+            last_line = top_level.end_lineno or top_level.lineno
+            key = (
+                filename,
+                type(top_level).__name__,
+                int(getattr(top_level, "col_offset", 0)),
+                int(getattr(top_level, "end_col_offset", 0)),
+                "".join(lines[first_line - 1:last_line]),
+            )
+            cached = _MODULE_NODE_FACT_CACHE.get(key)
+        if cached is None:
+            node_calls: set[str] = set()
+            node_imports: dict[str, set[str]] = {}
+            node_absolute_imports: set[str] = set()
+            for node in ast.walk(top_level):
+                if isinstance(node, ast.ImportFrom):
+                    if node.module:
+                        node_imports.setdefault(node.module, set()).update(a.name for a in node.names)
+                elif isinstance(node, ast.Import):
+                    node_absolute_imports.update(a.name for a in node.names)
+                elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                    node_calls.add(node.func.id)
+            cached = (
+                frozenset(node_calls),
+                {name: frozenset(names) for name, names in node_imports.items()},
+                frozenset(node_absolute_imports),
+            )
+            if key is not None:
+                _MODULE_NODE_FACT_CACHE[key] = cached
+                if len(_MODULE_NODE_FACT_CACHE) > _MODULE_NODE_FACT_CACHE_LIMIT:
+                    _MODULE_NODE_FACT_CACHE.popitem(last=False)
+        else:
+            _MODULE_NODE_FACT_CACHE.move_to_end(key)
+        node_calls, node_imports, node_absolute_imports = cached
+        calls.update(node_calls)
+        for name, symbols in node_imports.items():
+            imports.setdefault(name, set()).update(symbols)
+        absolute_imports.update(node_absolute_imports)
     return _ModuleFacts(
         frozenset(calls),
         {name: frozenset(symbols) for name, symbols in imports.items()},

@@ -1557,9 +1557,12 @@ def validate_registry_checklist_entry_consistency_case(_base_params):
     validator_name_set = set(validator_names)
     imported_validate_names = load_imported_validate_names_from_synthetic_main_entry(PROJECT_ROOT)
     defined_validate_names = load_defined_validate_names_from_synthetic_case_modules(PROJECT_ROOT)
-    current_test_statuses = derive_checklist_state(CHECKLIST_PATH)["test_statuses"]
-    done_test_rows = load_done_test_rows(CHECKLIST_PATH)
-    done_b_rows = load_done_b_rows(CHECKLIST_PATH)
+    checklist_state = derive_checklist_state(CHECKLIST_PATH)
+    current_test_statuses = checklist_state["test_statuses"]
+    done_test_rows = load_done_test_rows(CHECKLIST_PATH, state=checklist_state)
+    done_b_rows = load_done_b_rows(CHECKLIST_PATH, state=checklist_state)
+    # Keep this check independent of the canonical JSON state: the persisted
+    # Markdown view must still be inspected for desynchronization.
     main_statuses = load_main_statuses(load_checklist_tables(CHECKLIST_PATH))
 
     add_check(results, "meta_registry", case_id, "validator_registry_not_empty", True, len(validator_entries) > 0)

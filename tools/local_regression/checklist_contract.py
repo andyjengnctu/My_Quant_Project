@@ -327,8 +327,10 @@ def derive_checklist_state(checklist_path: Path) -> Dict[str, object]:
     }
 
 
-def load_main_catalog(checklist_path: Path) -> Dict[str, Dict[str, str]]:
-    tables = derive_checklist_state(checklist_path)["tables"]
+def load_main_catalog(
+    checklist_path: Path, *, state: Mapping[str, Any] | None = None,
+) -> Dict[str, Dict[str, str]]:
+    tables = (state if state is not None else derive_checklist_state(checklist_path))["tables"]
     catalog: Dict[str, Dict[str, str]] = {}
     for cols in tables["B1"]:
         if len(cols) > 5:
@@ -340,17 +342,28 @@ def load_main_catalog(checklist_path: Path) -> Dict[str, Dict[str, str]]:
     return catalog
 
 
-def load_done_test_rows(checklist_path: Path) -> List[Dict[str, str]]:
+def load_done_test_rows(
+    checklist_path: Path, *, state: Mapping[str, Any] | None = None,
+) -> List[Dict[str, str]]:
+    # AI: A single validator may consume several views from one immutable
+    # checklist snapshot. Share its state only within that validator; default
+    # calls still reload to observe subsequent checklist edits.
+    tables = (state if state is not None else derive_checklist_state(checklist_path))["tables"]
     return [
         {"id": cols[0], "name": cols[1].replace("`", "").strip(), "b_id": cols[2]}
-        for cols in derive_checklist_state(checklist_path)["tables"]["T"] if len(cols) >= 3
+        for cols in tables["T"] if len(cols) >= 3
     ]
 
 
-def load_done_b_rows(checklist_path: Path) -> List[Dict[str, str]]:
+def load_done_b_rows(
+    checklist_path: Path, *, state: Mapping[str, Any] | None = None,
+) -> List[Dict[str, str]]:
     return [
         {"kind": row["kind"], "b_id": b_id, "item": row["item"], "entry": row["entry"]}
-        for b_id, row in sorted(load_main_catalog(checklist_path).items(), key=lambda pair: _tracking_id_sort_key(pair[0]))
+        for b_id, row in sorted(
+            load_main_catalog(checklist_path, state=state).items(),
+            key=lambda pair: _tracking_id_sort_key(pair[0]),
+        )
         if row["status"] == "DONE"
     ]
 

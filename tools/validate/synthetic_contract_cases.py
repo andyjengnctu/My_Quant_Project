@@ -1121,9 +1121,11 @@ def validate_run_all_dataset_prepare_pass_main_contract_case(_base_params):
 
         summary_name_by_script = {script: summary_name for _name, script, summary_name in run_all_module.SCRIPT_ORDER}
         child_envs = []
+        observed_execution_modes = {}
 
         def _fake_run_script(*, name, relative_script, timeout_sec, env, log_path, progress_callback, major_index, major_total, execution_mode="serial"):
             child_envs.append(dict(env))
+            observed_execution_modes[name] = execution_mode
             payload = {
                 "status": "PASS",
                 "failures": [],
@@ -1188,14 +1190,18 @@ def validate_run_all_dataset_prepare_pass_main_contract_case(_base_params):
         )
 
     check("run_all_main_dataset_prepare_pass_return_code", 0, rc)
+    check("run_all_coverage_consistency_runs_without_parallel_resource_competition", "serial", observed_execution_modes.get("consistency"))
+    check("run_all_short_checks_keep_parallel_execution", {"quick_gate", "chain_checks", "ml_smoke"}, {
+        name for name, mode in observed_execution_modes.items() if mode == "parallel"
+    })
     check("run_all_main_dataset_prepare_pass_overall_status", "PASS", master_summary.get("overall_status"))
     check("run_all_main_dataset_prepare_payload_status", "PASS", master_summary.get("dataset_prepare", {}).get("status"))
     check("run_all_main_dataset_prepare_not_run_steps_empty", [], master_summary.get("not_run_step_names", []))
     check("run_all_main_dataset_prepare_selected_steps", list(run_all_module.STEP_NAMES), master_summary.get("selected_steps"))
     check("run_all_parent_wall_time_source_is_persisted", formal_wall_time_module.FORMAL_WALL_TIME_SOURCE, master_summary.get("formal_wall_time", {}).get("source"))
-    check("run_all_parent_wall_time_critical_path_uses_outer_durations", 0.04, master_summary.get("formal_wall_time", {}).get("critical_path_duration_sec"))
+    check("run_all_parent_wall_time_critical_path_uses_outer_durations", 0.06, master_summary.get("formal_wall_time", {}).get("critical_path_duration_sec"))
     check("meta_quality_receives_parent_wall_time_source", formal_wall_time_module.FORMAL_WALL_TIME_SOURCE, meta_quality_summary.get("performance", {}).get("formal_wall_time_source"))
-    check("meta_quality_receives_parent_wall_time_critical_path", 0.04, meta_quality_summary.get("performance", {}).get("critical_path_duration_sec"))
+    check("meta_quality_receives_parent_wall_time_critical_path", 0.06, meta_quality_summary.get("performance", {}).get("critical_path_duration_sec"))
     check("run_all_formal_primary_param_file_exists", True, formal_param_exists)
     check("run_all_formal_primary_param_uses_current_config_defaults", params_to_json_dict(V16StrategyParams()), formal_param_payload)
     check("run_all_all_child_steps_receive_isolated_param_override", [str(formal_param_path)] * len(child_param_paths), child_param_paths)
@@ -1441,8 +1447,15 @@ def validate_meta_quality_performance_memory_contract_case(_base_params):
             parallel_step_names=run_all_module.PARALLEL_STEP_NAMES,
             manifest=manifest,
         )
-        check("performance_parallel_critical_path_uses_parent_wall_max_not_sum", 5.25, parent_wall.get("critical_path_duration_sec"))
+        check("performance_isolated_consistency_critical_path_includes_serial_duration", 7.25, parent_wall.get("critical_path_duration_sec"))
         check("performance_parent_aggregate_duration_retained_for_diagnostics", 11.25, parent_wall.get("aggregate_step_duration_sec"))
+        serial_wall = formal_wall_time_module.build_parent_wall_time_summary(
+            script_summaries_by_name=parent_script_summaries,
+            selected_step_names=["quick_gate", "consistency", "chain_checks", "ml_smoke", "meta_quality"],
+            parallel_step_names=set(),
+            manifest=manifest,
+        )
+        check("performance_single_worker_critical_path_counts_every_serial_step", 11.25, serial_wall.get("critical_path_duration_sec"))
         check("performance_parent_wall_time_is_canonical_source", formal_wall_time_module.FORMAL_WALL_TIME_SOURCE, parent_wall.get("source"))
 
         strict_time_manifest = dict(manifest)
