@@ -1070,7 +1070,23 @@ def append_completed_pair_score_reuse_contract_checks(
         forward_frame = pd.DataFrame({
             "ticker": ["2330"], "date": ["2021-01-04"],
             "group_index": [0], "model_score": [0.20],
+            # Shared-safety multi-output profiles require this sidecar even
+            # when the test is about score-file replacement, not safety.
+            "raw_safety_score": [0.60],
         })
+        # Reject an incomplete publication before exercising same-path reuse.
+        # Otherwise the revision-cache test never reaches its actual subject.
+        forward_frame.drop(columns="raw_safety_score").to_csv(
+            forward_path, index=False, encoding="utf-8-sig"
+        )
+        try:
+            forward_owner.load_continuous_ranker_oos_score_table_from_path(
+                str(forward_path), profile
+            )
+        except ValueError as exc:
+            missing_sidecar_rejected = "raw_safety_score" in str(exc)
+        else:
+            missing_sidecar_rejected = False
         forward_frame.to_csv(forward_path, index=False, encoding="utf-8-sig")
         old_forward = forward_owner.load_continuous_ranker_oos_score_table_from_path(
             str(forward_path), profile
@@ -1117,9 +1133,21 @@ def append_completed_pair_score_reuse_contract_checks(
         pit_frame = pd.DataFrame({
             "ticker": ["2330"], "date": ["2021-01-04"],
             "group_index": [0], "breakout_quality_score": [0.25],
+            "raw_safety_score": [0.60],
             "fold_id": ["fold_fixture"],
             "model_information_cutoff": ["2020-12-31"],
         })
+        pit_frame.drop(columns="raw_safety_score").to_csv(
+            pit_path, index=False, encoding="utf-8-sig"
+        )
+        try:
+            forward_owner.load_selection_point_in_time_score_table_from_path(
+                str(pit_path), experiment_profile=profile
+            )
+        except ValueError as exc:
+            missing_pit_sidecar_rejected = "raw_safety_score" in str(exc)
+        else:
+            missing_pit_sidecar_rejected = False
         pit_frame.to_csv(pit_path, index=False, encoding="utf-8-sig")
         old_pit = forward_owner.load_selection_point_in_time_score_table_from_path(
             str(pit_path), experiment_profile=profile
@@ -1168,12 +1196,13 @@ def append_completed_pair_score_reuse_contract_checks(
         "forward_oos_same_path_republication_invalidates_override_and_canonical_score_cache",
         True, old_value == 0.20 and changed_value == 0.90 and canonical_value == 0.90
         and float(old_canonical.loc[("2330", "2021-01-04"), "model_score"]) == 0.20
-        and signature_collision and invalid_forward_rejected,
+        and signature_collision and invalid_forward_rejected
+        and missing_sidecar_rejected,
     )
     add_check(
         results, "synthetic_breakout_quality", case_id,
         "pit_isolated_same_stat_atomic_replacement_reloads_without_manual_cache_clear",
-        True, pit_reloaded,
+        True, pit_reloaded and missing_pit_sidecar_rejected,
     )
     add_check(
         results, "synthetic_breakout_quality", case_id,
