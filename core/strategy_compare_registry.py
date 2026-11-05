@@ -142,7 +142,7 @@ STRATEGY_COMPARE_SUITES = {
         "arm_ids": (
             "C96", "C97", "C98", "C99", "C100", "C101", "C102", "C103",
             "C105", "C106", "C107", "C108", "C109", "C110",
-            "C111", "C112", "C115", "C116", "C117", "C118", "C119", "C120", "C121", "C122", "C123", "C124", "C125", "C126", "C133", "C134", "C135", "C136",
+            "C111", "C112", "C115", "C116", "C117", "C118", "C119", "C120", "C121", "C122", "C123", "C124", "C125", "C126", "C133", "C134", "C135", "C136", "C137", "C138",
         ),
         # A compact connected contrast graph supports each selected model
         # versus C96 plus the matched CK/CJ label contrast. Historical AO/CH
@@ -157,6 +157,7 @@ STRATEGY_COMPARE_SUITES = {
             "C109-C96", "C110-C96", "C111-C96", "C112-C96", "C115-C96", "C116-C96", "C117-C96", "C118-C96", "C119-C96", "C120-C96", "C121-C96", "C122-C96", "C123-C96", "C124-C96", "C125-C96", "C126-C96", "C133-C96", "C134-C96", "C135-C96", "C136-C96",
             "C109-C107", "C110-C108", "C111-C112", "C115-C116", "C105-C117", "C106-C118", "C119-C120", "C121-C122", "C123-C124", "C125-C126", "C123-C125", "C124-C126", "C121-C123", "C122-C124", "C133-C134", "C135-C136", "C133-C135", "C134-C136",
             "C110-C109", "C111-C115", "C112-C116",
+            "C137-C96", "C138-C96", "C137-C138", "C137-C133", "C138-C134",
         ),
         "display_name_bases": {
             "C96": "Min Base-Finalist-Best / Broker-Cash",
@@ -190,7 +191,10 @@ STRATEGY_COMPARE_SUITES = {
             "C133": "Daily Min MR-13CT Rank + Positive Exact K/R0 / Broker-Cash",
             "C134": "Daily Min MR-13CT Rank + Positive Direct No-K No-R0 / Broker-Cash",
             "C135": "Min MR-13CT Rank + Positive Exact K/R0 / Broker-Cash",
-            "C136": "Min MR-13CT Rank + Positive Direct No-K No-R0 / Broker-Cash",        },
+            "C136": "Min MR-13CT Rank + Positive Direct No-K No-R0 / Broker-Cash",
+            "C137": "Daily Min MR-13CU NetPnL Rank Exact K/R0 / Broker-Cash",
+            "C138": "Daily Min MR-13CU NetPnL Rank Direct No-K No-R0 / Broker-Cash",
+        },
     },
     "non_dl_c85_same_signal_revalidation_v1": {
         "arm_ids": ("C58", "C61", "C95"),
@@ -2278,6 +2282,16 @@ STRATEGY_DL_SOURCES = {
         "forward_scores_builder": {"enabled": True, "builder_type": "selection_pit_from_existing_folds",
                                    "options": {"resume": True, "allow_stale_source": False}},
     },
+    "CONT13CU_ROLL": {
+        "filter_id": "breakout_quality_v1",
+        "model_architecture": "inception_time_v1",
+        "experiment_profile": "true_daily_universal_mintrade_fullcycle_netpnl_full_list_ndcg_pairwise",
+        "threshold": None, "score_source": "selection_point_in_time",
+        "single_seed_strategy_conversion_authorized": True,
+        "description": "MR-13CU TrueDaily continuous NetPnL rank; Daily Exact/Direct share one PIT source without Positive admission.",
+        "forward_scores_builder": {"enabled": True, "builder_type": "selection_pit_from_existing_folds",
+                                   "options": {"resume": True, "allow_stale_source": False}},
+    },
     "CONT13CK_ROLL": {
         "filter_id": "breakout_quality_v1",
         "model_architecture": "inception_time_v1",
@@ -2747,6 +2761,33 @@ STRATEGY_COMPARE_ARMS = {
         },
         "robustness_role": "off",
     },
+    "C137": {
+        "replay_contract_version": 1,
+        "name": "Daily Min MR-13CU NetPnL Rank Exact K/R0 / Broker-Cash",
+        "description": "TrueDaily continuous NetPnL PIT rank without Positive admission; next-exchange-session limit entry and canonical Min P16 exit/cash/costs.",
+        "param_source": "min_best_broker_cash_rolling_experiment",
+        "param_policy": "base-finalist-best", "rule_policy": "all_off",
+        "dl_enabled": True, "dl_id": "CONT13CU_ROLL",
+        "dl_runtime_mode": "resource-aware-continuous-score-constrained-optimal",
+        "dl_runtime_options": {
+            "preserve_k_r0": True, "constrained_solver": "exact_branch_and_bound_v1", "selection_only": True,
+        },
+        "robustness_role": "off", "entry_strategy": "Daily",
+    },
+    "C138": {
+        "replay_contract_version": 1,
+        "name": "Daily Min MR-13CU NetPnL Rank Direct No-K No-R0 / Broker-Cash",
+        "description": "Same TrueDaily continuous NetPnL PIT rank and Daily Min execution as C137; Direct No-K/No-R0 without Positive admission.",
+        "param_source": "min_best_broker_cash_rolling_experiment",
+        "param_policy": "base-finalist-best", "rule_policy": "all_off",
+        "dl_enabled": True, "dl_id": "CONT13CU_ROLL",
+        "dl_runtime_mode": "resource-aware-continuous-score-no-k-no-r0",
+        "dl_runtime_options": {
+            "preserve_k": False, "preserve_r0": False,
+            "selection_order": "model_score_desc_then_canonical_tie_v1", "selection_only": True,
+        },
+        "robustness_role": "off", "entry_strategy": "Daily",
+    },
     "C95": {
         "name": "Full Adjusted Price Corrected Same-Signal Agree 4x300",
         "description": (
@@ -3173,6 +3214,11 @@ STRATEGY_COMPARE_CONTRASTS = {
     "C135-C136": {"left": "C135", "right": "C136", "description": "Same CT score: Breakout Exact versus Direct"},
     "C133-C135": {"left": "C133", "right": "C135", "description": "Same CT score: Daily versus Breakout Exact"},
     "C134-C136": {"left": "C134", "right": "C136", "description": "Same CT score: Daily versus Breakout Direct"},
+    "C137-C96": {"left": "C137", "right": "C96", "description": "TrueDaily CU Daily NetPnL rank Exact versus Breakout broker-cash reference"},
+    "C138-C96": {"left": "C138", "right": "C96", "description": "TrueDaily CU Daily NetPnL rank Direct versus Breakout broker-cash reference"},
+    "C137-C138": {"left": "C137", "right": "C138", "description": "Same CU PIT score and Daily entry: Exact K/R0 versus Direct No-K/No-R0"},
+    "C137-C133": {"left": "C137", "right": "C133", "description": "TrueDaily CU versus CT: Daily Exact NetPnL rank without/with calibrated Positive"},
+    "C138-C134": {"left": "C138", "right": "C134", "description": "TrueDaily CU versus CT: Daily Direct NetPnL rank without/with calibrated Positive"},
     "C123-C125": {"left": "C123", "right": "C125", "description": "CO versus CP: Exact NetPnL rank without/with calibrated Positive"},
     "C124-C126": {"left": "C124", "right": "C126", "description": "CO versus CP: Direct NetPnL rank without/with calibrated Positive"},
     "C121-C122": {"left": "C121", "right": "C122", "description": "Same MR-13CN PIT score, Exact versus Direct"},

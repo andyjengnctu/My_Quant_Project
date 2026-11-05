@@ -21,20 +21,38 @@ from services.audit import target_oracle_romd as oracle
 
 
 class DailyEntryStrategyCases(TestCase):
-    def test_true_daily_only_two_strategy_records(self):
+    def test_daily_strategy_records_follow_canonical_comparisons(self):
         definition = next(d for d in get_reusable_audit_definitions("breakout_quality")
                           if d.audit_type == oracle.SUPPORTED_AUDIT_TYPE)
         rows = tuple(definition.source["oracle_comparisons"])
-        expected = {
-            "TrueDailyUniversal_MinTrade_NetPnL_Positive",
-            "TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct",
-        }
-        self.assertEqual(len(rows), 20)
-        self.assertEqual({r["target"] for r in rows if r.get("strategy") == "Daily"}, expected)
-        self.assertEqual(len([r for r in rows if r.get("strategy", "Breakout") == "Breakout"]), 18)
+        from core.positive_netpnl_contract import requires_positive_score
+        from core.breakout_quality_registry import get_breakout_quality_experiment_profile
+        from core.breakout_quality_runtime import get_continuous_ranker_score_output_columns
+        # AI註: Validate each declaration without freezing current roster membership.
+        settings, base, exact = oracle._contract(definition)
         scoped = oracle._oracle_strategy_scopes(definition)
         self.assertEqual([(s, len(d.source["oracle_comparisons"])) for s,d in scoped],
-                         [("Breakout", 18), ("Daily", 2)])
+                         [(strategy, sum(r.get("strategy", "Breakout") == strategy for r in rows))
+                          for strategy in ("Breakout", "Daily")
+                          if any(r.get("strategy", "Breakout") == strategy for r in rows)])
+        for strategy, scope in scoped:
+            plan = oracle._oracle_comparison_plan(scope)
+            direct = oracle._direct_arm(scope, settings, base, exact)
+            contracts = oracle._resolve_oracle_target_score_contracts(scope, settings, plan)
+            if strategy != "Daily":
+                continue
+            for row in scope.source["oracle_comparisons"]:
+                arm = oracle._target_reference_arm(scope, settings, plan, row["target"], exact, direct)
+                profile = get_breakout_quality_experiment_profile(
+                    settings.dl_sources[arm.dl_id].experiment_profile)
+                outputs = get_continuous_ranker_score_output_columns(
+                    profile.training_objective, score_calibration=profile.score_calibration)
+                self.assertEqual(arm.entry_strategy, "Daily")
+                self.assertEqual(requires_positive_score(arm.dl_runtime_options), bool(row.get("positive_output")))
+                self.assertEqual("positive_p_positive" in outputs.values(), bool(row.get("positive_output")))
+                self.assertEqual(profile.continuous_target_id, contracts[row["target"]]["target_id"])
+                self.assertEqual(contracts[row["target"]]["target_id"],
+                                 "true_daily_universal_mintrade_fulltrade_netpnl_v1")
         self.assertTrue(all(oracle._oracle_target_strategy(d, r["target"]) == strategy
                             for strategy, d in scoped
                             for r in d.source["oracle_comparisons"]))
@@ -98,9 +116,8 @@ class DailyEntryStrategyCases(TestCase):
                           if d.audit_type == oracle.SUPPORTED_AUDIT_TYPE)
         rows = resolve_current_oracle_comparisons(definition.source)
         keys = [oracle_comparison_key(row) for row in rows]
-        self.assertEqual(len(keys), 20)
-        self.assertEqual(len(set(keys)), 20)
-        self.assertEqual(len({row["target"] for row in rows}), 18)
+        self.assertEqual(len(keys), len(rows))
+        self.assertEqual(len(set(keys)), len(rows))
         for name in ("TrueDailyUniversal_MinTrade_NetPnL_Positive",
                      "TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct"):
             pair = [row for row in rows if row["target"] == name]
@@ -116,11 +133,17 @@ class DailyEntryStrategyCases(TestCase):
         self.assertIn("TrueDailyUniversal_MinTrade_NetPnL_Positive::Daily", keys)
         self.assertIn("TrueDailyUniversal_MinTrade_NetPnL_Positive", keys)
 
-    def test_one_approval_matrix_and_same_engine_twenty_treatments(self):
+    def test_one_approval_matrix_and_same_engine_for_declared_treatments(self):
         from core.audit_registry import oracle_comparison_key
         definition = next(d for d in get_reusable_audit_definitions("breakout_quality")
                           if d.audit_type == oracle.SUPPORTED_AUDIT_TYPE)
         seeds = tuple(range(1, 9))
+        comparisons = tuple(definition.source["oracle_comparisons"])
+        scope_counts = [(strategy, len(scope.source["oracle_comparisons"]))
+                        for strategy, scope in oracle._oracle_strategy_scopes(definition)]
+        reuse_count = len(seeds) * (1 + sum(row.get("strategy", "Breakout") != "Daily"
+                                          for row in comparisons))
+        run_count = len(seeds) * sum(row.get("strategy") == "Daily" for row in comparisons)
         calls = []
         common_baseline = {"target":"C96", "strategy":"Breakout",
                            "seed_observations": [], "romd": 9.0}
@@ -155,8 +178,8 @@ class DailyEntryStrategyCases(TestCase):
                                    for row in scoped.source["oracle_comparisons"]}}
         with patch.object(oracle,"_run_single_stage_oracle",side_effect=fake_run):
             preview = oracle.preview_oracle_replay_plan(definition,project_root="/tmp")
-            self.assertEqual(len(preview["targets"]),21)
-            self.assertIn("Portfolio REUSE 152 / RUN（需回放）16 / BLOCKED 0", preview["text"])
+            self.assertEqual(len(preview["targets"]), 1 + len(comparisons))
+            self.assertIn(f"Portfolio REUSE {reuse_count} / RUN（需回放）{run_count} / BLOCKED 0", preview["text"])
             self.assertIn("TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct", preview["text"])
             self.assertIn("Daily",preview["text"])
             result = oracle.build_report(
@@ -164,16 +187,16 @@ class DailyEntryStrategyCases(TestCase):
                 preflight_approval=lambda _:True,
                 approved_replay_decisions=preview["preflight"],
             )
-        self.assertEqual(len(result["oracles"]),20)
-        self.assertEqual(len(result["definitions"]),18)
-        self.assertEqual(len(result["comparison_inventory"]),21)
+        self.assertEqual(len(result["oracles"]), len(comparisons))
+        self.assertEqual(len(result["definitions"]), len({row["target"] for row in comparisons}))
+        self.assertEqual(len(result["comparison_inventory"]), 1 + len(comparisons))
         target = "TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct"
         values = {(row["target"],row["strategy"]):row["romd"] for row in result["oracles"]}
         self.assertEqual(values[(target,"Breakout")],25.0)
         self.assertEqual(values[(target,"Daily")],40.0)
         self.assertEqual([c[1] for c in calls], [True,True,False,False])
         self.assertEqual([(c[0],len(c[2])) for c in calls[-2:]],
-                         [("Breakout",8*19),("Daily",8*3)])
+                         [(strategy, len(seeds) * (1 + count)) for strategy, count in scope_counts])
 
     def test_scoped_daily_scores_do_not_leak_or_read_positive_truth(self):
         days = tuple(pd.Timestamp(t) for t in
@@ -338,13 +361,14 @@ class DailyEntryStrategyCases(TestCase):
         self.assertEqual(after["arm"]["entry_strategy"], "Daily")
         self.assertEqual(after["arm"]["replay_contract_version"], 3)
 
-    def test_six_single_ranker_arms_pit_and_oracle_replay_parity(self):
+    def test_registered_daily_and_positive_arms_pit_and_oracle_replay_parity(self):
         """PIT and perfect-output sources use one real Broker-Cash replay owner.
 
         This synthetic case is not signed 8-seed E13 parity. It does assert
         identical trades/equity and that a zero Positive score changes fills.
         """
         from core.strategy_compare_policy import get_strategy_comparison_settings
+        from core.positive_netpnl_contract import requires_positive_score
         from core.portfolio_fast_data import prep_stock_data_and_trades, pack_prepared_stock_data
         from core.portfolio_engine import run_portfolio_timeline
         from filters.breakout_quality.runtime import (
@@ -373,14 +397,19 @@ class DailyEntryStrategyCases(TestCase):
             benchmark_ticker="2330", benchmark_data=market["2330"],
             is_training=False, verbose=False, profile_stats={},
         )
-        for arm_id in ("C125", "C126", "C133", "C134", "C135", "C136"):
-            arm = settings.arms[arm_id]
+        arms = [arm for arm in settings.arms.values()
+                if arm.dl_enabled and (arm.entry_strategy == "Daily"
+                                       or requires_positive_score(arm.dl_runtime_options))]
+        self.assertTrue(arms)
+        for arm in arms:
+            arm_id = arm.arm_id
             self.assertIn(arm.entry_strategy, {"Daily", "Breakout"})
             self.assertTrue(arm.enabled)
             primary = settings.dl_sources[arm.dl_id]
             options = dict(arm.dl_runtime_options)
             unfiltered_trades = None
-            for excluded in (False, True):
+            qualified = requires_positive_score(options)
+            for excluded in ((False, True) if qualified else (False,)):
                 positives = {key: (0.0 if excluded and key[0] == "2330" else 1.0)
                              for key in scores}
 
@@ -399,7 +428,7 @@ class DailyEntryStrategyCases(TestCase):
                         audit_oracle_truth_score_context(
                             scores, ranking_policy=arm.dl_runtime_mode,
                             ranking_options=options, key_mode="information_date",
-                            positive_scores=positives,
+                            positive_scores=positives if qualified else None,
                         ):
                     oracle_result = run_portfolio_timeline(**arguments)
                 with portfolio_entry_policy_context(arm.entry_strategy,

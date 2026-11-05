@@ -192,6 +192,8 @@ class PositiveNetPnlContractCases(TestCase):
         positive_direct = positive_exact + "_Direct"
         published = [row for row in comparisons if row["target"] != positive_exact
                      and row.get("strategy", "Breakout") == "Breakout"]
+        legacy_keys = {"C96", *(oracle_comparison_key(row) for row in published
+                                 if not row.get("strategy_arm_id"))}
         old_definitions = {row["target"]: row["description"] for row in published}
         old_definitions[positive_direct] = (
             "NON-PIT diagnostic only: full-cycle Min NetPnL Direct with strictly "
@@ -230,12 +232,12 @@ class PositiveNetPnlContractCases(TestCase):
             self.assertEqual(values["C96"]["oracle_romd"], 9.17)
             self.assertEqual(values["MFE40_Control"]["oracle_romd"], 24.62)
             self.assertEqual(values["DailyUniversal_MinTrade_NetPnL_Direct"]["oracle_romd"], 24.62)
-            self.assertEqual(len(values), len(targets) - 6)
+            self.assertEqual(set(values), legacy_keys)
             self.assertNotIn(positive_exact, values)  # Never backfill a new Target.
             self.assertNotIn(positive_direct, values)  # Old raw Gate != formal dual-head.
             true_daily = {row["target"] for row in comparisons
                           if row.get("strategy") == "Daily"}
-            self.assertEqual(len(true_daily), 2)
+            self.assertTrue(true_daily)
             self.assertTrue({name + "::Daily" for name in true_daily}.isdisjoint(values))
             self.assertTrue(true_daily.isdisjoint(values))  # Old unverified binding is not re-certified.
             ledger = Path(temp) / "doc/scientific_contracts/REPORT_CONTRACT_VERSIONS.json"
@@ -275,6 +277,8 @@ class PositiveNetPnlContractCases(TestCase):
             # Same Target, independent Strategy results: Breakout receipts
             # retain their old identity; Daily may only use its own evidence.
             for target in sorted(true_daily):
+                payload["definitions"][target] = next(
+                    row["description"] for row in comparisons if row["target"] == target)
                 payload["oracles"].append({
                     "target": target, "strategy": "Daily", "seeds": len(seeds),
                     "romd": 41.0, "win_rate_pct": 96.0,
@@ -284,7 +288,7 @@ class PositiveNetPnlContractCases(TestCase):
             # Old Breakout remains readable, but previous C131/C132 Daily
             # results must not be re-labelled as C133/C134 evidence.
             _, _, _, values, info = read_rows()
-            self.assertEqual(len(values), len(targets) - 6)
+            self.assertEqual(set(values), legacy_keys)
             self.assertNotIn("TrueDailyUniversal_MinTrade_NetPnL_Positive::Daily", values)
             self.assertNotIn("TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct::Daily", values)
             settings = get_strategy_comparison_settings(STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE)

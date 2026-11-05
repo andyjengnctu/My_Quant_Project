@@ -401,13 +401,13 @@ def _oracle_target_strategy(definition, target: str) -> str:
     if strategy not in {"Breakout", "Daily"}:
         raise OracleBlockedError(f"Unsupported Oracle portfolio strategy: {strategy}")
     if strategy == "Daily":
-        # Only the approved actual TrueDaily source can authorize this entry
-        # counterfactual.  Score Source/Positive must stay the same as Exact.
+        # AI註: Only the approved actual TrueDaily source can authorize this entry
+        # counterfactual. Positive admission is an independent selector output
+        # contract, validated against the reference arm, not an entry policy.
         definition_map = {row["target"]: row for row in definition.source["oracle_comparisons"]}
         producer = definition_map.get(entry.get("score_source") or target)
-        if (not producer or producer.get("score") != "daily_trade_path_true_net_pnl"
-                or entry.get("positive_output") != "netpnl_positive_probability_v1"):
-            raise OracleBlockedError("Daily strategy requires signed TrueDaily NetPnL + Positive source")
+        if not producer or producer.get("score") != "daily_trade_path_true_net_pnl":
+            raise OracleBlockedError("Daily strategy requires signed TrueDaily NetPnL source")
     return strategy
 
 

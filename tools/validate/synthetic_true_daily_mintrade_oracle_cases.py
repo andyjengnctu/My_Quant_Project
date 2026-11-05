@@ -80,7 +80,8 @@ class TrueDailyUniversalOracleCases(TestCase):
         plan = oracle._oracle_comparison_plan(definition)
         exact = "TrueDailyUniversal_MinTrade_NetPnL_Positive"
         direct = exact + "_Direct"
-        self.assertEqual(len(definition.source["oracle_comparisons"]), 20)
+        self.assertEqual(len(plan["targets"]), len({row["target"]
+            for row in definition.source["oracle_comparisons"]}))
         self.assertEqual(plan["daily_recipes"][exact],
                          ("daily_trade_path_true_net_pnl", "daily_trade40_profile", None))
         self.assertEqual(plan["daily_sources"][direct], exact)
@@ -406,11 +407,12 @@ class OraclePerfectOutputReuseCases(TestCase):
             before = {p: p.read_bytes() for p in root.rglob("*") if p.is_file()}
             with self._environment(root, fixture):
                 preview = oracle.preview_oracle_replay_plan(fixture[0], project_root=root)
-                self.assertEqual(len(preview["preflight"]), 168)
+                comparison_count = 1 + len(fixture[0].source["oracle_comparisons"])
+                self.assertEqual(len(preview["preflight"]), len(fixture[1]) * comparison_count)
                 self.assertEqual(set(preview["preflight"].values()), {"REUSE"})
                 _, _, _, values, info = _oracle_rows(root, fixture[0], {})
             target = "TrueDailyUniversal_MinTrade_NetPnL_Positive"
-            self.assertEqual(len(values), 21)
+            self.assertEqual(len(values), comparison_count)
             self.assertEqual(values[target]["oracle_romd"], 11.)
             self.assertEqual(values[target + "::Daily"]["oracle_romd"], 31.)
             self.assertEqual(values[target + "_Direct::Daily"]["oracle_romd"], 32.)
@@ -533,7 +535,7 @@ class OraclePerfectOutputReuseCases(TestCase):
                 _, _, _, values, _ = _oracle_rows(root, fixture[0], {})
             self.assertEqual(list(preview["preflight"].values()).count("RUN"), 1)
             self.assertEqual(preview["preflight"][(fixture[1][-1], key)], "RUN")
-            self.assertEqual(len(values), 20)
+            self.assertEqual(len(values), len(fixture[0].source["oracle_comparisons"]))
             self.assertNotIn(key, values)
             self.assertIn(key.replace("::Daily", ""), values)
             self.assertIn(key.replace("::Daily", "_Direct::Daily"), values)
