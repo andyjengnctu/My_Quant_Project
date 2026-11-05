@@ -467,6 +467,8 @@ def execution_context(*, dataset: str, price_sha256: str, param_sha256: str,
                       execution_gate: str | None) -> dict[str, Any]:
     if not is_sha256_hex(price_sha256) or not is_sha256_hex(param_sha256):
         raise ValueError("Oracle execution context requires verified price/P16 identity")
+    if execution_gate is not None:
+        raise ValueError("Retired raw-outcome Oracle gate; Positive must enter through scores")
     policy = oracle_replay_policy(replay_policy)
     payload = {
         "schema": _SCHEMA, "purpose": "hindsight_oracle_completed_replay",
@@ -483,19 +485,11 @@ def execution_context(*, dataset: str, price_sha256: str, param_sha256: str,
         "source_contract": dict(source_contract) if source_contract is not None else None,
         "dataset_inputs": dict(dataset_inputs) if dataset_inputs is not None and source_contract is not None else None,
         "execution_gate": execution_gate,
-        "execution_gate_implementation": (_gate_implementation_sha256() if execution_gate is not None else None),
+        "execution_gate_implementation": None,
     }
     # Effective provider contracts contain tuples; persisted JSON represents
     # them as arrays. Normalize once at the boundary, before equality checks.
     return json.loads(json.dumps(payload, sort_keys=True, ensure_ascii=False))
-
-
-@lru_cache(maxsize=1)
-def _gate_implementation_sha256() -> str:
-    code_root = Path(__file__).resolve().parents[2]
-    return canonical_json_sha256({relative: _syntax_payload(_CalculationSyntax().visit(
-        ast.parse((code_root / relative).read_text(encoding="utf-8-sig"))))
-        for relative in ("core/oracle_positive_gate.py", "services/audit/oracle_execution_policy.py")})
 
 
 def legacy_import_permitted(context: Mapping[str, Any]) -> bool:

@@ -3872,9 +3872,6 @@ def _training_target_for_profile(
         CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_JOINT_MIN: "safety_raw_mfe_joint_min_training_target",
         CONTINUOUS_RANKER_TARGET_BUILDER_DIRECT_HMHS: "direct_hmhs_target",
     }
-    if target_builder == "binary_positive_from_raw":
-        from core.positive_netpnl_contract import positive_labels
-        return positive_labels(raw_target)
     if target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_JOINT_MFE_D40:
         return build_joint_mfe_d40_quadrants(
             group_table, np.isfinite(np.asarray(raw_target, dtype=np.float32))
@@ -4037,7 +4034,7 @@ def _evaluate_epoch_split(
     metric_family = None
     family_keys = None
 
-    if target_builder in {CONTINUOUS_RANKER_TARGET_BUILDER_JOINT_MFE_D40, "binary_positive_from_raw"}:
+    if target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_JOINT_MFE_D40:
         policy = get_continuous_ranker_training_policy(profile.training_objective)
         logits = _predict_logits(
             torch, model, feature_bank, group_context, ids, **predict_common

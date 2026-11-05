@@ -1,4 +1,4 @@
-"""Signed, NON-PIT *raw* Full-Cycle Min NetPnL for one diagnostic gate.
+"""Signed, NON-PIT raw Full-Cycle Min NetPnL for perfect Positive scores.
 
 This is a consumer of the existing single-stock Min execution owner.  It does
 not compute orders, fees, stops, exits or sizing itself.  It independently
@@ -21,10 +21,9 @@ import numpy as np
 import pandas as pd
 
 from core.file_integrity import (
-    canonical_json_sha256, compute_file_sha256,
+    canonical_json_sha256, compute_file_sha256, is_sha256_hex,
     atomic_replace_with_retry, exclusive_file_lock,
 )
-from core.oracle_positive_gate import POSITIVE_FULLCYCLE_NETPNL_GATE
 from filters.breakout_quality.contract import DEFAULT_LABEL_POLICY
 from filters.breakout_quality.daily_trade40_target import (
     collect_canonical_exchange_sessions, compute_counterfactual_trade40_batch,
@@ -36,10 +35,12 @@ from filters.breakout_quality.workflow_io import discover_dataset_csv_inputs, lo
 from services.audit.daily_trade40_oracle import truth_producer_fingerprint
 
 SCHEMA = 1
+# Immutable evidence namespace; the old out-of-band admission implementation
+# is retired. Current execution consumes these outcomes only as score columns.
+POSITIVE_FULLCYCLE_NETPNL_GATE = 'fullcycle_reference_net_pnl_strictly_positive_v1'
 
 
 def _identity(*, seed, price_sha, param_sha, source_evidence, project_root):
-    root = Path(__file__).resolve().parents[2]
     return {
         'schema': SCHEMA, 'gate': POSITIVE_FULLCYCLE_NETPNL_GATE,
         'seed': int(seed), 'price_sha256': str(price_sha),
@@ -47,7 +48,7 @@ def _identity(*, seed, price_sha, param_sha, source_evidence, project_root):
         'canonical_raw_sha256': str(source_evidence['raw_label_sha256']),
         'canonical_rank_sha256': str(source_evidence['rank_sha256']),
         'canonical_truth_source_sha256': str(source_evidence['truth_source_sha256']),
-        'gate_source_sha256': compute_file_sha256(root / 'core/oracle_positive_gate.py'),
+        'gate_source_sha256': compute_file_sha256(Path(__file__)),
         'sign_producer_sha256': compute_file_sha256(Path(__file__)),
     }
 
@@ -92,6 +93,40 @@ def _load(path: Path, identity: Mapping[str, Any]) -> dict[tuple[str, str], floa
         return {key: float(value) for key, value in zip(keys, values) if np.isfinite(value)}
     except (OSError, ValueError, TypeError, KeyError, IndexError, zipfile.BadZipFile) as exc:
         raise ValueError(f'Positive-NetPnL truth evidence corrupt: {path.name}: {exc}') from exc
+
+
+def _existing_raw_witness(root: Path, subdir: str, identity: Mapping[str, Any]):
+    """Reuse original signed bytes by complete numerical/input identity.
+
+    Producer source hashes remain immutable provenance, rather than requiring
+    an obsolete executable to remain installed. Every candidate is still read
+    with its ORIGINAL full identity and verified by the canonical NPZ reader.
+    """
+    path = _path(root, subdir, identity)
+    current = _load(path, identity)
+    if current is not None:
+        return current, path
+    provenance = {'gate_source_sha256', 'sign_producer_sha256'}
+    expected = {key: value for key, value in identity.items() if key not in provenance}
+    found = None
+    for candidate in sorted(path.parent.glob('*.npz')):
+        try:
+            with np.load(candidate, allow_pickle=False) as archive:
+                original = json.loads(str(archive['meta'].item()))['identity']
+            if (not isinstance(original, dict) or set(original) != set(identity)
+                    or any(not is_sha256_hex(original[key]) for key in provenance)):
+                raise ValueError('raw witness identity/provenance schema invalid')
+            if candidate != _path(root, subdir, original):
+                raise ValueError('raw witness filename differs from its signed identity')
+            if {key: value for key, value in original.items() if key not in provenance} != expected:
+                continue
+            raw = _load(candidate, original)
+            if found is not None and found[0] != raw:
+                raise ValueError('conflicting signed raw witnesses for the same inputs')
+            found = raw, candidate
+        except (OSError, ValueError, TypeError, KeyError, IndexError, zipfile.BadZipFile) as exc:
+            raise ValueError(f'Positive raw witness invalid: {candidate.name}: {exc}') from exc
+    return found
 
 
 def _save(path: Path, identity: Mapping[str, Any], raw: Mapping[tuple[str, str], float]) -> None:
@@ -144,11 +179,14 @@ def load_or_build_positive_truth(
     identity = _identity(seed=seed, price_sha=price_sha256, param_sha=param_sha256,
                          source_evidence=canonical_evidence, project_root=root)
     path = _path(root, output_subdir, identity)
-    existing = _load(path, identity)
-    if existing is not None:
+    witness = _existing_raw_witness(root, output_subdir, identity)
+    if witness is not None:
+        existing, original_path = witness
         if not set(existing).issubset(canonical_scores):
             raise ValueError('positive raw keys differ from original score keys')
-        return existing, path
+        if len(existing) != int(canonical_evidence['settled_net_pnl_rows']):
+            raise ValueError('positive raw settled count differs from certified truth')
+        return existing, original_path
     # Same generic feature cohort; no strategy filter or portfolio-selected
     # sample may enter this table. The canonical producer remains the authority.
     from services.audit.oracle_score_artifacts import oracle_dataset_summary_sha256

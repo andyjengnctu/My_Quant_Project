@@ -236,6 +236,13 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
     summary = {"ticker": case_id, "synthetic": True}
     check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
 
+    from .check_result_utils import run_unittest_capability_cases
+    from .synthetic_positive_netpnl_contract_cases import ScoreOutputCompletenessCases
+    output_checks, _details = run_unittest_capability_cases(
+        case_id, "synthetic_breakout_quality", (ScoreOutputCompletenessCases,),
+    )
+    results.extend(output_checks)
+
     from core.breakout_quality_registry import (
         CONTINUOUS_RANKER_TRAINING_OBJECTIVES,
         DAILY_UNIVERSAL_SHARED_HS_QUALIFICATION_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
@@ -1210,6 +1217,16 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         )
         if str(column) != "breakout_quality_score"
     }
+    from core.breakout_quality_registry import SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES
+    for name in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES:
+        registered_profile = get_breakout_quality_experiment_profile(name)
+        if registered_profile.score_calibration is not None:
+            registered_optional_score_columns.update(
+                column for column in get_continuous_ranker_score_output_columns(
+                    registered_profile.training_objective,
+                    score_calibration=registered_profile.score_calibration,
+                ).values() if column != "breakout_quality_score"
+            )
     runtime_optional_score_columns = get_continuous_ranker_persisted_score_columns()
     ranking_store_source = read_source_text("filters/breakout_quality/ranking_score_store.py")
     check_true(

@@ -76,9 +76,10 @@ def load_positive_truth(*, project_root: Path, output_subdir: str, seed: int,
              canonical_evidence.get("truth_source_sha256") != truth_producer_fingerprint()) or
             canonical_evidence.get("entry_policy") != ENTRY_POLICY):
         raise DailyTrade40OracleBlockedError("TrueDaily raw NetPnL provenance mismatch")
-    path, identity = _raw_path(Path(project_root), output_subdir, seed,
+    _path, identity = _raw_path(Path(project_root), output_subdir, seed,
                                price_sha256, param_sha256, canonical_evidence)
-    raw = positive_witness._load(path, identity)
+    witness = positive_witness._existing_raw_witness(Path(project_root), output_subdir, identity)
+    raw = None if witness is None else witness[0]
     if raw is None or not set(raw).issubset(canonical_scores) or len(raw) != int(
             canonical_evidence["settled_net_pnl_rows"]):
         raise DailyTrade40OracleBlockedError("TrueDaily Positive signed raw witness missing/incompatible")

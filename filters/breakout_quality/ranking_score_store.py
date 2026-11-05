@@ -459,7 +459,7 @@ def _validate_score_output_capability_contract(
     ):
         return
     expected_score_columns = get_continuous_ranker_score_output_columns(
-        str(profile.training_objective)
+        str(profile.training_objective), score_calibration=profile.score_calibration,
     )
     actual_score_columns = dict(manifest.get("score_columns") or {})
     if actual_score_columns != expected_score_columns:
@@ -974,7 +974,15 @@ def _load_selection_point_in_time_score_table_from_path_cached(
     table = read_breakout_quality_csv(path).copy()
     if expected_score_sha256 is not None and compute_file_sha256(path).lower() != expected_score_sha256:
         raise ValueError("Selection PIT score在讀取時來源 SHA256 已變更")
-    missing = sorted(set(PIT_REQUIRED_SCORE_COLUMNS).difference(table.columns))
+    required = set(PIT_REQUIRED_SCORE_COLUMNS)
+    resolved_profile = experiment_profile or (manifest or {}).get("experiment_profile")
+    if resolved_profile:
+        profile = get_breakout_quality_experiment_profile(str(resolved_profile))
+        if profile.score_calibration is not None:
+            required.update(get_continuous_ranker_score_output_columns(
+                profile.training_objective, score_calibration=profile.score_calibration,
+            ).values())
+    missing = sorted(required.difference(table.columns))
     if missing:
         raise ValueError(f"Selection PIT score table缺少欄位: {missing}")
     retained_columns = list(PIT_REQUIRED_SCORE_COLUMNS) + [
@@ -1345,6 +1353,10 @@ def _load_continuous_ranker_oos_contract_uncached(
             path=score_path,
             label="Continuous ranker report scores",
         )
+        if profile.score_calibration is not None:
+            _validate_forward_score_columns(
+                profile, pd.read_csv(score_path, encoding="utf-8-sig", nrows=0).columns,
+            )
 
     outer = dict(manifest.get("outer_oos_policy") or {})
     execution_start = pd.Timestamp(str(outer.get("oos_start_date") or "")).strftime("%Y-%m-%d")
@@ -1505,6 +1517,19 @@ def clear_continuous_ranker_oos_score_caches() -> None:
     load_continuous_ranker_oos_score_table_from_path.cache_clear()
 
 
+def _validate_forward_score_columns(profile, columns) -> None:
+    required = {"ticker", "date", "group_index", "model_score"}
+    if profile.score_calibration is not None:
+        required.update(column for column in get_continuous_ranker_score_output_columns(
+            profile.training_objective, score_calibration=profile.score_calibration,
+        ).values() if column != "breakout_quality_score")
+    if profile.training_sample_scope != TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS:
+        required.add("split")
+    missing = sorted(required - set(columns))
+    if missing:
+        raise ValueError(f"Continuous ranker scores缺少欄位: {missing}")
+
+
 @lru_cache(maxsize=32)
 def _load_continuous_ranker_oos_score_table_from_path_cached(
     score_path: str,
@@ -1516,12 +1541,7 @@ def _load_continuous_ranker_oos_score_table_from_path_cached(
     if not path.is_file():
         raise FileNotFoundError(f"找不到Continuous ranker scores: {path.name}")
     frame = read_breakout_quality_csv(path).copy()
-    required = {"ticker", "date", "group_index", "model_score"}
-    if profile.training_sample_scope != TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS:
-        required.add("split")
-    missing = sorted(required - set(frame.columns))
-    if missing:
-        raise ValueError(f"Continuous ranker scores缺少欄位: {missing}")
+    _validate_forward_score_columns(profile, frame.columns)
     if profile.training_sample_scope != TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS:
         frame = frame[frame["split"].astype(str) == "oos"].copy()
         if frame.empty:

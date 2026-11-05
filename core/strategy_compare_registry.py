@@ -2268,16 +2268,6 @@ STRATEGY_DL_SOURCES = {
             "options": {"resume": True, "allow_stale_source": False},
         },
     },
-    "CONT13CS_ROLL": {
-        "filter_id": "breakout_quality_v1",
-        "model_architecture": "inception_time_v1",
-        "experiment_profile": "true_daily_universal_mintrade_fullcycle_netpnl_rank",
-        "threshold": None, "score_source": "selection_point_in_time",
-        "single_seed_strategy_conversion_authorized": True,
-        "description": "MR-13CS true Daily broker NetPnL PIT rank; original historical Min teacher, independent FIT.",
-        "forward_scores_builder": {"enabled": True, "builder_type": "selection_pit_from_existing_folds",
-                                   "options": {"resume": True, "allow_stale_source": False}},
-    },
     "CONT13CT_ROLL": {
         "filter_id": "breakout_quality_v1",
         "model_architecture": "inception_time_v1",

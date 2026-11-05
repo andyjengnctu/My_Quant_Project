@@ -5505,7 +5505,6 @@ class OraclePriceSourceExecutionPolicyIsolationCases(TestCase):
 
     def test_execution_only_policy_does_not_enter_price_producer_identity(self):
         from services.audit.oracle_execution_policy import execution_gate_policies
-        from core.oracle_positive_gate import POSITIVE_FULLCYCLE_NETPNL_GATE
         definition = _ACTIVE_ORACLE_DEFINITION
         # Current Positive Exact/Direct are formal dual-score consumers.  The
         # historical raw-hindsight gate is no longer a current Oracle arm.

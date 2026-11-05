@@ -498,7 +498,8 @@ def _score_output_capability(bundle) -> dict[str, Any] | None:
 
     policy = _score_output_policy(bundle)
     if policy is None:
-        return None
+        columns = _score_output_columns(bundle)
+        return {"columns": columns} if len(columns) > 1 else None
     return {
         "output_head": str(policy.output_head),
         "columns": policy.manifest_columns(),
@@ -507,7 +508,8 @@ def _score_output_capability(bundle) -> dict[str, Any] | None:
 
 def _score_output_columns(bundle) -> dict[str, str]:
     return get_continuous_ranker_score_output_columns(
-        str(bundle.profile.training_objective)
+        str(bundle.profile.training_objective),
+        score_calibration=getattr(bundle.profile, "score_calibration", None),
     )
 
 
@@ -633,7 +635,9 @@ def _validate_minimum_counts(settings, fold_id: str, ids: dict[str, Any]) -> Non
 
 
 def _validate_score_frame(frame: pd.DataFrame, *, fold_contract: dict[str, Any]) -> pd.DataFrame:
-    missing = sorted(set(REQUIRED_SCORE_COLUMNS) - set(frame.columns))
+    required = set(REQUIRED_SCORE_COLUMNS)
+    required.update((fold_contract.get("score_output_contract") or {}).values())
+    missing = sorted(required - set(frame.columns))
     if missing:
         raise ValueError(f"point-in-time fold score缺少欄位: {missing}")
     retained_columns = list(REQUIRED_SCORE_COLUMNS) + [

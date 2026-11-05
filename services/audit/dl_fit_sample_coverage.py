@@ -22,7 +22,7 @@ from core.breakout_quality_policy import (
 )
 from core.breakout_quality_registry import TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
 from core.breakout_quality_runtime import (
-    CONTINUOUS_RANKER_CONTEXT_SOURCE_NONE, CONTINUOUS_RANKER_TARGET_BUILDER_BINARY_POSITIVE,
+    CONTINUOUS_RANKER_CONTEXT_SOURCE_NONE,
 )
 from core.console_report import render_table
 from core.research_report_contract import (
@@ -155,8 +155,8 @@ def _partitions(pre_score: np.ndarray, cohort: Mapping[str, Any], *, score_start
             "excluded_mask": excluded, "immature_mask": immature}
 
 
-def _positive_counts(cohort: Mapping[str, Any], fit_mask: np.ndarray, *, is_positive_binary: bool) -> tuple[int | None, int | None, float | None]:
-    if not is_positive_binary:
+def _positive_counts(cohort: Mapping[str, Any], fit_mask: np.ndarray, *, has_positive_output: bool) -> tuple[int | None, int | None, float | None]:
+    if not has_positive_output:
         return None, None, None
     from core.positive_netpnl_contract import positive_labels
     labels = positive_labels(cohort["raw"][fit_mask])
@@ -168,14 +168,14 @@ def _positive_counts(cohort: Mapping[str, Any], fit_mask: np.ndarray, *, is_posi
     return yes, no, (100.0 * yes / (yes + no)) if yes + no else None
 
 
-def _year_rows(model: str, seed: int, fold: str, cohort: Mapping[str, Any], masks: Mapping[str, Any], *, is_positive_binary: bool) -> list[dict[str, Any]]:
+def _year_rows(model: str, seed: int, fold: str, cohort: Mapping[str, Any], masks: Mapping[str, Any], *, has_positive_output: bool) -> list[dict[str, Any]]:
     rows = []
     years = cohort["years"]
     fitted = masks["fit_mask"]
     for year in np.unique(years[masks["pre_score_mask"]]):
         year_scope = masks["pre_score_mask"] & (years == int(year))
         fit_mask = fitted & year_scope
-        positive, negative, positive_rate = _positive_counts(cohort, fit_mask, is_positive_binary=is_positive_binary)
+        positive, negative, positive_rate = _positive_counts(cohort, fit_mask, has_positive_output=has_positive_output)
         rows.append({
             "model": model, "seed": seed, "fold": fold, "year": int(year),
             "pre_score_groups": int(year_scope.sum()),
@@ -318,7 +318,8 @@ def _audit_seed(root: Path, *, model: str, profile: str, seed: int) -> dict[str,
     )
     cohort = _prepare_cohort(bundle)
     recipe = get_continuous_ranker_execution_recipe(profile)
-    is_binary = recipe.training_policy.target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_BINARY_POSITIVE
+    from filters.breakout_quality.positive_rank_calibration import calibration_enabled
+    has_positive_output = calibration_enabled(bundle.profile)
     all_fold_rows: list[dict[str, Any]] = []
     all_year_rows: list[dict[str, Any]] = []
     last_observation = None
@@ -332,7 +333,7 @@ def _audit_seed(root: Path, *, model: str, profile: str, seed: int) -> dict[str,
         if parts["final_refit"] != row["final_refit"]:
             raise ValueError(f"{row['fold']} final_refit counts不能對帳")
         positive, nonpositive, positive_rate = _positive_counts(
-            cohort, parts["fit_mask"], is_positive_binary=is_binary,
+            cohort, parts["fit_mask"], has_positive_output=has_positive_output,
         )
         row.update({
             "pre_score_groups": parts["pre_score_groups"],
@@ -345,7 +346,7 @@ def _audit_seed(root: Path, *, model: str, profile: str, seed: int) -> dict[str,
         })
         year_rows = _year_rows(
             model, seed, row["fold"], cohort, {**parts, "pre_score_mask": pre_score},
-            is_positive_binary=is_binary,
+            has_positive_output=has_positive_output,
         )
         for key in ("pre_score_groups", "valid_target", "missing_target", "scope_excluded", "not_matured", "final_refit"):
             if sum(item[key] for item in year_rows) != parts[key]:
@@ -451,7 +452,7 @@ def build_report(definition, *, project_root: Path) -> dict[str, Any]:
             "No target只代表source未提供合法標籤；無schema證據不能細分成無訊號、未成交或其他失效原因。",
             "Label unmatured只限target已有效且時間未達score cutoff者；NULL不補零、不補負類。",
             "只有source contract、已簽章Fold檔案和canonical重算一致的Seed列為VERIFIED；其餘為BLOCKED。",
-            "Binary positive-rate僅對宣告binary_positive_from_raw的訓練目標適用；各Fold正負數已分開登錄。",
+            "Positive-rate對宣告同模型Positive輸出的NetPnL ranker計算；以成熟raw NetPnL > 0分組，各Fold正負數分開登錄。",
         ],
     }
 

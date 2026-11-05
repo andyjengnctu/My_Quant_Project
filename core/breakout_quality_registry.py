@@ -48,7 +48,6 @@ from core.breakout_quality_runtime import (
     TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_JOINT_MFE_D40_QUADRANT,
-    TRAINING_OBJECTIVE_DAILY_NETPNL_POSITIVE_BINARY,
     CONTINUOUS_RANKER_TRAINER_EVENT,
     CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
@@ -403,7 +402,6 @@ DAILY_UNIVERSAL_FORMAL_MINTRADE_FULLCYCLE_NETR_PAIRWISE_PROFILE = "daily_univers
 DAILY_UNIVERSAL_FORMAL_MINTRADE_FULLCYCLE_NETPNL_PAIRWISE_PROFILE = "daily_universal_formal_mintrade_fullcycle_netpnl_per_seed_full_list_ndcg_pairwise"
 DAILY_UNIVERSAL_JOINT_MFE_D40_QUADRANT_PROFILE = "daily_universal_joint_mfe_d40_quadrant_cross_entropy"
 DAILY_UNIVERSAL_NETPNL_POSITIVE_BINARY_PROFILE = "daily_universal_formal_mintrade_fullcycle_netpnl_positive_binary"
-TRUE_DAILY_MINTRADE_NETPNL_RANK_PROFILE = "true_daily_universal_mintrade_fullcycle_netpnl_rank"
 TRUE_DAILY_MINTRADE_NETPNL_POSITIVE_PROFILE = "true_daily_universal_mintrade_fullcycle_netpnl_positive_binary"
 DAILY_UNIVERSAL_DIRECT_U40_HUBER_PROFILE = "daily_universal_full_horizon_mfe_minus_d40_huber"
 DAILY_UNIVERSAL_DIRECT_U40_PAIRWISE_PROFILE = "daily_universal_full_horizon_mfe_minus_d40_full_list_ndcg_pairwise"
@@ -1744,18 +1742,6 @@ _EXPERIMENT_PROFILES = {
         model_architecture="inception_time_v1",
         fit_contract_version=2,
         score_calibration="positive_rank_isotonic_validation_v1",
-    ),
-    TRUE_DAILY_MINTRADE_NETPNL_RANK_PROFILE: BreakoutQualityExperimentProfile(
-        name=TRUE_DAILY_MINTRADE_NETPNL_RANK_PROFILE,
-        optimizer_name="adam",
-        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
-        training_objective=TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
-        continuous_target_id="true_daily_universal_mintrade_fulltrade_netpnl_v1",
-        loss_name="pairwise_logistic",
-        epoch_selection_metric="mean_daily_spearman",
-        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
-        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
-        model_architecture="inception_time_v1",
     ),
     TRUE_DAILY_MINTRADE_NETPNL_POSITIVE_PROFILE: BreakoutQualityExperimentProfile(
         name=TRUE_DAILY_MINTRADE_NETPNL_POSITIVE_PROFILE,
@@ -3463,28 +3449,6 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         ),
         metric_scope="all_stock_days_formal_mintrade_fullcycle_netpnl_positive_rank",
         score_semantic_id="daily_formal_mintrade_fullcycle_netpnl_positive_rank",
-        pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
-        selection_pit_authorized=True,
-        current_time_validation_authorized=True,
-    ),
-    TRUE_DAILY_MINTRADE_NETPNL_RANK_PROFILE: ContinuousRankerResearchSpec(
-        profile_name=TRUE_DAILY_MINTRADE_NETPNL_RANK_PROFILE,
-        model_research_id="MR-13CS",
-        experiment_name="MR-13CS TrueDaily full-cycle NetPnL rank",
-        phase="13CS",
-        trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
-        target_description=(
-            "Every eligible stock-day: independent next-market-session prior-close "
-            "limit buy attempt and canonical full-cycle Min broker-ledger NetPnL; "
-            "no-fill/unmatured outcomes are NULL."
-        ),
-        objective_description=(
-            "Independent PIT-matured historical Min Optimizer + seed P16 "
-            "teacher, InceptionTime 300x10 and full-list Delta-NDCG pairwise. "
-            "Same broker outcomes as TrueDaily Oracle; no hindsight cache or OOS truth enters FIT."
-        ),
-        metric_scope="all_stock_days_true_daily_fullcycle_netpnl_per_seed",
-        score_semantic_id="true_daily_mintrade_fullcycle_netpnl_rank",
         pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
         selection_pit_authorized=True,
         current_time_validation_authorized=True,

@@ -63,6 +63,7 @@ from services.breakout_quality import ranker_training as ranker_api
 from services.breakout_quality.point_in_time_scores import POINT_IN_TIME_SCHEMA_VERSION
 from services.breakout_quality.fit_repair_transaction import selection_pit_build_lock_path
 from core.breakout_quality_registry import (
+    get_breakout_quality_experiment_profile,
     TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS,
     TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
 )
@@ -230,11 +231,9 @@ def _validate_score_artifacts(args) -> tuple[pd.DataFrame, dict[str, Any]]:
             "model_information_cutoff": "string",
         },
     )
-    profile = get_breakout_quality_workflow_settings(
-        experiment_profile=str(args.experiment_profile)
-    )
+    profile = get_breakout_quality_experiment_profile(str(args.experiment_profile))
     expected_score_columns = get_continuous_ranker_score_output_columns(
-        str(profile.training_objective)
+        str(profile.training_objective), score_calibration=profile.score_calibration,
     )
     actual_score_columns = dict(manifest.get("score_columns") or {})
     if actual_score_columns != expected_score_columns:

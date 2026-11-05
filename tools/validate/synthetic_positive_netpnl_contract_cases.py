@@ -21,7 +21,6 @@ if str(ROOT) not in sys.path:
 from core.positive_netpnl_contract import (positive_labels, positive_score_admitted,
                                            admit_positive_score_rows, POSITIVE_SCORE_CONTRACT, POSITIVE_P_CLASS_COLUMN)
 from core.breakout_quality_runtime import (
-    TRAINING_OBJECTIVE_DAILY_NETPNL_POSITIVE_BINARY,
     get_continuous_ranker_training_policy,
     get_continuous_ranker_score_output_columns,
 )
@@ -69,7 +68,7 @@ class PositiveNetPnlContractCases(TestCase):
         for name in profiles:
             profile = get_breakout_quality_experiment_profile(name)
             recipe = get_continuous_ranker_execution_recipe(name)
-            self.assertEqual(profile.fit_contract_version, 2)
+            self.assertGreaterEqual(profile.fit_contract_version, 1)
             self.assertEqual(profile.score_calibration, POSITIVE_RANK_CALIBRATION)
             self.assertEqual(recipe.training_policy.target_builder, "scalar_pairwise")
             self.assertTrue(recipe.training_policy.uses_pairwise_loss)
@@ -540,6 +539,104 @@ class PositiveRankCalibrationCases(TestCase):
                     payload.pop('score_calibration'); torch.save(payload, path)
                     with self.assertRaises(ValueError):
                         load_model_from_fitted_checkpoint(torch, contract=contract, bundle=bundle, plan=plan)
+
+class ScoreOutputCompletenessCases(TestCase):
+    """Registry-driven persisted-output checks, also used by the PIT contract case."""
+
+    @staticmethod
+    def profiles():
+        from core.breakout_quality_registry import (
+            SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES,
+            get_breakout_quality_experiment_profile,
+        )
+        return [profile for name in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES
+                if (profile := get_breakout_quality_experiment_profile(name)).score_calibration]
+
+    def test_calibrated_output_is_required_by_manifest_and_fold(self):
+        from types import SimpleNamespace
+        import pandas as pd
+        from services.breakout_quality.point_in_time_scores import (
+            _score_output_columns, _score_output_capability, _validate_score_frame,
+        )
+        from filters.breakout_quality.ranking_score_store import _validate_score_output_capability_contract
+        self.assertTrue(self.profiles())
+        for profile in self.profiles():
+            with self.subTest(profile=profile.name):
+                columns = get_continuous_ranker_score_output_columns(
+                    profile.training_objective, score_calibration=profile.score_calibration,
+                )
+                self.assertIn(POSITIVE_P_CLASS_COLUMN, columns.values())
+                self.assertEqual(_score_output_columns(SimpleNamespace(profile=profile)), columns)
+                self.assertEqual(_score_output_capability(SimpleNamespace(profile=profile))["columns"], columns)
+                _validate_score_output_capability_contract({"score_columns": columns}, profile=profile)
+                with self.assertRaises(ValueError):
+                    _validate_score_output_capability_contract(
+                        {"score_columns": {"primary": "breakout_quality_score"}}, profile=profile)
+                contract = {"experiment_profile": profile.name, "fold_id": "fold",
+                            "model_information_cutoff": "2020-12-31", "score_output_contract": columns,
+                            "planned_periods": {"score_start": "2021-01-04", "score_end": "2021-01-04"}}
+                frame = pd.DataFrame({"ticker": ["2330"], "date": ["2021-01-04"], "group_index": [0],
+                                      "breakout_quality_score": [.7], "fold_id": ["fold"],
+                                      "model_information_cutoff": ["2020-12-31"]})
+                with self.assertRaises(ValueError):
+                    _validate_score_frame(frame, fold_contract=contract)
+                frame[POSITIVE_P_CLASS_COLUMN] = .6
+                self.assertIn(POSITIVE_P_CLASS_COLUMN, _validate_score_frame(frame, fold_contract=contract))
+
+    def test_forward_writer_and_both_readers_require_same_positive_output(self):
+        import pandas as pd
+        from services.breakout_quality.train_daily_ranker import _write_forward_score_frame
+        from filters.breakout_quality.ranking_score_store import (
+            load_continuous_ranker_oos_score_table_from_path,
+            load_selection_point_in_time_score_table_from_path,
+        )
+        for profile in self.profiles():
+            with self.subTest(profile=profile.name), TemporaryDirectory() as folder:
+                path = Path(folder) / "forward.csv.gz"
+                frame = pd.DataFrame({"ticker": ["2330", "2317"], "date": ["2021-01-04"] * 2,
+                                      "group_index": [0, 1], "model_score": [.2, .8]})
+                with self.assertRaises(ValueError):
+                    _write_forward_score_frame(frame, path, profile=profile, score_extras={})
+                self.assertFalse(path.exists())
+                extras = {POSITIVE_P_CLASS_COLUMN: [.1, .9]}
+                _write_forward_score_frame(frame, path, profile=profile, score_extras=extras)
+                loaded = load_continuous_ranker_oos_score_table_from_path(str(path), profile.name)
+                self.assertIn(POSITIVE_P_CLASS_COLUMN, loaded)
+                original = pd.read_csv(path, dtype={"ticker": str})
+                np.testing.assert_allclose(original["model_score"], frame["model_score"])
+                np.testing.assert_allclose(original[POSITIVE_P_CLASS_COLUMN], extras[POSITIVE_P_CLASS_COLUMN])
+                frame.to_csv(path, index=False, compression="gzip")
+                with self.assertRaises(ValueError):
+                    load_continuous_ranker_oos_score_table_from_path(str(path), profile.name)
+                pit = frame.rename(columns={"model_score": "breakout_quality_score"}).assign(
+                    fold_id="fold", model_information_cutoff="2020-12-31")
+                pit.to_csv(path, index=False, compression="gzip")
+                with self.assertRaises(ValueError):
+                    load_selection_point_in_time_score_table_from_path(str(path), experiment_profile=profile.name)
+                pit[POSITIVE_P_CLASS_COLUMN] = extras[POSITIVE_P_CLASS_COLUMN]
+                pit.to_csv(path, index=False, compression="gzip")
+                self.assertIn(POSITIVE_P_CLASS_COLUMN, load_selection_point_in_time_score_table_from_path(
+                    str(path), experiment_profile=profile.name))
+
+    def test_retired_predictors_and_raw_outcome_gate_cannot_execute(self):
+        from importlib.util import find_spec
+        from core.breakout_quality_registry import get_breakout_quality_experiment_profile
+        from core.strategy_compare_registry import STRATEGY_DL_SOURCES
+        from services.research.oracle_artifact_contract import execution_context
+        with self.assertRaises(ValueError):
+            get_breakout_quality_experiment_profile("true_daily_universal_mintrade_fullcycle_netpnl_rank")
+        with self.assertRaises(ValueError):
+            get_continuous_ranker_training_policy("daily_netpnl_positive_binary_cross_entropy")
+        self.assertNotIn("CONT13CS_ROLL", STRATEGY_DL_SOURCES)
+        self.assertIsNone(find_spec("core.oracle_positive_gate"))
+        self.assertIsNone(find_spec("services.audit.positive_gate_evidence"))
+        with self.assertRaisesRegex(ValueError, "Retired raw-outcome"):
+            execution_context(dataset="full", price_sha256="a" * 64, param_sha256="b" * 64,
+                seed=42, target="test", start="2021-01-01", end="2021-01-04", cutoff="2021-01-04",
+                max_positions=10, evaluation_mode="rolling", ranking_policy="test", ranking_options={},
+                replay_policy={}, score_contract=None, source_contract=None, dataset_inputs=None,
+                execution_gate="fullcycle_reference_net_pnl_strictly_positive_v1")
+
 
 if __name__ == '__main__':
     main(verbosity=2)

@@ -1251,104 +1251,53 @@ class FormalMinReplayIntegrationCases(TestCase):
         with self.assertRaisesRegex(oracle.OracleBlockedError, "retired Target identity"):
             oracle._oracle_comparison_plan(retired)
 
-class FullcyclePositiveNetPnLDiagnosticCases(TestCase):
+class PerfectPositiveTruthEvidenceCases(TestCase):
     """Dedicated primitive checks; original Oracle score-only behavior is frozen."""
 
-    def test_positive_gate_rejects_zero_negative_null_and_unscored(self):
-        from core.oracle_positive_gate import (
-            active_positive_oracle_truth, positive_oracle_entry_gate,
-            positive_gate_candidate_status, filter_positive_oracle_candidates,
-        )
-        values = {('2330', '2025-01-02'): 5.5,
-                  ('2317', '2025-01-02'): 0.,
-                  ('1301', '2025-01-02'): -1.25,
-                  ('0050', '2025-01-02'): float('nan')}
-        def candidate(ticker, available=True):
-            return {'ticker': ticker, 'breakout_quality_rank': {
-                'available': available, 'score_date': '2025-01-02', 'score': 1.}}
-        rows = [candidate(ticker) for ticker in ('2330', '2317', '1301', '0050', '9999')]
-        rows.append(candidate('2330', available=False))
-        self.assertEqual(len(filter_positive_oracle_candidates(rows)), len(rows))
-        with positive_oracle_entry_gate(values):
-            self.assertEqual([x['ticker'] for x in filter_positive_oracle_candidates(rows)], ['2330'])
-            self.assertEqual([positive_gate_candidate_status(x)[1] for x in rows],
-                             ['positive', 'nonpositive_target', 'nonpositive_target',
-                              'nonpositive_target', 'null_target', 'missing_score'])
-            with self.assertRaisesRegex(RuntimeError, 'Nested'):
-                with positive_oracle_entry_gate(values):
-                    pass
-        self.assertIsNone(active_positive_oracle_truth())
-        self.assertEqual([x['ticker'] for x in filter_positive_oracle_candidates(rows)],
-                         [x['ticker'] for x in rows])
 
-    def test_only_diagnostic_direct_selector_filters_candidates_before_allocation(self):
-        from core.oracle_positive_gate import positive_oracle_entry_gate
-        from core import portfolio_entry_selection_max_dl as selector
-        rows = [
-            {'ticker': ticker, 'breakout_quality_rank': {'available': True,
-                'score_date': '2025-01-02', 'score': score}, 'model_score': score}
-            for ticker, score in [('2330', .1), ('2317', .9), ('1301', .8)]
-        ]
-        seen = []
-        def select(candidates, **kwargs):
-            seen.append([row['ticker'] for row in candidates])
-            return {'selected_count': min(2, len(candidates))}
-        def diag(_base, _baseline, selected, **kw):
-            return dict(kw)
-        kwargs = dict(available_cash=1000, sizing_equity=1000,
-                      free_slots=10, params=object(), baseline={}, default_diag={})
-        with patch.object(selector, '_simulate_reserved_candidate_order', side_effect=select), \
-             patch.object(selector, '_resource_aware_diag_from_result', side_effect=diag), \
-             patch.object(selector, '_max_dl_score_order', side_effect=lambda x, **kw:x):
-            order, _ = selector._reorder_resource_aware_continuous_score_no_k_no_r0(rows, **kwargs)
-            self.assertEqual(len(order), 3)
-            with positive_oracle_entry_gate({('2330','2025-01-02'): 200.,
-                                            ('2317','2025-01-02'): -1.,
-                                            ('1301','2025-01-02'): 0.}):
-                order, _ = selector._reorder_resource_aware_continuous_score_no_k_no_r0(rows, **kwargs)
-                self.assertEqual([x['ticker'] for x in order], ['2330'])
-            self.assertEqual(seen, [['2330', '2317', '1301'], ['2330']])
 
-    def test_signed_positive_raw_and_trade_evidence_rejects_mutation(self):
-        from core.oracle_positive_gate import POSITIVE_FULLCYCLE_NETPNL_GATE
+    def test_signed_positive_raw_evidence_rejects_mutation(self):
         from services.audit.fullcycle_positive_truth import _save, _load
-        from services.audit.positive_gate_evidence import (
-            save_positive_replay_evidence, read_evidence,
-        )
         with TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            identity = {'schema': 1, 'gate': POSITIVE_FULLCYCLE_NETPNL_GATE,
-                        'seed': 42, 'raw': 'a'*64}
-            path = root/'raw.npz'
-            _save(path, identity, {('2330', '2025-01-02'): 5.,
-                                   ('2317', '2025-01-02'): float('nan')})
-            self.assertEqual(_load(path, identity), {('2330', '2025-01-02'): 5.})
-            with self.assertRaisesRegex(ValueError, 'invalid|mismatch|corrupt'):
-                _load(path, {**identity, 'seed': 43})
-            replay = {'target': 'DailyUniversal_MinTrade_NetPnL_Positive_Direct', 'seed': 42}
-            trade = {'ticker': '2330', 'breakout_quality_score_date': '2025-01-02',
-                     'entry_trade_date': '2025-01-03', 'signal_date': '2025-01-02',
-                     'entry_price': 100., 'exit_price': 102., 'exit_date': '2025-01-15',
-                     'exit_type': 'STOP', 'pnl': 50.0}
-            played = {'profile': {'closed_trade_rows': [trade]}}
-            kw = dict(project_root=root, output_subdir='audit-test', seed=42,
-                      replay_identity=replay, portfolio=played,
-                      execution_rows=[{'entry_filled': True, 'ticker': '2330',
-                                      'trade_date': '2025-01-03', 'filled_qty': 100}],
-                      raw_net_pnl={('2330', '2025-01-02'): 5.0},
-                      summary={'trades': 1, 'win_rate_pct': 100., 'romd': 8.5})
-            output = save_positive_replay_evidence(**kw)
-            self.assertEqual(read_evidence(output)['summary']['outcomes']['profit'], 1)
-            with self.assertRaisesRegex(ValueError, 'NULL/nonpositive'):
-                save_positive_replay_evidence(**{**kw,
-                        'raw_net_pnl': {('2330', '2025-01-02'): 0.}})
-            original = output.read_text(encoding='utf-8')
-            output.write_text(original.replace('2025-01-03', '2025-01-04'), encoding='utf-8')
-            with self.assertRaisesRegex(ValueError, 'digest mismatch'):
-                read_evidence(output)
+            path = Path(tmp) / "raw.npz"
+            identity = {"schema": 1, "seed": 42, "raw": "a" * 64}
+            _save(path, identity, {("2330", "2025-01-02"): 5.,
+                                   ("2317", "2025-01-02"): float("nan")})
+            self.assertEqual(_load(path, identity), {("2330", "2025-01-02"): 5.})
+            with self.assertRaisesRegex(ValueError, "invalid|mismatch|corrupt"):
+                _load(path, {**identity, "seed": 43})
+
+    def test_retired_gate_provenance_reuses_original_signed_raw_without_rewriting(self):
+        from core.file_integrity import compute_file_sha256
+        from services.audit.fullcycle_positive_truth import (
+            _identity, _path, _save, _existing_raw_witness,
+        )
+        evidence = {"raw_label_sha256": "c" * 64, "rank_sha256": "d" * 64,
+                    "truth_source_sha256": "e" * 64}
+        with TemporaryDirectory() as folder:
+            root = Path(folder)
+            current = _identity(seed=42, price_sha="a" * 64, param_sha="b" * 64,
+                                source_evidence=evidence, project_root=root)
+            original = {**current, "gate_source_sha256": "1" * 64,
+                        "sign_producer_sha256": "2" * 64}
+            path = _path(root, "test", original)
+            raw = {("2330", "2025-01-02"): 5.0}
+            _save(path, original, raw)
+            before = compute_file_sha256(path)
+            self.assertEqual(_existing_raw_witness(root, "test", current), (raw, path))
+            self.assertEqual(compute_file_sha256(path), before)
+            self.assertFalse(_path(root, "test", current).exists())
+            for field in ("seed", "price_sha256", "param_sha256", "canonical_raw_sha256",
+                          "canonical_rank_sha256", "canonical_truth_source_sha256"):
+                changed = {**current, field: 99 if field == "seed" else "f" * 64}
+                self.assertIsNone(_existing_raw_witness(root, "test", changed))
+            conflict = {**original, "sign_producer_sha256": "3" * 64}
+            _save(_path(root, "test", conflict), conflict, {("2330", "2025-01-02"): 6.0})
+            with self.assertRaisesRegex(ValueError, "conflicting signed raw"):
+                _existing_raw_witness(root, "test", current)
+
 
     def test_positive_target_uses_score_boundary_not_future_outcome_gate(self):
-        from core.oracle_positive_gate import POSITIVE_FULLCYCLE_NETPNL_GATE
         from services.audit.catalog import AUDIT_CATALOG, AUDIT_METHOD_CATALOG
         from core.audit_policy import get_audit_definitions
         definition = next(x for x in get_reusable_audit_definitions('breakout_quality')

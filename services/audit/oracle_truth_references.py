@@ -266,11 +266,13 @@ def load_or_build_positive_truth(*, execution, cache_root, **kwargs):
     OracleTruthReferences(cache_root).validate_consumption(execution, evidence)
     identity = positive._identity(seed=kwargs["seed"], price_sha=kwargs["price_sha256"],
         param_sha=kwargs["param_sha256"], source_evidence=evidence, project_root=kwargs["project_root"])
-    path = positive._path(kwargs["project_root"], kwargs["output_subdir"], identity)
-    existing = positive._load(path, identity)
-    if existing is not None:
+    witness = positive._existing_raw_witness(kwargs["project_root"], kwargs["output_subdir"], identity)
+    if witness is not None:
+        existing, path = witness
         if not set(existing).issubset(kwargs["canonical_scores"]):
             raise ValueError("positive raw witness differs from certified score membership")
+        if len(existing) != int(evidence["settled_net_pnl_rows"]):
+            raise ValueError("positive raw witness settled count differs from certified truth")
         return existing, path
     from services.audit.daily_trade40_oracle import truth_producer_fingerprint
     current_evidence = {**evidence, "truth_source_sha256": truth_producer_fingerprint("net_pnl")}

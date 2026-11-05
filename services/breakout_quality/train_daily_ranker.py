@@ -1110,6 +1110,27 @@ def _evaluate_head_metric_slices(
         result["breakout_candidate_oos"] = empty_candidate
     return result
 
+def _write_forward_score_frame(frame, path, *, profile, score_extras) -> None:
+    """Persist the runtime-owned output capability without changing FIT/rank."""
+    from core.breakout_quality_runtime import get_continuous_ranker_score_output_columns
+    work = frame.copy()
+    for column, values in score_extras.items():
+        work[str(column)] = np.asarray(values, dtype=np.float32)
+    sidecars = {
+        column for role, column in get_continuous_ranker_score_output_columns(
+            profile.training_objective, score_calibration=profile.score_calibration,
+        ).items() if column != "breakout_quality_score"
+    }
+    missing = sorted(({"model_score"} | sidecars) - set(work.columns))
+    if missing:
+        raise ValueError(f"Forward score-output capability缺少欄位: {missing}")
+    for column in sidecars:
+        values = pd.to_numeric(work[column], errors="raise").to_numpy(dtype=np.float64)
+        if not np.isfinite(values).all() or ((values < 0) | (values > 1)).any():
+            raise ValueError(f"Forward {column}必須為0到1的有限值")
+    work.to_csv(path, index=False, encoding="utf-8-sig", compression="gzip")
+
+
 def run(args) -> int:
     started = time.perf_counter()
     research_spec = get_continuous_ranker_research_spec(str(args.experiment_profile))
@@ -1445,6 +1466,7 @@ def run(args) -> int:
     dual_component_evaluation = {}
     validation_heads = None
     forward_heads = None
+    forward_sidecars = {}
     validation_components = None
     forward_components = None
 
@@ -2008,15 +2030,10 @@ def run(args) -> int:
         ]
     oos_frame["model_score"] = forward_scores
     if training_policy.categorical_class_count is not None:
-        for column, values in forward_sidecars.items():
-            oos_frame[str(column)] = np.asarray(values, dtype=np.float32)
         class_labels = ranker_api._training_target_for_profile(
             bundle.profile, bundle.raw_target, percentile_target, bundle.group_table
         )
-        oos_frame[
-            "target_joint_quadrant_class" if training_policy.categorical_class_count == 4
-            else "target_binary_positive_class"
-        ] = class_labels[forward_score_ids]
+        oos_frame["target_joint_quadrant_class"] = class_labels[forward_score_ids]
     if forward_heads is not None:
         if safety_primary_duo:
             oos_frame["raw_safety_score"] = forward_heads["raw_safety"]
@@ -2045,7 +2062,9 @@ def run(args) -> int:
         oos_frame["predicted_composite_r"] = forward_components["model_score"]
     if loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_RAW_R:
         oos_frame["predicted_r"] = forward_scores
-    oos_frame.to_csv(score_path, index=False, encoding="utf-8-sig", compression="gzip")
+    _write_forward_score_frame(
+        oos_frame, score_path, profile=bundle.profile, score_extras=forward_sidecars,
+    )
     _date_split_frame(bundle, split, forward_score_ids=forward_score_ids).to_csv(
         split_path, index=False, encoding="utf-8-sig"
     )
@@ -2125,11 +2144,7 @@ def run(args) -> int:
             "training_label_scope": bundle.profile.training_label_scope,
             "target": target_id,
             "model_score": (
-                (
-                    "p_positive_fullcycle_netpnl"
-                    if training_policy.categorical_class_count == 2
-                    else "p_high_mfe_and_low_full_horizon_mae"
-                )
+                "p_high_mfe_and_low_full_horizon_mae"
                 if training_policy.categorical_class_count is not None
                 else "predicted_r_two_logit_margin"
                 if training_policy.score_transform == CONTINUOUS_RANKER_SCORE_TRANSFORM_MARGIN_R

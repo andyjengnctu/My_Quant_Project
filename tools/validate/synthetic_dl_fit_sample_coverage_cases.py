@@ -22,7 +22,6 @@ from core.breakout_quality_registry import (
 )
 from core.research_report_contract import validate_approved_persistent_report_contracts
 from core.breakout_quality_runtime import (
-    CONTINUOUS_RANKER_TARGET_BUILDER_BINARY_POSITIVE,
     CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH,
     CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT,
 )
@@ -33,6 +32,8 @@ from services.breakout_quality.fitting_data_dependencies import (
     FitDataDependencies, fold_source_dependency_issues,
 )
 from services.audit import dl_fit_sample_coverage as audit
+from core.positive_netpnl_contract import POSITIVE_RANK_CALIBRATION
+from filters.breakout_quality.positive_rank_calibration import calibration_enabled
 
 
 class SampleCoverageTests(unittest.TestCase):
@@ -65,6 +66,7 @@ class SampleCoverageTests(unittest.TestCase):
                                    if daily else TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS),
             training_label_scope=(TRAINING_LABEL_SCOPE_ALL if daily else TRAINING_LABEL_SCOPE_PASS_ONLY),
             continuous_target_id="test_target",
+            score_calibration=POSITIVE_RANK_CALIBRATION,
         )
         return SimpleNamespace(
             profile=profile,
@@ -107,11 +109,11 @@ class SampleCoverageTests(unittest.TestCase):
         self.assertEqual(len(ids["train_ids"]), 2)
         self.assertEqual(len(ids["validation_ids"]), 2)
         positive, negative, rate = audit._positive_counts(
-            cohort, parts["fit_mask"], is_positive_binary=True,
+            cohort, parts["fit_mask"], has_positive_output=True,
         )
         self.assertEqual((positive, negative), (2, 3))
         self.assertAlmostEqual(rate, 40.)
-        rows = audit._year_rows("MODEL", 1, "fold_001", cohort, {**parts, "pre_score_mask": cohort["dates"].lt("2021-01-01").to_numpy()}, is_positive_binary=True)
+        rows = audit._year_rows("MODEL", 1, "fold_001", cohort, {**parts, "pre_score_mask": cohort["dates"].lt("2021-01-01").to_numpy()}, has_positive_output=True)
         self.assertEqual(sum(row["final_refit"] for row in rows), 5)
         self.assertEqual(sum(row["missing_target"] for row in rows), 1)
         self.assertEqual(sum(row["event_rows"] for row in rows), 6)
@@ -129,7 +131,7 @@ class SampleCoverageTests(unittest.TestCase):
         self.assertEqual(parts["missing_target"], 1)
         self.assertEqual(parts["final_refit"], 4)
         self.assertEqual(cohort["event_weights"][ids["final_ids"]].sum(), 5)
-        self.assertIsNone(audit._positive_counts(cohort, parts["fit_mask"], is_positive_binary=False)[2])
+        self.assertIsNone(audit._positive_counts(cohort, parts["fit_mask"], has_positive_output=False)[2])
 
     def make_published_fold(self, root: Path, bundle, *, profile="test-profile"):
         base = root / "models" / "research" / "breakout_quality" / "model_robustness" / "rolling_oos" / "test-profile" / "seed_7"
@@ -189,7 +191,7 @@ class SampleCoverageTests(unittest.TestCase):
             args = {"filter_id": "test_filter", "model_architecture": "test_arch"}
             fake_settings = SimpleNamespace(**args)
             fake_recipe = SimpleNamespace(
-                training_policy=SimpleNamespace(target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_BINARY_POSITIVE),
+                training_policy=SimpleNamespace(target_builder="scalar_pairwise"),
                 target_policy=SimpleNamespace(materialization_mode=CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH),
                 context_policy=SimpleNamespace(source="none"),
             )
@@ -228,7 +230,7 @@ class SampleCoverageTests(unittest.TestCase):
             signed_before = signed_path.read_bytes()
             fake_settings = SimpleNamespace(filter_id="test_filter", model_architecture="test_arch")
             fake_recipe = SimpleNamespace(
-                training_policy=SimpleNamespace(target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_BINARY_POSITIVE),
+                training_policy=SimpleNamespace(target_builder="scalar_pairwise"),
                 target_policy=SimpleNamespace(materialization_mode=CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH),
                 context_policy=SimpleNamespace(source="none"),
             )
@@ -274,14 +276,15 @@ class SampleCoverageTests(unittest.TestCase):
         for model, profile in inventory:
             with self.subTest(model=model, profile=profile):
                 recipe = get_continuous_ranker_execution_recipe(profile)
-                is_positive = (
-                    recipe.training_policy.target_builder
-                    == CONTINUOUS_RANKER_TARGET_BUILDER_BINARY_POSITIVE
-                )
+                from core.breakout_quality_registry import get_breakout_quality_experiment_profile
+                registered_profile = get_breakout_quality_experiment_profile(profile)
+                is_positive = calibration_enabled(registered_profile)
                 if is_positive:
-                    self.assertEqual(recipe.training_policy.categorical_class_count, 2)
+                    self.assertIsNone(recipe.training_policy.categorical_class_count)
+                    self.assertTrue(recipe.training_policy.uses_pairwise_loss)
                 daily = recipe.training_sample_scope == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
                 bundle = self.fake_bundle(daily=daily)
+                bundle.profile.score_calibration = registered_profile.score_calibration
                 with tempfile.TemporaryDirectory() as temp:
                     root = Path(temp)
                     base, _manifest, _paths = self.make_published_fold(root, bundle, profile=profile)
