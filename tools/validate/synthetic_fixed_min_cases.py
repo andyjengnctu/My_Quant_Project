@@ -119,6 +119,84 @@ class FixedMinContractTests(TestCase):
         from config.breakout_quality import BREAKOUT_QUALITY_POINT_IN_TIME_TRAIN_WINDOW_MONTHS
         self.assertIsNone(BREAKOUT_QUALITY_POINT_IN_TIME_TRAIN_WINDOW_MONTHS)
 
+    def test_fixed_min_oracle_replay_accepts_absent_universe_boundary(self):
+        """No Optimizer boundary must not crash the real ensemble replay entry."""
+        from unittest.mock import patch
+        from core.data_utils import get_required_min_rows
+        from core.fixed_min_policy import fixed_min_param_payload
+        from core.portfolio_param_runtime import build_active_param_ensemble_objects_from_payload
+        from core.raw_universe_contract import resolve_raw_universe_required_min_rows
+        from services import portfolio_replay as replay
+
+        payload = fixed_min_param_payload()
+        self.assertIsNone(resolve_raw_universe_required_min_rows(payload))
+        records = build_active_param_ensemble_objects_from_payload(payload)
+        self.assertEqual(len(records), 1)
+        self.assertEqual(replay._resolve_required_min_rows_for_raw_universe(
+            [fixed_min_params()], raw_universe_required_min_rows=None,
+        ), get_required_min_rows(fixed_min_params()))
+
+        def key_with(boundary):
+            return replay._replay_preparation_key(
+                '/tmp/fixed-min-oracle', records, ensemble=True,
+                raw_universe_required_min_rows=boundary, keep_trade_logs=False,
+                use_prepared_cache=False, write_prepared_cache=False,
+            )
+
+        no_optimizer = key_with(None)
+        p16_pinned = key_with(260)
+        self.assertIsNone(no_optimizer[3])
+        self.assertEqual(p16_pinned[3], 260)
+        self.assertNotEqual(no_optimizer, p16_pinned,
+                            'P16 and Fixed Min must not share prepared-market cache')
+        self.assertEqual(key_with('260'), p16_pinned)
+        for invalid in (True, 0, -1, 260.5):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                key_with(invalid)
+
+        market = {'1900-01-01': [{
+            'sorted_dates': [pd.Timestamp('2021-01-04'), pd.Timestamp('2021-01-05')],
+            'all_dfs_fast': {}, 'all_trade_logs': {}, 'all_pit_stats_index': {},
+            'prep_wall_sec': 0.0,
+        }]}
+        cache = {}
+        with (
+            patch.object(replay, '_load_contexts_for_active_ensemble_schedule',
+                         return_value=market) as build_market,
+            patch.object(replay, '_apply_active_single_stock_score_stats'),
+            patch.object(replay, 'run_portfolio_timeline',
+                         side_effect=['C139-timeline', 'C140-timeline']) as portfolio,
+            patch.object(replay, 'append_portfolio_replay_profile',
+                         side_effect=lambda value, profile: (value, profile)),
+        ):
+            outputs = [replay.run_portfolio_simulation_with_param_ensemble(
+                '/tmp/fixed-min-oracle', payload, start_year=2021,
+                start_date='2021-01-04', end_date='2021-01-05', verbose=False,
+                replay_preparation_cache=cache,
+            ) for _ in range(2)]
+        self.assertEqual(build_market.call_count, 1,
+                         'Same Fixed Min preparation must be reused within a session')
+        self.assertEqual(build_market.call_args.kwargs['raw_universe_required_min_rows'], None)
+        self.assertEqual(portfolio.call_count, 2,
+                         'Same market preparation must not reuse a portfolio result')
+        self.assertEqual([output[0] for output in outputs],
+                         ['C139-timeline', 'C140-timeline'])
+        self.assertTrue(all(out[1]['raw_universe_required_min_rows'] is None
+                            for out in outputs))
+
+    def test_fixed_min_oracle_receipt_identity_includes_portfolio_engine(self):
+        from unittest.mock import patch
+        from services.audit import fixed_min_oracle_scope as fixed
+
+        with patch.object(fixed, 'compute_file_sha256',
+                          wraps=fixed.compute_file_sha256) as fingerprint:
+            digest = fixed._source_sha()
+        checked = {str(call.args[0].relative_to(Path(fixed.__file__).resolve().parents[2]))
+                   for call in fingerprint.call_args_list}
+        self.assertEqual(len(digest), 64)
+        self.assertIn('services/portfolio_replay.py', checked)
+        self.assertIn('core/portfolio_engine.py', checked)
+
     def test_immutable_artifact_reuse_and_drift_rejection(self):
         with TemporaryDirectory() as temp:
             root = Path(temp)

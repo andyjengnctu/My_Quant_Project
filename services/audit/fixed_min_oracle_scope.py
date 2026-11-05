@@ -85,6 +85,9 @@ def _source_sha() -> str:
         "services/audit/fixed_min_oracle_scope.py",
         "services/breakout_quality/fixed_min_source.py",
         "core/fixed_min_policy.py", "services/research/strategy_compare_replay.py",
+        # The fixed Oracle receipts depend on the shared broker-cash replay
+        # implementation, not only on this scope and its entry adapter.
+        "services/portfolio_replay.py", "core/portfolio_engine.py",
         "filters/breakout_quality/runtime.py",
     )
     return canonical_json_sha256({

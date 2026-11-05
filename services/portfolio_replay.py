@@ -84,9 +84,16 @@ def _replay_preparation_key(
             tuple((str(member["params_signature"]), str(member.get("member_index") or ""))
                   for member in members),
         ))
+    # A non-Optimizer source (e.g. Fixed Min) legitimately has no pinned
+    # raw-universe boundary. Preserve that absence in the session cache key:
+    # the context builder then derives its minimum rows from the signed params.
+    # Never coerce None to 0 or a P16 boundary, which could change the universe.
+    universe_boundary = coerce_raw_universe_required_min_rows(
+        raw_universe_required_min_rows, allow_none=True,
+    )
     return (
         "portfolio-prep-session-v1", str(Path(data_dir).resolve()),
-        tuple(schedule), int(raw_universe_required_min_rows),
+        tuple(schedule), universe_boundary,
         bool(keep_trade_logs), bool(use_cache), bool(write_cache),
         None if raw_data_loader is None else id(raw_data_loader),
     )
