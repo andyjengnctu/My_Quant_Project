@@ -79,10 +79,15 @@ def slice_formal_mintrade40_pit_source_for_fold(
     if (type(source.seed) is not int or source.seed <= 0 or
             len(source.param_sha256) != 64 or
             any(c not in "0123456789abcdef" for c in source.param_sha256.lower()) or
-            source.source_id != "formal_min_roos_seed" or
+            source.source_id not in {"formal_min_roos_seed", "fixed_min_constant_v1"} or
             not source.schedule or
             len(source.schedule) != len(source.publication_dates)):
         raise FormalMinTrade40PITBlocked("Unverified formal MinTrade40 parent source identity")
+
+    if source.source_id == "fixed_min_constant_v1":
+        from core.fixed_min_policy import verify_fixed_min_source
+        if not verify_fixed_min_source(source):
+            raise FormalMinTrade40PITBlocked("Fixed Min constant source identity drift")
 
     periods = []
     publication_dates = []
@@ -152,7 +157,11 @@ def verify_formal_mintrade40_pit_source(
     if (len(source.param_sha256) != 64 or
             any(char not in "0123456789abcdef" for char in source.param_sha256.lower())):
         raise FormalMinTrade40PITBlocked("Missing canonical Optimizer parameter SHA256")
-    if source.source_id != "formal_min_roos_seed":
+    if source.source_id == "fixed_min_constant_v1":
+        from core.fixed_min_policy import verify_fixed_min_source
+        if not verify_fixed_min_source(source):
+            raise FormalMinTrade40PITBlocked("Fixed Min constant source identity drift")
+    elif source.source_id != "formal_min_roos_seed":
         raise FormalMinTrade40PITBlocked("Retired or nonformal Min teacher source rejected")
     schedule = source.schedule
     if not schedule or len(schedule) != len(source.publication_dates):

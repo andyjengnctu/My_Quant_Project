@@ -257,6 +257,7 @@ def _shares_oracle_scalar_truth(profile: str, target_id: str) -> bool:
                     "formal_seed_mintrade_fullcycle_netr",
                     "formal_seed_mintrade_fullcycle_netpnl",
                     "true_daily_seed_mintrade_fullcycle_netpnl",
+                    "fixed_min_fullcycle_netpnl",
                 })
         )
         and policy.postprocess == CONTINUOUS_RANKER_TARGET_POSTPROCESS_NONE

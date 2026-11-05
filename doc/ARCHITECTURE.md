@@ -69,6 +69,7 @@ project/
 │  ├─ selection_policy.py             # history-selection 策略參數 schema／default snapshot owner
 │  ├─ breakout_policy.py              # breakout high_len range validation／derived values helper
 │  ├─ strategy_params.py              # breakout + training gate + execution 聚合參數契約
+│  ├─ fixed_min_policy.py            # 全歷史固定常數 Min：Target／Broker-Cash 共用參數與來源身分 SSOT
 │  ├─ strategy_compare_registry.py    # Compare Suite／profile／arm／contrast catalog SSOT
 │  ├─ strategy_compare_policy.py      # Strategy Compare resolver／validation／authorization
 │  ├─ audit_registry.py               # formal/reusable Audit definitions／source／dimensions SSOT

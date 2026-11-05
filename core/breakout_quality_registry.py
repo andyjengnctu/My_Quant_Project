@@ -401,6 +401,7 @@ DAILY_UNIVERSAL_COUNTERFACTUAL_MINTRADE40_NETR_PAIRWISE_PROFILE = "daily_univers
 DAILY_UNIVERSAL_FORMAL_MINTRADE40_NETR_PAIRWISE_PROFILE = "daily_universal_formal_mintrade40_netr_per_seed_full_list_ndcg_pairwise"
 DAILY_UNIVERSAL_FORMAL_MINTRADE_FULLCYCLE_NETR_PAIRWISE_PROFILE = "daily_universal_formal_mintrade_fullcycle_netr_per_seed_full_list_ndcg_pairwise"
 DAILY_UNIVERSAL_FORMAL_MINTRADE_FULLCYCLE_NETPNL_PAIRWISE_PROFILE = "daily_universal_formal_mintrade_fullcycle_netpnl_per_seed_full_list_ndcg_pairwise"
+FIXED_MINTRADE_FULLCYCLE_NETPNL_PAIRWISE_PROFILE = "fixed_mintrade_fullcycle_netpnl_full_list_ndcg_pairwise"
 DAILY_UNIVERSAL_JOINT_MFE_D40_QUADRANT_PROFILE = "daily_universal_joint_mfe_d40_quadrant_cross_entropy"
 DAILY_UNIVERSAL_NETPNL_POSITIVE_BINARY_PROFILE = "daily_universal_formal_mintrade_fullcycle_netpnl_positive_binary"
 TRUE_DAILY_MINTRADE_NETPNL_POSITIVE_PROFILE = "true_daily_universal_mintrade_fullcycle_netpnl_positive_binary"
@@ -1730,6 +1731,19 @@ _EXPERIMENT_PROFILES = {
         training_label_scope=TRAINING_LABEL_SCOPE_ALL,
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
         model_architecture="inception_time_v1",
+    ),
+    FIXED_MINTRADE_FULLCYCLE_NETPNL_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
+        name=FIXED_MINTRADE_FULLCYCLE_NETPNL_PAIRWISE_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
+        continuous_target_id="fixed_mintrade_fullcycle_netpnl_v1",
+        loss_name="pairwise_logistic",
+        epoch_selection_metric="mean_daily_spearman",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+        model_architecture="inception_time_v1",
+        fit_contract_version=1,
     ),
     DAILY_UNIVERSAL_NETPNL_POSITIVE_BINARY_PROFILE: BreakoutQualityExperimentProfile(
         name=DAILY_UNIVERSAL_NETPNL_POSITIVE_BINARY_PROFILE,
@@ -3460,6 +3474,27 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         ),
         metric_scope="all_stock_days_formal_mintrade_fullcycle_netpnl_positive_binary",
         score_semantic_id="daily_formal_mintrade_fullcycle_netpnl_positive_probability",
+        selection_pit_authorized=True,
+        current_time_validation_authorized=True,
+    ),
+    FIXED_MINTRADE_FULLCYCLE_NETPNL_PAIRWISE_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=FIXED_MINTRADE_FULLCYCLE_NETPNL_PAIRWISE_PROFILE,
+        model_research_id="MR-13CV",
+        experiment_name="MR-13CV Fixed Min full-cycle NetPnL Ranker",
+        phase="13CV",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description=(
+            "Prespecified non-optimized Fixed Min trade-path full-cycle broker NetPnL; "
+            "identical parameters across all historical FIT years and OOS folds. "
+            "Unfilled and immature paths remain NULL."
+        ),
+        objective_description=(
+            "Single-head 300x10 InceptionTime full-list Delta-NDCG pairwise. "
+            "Expanding pre-fold PIT-matured history; no Optimizer/P16 teacher."
+        ),
+        metric_scope="all_stock_days_fixed_mintrade_fullcycle_netpnl",
+        score_semantic_id="fixed_mintrade_fullcycle_netpnl_rank",
+        pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
         selection_pit_authorized=True,
         current_time_validation_authorized=True,
     ),

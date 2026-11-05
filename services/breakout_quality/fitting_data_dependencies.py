@@ -44,6 +44,7 @@ FORMAL_MIN_REALIZED_TARGET_KINDS = frozenset({
     'formal_seed_mintrade_fullcycle_broker_net_r',
     'formal_seed_mintrade_fullcycle_broker_net_pnl',
     'true_daily_seed_mintrade_fullcycle_broker_net_pnl',
+    'fixed_min_fullcycle_broker_net_pnl',
 })
 
 
@@ -122,11 +123,25 @@ class FitDataDependencies:
         if fit_cutoff is None:
             raise ValueError('MinTrade40 FIT identity requires explicit information cutoff')
         lineage = dict(original.get('teacher_lineage') or {})
-        if lineage.get('contract') != 'formal_mintrade40_seed_historical_plus_p16_v1':
-            raise ValueError('MinTrade40 FIT lineage contract missing')
+        source_contract = str(lineage.get('contract') or '')
+        if source_contract not in {
+                'formal_mintrade40_seed_historical_plus_p16_v1',
+                'fixed_min_constant_v1'}:
+            raise ValueError('MinTrade FIT lineage contract missing')
         records = target.get('formal_mintrade40_teacher_periods')
         if not isinstance(records, list) or not records:
-            raise ValueError('MinTrade40 verified source schedule missing from bundle')
+            raise ValueError('MinTrade verified source schedule missing from bundle')
+        if source_contract == 'fixed_min_constant_v1':
+            # The sole Fixed Min source is canonical constants; unlike original
+            # Optimizer teachers it cannot acquire a second historical period.
+            from core.fixed_min_policy import (
+                FIXED_MIN_FIRST_EFFECTIVE_DATE, fixed_min_signature,
+            )
+            expected = {'start': FIXED_MIN_FIRST_EFFECTIVE_DATE, 'end': None,
+                        'params_signature': fixed_min_signature(),
+                        'published': FIXED_MIN_FIRST_EFFECTIVE_DATE}
+            if records != [expected] or lineage.get('oos_start_date') is not None:
+                raise ValueError('Fixed Min historical constants were modified')
         digest = mintrade40_teacher_asof_sha256(
             seed=int(lineage['seed']), records=records,
             fit_cutoff=fit_cutoff, oos_start_date=lineage.get('oos_start_date'),

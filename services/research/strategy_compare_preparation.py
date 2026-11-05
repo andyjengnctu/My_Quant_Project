@@ -54,6 +54,13 @@ def _execute_preparation_action(
     comparison_start_date: str | None = None,
     comparison_end_date: str | None = None,
 ) -> None:
+    if action.builder_type == "research_fixed_min_constant_params":
+        from core.fixed_min_policy import ensure_fixed_min_param_artifact
+        _kind, source_id = action.artifact_key.split(":", 1)
+        if source_id != "fixed_min_constant_v1":
+            raise ValueError("Unknown Fixed Min parameter producer")
+        ensure_fixed_min_param_artifact(root)
+        return
     if action.builder_type == "forward_oos_scores":
         _kind, dl_id, _name = action.artifact_key.split(":", 2)
         source = settings.dl_sources[dl_id]

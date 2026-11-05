@@ -119,6 +119,36 @@ def _fullcycle_loader(outcome_metric: str):
     return load
 
 
+def _fixed_min_loader(*, project_root: str | Path, seed: int, authorized_build: bool):
+    from functools import partial
+    from core.fixed_min_policy import fixed_min_source, FIXED_MIN_ID
+    from services.breakout_quality.formal_mintrade40_pit_source import (
+        materialize_formal_mintrade40_pit_labels,
+    )
+    source = fixed_min_source(int(seed))
+    return {
+        "target_materializer": partial(
+            materialize_formal_mintrade40_pit_labels, source=source,
+            expected_seed=int(seed), horizon_sessions=None,
+            outcome_metric="net_pnl",
+            cache_project_root=str(Path(project_root).resolve()),
+        ),
+        "target_lineage": {
+            "contract": FIXED_MIN_ID, "target_kind": "fixed_min_fullcycle_broker_net_pnl",
+            "maturity_policy": "natural_exit_or_research_terminal_closeout_pit_v1",
+            "horizon_mode": "full_trade_cycle", "value_field": "raw_net_pnl",
+            "seed": int(seed), "source_sha256": source.param_sha256,
+            "first_effective_date": str(source.schedule[0].start.date()),
+            "last_source_period_start": str(source.schedule[0].start.date()),
+            "oos_start_date": source.oos_start_date,
+            "teacher_periods": [{"start": str(source.schedule[0].start.date()),
+                                 "end": None,
+                                 "params_signature": source.schedule[0].params_signature,
+                                 "published": source.publication_dates[0]}],
+        },
+    }
+
+
 _TRADE_PATH_SOURCES: dict[str, TradePathSource] = {
     "formal_seed_mintrade40_netr": TradePathSource(
         contract_kind="formal_seed_mintrade40_netr",
@@ -138,6 +168,10 @@ _TRADE_PATH_SOURCES: dict[str, TradePathSource] = {
         contract_kind="formal_seed_mintrade_fullcycle_netr",
         loader=_fullcycle_loader("net_r"),
         dependencies=(),
+    ),
+    "fixed_min_fullcycle_netpnl": TradePathSource(
+        contract_kind="fixed_min_fullcycle_netpnl", loader=_fixed_min_loader,
+        dependencies=(),  # Prespecified constants, no Optimizer producer.
     ),
     "formal_seed_mintrade_fullcycle_netpnl": TradePathSource(
         contract_kind="formal_seed_mintrade_fullcycle_netpnl",

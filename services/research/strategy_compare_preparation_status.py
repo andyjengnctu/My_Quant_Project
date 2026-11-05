@@ -226,6 +226,10 @@ def _validate_param_artifact(
         raw_payload = _read_json(path)
         if raw_payload is None:
             return False, "PARAM_CONTRACT_INVALID_JSON", policy
+        if artifact_contract.get("fixed_min_contract_id") == "fixed_min_constant_v1":
+            from core.fixed_min_policy import fixed_min_param_payload
+            if raw_payload != fixed_min_param_payload():
+                return False, "FIXED_MIN_CONSTANT_DRIFT", policy
         mismatch = _validate_expected_artifact_contract(raw_payload, artifact_contract)
         if mismatch is not None:
             return False, f"PARAM_CONTRACT_MISMATCH: {mismatch}", policy
@@ -945,7 +949,16 @@ def _collect_parameter_artifact_status(
             )
             policy_identity_ready = identity_ready
             policy_identity_status = identity_status
-            if builder_type == "optimizer_raw_price_strategy_params":
+            if builder_type == "research_fixed_min_constant_params":
+                from core.fixed_min_policy import fixed_min_param_payload
+                actual = _read_json(path)
+                policy_identity_ready = bool(actual == fixed_min_param_payload())
+                policy_identity_status = (
+                    "READY" if policy_identity_ready else "FIXED_MIN_CONSTANT_IDENTITY_MISMATCH"
+                )
+                scientific_identity_blocked = bool(scientific_identity_blocked or
+                                                   (path.exists() and not policy_identity_ready))
+            elif builder_type == "optimizer_raw_price_strategy_params":
                 builder_options = {} if source.builder is None else dict(source.builder.options)
                 training_profile_id = str(builder_options.get("training_profile_id") or "").strip()
                 if not training_profile_id:
