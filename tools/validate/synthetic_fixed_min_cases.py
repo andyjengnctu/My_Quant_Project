@@ -14,8 +14,9 @@ import pandas as pd
 
 from core.fixed_min_policy import (
     FIXED_MIN_ID, FIXED_MIN_TARGET, fixed_min_params, fixed_min_signature,
-    fixed_min_source, fixed_min_artifact_path, ensure_fixed_min_param_artifact,
+    fixed_min_artifact_path, ensure_fixed_min_param_artifact,
 )
+from services.breakout_quality.fixed_min_source import fixed_min_source
 from core.strategy_compare_policy import get_strategy_comparison_settings
 from core.breakout_quality_policy import get_breakout_quality_model_test_settings
 from services.breakout_quality.formal_mintrade40_pit_source import (
@@ -132,6 +133,114 @@ class FixedMinContractTests(TestCase):
             with self.assertRaisesRegex(ValueError, 'differs from canonical'):
                 ensure_fixed_min_param_artifact(root)
 
+    def test_fixed_min_robustness_uses_one_truth_for_all_seeds(self):
+        from unittest.mock import patch
+        from types import SimpleNamespace
+        from core.fixed_min_policy import (
+            fixed_min_producer_manifest_path,
+            inspect_fixed_min_robustness_parameter_artifact,
+            ensure_fixed_min_robustness_parameter_artifact,
+        )
+        from services.research import strategy_multi_seed_robustness as robustness_owner
+
+        settings = get_strategy_comparison_settings('broker_cash_dl_conversion_rolling')
+        arms = tuple(settings.arms[k] for k in ('C139', 'C140', 'C141'))
+        benchmark = SimpleNamespace(benchmark_id='fixed-min-test', resolved_seeds=(17, 31))
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            path = fixed_min_artifact_path(root)
+            manifest = fixed_min_producer_manifest_path(root)
+            with (
+                patch.object(robustness_owner, 'PROJECT_ROOT', root),
+                patch.object(robustness_owner,
+                             'ensure_fixed_min_robustness_parameter_artifact',
+                             wraps=ensure_fixed_min_robustness_parameter_artifact) as constant_producer,
+                patch.object(robustness_owner,
+                             'ensure_robustness_benchmark_strategy_parameter_artifact',
+                             side_effect=AssertionError('Optimizer must not run')),
+            ):
+                rows, blockers, plans = robustness_owner._benchmark_parameter_plan_rows(
+                    settings=settings, robustness=benchmark, benchmark_arms=arms,
+                    comparison_start='2021-01-01', comparison_end='2026-03-02',
+                )
+                self.assertFalse(blockers)
+                self.assertEqual(len(rows), 1)
+                self.assertEqual(rows[0][0], 'BUILD')
+                self.assertIn(':constant=all:', rows[0][1])
+                self.assertEqual(len(plans), 6)
+                self.assertEqual({str(b['path']) for b in plans.values()}, {str(path)})
+                bound = robustness_owner._prepare_benchmark_strategy_parameter_artifacts(
+                    settings=settings, robustness=benchmark, benchmark_arms=arms,
+                    comparison_start='2021-01-01', comparison_end='2026-03-02',
+                )
+                self.assertEqual(constant_producer.call_count, 1)
+                self.assertEqual(len(bound), 6)
+                self.assertEqual({str(b['path']) for b in bound.values()}, {str(path)})
+                self.assertEqual({str(b['manifest_path']) for b in bound.values()}, {str(manifest)})
+                self.assertEqual(len({b['sha256'] for b in bound.values()}), 1)
+                self.assertEqual({b['seed'] for b in bound.values()}, {17, 31})
+                self.assertEqual(inspect_fixed_min_robustness_parameter_artifact(root)['action'], 'REUSE')
+                rows, blockers, _ = robustness_owner._benchmark_parameter_plan_rows(
+                    settings=settings, robustness=benchmark, benchmark_arms=arms,
+                    comparison_start='2021-01-01', comparison_end='2026-03-02',
+                )
+                self.assertEqual(len(rows), 1)
+                self.assertEqual(rows[0][0], 'REUSE')
+                self.assertFalse(blockers)
+                import json
+                payload = json.loads(path.read_text(encoding='utf-8'))
+                payload['params_by_effective_date']['1900-01-01']['high_len'] = 201
+                path.write_text(json.dumps(payload), encoding='utf-8')
+                rows, blockers, _ = robustness_owner._benchmark_parameter_plan_rows(
+                    settings=settings, robustness=benchmark, benchmark_arms=arms,
+                    comparison_start='2021-01-01', comparison_end='2026-03-02',
+                )
+                self.assertEqual(rows[0][0], 'BLOCKED')
+                self.assertTrue(blockers)
+                with self.assertRaisesRegex(ValueError, 'source drift'):
+                    ensure_fixed_min_robustness_parameter_artifact(root)
+
+    def test_existing_fixed_min_truth_repairs_only_missing_manifest(self):
+        from core.fixed_min_policy import (
+            fixed_min_producer_manifest_path,
+            inspect_fixed_min_robustness_parameter_artifact,
+            ensure_fixed_min_robustness_parameter_artifact,
+        )
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            path = ensure_fixed_min_param_artifact(root)
+            original = path.read_bytes()
+            self.assertEqual(
+                inspect_fixed_min_robustness_parameter_artifact(root),
+                {'action': 'REPAIR', 'status': 'FIXED_MIN_MANIFEST_MISSING'},
+            )
+            published = ensure_fixed_min_robustness_parameter_artifact(root)
+            self.assertEqual(published['action'], 'REPAIR')
+            self.assertEqual(path.read_bytes(), original)
+            self.assertTrue(fixed_min_producer_manifest_path(root).is_file())
+            self.assertEqual(ensure_fixed_min_robustness_parameter_artifact(root)['action'], 'REUSE')
+
+    def test_fixed_min_robustness_manifest_tamper_rejected(self):
+        from core.fixed_min_policy import (
+            fixed_min_producer_manifest_path,
+            inspect_fixed_min_robustness_parameter_artifact,
+            ensure_fixed_min_robustness_parameter_artifact,
+        )
+        import json
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            ready = ensure_fixed_min_robustness_parameter_artifact(root)
+            self.assertEqual(ready['action'], 'BUILD')
+            self.assertEqual(ensure_fixed_min_robustness_parameter_artifact(root)['action'], 'REUSE')
+            manifest_path = fixed_min_producer_manifest_path(root)
+            manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+            manifest['parameter_file_sha256'] = '0' * 64
+            manifest_path.write_text(json.dumps(manifest), encoding='utf-8')
+            state = inspect_fixed_min_robustness_parameter_artifact(root)
+            self.assertEqual(state, {'action': 'BLOCKED', 'status': 'FIXED_MIN_MANIFEST_DRIFT'})
+            with self.assertRaisesRegex(ValueError, 'source drift'):
+                ensure_fixed_min_robustness_parameter_artifact(root)
+
     def test_tampered_fixed_source_rejected(self):
         source = fixed_min_source(42)
         invalid = replace(source, schedule=(replace(
@@ -182,6 +291,39 @@ def validate_fixed_min_end_to_end_contract_case(_base_params):
         )
         check('drifted source never REUSE', (False, 'FIXED_MIN_CONSTANT_DRIFT'),
               (ready, reason))
+    # Robustness must not reinterpret timeless parameters as seed-fitted Optimizer output.
+    from unittest.mock import patch
+    from types import SimpleNamespace
+    from core.fixed_min_policy import (
+        inspect_fixed_min_robustness_parameter_artifact,
+        ensure_fixed_min_robustness_parameter_artifact,
+    )
+    from services.research import strategy_multi_seed_robustness as robustness_owner
+    with TemporaryDirectory() as temp:
+        root = Path(temp)
+        arms = tuple(enabled[k] for k in ('C139', 'C140', 'C141'))
+        bench = SimpleNamespace(benchmark_id='fixed-min-synthetic', resolved_seeds=(17, 31))
+        with patch.object(robustness_owner, 'PROJECT_ROOT', root):
+            rows, blocked, bindings = robustness_owner._benchmark_parameter_plan_rows(
+                settings=setting, robustness=bench, benchmark_arms=arms,
+                comparison_start='2021-01-01', comparison_end='2026-03-02',
+            )
+            check('fixed robustness one unbuilt constant source', ('BUILD', 1, 0),
+                  (rows[0][0], len(rows), len(blocked)))
+            check_true('all seeded arms refer to one fixed parameter truth',
+                       len(bindings) == 6 and len({str(b['path']) for b in bindings.values()}) == 1)
+            artifact = ensure_fixed_min_param_artifact(root)
+            rows, blocked, _ = robustness_owner._benchmark_parameter_plan_rows(
+                settings=setting, robustness=bench, benchmark_arms=arms,
+                comparison_start='2021-01-01', comparison_end='2026-03-02',
+            )
+            check('fixed robustness missing manifest is repair only', ('REPAIR', 0),
+                  (rows[0][0], len(blocked)))
+            before = artifact.read_bytes()
+            ensure_fixed_min_robustness_parameter_artifact(root)
+            check_true('fixed robustness REUSE does not replace constants',
+                       artifact.read_bytes() == before
+                       and inspect_fixed_min_robustness_parameter_artifact(root)['action'] == 'REUSE')
     source = fixed_min_source(42)
     check('one all-history schedule', 1, len(source.schedule))
     check('1900 effective date', '1900-01-01',

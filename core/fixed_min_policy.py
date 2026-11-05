@@ -20,6 +20,9 @@ FIXED_MIN_RESEARCH_END_DATE = "2026-03-02"
 FIXED_MIN_PARAM_RELATIVE_PATH = (
     "models/research/breakout_quality/strategy_params/fixed_min_constant_v1/roos_base_best.json"
 )
+FIXED_MIN_MANIFEST_RELATIVE_PATH = (
+    "models/research/breakout_quality/strategy_params/fixed_min_constant_v1/producer_manifest.json"
+)
 
 
 def fixed_min_params() -> V16StrategyParams:
@@ -103,38 +106,78 @@ def ensure_fixed_min_param_artifact(project_root: Path) -> Path:
     return path
 
 
-def fixed_min_source(seed: int):
-    """The same immutable constant params as the strategy (no Optimizer/P16)."""
-    if type(seed) is not int or seed <= 0:
-        raise ValueError("Fixed Min requires a positive FIT seed")
-    import pandas as pd
-    from filters.breakout_quality.daily_trade40_target import ExecutableMinPeriod
-    from services.breakout_quality.formal_mintrade40_pit_source import FormalMinTrade40PITSource
-    period = ExecutableMinPeriod(
-        start=pd.Timestamp(FIXED_MIN_FIRST_EFFECTIVE_DATE), end=None,
-        params=fixed_min_params(), source_id=FIXED_MIN_ID,
-        params_signature=fixed_min_signature(),
-    )
-    return FormalMinTrade40PITSource(
-        seed=seed, param_sha256=fixed_min_scientific_sha256(),
-        schedule=(period,), publication_dates=(FIXED_MIN_FIRST_EFFECTIVE_DATE,),
-        source_id=FIXED_MIN_ID, oos_start_date=None,
-    )
+
+def fixed_min_producer_manifest_path(project_root: Path) -> Path:
+    return Path(project_root).resolve() / FIXED_MIN_MANIFEST_RELATIVE_PATH
 
 
-def verify_fixed_min_source(source) -> bool:
-    """Strictly prove one identical constant, without accepting fake Optimizer lineage."""
-    if source.source_id != FIXED_MIN_ID:
-        return False
-    if (source.param_sha256 != fixed_min_scientific_sha256()
-            or source.publication_dates != (FIXED_MIN_FIRST_EFFECTIVE_DATE,)
-            or source.oos_start_date is not None
-            or len(source.schedule) != 1):
-        return False
-    period = source.schedule[0]
-    return bool(
-        period.source_id == FIXED_MIN_ID
-        and str(period.start.date()) == FIXED_MIN_FIRST_EFFECTIVE_DATE
-        and period.params_signature == fixed_min_signature()
-        and build_portfolio_params_signature(period.params) == fixed_min_signature()
-    )
+def _fixed_min_producer_manifest_payload(path: Path) -> dict:
+    from core.strategy_param_artifacts import compute_strategy_param_scientific_sha256
+    from core.file_integrity import compute_file_sha256
+
+    return {
+        "schema_type": "fixed_min_parameter_producer_manifest",
+        "schema_version": 1,
+        "source_id": FIXED_MIN_ID,
+        "parameter_path": FIXED_MIN_PARAM_RELATIVE_PATH,
+        "fixed_min_contract_sha256": fixed_min_scientific_sha256(),
+        "parameter_scientific_sha256": compute_strategy_param_scientific_sha256(path),
+        "parameter_file_sha256": compute_file_sha256(path),
+    }
+
+
+def inspect_fixed_min_robustness_parameter_artifact(project_root: Path) -> dict:
+    """Inspect the immutable, seed-independent source without producing work."""
+    import json
+
+    path = fixed_min_artifact_path(project_root)
+    manifest_path = fixed_min_producer_manifest_path(project_root)
+    if not path.exists():
+        return {"action": "BLOCKED" if manifest_path.exists() else "BUILD",
+                "status": "SOURCE_MISSING_WITH_MANIFEST" if manifest_path.exists()
+                          else "FIXED_MIN_SOURCE_MISSING"}
+    try:
+        actual = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"action": "BLOCKED", "status": "FIXED_MIN_SOURCE_UNREADABLE"}
+    if actual != fixed_min_param_payload():
+        return {"action": "BLOCKED", "status": "FIXED_MIN_CONSTANT_DRIFT"}
+    if not manifest_path.exists():
+        return {"action": "REPAIR", "status": "FIXED_MIN_MANIFEST_MISSING"}
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"action": "BLOCKED", "status": "FIXED_MIN_MANIFEST_UNREADABLE"}
+    if manifest != _fixed_min_producer_manifest_payload(path):
+        return {"action": "BLOCKED", "status": "FIXED_MIN_MANIFEST_DRIFT"}
+    return {"action": "REUSE", "status": "READY"}
+
+
+def ensure_fixed_min_robustness_parameter_artifact(project_root: Path) -> dict:
+    """Publish metadata for the single fixed source, never seed-specific params."""
+    import json
+
+    before = inspect_fixed_min_robustness_parameter_artifact(project_root)
+    if before["action"] == "BLOCKED":
+        raise ValueError(f"Fixed Min benchmark source drift: {before['status']}")
+    path = ensure_fixed_min_param_artifact(project_root)
+    manifest_path = fixed_min_producer_manifest_path(project_root)
+    expected_manifest = _fixed_min_producer_manifest_payload(path)
+    if not manifest_path.exists():
+        # Exclusive create prevents replacement of any registered manifest.
+        try:
+            with manifest_path.open("x", encoding="utf-8") as f:
+                json.dump(expected_manifest, f, ensure_ascii=False, sort_keys=True, indent=2)
+                f.write("\n")
+        except FileExistsError:
+            pass
+    state = inspect_fixed_min_robustness_parameter_artifact(project_root)
+    if state["action"] != "REUSE":
+        raise ValueError(f"Fixed Min benchmark publication invalid: {state['status']}")
+    return {
+        "path": path,
+        "manifest_path": manifest_path,
+        "sha256": expected_manifest["parameter_file_sha256"],
+        "scientific_sha256": expected_manifest["parameter_scientific_sha256"],
+        "action": "REUSE" if before["action"] == "REUSE" else before["action"],
+    }

@@ -107,6 +107,11 @@ from core.report_metrics import (
     R_SELECTION_TRANSLATION_METRICS,
     TRADE_RESULT_METRICS,
 )
+from core.fixed_min_policy import (
+    FIXED_MIN_ID, fixed_min_artifact_path, fixed_min_producer_manifest_path,
+    inspect_fixed_min_robustness_parameter_artifact,
+    ensure_fixed_min_robustness_parameter_artifact,
+)
 from core.strategy_param_artifacts import (
     resolve_strategy_param_benchmark_artifact_path,
     resolve_strategy_param_benchmark_manifest_path,
@@ -625,6 +630,8 @@ def _robustness_arm_seed_pairing_semantics(
         protocol = get_strategy_param_fitting_seed_protocol(profile.fitting_seed_protocol)
         if protocol.enabled:
             return "outer_replication_seed_with_arm_specific_fitting_seed_bundle"
+    if builder_type == "research_fixed_min_constant_params":
+        return "same_fixed_parameter_truth_for_all_replication_seeds"
     if builder_type == "optimizer_raw_price_strategy_params":
         options = {} if source.builder is None else dict(source.builder.options or {})
         training_profile_id = str(options.get("training_profile_id") or "").strip()
@@ -663,7 +670,18 @@ def _benchmark_param_binding(
     builder_type = (
         None if source.builder is None else str(source.builder.builder_type or "").strip()
     )
-    if builder_type == "optimizer_raw_price_strategy_params":
+    if builder_type == "research_fixed_min_constant_params":
+        if str(arm.param_source) != FIXED_MIN_ID or policy != "base-finalist-best":
+            raise ValueError("Fixed Min benchmark requires the registered constant source/policy")
+        family = "fixed_min"
+        mode = "rolling"
+        path = fixed_min_artifact_path(PROJECT_ROOT)
+        manifest_path = fixed_min_producer_manifest_path(PROJECT_ROOT)
+        producer_variant = "fixed_min_constant_v1"
+        training_profile_id = None
+        fitting_seed_count = 0
+        fitting_trials_per_seed = 0
+    elif builder_type == "optimizer_raw_price_strategy_params":
         family = "full"
         mode = str(source.consumption_evaluation_mode or "rolling").strip()
         options = {} if source.builder is None else dict(source.builder.options or {})
@@ -811,6 +829,8 @@ def _inspect_benchmark_strategy_parameter_binding(
     )
     if required_schedule_end in (None, ""):
         return None
+    if str(binding["producer_variant"]) == "fixed_min_constant_v1":
+        return inspect_fixed_min_robustness_parameter_artifact(PROJECT_ROOT)
     if str(binding["producer_variant"]) == "raw_price_isolated_v1":
         return inspect_raw_price_robustness_strategy_parameter_artifact(
             PROJECT_ROOT,
@@ -866,6 +886,8 @@ def _inspect_benchmark_strategy_parameter_binding(
 
 def _benchmark_parameter_build_detail(binding: dict[str, Any]) -> str:
     variant = str(binding.get("producer_variant") or "")
+    if variant == "fixed_min_constant_v1":
+        return "The same prespecified Fixed Min constant source is shared across every seed; no Optimizer work"
     if variant == "fixed_multiseed_v1":
         return (
             "由canonical Optimizer以robustness replicate identity建立固定fitting-seed bundle；"
@@ -880,6 +902,21 @@ def _benchmark_parameter_build_detail(binding: dict[str, Any]) -> str:
     return (
         "由canonical Optimizer以相同benchmark seed與統一trials/fold自動建立；"
         "不得fallback到production Seed42策略參數"
+    )
+
+
+def _benchmark_physical_unit(binding: dict[str, Any], seed: int) -> tuple:
+    """Reuse the one fixed-constant truth across seeds, never share fitted Optimizer truth."""
+    variant = str(binding["producer_variant"])
+    return (
+        0 if variant == "fixed_min_constant_v1" else int(seed),
+        variant,
+        str(binding["training_profile_id"] or ""),
+        str(binding["family"]),
+        str(binding["evaluation_mode"]),
+        str(binding["param_policy"]),
+        str(binding.get("parameter_set_identity") or ""),
+        str(binding.get("validation_protocol_id") or ""),
     )
 
 
@@ -928,16 +965,7 @@ def _benchmark_parameter_plan_rows(
                     "不需重建benchmark params或strategy replay",
                 ))
                 continue
-            unit = (
-                int(seed),
-                str(binding["producer_variant"]),
-                str(binding["training_profile_id"] or ""),
-                str(binding["family"]),
-                str(binding["evaluation_mode"]),
-                str(binding["param_policy"]),
-                str(binding.get("parameter_set_identity") or ""),
-                str(binding.get("validation_protocol_id") or ""),
-            )
+            unit = _benchmark_physical_unit(binding, seed)
             if unit in seen_units:
                 canonical = seen_units[unit]
                 if (
@@ -972,10 +1000,13 @@ def _benchmark_parameter_plan_rows(
                 if str(binding["training_profile_id"] or "")
                 else ""
             )
+            variant = str(binding["producer_variant"])
             seed_role = (
-                "replicate" if str(binding["producer_variant"]) == "fixed_multiseed_v1"
+                "constant" if variant == "fixed_min_constant_v1"
+                else "replicate" if variant == "fixed_multiseed_v1"
                 else "seed"
             )
+            seed_value = "all" if variant == "fixed_min_constant_v1" else str(seed)
             # Keep the approved P5 plan labels unchanged; distinguish other
             # validation protocols when historical sources share a seed/policy.
             validation_identity_suffix = ""
@@ -991,7 +1022,7 @@ def _benchmark_parameter_plan_rows(
                     f":protocol={binding['validation_protocol_id']}"
                 )
             label = (
-                f"param-benchmark:{robustness.benchmark_id}:{seed_role}={seed}:"
+                f"param-benchmark:{robustness.benchmark_id}:{seed_role}={seed_value}:"
                 f"{binding['family']}:{binding['evaluation_mode']}:{binding['param_policy']}"
                 f"{variant_suffix}{budget_suffix}{profile_suffix}{validation_identity_suffix}"
             )
@@ -1024,15 +1055,22 @@ def _benchmark_parameter_plan_rows(
                     ))
                 continue
             action = str(state["action"])
+            if action == "BLOCKED" and variant == "fixed_min_constant_v1":
+                blockers.append(f"Fixed Min constant source is not trustworthy: {state.get('status')}")
             binding["plan_action"] = action
             binding["plan_status"] = str(state.get("status") or "")
             if action == "REUSE":
                 detail = project_relative_display_path(path, project_root=PROJECT_ROOT)
             elif action == "REPAIR":
-                detail = (
-                    "策略參數payload與Optimizer fitting contract相同；只快速修復benchmark publication manifest，"
-                    "不重新執行fold optimizer"
-                )
+                if variant == "fixed_min_constant_v1":
+                    detail = "Prespecified Fixed Min source is intact; only its provenance manifest needs publication"
+                else:
+                    detail = (
+                        "策略參數payload與Optimizer fitting contract相同；只快速修復benchmark publication manifest，"
+                        "不重新執行fold optimizer"
+                    )
+            elif action == "BLOCKED" and variant == "fixed_min_constant_v1":
+                detail = f"Fixed Min source or manifest drift: {state.get('status')}"
             elif action == "REBUILD":
                 detail = (
                     "既有benchmark策略參數缺少／過期／scientific identity不符；由canonical Optimizer service自動REBUILD／RESUME"
@@ -1108,7 +1146,9 @@ def _ensure_benchmark_strategy_parameter_binding(
             "robustness benchmark param缺少可解析required schedule end: "
             f"{binding['arm_id']}/seed={seed}"
         )
-    if str(binding["producer_variant"]) == "raw_price_isolated_v1":
+    if str(binding["producer_variant"]) == "fixed_min_constant_v1":
+        result = ensure_fixed_min_robustness_parameter_artifact(PROJECT_ROOT)
+    elif str(binding["producer_variant"]) == "raw_price_isolated_v1":
         result = ensure_raw_price_robustness_strategy_parameter_artifact(
             PROJECT_ROOT,
             benchmark_id=str(robustness.benchmark_id),
@@ -1220,16 +1260,7 @@ def _prepare_benchmark_strategy_parameter_artifacts(
                     comparison_end=str(comparison_end),
                 )
                 continue
-            unit = (
-                int(seed),
-                str(binding["producer_variant"]),
-                str(binding["training_profile_id"] or ""),
-                str(binding["family"]),
-                str(binding["evaluation_mode"]),
-                str(binding["param_policy"]),
-                str(binding.get("parameter_set_identity") or ""),
-                str(binding.get("validation_protocol_id") or ""),
-            )
+            unit = _benchmark_physical_unit(binding, seed)
             result = built_by_unit.get(unit)
             if result is not None and (
                 Path(binding["path"]) != Path(result["path"])
@@ -1254,7 +1285,9 @@ def _prepare_benchmark_strategy_parameter_artifacts(
                 built_by_unit[unit] = result
                 print(
                     "[" + styled_workflow_status(str(result["producer_action"])) + "]"
-                    + f" seed={seed} {binding['family']}/{binding['evaluation_mode']} "
+                    + (" constant=all " if str(binding["producer_variant"]) == "fixed_min_constant_v1"
+                       else f" seed={seed} ")
+                    + f"{binding['family']}/{binding['evaluation_mode']} "
                     + f"{binding['param_policy']}"
                     + (
                         "" if str(binding["producer_variant"]) == "canonical_schedule_v1"
@@ -1263,7 +1296,9 @@ def _prepare_benchmark_strategy_parameter_artifacts(
                 )
             # AI: Reuse one verified physical result, not the same mutable arm
             # binding; every replay and output row retains its owning arm ID.
-            bindings[(arm.arm_id, int(seed))] = {**result, "arm_id": arm.arm_id}
+            bindings[(arm.arm_id, int(seed))] = {
+                **result, "arm_id": arm.arm_id, "seed": int(seed),
+            }
     return bindings
 
 
@@ -1887,7 +1922,7 @@ def _render_robustness_execution_plan(
     )
     blockers.extend(benchmark_blockers)
     pending_work = any(
-        row[0] in {"BUILD", "REBUILD", "RESUME", "CHECK"}
+        row[0] in {"BUILD", "REBUILD", "RESUME", "CHECK", "REPAIR"}
         for row in (*param_rows, *benchmark_rows, *upstream_rows)
     )
     overall = "BLOCKED" if blockers else "PREPARABLE" if pending_work else "READY"
@@ -2120,7 +2155,16 @@ def _render_robustness_execution_plan(
                 str(item.get("producer_variant") or "") == "raw_price_isolated_v1"
                 for item in arm_bindings
             )
-            if uses_fitting_bundle:
+            uses_fixed_min_constant = any(
+                str(item.get("producer_variant") or "") == "fixed_min_constant_v1"
+                for item in arm_bindings
+            )
+            if uses_fixed_min_constant:
+                description = (
+                    f"{cfg.seed_count} benchmark seeds share the same prespecified Fixed Min params; "
+                    "replay observations remain seed-specific"
+                )
+            elif uses_fitting_bundle:
                 fitting_counts = {
                     int(item.get("fitting_seed_count") or 0)
                     for item in arm_bindings
@@ -2152,7 +2196,7 @@ def _render_robustness_execution_plan(
                 description = (
                     f"{cfg.seed_count}個固定benchmark seeds；同seed strategy optimizer params + DL-off replay"
                 )
-            action = "PARAM+REPLAY"
+            action = "REPLAY" if uses_fixed_min_constant else "PARAM+REPLAY"
         rows.append((action, arm.name, description))
     training_sources = _training_source_groups(tuple(model_arms), settings=settings)
     model_source_units = tuple(
@@ -2183,6 +2227,8 @@ def _render_robustness_execution_plan(
                 # REPAIR are not pending searches.
                 if str(binding.get("plan_action") or "") not in {"BUILD", "REBUILD"}:
                     continue
+                if str(binding.get("producer_variant") or "") == "fixed_min_constant_v1":
+                    continue  # Static parameter publication does not run Optimizer search.
                 pending_optimizer_search_groups.add((
                     int(seed),
                     str(binding["producer_variant"]),

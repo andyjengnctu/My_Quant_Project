@@ -333,6 +333,10 @@ def append_robustness_benchmark_plan_checks(
                 "resolve_fixed_multiseed_robustness_strategy_parameter_artifact",
                 return_value={"action": "BUILD", "status": "ARTIFACT_MISSING_OR_INVALID"},
             ) as fixed_inspector,
+            patch.object(
+                robustness_owner, "inspect_fixed_min_robustness_parameter_artifact",
+                return_value={"action": "BUILD", "status": "FIXED_MIN_SOURCE_MISSING"},
+            ),
         ):
             rows, blockers, _bindings = _benchmark_parameter_plan_rows(
                 settings=robust_settings,
@@ -444,6 +448,9 @@ def append_robustness_benchmark_plan_checks(
                         and f":profile={profile_id}" in str(row[1])
                         for profile_id, variant in fixed_profile_variants.items()
                     )
+                )
+                or (
+                    ":constant=all:fixed_min:rolling:base-finalist-best:fixed_min_constant_v1" in str(row[1])
                 )
                 or (
                     ":seed=" in str(row[1])
@@ -659,6 +666,17 @@ def append_robustness_benchmark_plan_checks(
         ),
     )
     expected_reuse_units = len(rolling_canonical_reuse_arm_ids) * len(rolling_robustness.resolved_seeds)
+    rolling_fixed_constant_arm_ids = tuple(
+        arm_id for arm_id in rolling_robustness.stochastic_arm_ids
+        if (
+            rolling_robust_settings.parameter_sources[
+                str(rolling_robust_settings.arms[arm_id].param_source)
+            ].builder is not None
+            and str(rolling_robust_settings.parameter_sources[
+                str(rolling_robust_settings.arms[arm_id].param_source)
+            ].builder.builder_type) == "research_fixed_min_constant_params"
+        )
+    )
     rolling_pending_param_truth_paths = {
         (str(binding["path"]), str(binding["manifest_path"]))
         for arm_id in (*rolling_fixed_multiseed_arm_ids, *rolling_raw_price_arm_ids)
@@ -681,8 +699,11 @@ def append_robustness_benchmark_plan_checks(
         and f"scientific result REUSE={expected_reuse_units}/{expected_total_units} arm×replicate" in rendered_robustness_plan
         and rendered_robustness_plan.count("PARAM+REPLAY") == sum(
             1 for arm in rolling_stochastic
-            if not arm.dl_enabled and arm.arm_id not in rolling_canonical_reuse_arm_ids
+            if not arm.dl_enabled
+            and arm.arm_id not in rolling_canonical_reuse_arm_ids
+            and arm.arm_id not in rolling_fixed_constant_arm_ids
         )
+        and "share the same prespecified Fixed Min params" in rendered_robustness_plan
         and rendered_robustness_plan.count(" seed scientific results identity一致") == len(rolling_canonical_reuse_arm_ids)
         and "Strategy fitting budgets" in rendered_robustness_plan
         and "4 seeds x 300 trials" in rendered_robustness_plan
@@ -758,6 +779,10 @@ def append_robustness_benchmark_plan_checks(
         ),
         patch(
             "services.research.strategy_multi_seed_robustness.inspect_raw_price_robustness_strategy_parameter_artifact",
+            return_value={"action": "REUSE", "status": "READY"},
+        ),
+        patch(
+            "services.research.strategy_multi_seed_robustness.inspect_fixed_min_robustness_parameter_artifact",
             return_value={"action": "REUSE", "status": "READY"},
         ),
         patch.object(Path, "is_file", _isolated_ready_param_is_file),

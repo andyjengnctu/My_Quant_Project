@@ -121,7 +121,8 @@ def _fullcycle_loader(outcome_metric: str):
 
 def _fixed_min_loader(*, project_root: str | Path, seed: int, authorized_build: bool):
     from functools import partial
-    from core.fixed_min_policy import fixed_min_source, FIXED_MIN_ID
+    from core.fixed_min_policy import FIXED_MIN_ID
+    from services.breakout_quality.fixed_min_source import fixed_min_source
     from services.breakout_quality.formal_mintrade40_pit_source import (
         materialize_formal_mintrade40_pit_labels,
     )
