@@ -7732,40 +7732,99 @@ class FixedMinOracleResearchContractCases(TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             settings, arms = fixed._settings()
-            profile_name = settings.dl_sources[arms["C140"].dl_id].experiment_profile
-            profile = get_breakout_quality_experiment_profile(profile_name)
+            rank_profile_name = settings.dl_sources[arms["C140"].dl_id].experiment_profile
+            rank_profile = get_breakout_quality_experiment_profile(rank_profile_name)
+            feature_profile_name = fixed.SOURCE["daily_trade40_profile"]
+            feature_profile = get_breakout_quality_experiment_profile(feature_profile_name)
+            self.assertEqual(rank_profile.model_architecture, feature_profile.model_architecture)
+            self.assertIsNone(fixed.registered_trade_path_source(feature_profile_name))
             group = pd.DataFrame([
                 {"ticker": "2330", "date": "2021-01-04"},
                 {"ticker": "2317", "date": "2021-01-04"},
+                {"ticker": "2603", "date": "2021-01-04"},
             ])
+            # Unused ticker categories must not schedule empty path jobs.
+            group["ticker"] = pd.Categorical(group["ticker"],
+                categories=["2330", "2317", "2603", "9999"])
             bundle = SimpleNamespace(
                 summary={"dataset": "full", "filter_id": fixed.SOURCE["filter_id"],
                          "sample_scope": "daily_eligible_stock_days",
-                         "score_eligible_sample_count": 2},
-                target_manifest={"target_contract": {"target_id": profile.continuous_target_id}},
+                         "score_eligible_sample_count": 3},
+                target_manifest={"target_contract": {
+                    "target_id": feature_profile.continuous_target_id}},
                 group_table=group,
             )
-            inputs = [("2330", root / "2330.csv"), ("2317", root / "2317.csv")]
+            inputs = [(ticker, root / (ticker + ".csv")) for ticker in ("2330", "2317", "2603")]
             for _, file in inputs:
                 file.touch()
             data = [
                 pd.DataFrame([{"ticker": "2317", "date": "2021-01-04", "realized_net_pnl": -4.0}]),
                 pd.DataFrame([{"ticker": "2330", "date": "2021-01-04", "realized_net_pnl": 12.0}]),
+                pd.DataFrame([{"ticker": "2603", "date": "2021-01-04", "realized_net_pnl": np.nan}]),
             ]
             with patch.object(fixed, "price_inventory_sha256", return_value="a" * 64), \
-                 patch.object(fixed, "load_profile_continuous_ranker_data", return_value=bundle), \
+                 patch.object(fixed, "load_profile_continuous_ranker_data", return_value=bundle) as loader, \
                  patch.object(fixed, "discover_dataset_csv_inputs", return_value=(inputs, ())), \
                  patch.object(fixed, "collect_canonical_exchange_sessions",
                               return_value=pd.DatetimeIndex([pd.Timestamp("2021-01-04")])), \
                  patch.object(fixed, "_run_ticker_outcomes", return_value=(data, 0, 0)) as producer:
                 identity = fixed._truth_identity(root)
                 scores, score_sha, cohort_sha = fixed._build_truth(root, identity)
+                self.assertEqual(loader.call_count, 1)
+                self.assertEqual(loader.call_args.kwargs["experiment_profile"], feature_profile_name)
+                self.assertNotEqual(loader.call_args.kwargs["experiment_profile"], rank_profile_name)
                 self.assertEqual(scores[("2330", "2021-01-04")], 1.0)
-                self.assertEqual(scores[("2317", "2021-01-04")], 0.0)
+                self.assertEqual(scores[("2317", "2021-01-04")], 0.5)
+                self.assertEqual(scores[("2603", "2021-01-04")], 0.0)
                 self.assertEqual(producer.call_count, 1)
+                self.assertEqual(len(producer.call_args.args), 1)
+                self.assertCountEqual([job[1] for job in producer.call_args.args[0]],
+                                      ["2317", "2330", "2603"])
                 reused = fixed._build_truth(root, identity)
                 self.assertEqual(reused, (scores, score_sha, cohort_sha))
                 self.assertEqual(producer.call_count, 1, "Signed same identity must reuse truth")
+                self.assertEqual(loader.call_count, 1, "Truth REUSE must not reload cohort")
+
+    def test_fixed_min_oracle_rejects_trade_path_profile_as_cohort(self):
+        from services.audit import fixed_min_oracle_scope as fixed
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            settings, arms = fixed._settings()
+            real_path_profile = settings.dl_sources[arms["C140"].dl_id].experiment_profile
+            with patch.object(fixed, "price_inventory_sha256", return_value="a" * 64), \
+                 patch.dict(fixed.SOURCE, {"daily_trade40_profile": real_path_profile}), \
+                 patch.object(fixed, "load_profile_continuous_ranker_data") as loader, \
+                 patch.object(fixed, "_run_ticker_outcomes") as outcomes:
+                identity = fixed._truth_identity(root)
+                with self.assertRaisesRegex(fixed.OracleBlockedError,
+                                            "compatible non-trade-path provider"):
+                    fixed._build_truth(root, identity)
+                loader.assert_not_called()
+                outcomes.assert_not_called()
+
+    def test_fixed_min_oracle_rejects_mismatched_feature_architecture(self):
+        from services.audit import fixed_min_oracle_scope as fixed
+        from core.breakout_quality_registry import get_breakout_quality_experiment_profile
+        from dataclasses import replace
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            settings, arms = fixed._settings()
+            rank_profile = get_breakout_quality_experiment_profile(
+                settings.dl_sources[arms["C140"].dl_id].experiment_profile)
+            mismatched = replace(rank_profile, model_architecture="other_architecture")
+            original = fixed.get_breakout_quality_experiment_profile
+            def lookup(name):
+                if name == rank_profile.name:
+                    return mismatched
+                return original(name)
+            with patch.object(fixed, "price_inventory_sha256", return_value="a" * 64), \
+                 patch.object(fixed, "get_breakout_quality_experiment_profile", side_effect=lookup), \
+                 patch.object(fixed, "load_profile_continuous_ranker_data") as loader:
+                identity = fixed._truth_identity(root)
+                with self.assertRaisesRegex(fixed.OracleBlockedError,
+                                            "compatible non-trade-path provider"):
+                    fixed._build_truth(root, identity)
+                loader.assert_not_called()
 
 if __name__ == "__main__":
     main(verbosity=2)

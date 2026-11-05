@@ -21,8 +21,10 @@ from config.robustness_benchmark import TARGET_ORACLE_ROBUSTNESS_BENCHMARK_ID
 from config.breakout_quality import BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD
 from core.audit_registry import AUDIT_REUSABLE_REPORTS, oracle_target_semantics
 from core.breakout_quality_registry import (
-    FIXED_MINTRADE_FULLCYCLE_NETPNL_PAIRWISE_PROFILE, get_breakout_quality_experiment_profile,
+    TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+    get_breakout_quality_experiment_profile,
 )
+from core.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
 from core.file_integrity import canonical_json_sha256, compute_file_sha256
 from core.fixed_min_policy import (
     FIXED_MIN_ID, fixed_min_scientific_sha256, fixed_min_signature,
@@ -47,6 +49,7 @@ from filters.breakout_quality.strategy_rule_policies import ALL_RULE_FILTERS_OFF
 from filters.breakout_quality.strategy_compare_contracts import COMPARISON_MODE_SCORE_RANKING
 from filters.breakout_quality.runtime import audit_oracle_truth_score_context
 from services.breakout_quality.fixed_min_source import fixed_min_source
+from services.breakout_quality.trade_path_target_source import registered_trade_path_source
 from services.audit.daily_trade40_oracle import (
     _run_ticker_outcomes, truth_producer_fingerprint,
 )
@@ -89,10 +92,29 @@ def _source_sha() -> str:
         # implementation, not only on this scope and its entry adapter.
         "services/portfolio_replay.py", "core/portfolio_engine.py",
         "filters/breakout_quality/runtime.py",
+        # The candidate stock/day cohort is part of the Oracle truth, even
+        # when the economic outcome comes from the independent Min path owner.
+        "filters/breakout_quality/profile_ranker_data.py",
+        "filters/breakout_quality/daily_ranker_data.py",
     )
+    # Bind only the registered *scientific* cohort contract. Hashing the whole
+    # model/Oracle registries would invalidate completed FixedMin replay merely
+    # because an unrelated model or target was added later.
+    cohort_name = str(SOURCE["daily_trade40_profile"])
+    cohort = get_breakout_quality_experiment_profile(cohort_name)
+    cohort_policy = get_continuous_ranker_execution_recipe(cohort_name).target_policy
     return canonical_json_sha256({
         "original_min_path_source": original,
         "fixed_min_source_files": {f: compute_file_sha256(root / f) for f in files},
+        "feature_cohort_contract": {
+            "name": cohort_name,
+            "architecture": cohort.model_architecture,
+            "sample_scope": cohort.training_sample_scope,
+            "target_id": cohort.continuous_target_id,
+            "materialization_mode": cohort_policy.materialization_mode,
+            "horizon_bars": cohort_policy.horizon_bars,
+            "sample_universe_horizon_bars": cohort_policy.sample_universe_horizon_bars,
+        },
         "contract": CONTRACT_ID,
     })
 
@@ -313,10 +335,24 @@ def _build_truth(root: Path, identity: Mapping[str, Any]):
     settings, arms = _settings()
     source_id = arms["C140"].dl_id
     source = settings.dl_sources[source_id]
-    profile = get_breakout_quality_experiment_profile(source.experiment_profile)
+    rank_profile = get_breakout_quality_experiment_profile(source.experiment_profile)
+    # A real-path FIT profile *must* receive its verified seed-scoped teacher.
+    # The hindsight Oracle needs only its score-eligible stock/day population,
+    # not a second FIT-label materialization followed by another path replay.
+    # The formal Oracle Registry already names the generic daily feature-cohort
+    # producer used by the other MinTrade hindsight treatments. It shares the
+    # same architecture and information-date eligibility with MR-13CV.
+    cohort_profile_name = str(SOURCE["daily_trade40_profile"])
+    cohort_profile = get_breakout_quality_experiment_profile(cohort_profile_name)
+    if (registered_trade_path_source(cohort_profile_name) is not None or
+            cohort_profile.training_sample_scope != TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS or
+            rank_profile.training_sample_scope != TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS or
+            cohort_profile.model_architecture != rank_profile.model_architecture):
+        raise OracleBlockedError("FixedMin Oracle feature cohort is not a compatible non-trade-path provider")
     bundle = load_profile_continuous_ranker_data(
-        filter_id=str(SOURCE["filter_id"]), model_architecture=str(profile.model_architecture),
-        experiment_profile=source.experiment_profile, preload_feature_bank=False,
+        filter_id=str(SOURCE["filter_id"]),
+        model_architecture=str(rank_profile.model_architecture),
+        experiment_profile=cohort_profile_name, preload_feature_bank=False,
         allow_stale_source=False, project_root=root)
     group = pd.DataFrame(bundle.group_table).reset_index(drop=True)
     summary = dict(bundle.summary or {})
@@ -325,7 +361,7 @@ def _build_truth(root: Path, identity: Mapping[str, Any]):
             summary.get("filter_id") != str(SOURCE["filter_id"]) or
             summary.get("sample_scope") != "daily_eligible_stock_days" or
             int(summary.get("score_eligible_sample_count", -1)) != len(group) or
-            target_contract.get("target_id") != profile.continuous_target_id or
+            target_contract.get("target_id") != cohort_profile.continuous_target_id or
             not {"ticker", "date"}.issubset(group.columns)):
         raise OracleBlockedError("FixedMin Oracle feature-eligible source differs from PIT DL")
     group["ticker"] = group["ticker"].map(normalize_ticker)
@@ -352,7 +388,9 @@ def _build_truth(root: Path, identity: Mapping[str, Any]):
             schedule[0].params_signature != fixed_min_signature()):
         raise OracleBlockedError("FixedMin Oracle teacher parameter signature differs")
     jobs = []
-    for index, (ticker, values) in enumerate(group.groupby("ticker", sort=True)):
+    # Score eligibility may leave unused ticker categories after the OOS date
+    # slice. Only observed tickers are valid Oracle worker jobs.
+    for index, (ticker, values) in enumerate(group.groupby("ticker", sort=True, observed=True)):
         if ticker not in sources:
             raise OracleBlockedError(f"FixedMin Oracle eligible ticker missing OHLCV: {ticker}")
         jobs.append((index, ticker, str(sources[ticker]), pd.DatetimeIndex(values["date"])))
