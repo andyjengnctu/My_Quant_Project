@@ -1692,9 +1692,9 @@ class FormalMinTrade40IntegratedResearchCases(unittest.TestCase):
             self.assertEqual(a.rule_policy, b.rule_policy)
             self.assertNotEqual(a.dl_runtime_mode, b.dl_runtime_mode)
         rows = collect_target_dl_overview(Path(__file__).resolve().parents[2])['rows']
-        assigned = {row['target']: row for row in rows if row['model']=='MR-13CM'}
-        self.assertEqual(assigned['DailyUniversal_MinTrade40_NetR']['strategy'],'C119')
-        self.assertEqual(assigned['DailyUniversal_MinTrade40_NetR_Direct']['strategy'],'C120')
+        assigned = {(row['target'], row['selector']): row for row in rows if row['model']=='MR-13CM'}
+        self.assertEqual(assigned[('MinTrade40_NetR', 'Exact')]['strategy'],'C119')
+        self.assertEqual(assigned[('MinTrade40_NetR', 'Direct')]['strategy'],'C120')
         self.assertEqual(len(assigned),2)
 
     def test_missing_original_p16_is_delegated_to_canonical_optimizer_first(self):

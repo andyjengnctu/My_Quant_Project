@@ -430,7 +430,7 @@ class OraclePerfectOutputReuseCases(TestCase):
             self.assertEqual(set(preview["preflight"].values()), {"REUSE"})
             self.assertEqual(before, {p: p.read_bytes() for p in root.rglob("*") if p.is_file()})
 
-    def test_legacy_dual_positive_receipts_reuse_single_ranker_oracle_without_replay(self):
+    def test_legacy_oracle_positive_receipts_reuse_two_model_oracle_without_replay(self):
         """Signed old output schema and signed new output schema mean one Oracle.
 
         This exercises the actual immutable-origin index and its no-index
@@ -456,9 +456,9 @@ class OraclePerfectOutputReuseCases(TestCase):
                 native_identity, result = index.read(current)
                 old_context = copy.deepcopy(current)
                 old_options = old_context["ranking_options"]
-                self.assertEqual(old_options.pop("positive_prediction_contract"),
-                                 "single_ranker_calibrated_positive_v2")
-                old_options["positive_dl_id"] = "oracle_perfect_positive_output"
+                self.assertEqual(old_options.pop('positive_dl_id'),
+                                 'CONT13CP_ROLL' if 'DailyUniversal_' in key[1] and 'TrueDaily' not in key[1] else 'CONT13CT_ROLL')
+                old_options['positive_prediction_contract'] = 'single_ranker_calibrated_positive_v2' 
                 old_context["score_contract"]["positive_score_contract_revision"] = (
                     "positive_netpnl_dual_output_v1")
                 self.assertEqual(oracle_execution_contract(old_context),
@@ -484,7 +484,7 @@ class OraclePerfectOutputReuseCases(TestCase):
                     self.assertIsNone(index.native_completed(incompatible))
                 for field, value in (("positive_probability_threshold", .6),
                                      ("positive_score_column", "wrong_column"),
-                                     ("positive_prediction_contract", "unknown_v3")):
+                                     ("positive_dl_id", "")):
                     incompatible = copy.deepcopy(current)
                     incompatible["ranking_options"][field] = value
                     self.assertIsNone(index.read(incompatible))
@@ -623,8 +623,7 @@ class OraclePerfectOutputReuseCases(TestCase):
                 elif change == "old_version":
                     arm["replay_contract_version"] = 1
                 else:
-                    arm["dl_runtime_options"]["positive_dl_id"] = "CONT13CT_ROLL"
-                    arm["dl_runtime_options"].pop("positive_prediction_contract")
+                    arm["dl_runtime_options"]["positive_dl_id"] = "FAKE_SECONDARY"
                 old["execution_sha256"] = canonical_json_sha256(old["execution_contract"])
                 self.assertFalse(reference_arm_execution_matches(old, comparison, local))
             self.assertFalse(reference_arm_execution_matches(

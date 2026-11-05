@@ -1,7 +1,7 @@
 """Full-cycle NetPnL Positive supervision and score-admission semantics.
 
-Prediction-time eligibility uses the calibrated column of the same scalar
-ranker (or perfect Oracle score output), never an out-of-band future outcome.
+Prediction-time eligibility uses an independent PIT-matured binary-classifier
+probability (or perfect Oracle output); the ranker is a separate DL.
 """
 from __future__ import annotations
 
@@ -13,24 +13,34 @@ import numpy as np
 POSITIVE_PROBABILITY_THRESHOLD = 0.5
 POSITIVE_P_CLASS_COLUMN = "positive_p_positive"
 POSITIVE_RANK_CALIBRATION = "positive_rank_isotonic_validation_v1"
-POSITIVE_SCORE_CONTRACT = "single_ranker_calibrated_positive_v2"
+POSITIVE_SCORE_CONTRACT = "positive_netpnl_dual_output_v1"
 
 
 def requires_positive_score(options: Mapping | None) -> bool:
-    """Discover the inline output capability; reject retired dual-DL wiring."""
+    """The Positive admission stage must name its own PIT classifier DL.
+
+    Oracle may provide a separate perfect score map; strategy execution may not
+    silently fall back to a calibrated primary ranker or to future NetPnL.
+    """
     options = options or {}
-    if options.get("positive_dl_id"):
-        raise ValueError("Retired independent Positive DL source; rebuild the strategy contract")
-    allowed = {"positive_score_column", "positive_prediction_contract", "positive_probability_threshold"}
-    supplied = {key for key in options if str(key).startswith("positive_")}
-    if supplied - allowed:
-        raise ValueError("Unknown or retired Positive score options")
-    column = options.get("positive_score_column")
+    supplied = {str(key) for key in options if str(key).startswith("positive_")}
     if not supplied:
         return False
-    if (column != POSITIVE_P_CLASS_COLUMN
-            or options.get("positive_prediction_contract") != POSITIVE_SCORE_CONTRACT):
-        raise ValueError("Positive ranker score-consumption contract missing or stale")
+    allowed = {
+        "positive_dl_id", "positive_score_column", "positive_probability_threshold",
+        "positive_filter_id", "positive_model_architecture", "positive_experiment_profile",
+        "positive_score_source", "positive_score_path_override",
+        "positive_score_manifest_path_override",
+    }
+    if supplied - allowed:
+        raise ValueError("Unsupported Positive score options: " + repr(sorted(supplied - allowed)))
+    if not str(options.get("positive_dl_id") or "").strip():
+        raise ValueError("Positive admission requires a separately registered DL source")
+    if options.get("positive_score_column") != POSITIVE_P_CLASS_COLUMN:
+        raise ValueError("Positive binary classifier must supply the P(positive) score column")
+    threshold = options.get("positive_probability_threshold")
+    if isinstance(threshold, bool) or not isinstance(threshold, (int, float)) or not math.isfinite(threshold) or not 0 < threshold < 1:
+        raise ValueError("Positive probability threshold must be finite in (0,1)")
     return True
 
 
@@ -46,7 +56,7 @@ def positive_labels(raw_net_pnl) -> np.ndarray:
 
 
 def positive_score_admitted(row: Mapping) -> bool:
-    """Fail closed on missing/misaligned columns; retain the same model rank."""
+    """Fail closed on missing/misaligned independent classifier scores."""
     options = row.get("breakout_quality_ranking_options") or {}
     if not isinstance(options, Mapping):
         raise ValueError("Ranking options must be a mapping")

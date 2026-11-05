@@ -62,9 +62,10 @@ def runtime_score_projection_requirements(
 
     from core.positive_netpnl_contract import requires_positive_score
     if requires_positive_score(options):
-        if not dl_id:
-            raise ValueError("Positive score column requires the primary model source")
-        requirements.setdefault(dl_id, set()).add(str(options["positive_score_column"]))
+        positive_dl_id = str(options["positive_dl_id"])
+        if not dl_id or positive_dl_id == dl_id or positive_dl_id not in dl_sources:
+            raise ValueError("Positive score column requires a distinct registered classifier DL")
+        requirements.setdefault(positive_dl_id, set()).add(str(options["positive_score_column"]))
 
     return {
         source_id: tuple(sorted(columns))

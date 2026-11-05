@@ -273,6 +273,17 @@ def _pair_cache_fingerprint_from_payload(
             artifact_keys.extend(
                 f"dl:{safety_dl_id}:{name}" for name in safety_artifact_names
             )
+    positive_dl_id = str(dict(on_arm_payload.get("dl_runtime_options") or {}).get("positive_dl_id") or "").strip()
+    positive_dl_payload = dict(dl_sources.get(positive_dl_id) or {})
+    if positive_dl_id:
+        if not positive_dl_payload or positive_dl_id == dl_id:
+            raise ValueError("Invalid two-stage Positive DL source in replay fingerprint")
+        names = (
+            ("manifest", "audit", "forward_scores")
+            if positive_dl_payload.get("score_source") == "selection_point_in_time"
+            else ("model", "manifest", "forward_scores")
+        )
+        artifact_keys.extend(f"dl:{positive_dl_id}:{name}" for name in names)
     # A versioned FIT is an input even when the replay only consumes one PIT
     # score column. Do not let identical scores resurrect pre-upgrade trades.
     for source_id in _selection_pit_runtime_source_ids(
@@ -339,6 +350,16 @@ def _pair_cache_fingerprint_from_payload(
             "threshold": dl_payload.get("threshold"),
             "score_source": dl_payload.get("score_source"),
         },
+        "positive_dl_source": (
+            {
+                "dl_id": positive_dl_id,
+                "filter_id": positive_dl_payload.get("filter_id"),
+                "model_architecture": positive_dl_payload.get("model_architecture"),
+                "experiment_profile": positive_dl_payload.get("experiment_profile"),
+                "threshold": positive_dl_payload.get("threshold"),
+                "score_source": positive_dl_payload.get("score_source"),
+            } if positive_dl_id else None
+        ),
         "safety_dl_source": (
             {
                 "dl_id": safety_dl_id,

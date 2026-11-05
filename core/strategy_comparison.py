@@ -1185,12 +1185,27 @@ def _validate_strategy_comparison_arm_runtime(settings: StrategyComparisonSettin
                 STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0,
             }:
                 raise ValueError(f"arm {key} Positive filter requires Exact or Direct mode")
+            positive_dl_id = str(options["positive_dl_id"])
+            if positive_dl_id not in settings.dl_sources or positive_dl_id == arm.dl_id:
+                raise ValueError(f"arm {key} Positive classifier must be a distinct registered DL")
             primary = settings.dl_sources[arm.dl_id]
-            profile = get_breakout_quality_experiment_profile(primary.experiment_profile)
+            classifier = settings.dl_sources[positive_dl_id]
+            rank_profile = get_breakout_quality_experiment_profile(primary.experiment_profile)
+            positive_profile = get_breakout_quality_experiment_profile(classifier.experiment_profile)
+            from core.breakout_quality_runtime import get_continuous_ranker_training_policy
+            classification = get_continuous_ranker_training_policy(positive_profile.training_objective)
             if (primary.score_source != "selection_point_in_time"
-                    or profile.score_calibration is None
+                    or classifier.score_source != primary.score_source
+                    or primary.filter_id != classifier.filter_id
+                    or primary.model_architecture != classifier.model_architecture
+                    or rank_profile.continuous_target_id != positive_profile.continuous_target_id
+                    or rank_profile.score_calibration is not None
+                    or positive_profile.score_calibration is not None
+                    or classification.categorical_class_count != 2
+                    or classification.categorical_primary_class != 1
+                    or options["positive_score_column"] not in classification.categorical_score_columns
                     or options.get("positive_probability_threshold") != POSITIVE_PROBABILITY_THRESHOLD):
-                raise ValueError(f"arm {key} requires a calibrated single-model PIT score contract")
+                raise ValueError(f"arm {key} requires matching PIT NetPnL rank and independent binary Positive DL")
         if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL:
             if options.get("preserve_k_r0") is not True:
                 raise ValueError(f"arm {key} Score constrained必須preserve_k_r0=True")

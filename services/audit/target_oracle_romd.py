@@ -458,17 +458,20 @@ def _target_reference_arm(definition, settings, plan, target, exact, direct):
             base.param_source, base.param_policy, base.rule_policy,
             _unqualified_selector_options(base.dl_runtime_options)):
         raise OracleBlockedError(f"Oracle target-scoped strategy differs from formal selector: {arm_id}")
-    from core.positive_netpnl_contract import requires_positive_score, POSITIVE_RANK_CALIBRATION
+    from core.positive_netpnl_contract import requires_positive_score
     qualified = bool(selected.get("positive_output"))
     options = dict(arm.dl_runtime_options or {})
     if qualified != requires_positive_score(options):
         raise OracleBlockedError(f"Oracle Positive output does not match arm source: {arm_id}")
     if qualified:
         primary_source = settings.dl_sources[arm.dl_id]
+        classifier_source = settings.dl_sources[str(options["positive_dl_id"])]
         rank = get_breakout_quality_experiment_profile(primary_source.experiment_profile)
+        classifier = get_breakout_quality_experiment_profile(classifier_source.experiment_profile)
         if (primary_source.score_source != "selection_point_in_time"
-                or rank.score_calibration != POSITIVE_RANK_CALIBRATION):
-            raise OracleBlockedError(f"Oracle Positive requires one calibrated PIT rank source: {arm_id}")
+                or classifier_source.score_source != primary_source.score_source
+                or rank.continuous_target_id != classifier.continuous_target_id):
+            raise OracleBlockedError(f"Oracle Positive requires matched PIT rank and classifier sources: {arm_id}")
     return arm
 
 
@@ -619,12 +622,17 @@ def _resolve_oracle_target_score_contracts(definition, settings, plan) -> dict[s
                                   if item["target"] == origin)
             if primary_profile.continuous_target_id != oracle_supervised_target_id(raw_comparison):
                 raise OracleBlockedError(f"Oracle and Positive ranker supervise different raw targets: {name}")
+            positive_dl_id = str(options["positive_dl_id"])
+            classifier_source = settings.dl_sources[positive_dl_id]
+            classifier_profile = get_breakout_quality_experiment_profile(classifier_source.experiment_profile)
+            if classifier_profile.continuous_target_id != primary_profile.continuous_target_id:
+                raise OracleBlockedError(f"Oracle rank/classifier Target lineage mismatch: {name}")
             positive_contract = {
                 "perfect_positive_output": positive_output,
                 "positive_probability_threshold": float(threshold),
                 "positive_score_column": POSITIVE_P_CLASS_COLUMN,
-                "positive_score_source_id": str(arm.dl_id),
-                "positive_profile_id": str(arm_source.experiment_profile),
+                "positive_score_source_id": positive_dl_id,
+                "positive_profile_id": str(classifier_source.experiment_profile),
                 "positive_score_contract_revision": POSITIVE_SCORE_CONTRACT,
             }
         result[name] = {

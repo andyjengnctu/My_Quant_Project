@@ -52,7 +52,13 @@ _LEGACY_POSITIVE_SOURCE_SHA256 = "56fdce12e331011e7423c7fa0f1c8b27563b43bbd731fc
 # Reviewed executable AST of requires_positive_score, positive_score_admitted,
 # and admit_positive_score_rows, *not* training/label-calibration code. An
 # executable gate change fails this check and cannot inherit the old Replay.
-_REVIEWED_POSITIVE_ADMISSION_AST_SHA256 = "172b6c09afc9d36e4a3844e0e1cd364cafc7e8c85fd37b3d8fa9ab3c20765a12"
+# Executable AST audited for the current distinct-DL score consumer. The row
+# admission decision on valid two-score Oracle inputs is unchanged: identical
+# information day, available scores, finite probability > 0.5.
+_REVIEWED_POSITIVE_ADMISSION_AST_SHA256 = "bbda38329e4ba1237c69b7082783a8519fbcf9c02daa2e58c72e2267d5e1795a"
+# The immediately preceding single-ranker code had the same row-level
+# admission behavior and is a reviewed, immutable past signed Oracle producer.
+_PREVIOUS_SINGLE_RANKER_SOURCE_SHA256 = "bd21e2953973e6602fd6a901c6bca2f2a5593c518b2b4c7c31482376fbf2943a"
 
 
 @lru_cache(maxsize=1)
@@ -79,7 +85,7 @@ def _approved_perfect_positive_admission(value: Any) -> bool:
     return (approved and
             (value == _ORACLE_PERFECT_POSITIVE_INTERFACE
              or (is_sha256_hex(value) and value in {
-                 _LEGACY_POSITIVE_SOURCE_SHA256, current_sha})))
+                 _LEGACY_POSITIVE_SOURCE_SHA256, _PREVIOUS_SINGLE_RANKER_SOURCE_SHA256, current_sha})))
 
 
 def oracle_score_contract(contract: Mapping[str, Any]) -> dict[str, Any]:

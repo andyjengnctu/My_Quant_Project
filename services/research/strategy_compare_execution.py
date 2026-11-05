@@ -98,6 +98,36 @@ def resolve_strategy_compare_ranking_options(
     """
 
     options = dict(arm.dl_runtime_options or {})
+    from core.positive_netpnl_contract import requires_positive_score
+    if requires_positive_score(options):
+        positive_dl_id = str(options["positive_dl_id"])
+        if positive_dl_id == str(arm.dl_id) or positive_dl_id not in settings.dl_sources:
+            raise ValueError(f"arm {arm.arm_id} requires independent Positive model source")
+        source = settings.dl_sources[positive_dl_id]
+        positive_override = dict((score_overrides or {}).get(positive_dl_id) or {})
+        if str(source.score_source) == SCORE_SOURCE_SELECTION_POINT_IN_TIME and not positive_override:
+            mode_paths = selection_pit_mode_paths(source, project_root=project_root)
+            if mode_paths is not None:
+                positive_override = {
+                    "score_path": mode_paths["score"],
+                    "manifest_path": mode_paths["manifest"],
+                }
+        has_score = bool(positive_override.get("score_path"))
+        has_manifest = bool(positive_override.get("manifest_path"))
+        if str(source.score_source) == SCORE_SOURCE_SELECTION_POINT_IN_TIME and has_score != has_manifest:
+            raise ValueError("Positive PIT score and manifest overrides must be paired")
+        options.update({
+            "positive_filter_id": str(source.filter_id),
+            "positive_score_source": str(source.score_source),
+            "positive_model_architecture": str(source.model_architecture),
+            "positive_experiment_profile": str(source.experiment_profile),
+            "positive_score_path_override": (
+                None if not has_score else str(positive_override["score_path"])
+            ),
+            "positive_score_manifest_path_override": (
+                None if not has_manifest else str(positive_override["manifest_path"])
+            ),
+        })
     if arm.dl_runtime_mode not in {
         STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_SAFETY_CONSTRAINED_OPTIMAL,
         STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_RESIDUAL_SAFETY_CONSTRAINED_OPTIMAL,
@@ -278,6 +308,12 @@ def run_strategy_compare_active_arm(
                     )
                 )
 
+    from core.positive_netpnl_contract import requires_positive_score
+    if expected_seed_override is not None and requires_positive_score(arm.dl_runtime_options):
+        positive_dl_id = str(arm.dl_runtime_options["positive_dl_id"])
+        secondary = dict(overrides.get(positive_dl_id) or {})
+        if not secondary.get("score_path") or not secondary.get("manifest_path"):
+            raise ValueError("Robustness requires isolated Positive classifier PIT score and manifest")
     ranking_options = resolve_strategy_compare_ranking_options(
         settings,
         arm,

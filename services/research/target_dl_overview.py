@@ -45,6 +45,7 @@ from core.strategy_compare_policy import (
     get_strategy_multi_seed_robustness_settings,
 )
 from core.strategy_compare_registry import STRATEGY_COMPARE_ARMS, STRATEGY_DL_SOURCES
+from core.positive_netpnl_contract import POSITIVE_P_CLASS_COLUMN, requires_positive_score
 from filters.breakout_quality.strategy_compare_dl_artifacts import resolve_arm_runtime_dl_source_ids
 from filters.breakout_quality.strategy_compare_pit_contract import (
     resolve_strategy_compare_selection_pit_bundle_dir,
@@ -239,9 +240,9 @@ def _oracle_rows(root: Path, definition, versions: Mapping[str, tuple]):
     return targets, comparisons, score_targets, metrics, oracle_info
 
 
-def _is_exact_supervision(profile: str, target_id: str) -> bool:
-    # The primary supervised label must be precisely the Oracle scalar label;
-    # a composite/conditional score with the same raw component is NOT equal.
+def _shares_oracle_scalar_truth(profile: str, target_id: str) -> bool:
+    # Different DL tasks can share the SAME mature NetPnL truth.  This check
+    # proves the input truth only; it does not identify the consumer as a ranker.
     registered = get_breakout_quality_experiment_profile(profile)
     recipe = get_continuous_ranker_execution_recipe(profile)
     policy = recipe.target_policy
@@ -263,6 +264,41 @@ def _is_exact_supervision(profile: str, target_id: str) -> bool:
         and objective.secondary_pair_scope == CONTINUOUS_RANKER_SECONDARY_PAIR_SCOPE_ALL
         and objective.pair_target_schema in {"scalar", "scalar_with_context_weight"}
     )
+
+
+def _is_exact_supervision(profile: str, target_id: str) -> bool:
+    # Rolling rho is a *ranking* metric. A NetPnL>0 classifier must not be
+    # presented as a continuous NetPnL ranker solely because it shares truth.
+    return bool(
+        _shares_oracle_scalar_truth(profile, target_id)
+        and get_continuous_ranker_execution_recipe(profile).training_policy.categorical_class_count is None
+    )
+
+
+def _is_positive_classification(profile: str, target_id: str) -> bool:
+    if not _shares_oracle_scalar_truth(profile, target_id):
+        return False
+    policy = get_continuous_ranker_execution_recipe(profile).training_policy
+    return bool(
+        policy.target_builder == "netpnl_positive_binary"
+        and policy.loss_handler == "categorical_cross_entropy"
+        and not policy.uses_pairwise_loss
+        and policy.categorical_class_count == 2
+        and policy.categorical_primary_class == 1
+        and POSITIVE_P_CLASS_COLUMN in policy.categorical_score_columns
+    )
+
+
+def _positive_classifier_for_arm(arm: Mapping[str, Any], target_id: str) -> str | None:
+    options = dict(arm.get("dl_runtime_options") or {})
+    if not requires_positive_score(options):
+        return None
+    positive_source = STRATEGY_DL_SOURCES.get(str(options["positive_dl_id"])) or {}
+    profile = str(positive_source.get("experiment_profile") or "")
+    if (profile not in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES
+            or not _is_positive_classification(profile, target_id)):
+        return None
+    return profile
 
 
 def _model_paths(root: Path, *, filter_id: str, profile: str,
@@ -460,8 +496,10 @@ def _strategy_bindings(*, target_names: tuple[str, ...],
                     or arm.get("rule_policy") != base_arm["rule_policy"]):
                 continue
             options = dict(arm.get("dl_runtime_options") or {})
-            from core.positive_netpnl_contract import requires_positive_score
             if requires_positive_score(options) != (target in positive_targets):
+                continue
+            if target in positive_targets and _positive_classifier_for_arm(
+                    arm, str(score_targets[target])) is None:
                 continue
             dl = STRATEGY_DL_SOURCES.get(arm.get("dl_id")) or {}
             primary_profile = str(dl.get("experiment_profile") or "")
@@ -680,19 +718,13 @@ def collect_target_dl_overview(project_root: Path) -> dict[str, Any]:
     positive_targets = {
         oracle_comparison_key(item) for item in comparisons if item.get("positive_output")
     }
-    positive_profiles = {
-        profile for (target, profile) in bindings if target in positive_targets
-    }
     rolling_romd = _strategy_rolling_metrics(root, versions)
     robust_romd = _strategy_robustness_metrics(root, versions)
     model_map: dict[str, list[dict[str, Any]]] = {}
     for profile in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES:
         possible_targets = [name for name, label_id in score_targets.items()
-                            if label_id and (
-                                _is_exact_supervision(profile, label_id) or (name, profile) in bindings
-                            )
-                            and ((name in positive_targets and (name, profile) in bindings)
-                                 or (name not in positive_targets and profile not in positive_profiles))]
+                            if label_id and _is_exact_supervision(profile, label_id)
+                            and (name not in positive_targets or (name, profile) in bindings)]
         if not possible_targets:
             continue
         model = get_continuous_ranker_research_spec(profile)
@@ -740,6 +772,10 @@ def collect_target_dl_overview(project_root: Path) -> dict[str, Any]:
         for model in models:
             profile = str(model.get("profile") or "")
             arm = bindings.get((target, profile), "")
+            classifier = (
+                _positive_classifier_for_arm(STRATEGY_COMPARE_ARMS[arm], str(score_targets[target]))
+                if arm and target in positive_targets else None
+            )
             metrics = oracle.get(target) or {}
             robust = robust_romd.get(arm) if arm else None
             rows.append({
@@ -749,6 +785,8 @@ def collect_target_dl_overview(project_root: Path) -> dict[str, Any]:
                 "oracle_romd": metrics.get("oracle_romd"),
                 "win_rate_pct": metrics.get("win_rate_pct"),
                 "model": model.get("model") or "",
+                "positive_model": (get_continuous_ranker_research_spec(classifier).model_research_id
+                                   if classifier else ""),
                 "rolling_rho": model.get("rolling_rho"),
                 "robustness_rho": model.get("robustness_rho"),
                 "rho_seeds": model.get("rho_seeds") or (),

@@ -978,10 +978,9 @@ def _load_selection_point_in_time_score_table_from_path_cached(
     resolved_profile = experiment_profile or (manifest or {}).get("experiment_profile")
     if resolved_profile:
         profile = get_breakout_quality_experiment_profile(str(resolved_profile))
-        if profile.score_calibration is not None:
-            required.update(get_continuous_ranker_score_output_columns(
-                profile.training_objective, score_calibration=profile.score_calibration,
-            ).values())
+        required.update(get_continuous_ranker_score_output_columns(
+            profile.training_objective, score_calibration=profile.score_calibration,
+        ).values())
     missing = sorted(required.difference(table.columns))
     if missing:
         raise ValueError(f"Selection PIT score table缺少欄位: {missing}")
@@ -1519,10 +1518,11 @@ def clear_continuous_ranker_oos_score_caches() -> None:
 
 def _validate_forward_score_columns(profile, columns) -> None:
     required = {"ticker", "date", "group_index", "model_score"}
-    if profile.score_calibration is not None:
-        required.update(column for column in get_continuous_ranker_score_output_columns(
-            profile.training_objective, score_calibration=profile.score_calibration,
-        ).values() if column != "breakout_quality_score")
+    # The independently trained Positive binary classifier persists both
+    # probabilities; missing sidecars must never silently disable admission.
+    required.update(column for column in get_continuous_ranker_score_output_columns(
+        profile.training_objective, score_calibration=profile.score_calibration,
+    ).values() if column not in {"breakout_quality_score", "model_score"})
     if profile.training_sample_scope != TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS:
         required.add("split")
     missing = sorted(required - set(columns))

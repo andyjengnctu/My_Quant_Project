@@ -308,8 +308,10 @@ class ScientificVersionCases(TestCase):
         from services.research import target_dl_overview as overview
 
         target = "DailyUniversal_MinTrade_NetPnL_Positive"
-        evidence = ((target,), ({"target": target, "positive_output": True},),
-                    {target: "synthetic-positive-target"},
+        rank_profile = get_strategy_comparison_settings(STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE).dl_sources[
+            "CONT13CO_ROLL"].experiment_profile
+        evidence = ((target,), ({"target": target, "positive_output": True, "selector": "exact"},),
+                    {target: "daily_formal_mintrade_fullcycle_netpnl_per_seed_v1"},
                     {target: {"oracle_romd": 90.84, "win_rate_pct": 99.88}}, {})
         with tempfile.TemporaryDirectory() as tmp, \
              patch.object(overview, "load_report_contract_versions", return_value={}), \
@@ -317,21 +319,25 @@ class ScientificVersionCases(TestCase):
                           return_value=SimpleNamespace(source={"filter_id": "breakout_quality_v1"})), \
              patch.object(overview, "get_active_audit_module_id", return_value="synthetic"), \
              patch.object(overview, "_oracle_rows", return_value=evidence), \
-             patch.object(overview, "_strategy_bindings", return_value={(target, VERSIONED_PROFILE): "C125"}), \
-             patch.object(overview, "_is_exact_supervision", side_effect=lambda profile, _label: profile == VERSIONED_PROFILE), \
+             patch.object(overview, "_strategy_bindings", return_value={(target, rank_profile): "C125"}), \
+             patch.object(overview, "_is_exact_supervision", side_effect=lambda profile, _label: profile == rank_profile), \
              patch.object(overview, "_model_comparison_rhos",
-                          side_effect=[{}, {VERSIONED_PROFILE: (0.1234, (101, 102, 103, 104))}]), \
+                          side_effect=[{}, {rank_profile: (0.1234, (101, 102, 103, 104))}]), \
              patch.object(overview, "_rolling_fit_version_current", return_value=False), \
              patch.object(overview, "_single_model_rho", return_value=None), \
              patch.object(overview, "_published_model_report", return_value=None), \
              patch.object(overview, "_strategy_rolling_metrics", return_value={}), \
              patch.object(overview, "_strategy_robustness_metrics", return_value={}):
             rows = overview.collect_target_dl_overview(Path(tmp))["rows"]
-        cq_rows = [row for row in rows if row["model"] == "MR-13CP"]
-        self.assertEqual(len(cq_rows), 1)
-        self.assertIsNone(cq_rows[0]["rolling_rho"])
-        self.assertEqual(cq_rows[0]["robustness_rho"], 0.1234)
-        self.assertEqual(cq_rows[0]["rho_seeds"], (101, 102, 103, 104))
+        # Per-seed ranking evidence remains valid without a completed main
+        # Rolling FIT, but rho is owned by the ranker, never by CP classifier.
+        rank_rows = [row for row in rows if row["model"] == "MR-13CO"]
+        self.assertEqual(len(rank_rows), 1)
+        self.assertEqual(rank_rows[0]["positive_model"], "MR-13CP")
+        self.assertIsNone(rank_rows[0]["rolling_rho"])
+        self.assertEqual(rank_rows[0]["robustness_rho"], 0.1234)
+        self.assertEqual(rank_rows[0]["rho_seeds"], (101, 102, 103, 104))
+        self.assertFalse(any(row["model"] == "MR-13CP" for row in rows))
 
     def test_old_model_and_strategy_results_blank_until_matching_v2(self):
         import hashlib

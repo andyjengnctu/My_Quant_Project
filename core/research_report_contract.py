@@ -815,7 +815,7 @@ STRATEGY_CONSISTENCY_METRIC_KEYS = (
 # neutral and unavailable cells remain unstyled (no schema/metric changes).
 TARGET_DL_VALIDATION_OVERVIEW_REPORT = PersistentReportContract(
     report_id="research.target_dl_validation_overview",
-    version=4,
+    version=5,
     role="read_only_local_completed_report_summary",
     menu_path=("Research", "Target Validation", "Target x DL Overview"),
     sections=(
@@ -826,7 +826,8 @@ TARGET_DL_VALIDATION_OVERVIEW_REPORT = PersistentReportContract(
                 C("selector", "Selector", alignment="left"),
                 C("oracle_romd", "Oracle RoMD", 2, preference="higher", format_kind="number"),
                 C("win_rate_pct", "Win Rate", 2, "%", "higher", "pct"),
-                C("model", "DL Model", alignment="left"),
+                C("model", "Rank DL", alignment="left"),
+                C("positive_model", "Positive DL", alignment="left"),
                 C("rolling_rho", "Rolling \u03c1", 4, preference="higher", format_kind="number"),
                 C("robustness_rho", "Robustness \u03c1", 4, preference="higher", format_kind="number"),
                 C("strategy", "\u7b56\u7565\u7de8\u865f", alignment="left"),

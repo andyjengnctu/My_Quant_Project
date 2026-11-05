@@ -471,26 +471,39 @@ def resolve_breakout_quality_candidate_rank(
             })
         from core.positive_netpnl_contract import requires_positive_score
         if requires_positive_score(options):
+            positive_source = str(options.get("positive_score_source") or "").strip()
+            positive_filter = str(options.get("positive_filter_id") or "").strip()
+            positive_arch = str(options.get("positive_model_architecture") or "").strip()
+            positive_profile = str(options.get("positive_experiment_profile") or "").strip()
+            if (not all((positive_source, positive_filter, positive_arch, positive_profile))
+                    or positive_source != context.score_source
+                    or (positive_arch == str(context.model_architecture)
+                        and positive_profile == str(context.experiment_profile))):
+                raise ValueError("Separate Positive DL identity/source is required for PIT ranking")
             arguments = dict(
                 project_root=root, ticker=str(ticker), signal_date=lookup_date,
-                filter_id=str(filter_id),
-                model_architecture=str(context.model_architecture),
-                experiment_profile=str(context.experiment_profile),
-                score_path_override=context.score_path_override,
+                filter_id=positive_filter,
+                model_architecture=positive_arch,
+                experiment_profile=positive_profile,
+                score_path_override=options.get("positive_score_path_override") or None,
                 score_column=str(options["positive_score_column"]),
             )
-            if context.score_source == SCORE_SOURCE_SELECTION_POINT_IN_TIME:
+            if positive_source == SCORE_SOURCE_SELECTION_POINT_IN_TIME:
                 positive_payload = lookup_selection_point_in_time_candidate_score(
-                    **arguments, manifest_path_override=context.score_manifest_path_override,
+                    **arguments,
+                    manifest_path_override=options.get("positive_score_manifest_path_override") or None,
                 )
-            else:
+            elif positive_source == SCORE_SOURCE_CONTINUOUS_RANKER_OOS:
                 positive_payload = lookup_continuous_ranker_oos_candidate_score(**arguments)
+            else:
+                raise ValueError("Positive classifier source must be PIT or OOS, not a future outcome")
             payload = dict(payload)
             payload.update({
                 "positive_probability": positive_payload.get("score"),
                 "positive_available": bool(positive_payload.get("available", False)),
                 "positive_score_date": str(positive_payload.get("score_date") or ""),
                 "positive_score_source": str(positive_payload.get("score_source") or ""),
+                "positive_dl_id": str(options["positive_dl_id"]),
             })
         calibration_path = str(options.get("expected_r_calibration_path") or "").strip()
         excess_calibration_path = str(

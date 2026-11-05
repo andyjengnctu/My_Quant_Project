@@ -49,7 +49,17 @@ class DailyEntryStrategyCases(TestCase):
                     profile.training_objective, score_calibration=profile.score_calibration)
                 self.assertEqual(arm.entry_strategy, "Daily")
                 self.assertEqual(requires_positive_score(arm.dl_runtime_options), bool(row.get("positive_output")))
-                self.assertEqual("positive_p_positive" in outputs.values(), bool(row.get("positive_output")))
+                if row.get('positive_output'):
+                    positive_id = arm.dl_runtime_options['positive_dl_id']
+                    classifier = get_breakout_quality_experiment_profile(
+                        settings.dl_sources[positive_id].experiment_profile)
+                    positive_columns = get_continuous_ranker_score_output_columns(
+                        classifier.training_objective,score_calibration=classifier.score_calibration)
+                    self.assertIn('positive_p_positive',positive_columns.values())
+                    self.assertNotIn('positive_p_positive',outputs.values())
+                    self.assertEqual(classifier.continuous_target_id,profile.continuous_target_id)
+                else:
+                    self.assertNotIn('positive_p_positive',outputs.values())
                 self.assertEqual(profile.continuous_target_id, contracts[row["target"]]["target_id"])
                 self.assertEqual(contracts[row["target"]]["target_id"],
                                  "true_daily_universal_mintrade_fulltrade_netpnl_v1")
@@ -58,9 +68,9 @@ class DailyEntryStrategyCases(TestCase):
                             for r in d.source["oracle_comparisons"]))
         self.assertEqual(oracle._oracle_target_strategy(definition, "C96"), "Breakout")
         contract = require_approved_report_contract("audit.target_oracle_romd")
-        self.assertEqual(contract.version, 12)
+        self.assertEqual(contract.version, 13)
         self.assertEqual(tuple(c.label for c in contract.sections[0].tables[0].columns[:3]),
-                         ("Target", "Strategy", "Return Mean"))
+                         ("Target", "Strategy", "Selector"))
         self.assertTrue(DAILY_ENTRY_CONTRACT.startswith("daily_stockday_close_limit_"))
 
     def test_daily_fit_has_separate_event_truth_and_cutoff_safe_cache(self):
@@ -80,8 +90,8 @@ class DailyEntryStrategyCases(TestCase):
         models = {}
         for arm_id in ("C125", "C126", "C133", "C134"):
             arm = STRATEGY_COMPARE_ARMS[arm_id]
-            models[arm_id] = (arm["dl_id"], arm["dl_id"])
-            self.assertNotIn("positive_dl_id", arm["dl_runtime_options"])
+            models[arm_id] = (arm["dl_id"], arm["dl_runtime_options"]["positive_dl_id"])
+            self.assertNotEqual(*models[arm_id])
         self.assertEqual(models["C125"], models["C126"])
         self.assertEqual(models["C133"], models["C134"])
         self.assertNotEqual(models["C125"], models["C133"])
@@ -180,7 +190,8 @@ class DailyEntryStrategyCases(TestCase):
             preview = oracle.preview_oracle_replay_plan(definition,project_root="/tmp")
             self.assertEqual(len(preview["targets"]), 1 + len(comparisons))
             self.assertIn(f"Portfolio REUSE {reuse_count} / RUN（需回放）{run_count} / BLOCKED 0", preview["text"])
-            self.assertIn("TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct", preview["text"])
+            self.assertIn("DailyUniversal_MinTrade_NetPnL_Positive", preview["text"])
+            self.assertIn("Direct", preview["text"])
             self.assertIn("Daily",preview["text"])
             result = oracle.build_report(
                 definition,project_root="/tmp",quiet=True,
@@ -407,6 +418,12 @@ class DailyEntryStrategyCases(TestCase):
             self.assertTrue(arm.enabled)
             primary = settings.dl_sources[arm.dl_id]
             options = dict(arm.dl_runtime_options)
+            if 'positive_dl_id' in options:
+                second = settings.dl_sources[options['positive_dl_id']]
+                options.update(positive_filter_id=second.filter_id,
+                    positive_score_source=second.score_source,
+                    positive_model_architecture=second.model_architecture,
+                    positive_experiment_profile=second.experiment_profile)
             unfiltered_trades = None
             qualified = requires_positive_score(options)
             for excluded in ((False, True) if qualified else (False,)):
@@ -478,8 +495,8 @@ class DailyEntryStrategyCases(TestCase):
             self.assertEqual(old_arm.dl_id, new_arm.dl_id)
             self.assertEqual(old_arm.param_source, new_arm.param_source)
             self.assertEqual(old_arm.rule_policy, new_arm.rule_policy)
-            self.assertEqual(new_arm.replay_contract_version, 3)
-            self.assertEqual(old_arm.replay_contract_version, 1)  # New registered arm, not a recycled ID.
+            self.assertEqual(new_arm.replay_contract_version, 4)
+            self.assertEqual(old_arm.replay_contract_version, 2)  # Current two-model identity.
             self.assertNotIn("entry_strategy", STRATEGY_COMPARE_ARMS[old_id])
         for strategy, scoped in oracle._oracle_strategy_scopes(definition):
             plan = oracle._oracle_comparison_plan(scoped)

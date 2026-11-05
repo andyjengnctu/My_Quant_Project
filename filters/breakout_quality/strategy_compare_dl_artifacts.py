@@ -142,6 +142,15 @@ def resolve_arm_runtime_dl_source_ids(
         source_ids.append(safety_dl_id)
 
 
+    from core.positive_netpnl_contract import requires_positive_score
+    options = dict(arm.dl_runtime_options or {})
+    if requires_positive_score(options):
+        positive_dl_id = str(options["positive_dl_id"])
+        if positive_dl_id not in settings.dl_sources or positive_dl_id == primary:
+            raise ValueError(f"arm {arm.arm_id} requires an independent registered Positive DL")
+        source_ids.append(positive_dl_id)
+
+
     unique = tuple(dict.fromkeys(source_ids))
     if len(unique) > 1:
         score_sources = {str(settings.dl_sources[dl_id].score_source) for dl_id in unique}

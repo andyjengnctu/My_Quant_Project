@@ -6075,7 +6075,7 @@ class OracleInventoryAndSourceIsolationRegressionCases(TestCase):
         live = resolve_current_oracle_comparisons(definition.source)
         from core.audit_registry import oracle_comparison_key
         names = [oracle_comparison_key(row) for row in live]
-        self.assertEqual(len(names), 20)
+        self.assertEqual(len(names), 22)  # Includes both CU Daily selectors.
         self.assertEqual(set(row["target"] for row in live),
                          {name for name, _ in oracle._oracle_comparison_plan(definition)["targets"]})
         self.assertTrue(set(definition.source["historical_only_oracle_targets"]).isdisjoint(names))

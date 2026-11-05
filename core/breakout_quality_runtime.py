@@ -110,6 +110,7 @@ TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING = (
 TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING = "daily_hmhs_pairwise_ranking"
 TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING = "daily_listwise_ranking"
 TRAINING_OBJECTIVE_DAILY_JOINT_MFE_D40_QUADRANT = "daily_joint_mfe_d40_quadrant_cross_entropy"
+TRAINING_OBJECTIVE_DAILY_NETPNL_POSITIVE_BINARY = "daily_mintrade_netpnl_positive_binary_cross_entropy"
 
 CONTINUOUS_RANKER_TRAINER_EVENT = "event"
 CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL = "daily_universal"
@@ -417,6 +418,7 @@ CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_HMHS = "safety_raw_mfe_hmhs"
 CONTINUOUS_RANKER_TARGET_BUILDER_SAFETY_RAW_MFE_JOINT_MIN = "safety_raw_mfe_joint_min"
 CONTINUOUS_RANKER_TARGET_BUILDER_DIRECT_HMHS = "direct_hmhs"
 CONTINUOUS_RANKER_TARGET_BUILDER_JOINT_MFE_D40 = "joint_mfe_d40_quadrants"
+CONTINUOUS_RANKER_TARGET_BUILDER_NETPNL_POSITIVE = "netpnl_positive_binary"
 CONTINUOUS_RANKER_LOSS_HANDLER_PERCENTILE_MSE = "percentile_mse"
 CONTINUOUS_RANKER_LOSS_HANDLER_RAW_R = "raw_r_regression"
 CONTINUOUS_RANKER_LOSS_HANDLER_DUAL_COMPONENT_R = "dual_component_r_regression"
@@ -1692,6 +1694,16 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             auxiliary_target_bundle=CONTINUOUS_RANKER_AUX_TARGET_CONDITIONAL_MFE_OPPORTUNITY,
             semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_DIRECT_HMHS,
             uses_pairwise_loss=True,
+        ),
+        TRAINING_OBJECTIVE_DAILY_NETPNL_POSITIVE_BINARY: ContinuousRankerTrainingPolicy(
+            batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
+            target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_NETPNL_POSITIVE,
+            loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_CATEGORICAL_CE,
+            profile_loss_metrics=(("netpnl_positive_cross_entropy", "positive_validation_cross_entropy"),),
+            categorical_class_count=2,
+            categorical_primary_class=1,
+            categorical_score_columns=("positive_p_nonpositive", "positive_p_positive"),
+            epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
         ),
         TRAINING_OBJECTIVE_DAILY_JOINT_MFE_D40_QUADRANT: ContinuousRankerTrainingPolicy(
             batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,

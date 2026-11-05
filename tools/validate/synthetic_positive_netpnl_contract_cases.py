@@ -1,4 +1,4 @@
-"""Isolated reusable single-ranker NetPnL score/selection primitive regressions.
+"""Two-model NetPnL ranker + Positive classifier / selector regressions.
 
 Only isolated synthetic data and a one-epoch CPU model roundtrip are used.
 No real market files, strategy optimizer or formal test runner is used.
@@ -85,34 +85,122 @@ class PositiveNetPnlContractCases(TestCase):
         self.assertNotEqual(oracle_target_semantics(by_legacy["DailyUniversal_MinTrade_NetPnL"])[0],
                             oracle_target_semantics(by_legacy["DailyUniversal_MinTrade_NetPnL_Positive"])[0])
 
-    def test_current_positive_models_are_continuous_single_rankers(self):
+    def test_current_positive_arms_have_independent_ranker_and_classifier(self):
         from core.breakout_quality_registry import get_breakout_quality_experiment_profile
         from core.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
-        from core.positive_netpnl_contract import POSITIVE_RANK_CALIBRATION
         settings = get_strategy_comparison_settings(STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE)
-        arms = [arm for arm in settings.enabled_arms
-                if (arm.dl_runtime_options or {}).get("positive_score_column")]
-        self.assertEqual(len(arms), 6)
-        profiles = {settings.dl_sources[arm.dl_id].experiment_profile for arm in arms}
-        self.assertEqual(len(profiles), 2)
-        for name in profiles:
-            profile = get_breakout_quality_experiment_profile(name)
-            recipe = get_continuous_ranker_execution_recipe(name)
-            self.assertGreaterEqual(profile.fit_contract_version, 1)
-            self.assertEqual(profile.score_calibration, POSITIVE_RANK_CALIBRATION)
-            self.assertEqual(recipe.training_policy.target_builder, "scalar_pairwise")
-            self.assertTrue(recipe.training_policy.uses_pairwise_loss)
-            self.assertIsNone(recipe.training_policy.categorical_class_count)
-            self.assertEqual(recipe.training_policy.head_loss_component_count, 1)
-            self.assertEqual(recipe.objective_policy.pairwise_reduction, "full_list_delta_ndcg_weighted")
-        for arm in arms:
-            self.assertNotIn("positive_dl_id", arm.dl_runtime_options)
+        expected = {'C125': ('CONT13CO_ROLL','CONT13CP_ROLL'),
+                    'C126': ('CONT13CO_ROLL','CONT13CP_ROLL'),
+                    'C133': ('CONT13CU_ROLL','CONT13CT_ROLL'),
+                    'C134': ('CONT13CU_ROLL','CONT13CT_ROLL'),
+                    'C135': ('CONT13CU_ROLL','CONT13CT_ROLL'),
+                    'C136': ('CONT13CU_ROLL','CONT13CT_ROLL')}
+        actual = {arm.arm_id: (arm.dl_id, arm.dl_runtime_options.get('positive_dl_id'))
+                  for arm in settings.enabled_arms if (arm.dl_runtime_options or {}).get('positive_score_column')}
+        self.assertEqual(actual, expected)
+        for arm_id, (rank_id, classification_id) in expected.items():
+            with self.subTest(arm=arm_id):
+                rank_profile = get_breakout_quality_experiment_profile(
+                    settings.dl_sources[rank_id].experiment_profile)
+                positive_profile = get_breakout_quality_experiment_profile(
+                    settings.dl_sources[classification_id].experiment_profile)
+                rank_recipe = get_continuous_ranker_execution_recipe(rank_profile.name)
+                classification_recipe = get_continuous_ranker_execution_recipe(positive_profile.name)
+                self.assertEqual(rank_profile.continuous_target_id, positive_profile.continuous_target_id)
+                self.assertEqual(rank_recipe.training_policy.target_builder, 'scalar_pairwise')
+                self.assertTrue(rank_recipe.training_policy.uses_pairwise_loss)
+                self.assertEqual(classification_recipe.training_policy.target_builder, 'netpnl_positive_binary')
+                self.assertEqual(classification_recipe.training_policy.categorical_class_count, 2)
+                self.assertEqual(classification_recipe.training_policy.categorical_primary_class, 1)
+                self.assertEqual(classification_recipe.training_policy.categorical_score_columns[1],
+                                 POSITIVE_P_CLASS_COLUMN)
+                self.assertIsNone(positive_profile.score_calibration)
+
+    def test_target_overview_joins_ranker_and_classifier_by_runtime_roles(self):
+        # Truth identity is intentionally shared by NetPnL rank and P(NetPnL>0)
+        # binary models.  The report must identify the role from the actual
+        # Strategy Registry consumers, not from that shared continuous label.
+        from core.breakout_quality_registry import get_continuous_ranker_research_spec, get_breakout_quality_experiment_profile
+        from services.research.target_dl_overview import (
+            _is_exact_supervision, _is_positive_classification,
+        )
+        from filters.breakout_quality.strategy_compare_dl_artifacts import resolve_arm_runtime_dl_source_ids
+        settings = get_strategy_comparison_settings(STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE)
+        cases = (
+            ("MinTrade_NetPnL", "Breakout", "Exact", "C123", "MR-13CO", ""),
+            ("MinTrade_NetPnL", "Breakout", "Direct", "C124", "MR-13CO", ""),
+            ("MinTrade_NetPnL_Positive", "Breakout", "Exact", "C125", "MR-13CO", "MR-13CP"),
+            ("MinTrade_NetPnL_Positive", "Breakout", "Direct", "C126", "MR-13CO", "MR-13CP"),
+            ("DailyUniversal_MinTrade_NetPnL", "Daily", "Exact", "C137", "MR-13CU", ""),
+            ("DailyUniversal_MinTrade_NetPnL", "Daily", "Direct", "C138", "MR-13CU", ""),
+            ("DailyUniversal_MinTrade_NetPnL_Positive", "Daily", "Exact", "C133", "MR-13CU", "MR-13CT"),
+            ("DailyUniversal_MinTrade_NetPnL_Positive", "Daily", "Direct", "C134", "MR-13CU", "MR-13CT"),
+            ("DailyUniversal_MinTrade_NetPnL_Positive", "Breakout", "Exact", "C135", "MR-13CU", "MR-13CT"),
+            ("DailyUniversal_MinTrade_NetPnL_Positive", "Breakout", "Direct", "C136", "MR-13CU", "MR-13CT"),
+        )
+        published = {arm_id: float(i + 1) for i, (*_, arm_id, rank, classifier) in enumerate(cases)}
+        with patch('services.research.target_dl_overview._strategy_rolling_metrics', return_value=published):
+            report = collect_target_dl_overview(ROOT)
+        keys = lambda row: (row['target'], row['entry_strategy'], row['selector'])
+        group = {keys(row): [] for row in report['rows']}
+        for row in report['rows']:
+            group[keys(row)].append(row)
+        for target, strategy, selector, arm_id, rank, classifier in cases:
+            with self.subTest(arm=arm_id):
+                matched = group[(target, strategy, selector)]
+                self.assertEqual(len(matched), 1, "one Target/Strategy/Selector is one strategy comparison")
+                row = matched[0]
+                self.assertEqual((row['strategy'], row['model'], row['positive_model']),
+                                 (arm_id, rank, classifier))
+                self.assertEqual(row['rolling_romd'], published[arm_id], "never borrow another arm's RoMD")
+                arm = settings.arms[arm_id]
+                actual_sources = resolve_arm_runtime_dl_source_ids(settings, arm)
+                actual_models = tuple(get_continuous_ranker_research_spec(
+                    settings.dl_sources[source].experiment_profile).model_research_id
+                    for source in actual_sources)
+                self.assertEqual(actual_models, (rank, classifier) if classifier else (rank,))
+        self.assertTrue(all(row['model'] not in {'MR-13CP', 'MR-13CT'}
+                            for row in report['rows']))
+        self.assertEqual(table_contract('research.target_dl_validation_overview',
+                                       'comparison', 'target_dl').headers[5:7],
+                         ('Rank DL', 'Positive DL'))
+        rendered = render_target_dl_overview(report)
+        self.assertIn('Positive DL', rendered)
+        self.assertIn('MR-13CP', rendered)
+        self.assertIn('MR-13CT', rendered)
+        # A classifier may use the same raw NetPnL truth but cannot provide
+        # the rolling Spearman rho as evidence for its ranker.
+        for rank, classifier in (("CONT13CO_ROLL", "CONT13CP_ROLL"),
+                                  ("CONT13CU_ROLL", "CONT13CT_ROLL")):
+            rank_profile = settings.dl_sources[rank].experiment_profile
+            binary_profile = settings.dl_sources[classifier].experiment_profile
+            target_id = get_breakout_quality_experiment_profile(rank_profile).continuous_target_id
+            self.assertTrue(_is_exact_supervision(rank_profile, target_id))
+            self.assertFalse(_is_exact_supervision(binary_profile, target_id))
+            self.assertFalse(_is_positive_classification(rank_profile, target_id))
+            self.assertTrue(_is_positive_classification(binary_profile, target_id))
+
+    def test_target_overview_rejects_positive_arm_without_binary_classifier(self):
+        from core.strategy_compare_registry import STRATEGY_DL_SOURCES
+        definition = get_formal_oracle_definition(get_active_audit_module_id())
+        targets, comparisons, labels, _, _ = _oracle_rows(
+            ROOT, definition, load_report_contract_versions(ROOT))
+        control = _strategy_bindings(target_names=targets, score_targets=labels, definition=definition)
+        target = 'DailyUniversal_MinTrade_NetPnL_Positive'
+        rank_profile = STRATEGY_DL_SOURCES['CONT13CO_ROLL']['experiment_profile']
+        self.assertEqual(control[(target, rank_profile)], 'C125')
+        # Swapping the classifier for a NetPnL ranker must not silently pass,
+        # even when their continuous_target_id matches perfectly.
+        with patch.dict(STRATEGY_DL_SOURCES, {'CONT13CP_ROLL': STRATEGY_DL_SOURCES['CONT13CO_ROLL']}):
+            missing = _strategy_bindings(target_names=targets,score_targets=labels, definition=definition)
+        self.assertNotIn((target, rank_profile), missing)
+        self.assertEqual(missing[('DailyUniversal_MinTrade_NetPnL', rank_profile)], 'C123')
 
     def test_no_filter_on_original_netpnl_and_positive_filter_fail_closed(self):
         rank = {'available': True,'score':0.70,'score_date':'2024-10-01',
                 'positive_available':True,'positive_score_date':'2024-10-01',
                 'positive_probability':0.51}
-        options = {'positive_score_column':POSITIVE_P_CLASS_COLUMN, 'positive_prediction_contract':POSITIVE_SCORE_CONTRACT,'positive_probability_threshold':0.5}
+        options = {'positive_dl_id':'CONT13CP_ROLL', 'positive_score_column':POSITIVE_P_CLASS_COLUMN,'positive_probability_threshold':0.5}
         row = {'breakout_quality_rank':rank,'breakout_quality_ranking_options':options}
         self.assertTrue(positive_score_admitted(row))
         for value in (0.5, 0.49, None, float('nan'), 1.1):
@@ -131,17 +219,22 @@ class PositiveNetPnlContractCases(TestCase):
               'positive_available':True,'positive_score_date':'2024-10-01','positive_probability':0.1}
         row={'breakout_quality_rank':rank,
              'breakout_quality_ranking_policy':'resource-aware-continuous-score-no-k-no-r0',
-             'breakout_quality_ranking_options':{'positive_score_column':POSITIVE_P_CLASS_COLUMN, 'positive_prediction_contract':POSITIVE_SCORE_CONTRACT}}
+             'breakout_quality_ranking_options':{'positive_dl_id':'CONT13CP_ROLL', 'positive_score_column':POSITIVE_P_CLASS_COLUMN, 'positive_probability_threshold':0.5}}
         order,diag=reorder_candidates_for_resource_aware_quality(
             [row],available_cash=0,sizing_equity=100,
             pre_market_occupied=10,max_positions=10,params=None)
         self.assertEqual(order,[])
 
-    def test_pit_rank_and_positive_use_one_profile_checkpoint_and_date(self):
+    def test_pit_rank_and_positive_use_separate_profiles_same_information_date(self):
         settings=get_strategy_comparison_settings(STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE)
         arm=settings.arms['C126']
         source=settings.dl_sources[arm.dl_id]
         options=dict(arm.dl_runtime_options)
+        classifier = settings.dl_sources[options['positive_dl_id']]
+        options.update(positive_filter_id=classifier.filter_id,
+                       positive_model_architecture=classifier.model_architecture,
+                       positive_experiment_profile=classifier.experiment_profile,
+                       positive_score_source=classifier.score_source)
         columns=[]
         lookup_calls=[]
         def fake_lookup(**kwargs):
@@ -163,8 +256,10 @@ class PositiveNetPnlContractCases(TestCase):
                 ticker='2330',signal_date='2024-10-01',
                 information_date='2024-10-01',high_len=40)
         self.assertEqual(columns,[None,'positive_p_positive'])
-        self.assertEqual({k:v for k,v in lookup_calls[0].items() if k != 'score_column'},
-                         {k:v for k,v in lookup_calls[1].items() if k != 'score_column'})
+        self.assertNotEqual(lookup_calls[0]['experiment_profile'],
+                            lookup_calls[1]['experiment_profile'])
+        self.assertEqual(lookup_calls[0]['experiment_profile'], source.experiment_profile)
+        self.assertEqual(lookup_calls[1]['experiment_profile'], classifier.experiment_profile)
         self.assertEqual(predicted['score'],.82)
         self.assertEqual(predicted['positive_probability'],.61)
         self.assertTrue(positive_score_admitted({
@@ -183,8 +278,8 @@ class PositiveNetPnlContractCases(TestCase):
             self.assertEqual(contracts[target]['reference_arm_id'],arm_id)
             self.assertEqual(contracts[target]['perfect_positive_output'],'netpnl_positive_probability_v1')
             arm = settings.arms[arm_id]
-            self.assertEqual(arm.dl_id, 'CONT13CP_ROLL')
-            self.assertEqual(contracts[target]['positive_score_source_id'], arm.dl_id)
+            self.assertEqual(arm.dl_id, 'CONT13CO_ROLL')
+            self.assertEqual(contracts[target]['positive_score_source_id'], 'CONT13CP_ROLL')
             with audit_oracle_truth_score_context(
                 {('2330','2024-10-01'): 0.77, ('2317','2024-10-01'): 0.12},
                 ranking_policy=arm.dl_runtime_mode,
@@ -405,183 +500,110 @@ class PositiveNetPnlContractCases(TestCase):
         expected={
             ('DailyUniversal_MinTrade_NetPnL','daily_universal_formal_mintrade_fullcycle_netpnl_per_seed_full_list_ndcg_pairwise'):'C123',
             ('DailyUniversal_MinTrade_NetPnL_Direct','daily_universal_formal_mintrade_fullcycle_netpnl_per_seed_full_list_ndcg_pairwise'):'C124',
-            ('DailyUniversal_MinTrade_NetPnL_Positive','daily_universal_formal_mintrade_fullcycle_netpnl_positive_binary'):'C125',
-            ('DailyUniversal_MinTrade_NetPnL_Positive_Direct','daily_universal_formal_mintrade_fullcycle_netpnl_positive_binary'):'C126',
+            ('DailyUniversal_MinTrade_NetPnL_Positive','daily_universal_formal_mintrade_fullcycle_netpnl_per_seed_full_list_ndcg_pairwise'):'C125',
+            ('DailyUniversal_MinTrade_NetPnL_Positive_Direct','daily_universal_formal_mintrade_fullcycle_netpnl_per_seed_full_list_ndcg_pairwise'):'C126',
         }
         for key,value in expected.items():
             self.assertEqual(bindings.get(key),value)
-        # All four TrueDaily arms consume one CT FIT; never the event CP FIT.
+        # All four TrueDaily arms use the CU ranker and independent CT admission.
         for suffix in ("", "_Direct"):
             name = "TrueDailyUniversal_MinTrade_NetPnL_Positive" + suffix
             self.assertEqual(
                 [(profile, arm) for (target, profile), arm in bindings.items() if target == name],
-                [("true_daily_universal_mintrade_fullcycle_netpnl_positive_binary",
+                [("true_daily_universal_mintrade_fullcycle_netpnl_full_list_ndcg_pairwise",
                   "C136" if suffix else "C135")])
             daily_key = name + "::Daily"
             expected_arm = "C134" if suffix else "C133"
             self.assertEqual(
                 [(profile, arm) for (target, profile), arm in bindings.items()
                  if target == daily_key],
-                [("true_daily_universal_mintrade_fullcycle_netpnl_positive_binary", expected_arm)],
+                [("true_daily_universal_mintrade_fullcycle_netpnl_full_list_ndcg_pairwise", expected_arm)],
             )
 
 
-class PositiveRankCalibrationCases(TestCase):
-    """One scalar output, PIT-only calibration, signed checkpoint roundtrip."""
+class IndependentPositiveClassifierCases(TestCase):
+    """The Positive gate consumes a distinct PIT-safe binary model, never raw outcomes."""
 
-    def _fixture(self):
-        from types import SimpleNamespace
-        import pandas as pd
-        from core.breakout_quality_registry import (
-            get_breakout_quality_experiment_profile, DAILY_UNIVERSAL_NETPNL_POSITIVE_BINARY_PROFILE,
-        )
-        from filters.breakout_quality.positive_rank_calibration import fit_score_calibration
-        profile = get_breakout_quality_experiment_profile(DAILY_UNIVERSAL_NETPNL_POSITIVE_BINARY_PROFILE)
-        days = pd.to_datetime(['2020-01-01'] * 2 + ['2020-01-06'] * 4 + ['2020-02-01'])
-        groups = pd.DataFrame({'ticker': list('ABCDEFG'), 'date': days,
-                               'label_eval_end_date': days + pd.Timedelta(days=1)})
-        raw = np.array([-2., 3., -30., 0., 5., 200., np.nan])
-        args = dict(scores=np.array([.1, .3, .7, .9]), raw_target=raw,
-                    group_table=groups, train_ids=np.arange(2), validation_ids=np.arange(2, 6),
-                    information_cutoff='2020-01-08', selected_epoch=1, profile=profile)
-        return profile, SimpleNamespace(), args, fit_score_calibration(**args)
-
-    def test_monotone_positive_does_not_replace_or_collapse_continuous_rank(self):
-        from filters.breakout_quality.positive_rank_calibration import attach_score_calibration, calibrated_score_columns
-        profile, model, _, payload = self._fixture()
-        attach_score_calibration(model, profile, {'score_calibration': payload}, selected_epoch=1)
-        scores = np.array([.1, .3, .7, .9]); before = scores.copy()
-        probability = calibrated_score_columns(model, profile, scores)[POSITIVE_P_CLASS_COLUMN]
-        np.testing.assert_array_equal(scores, before)
-        self.assertEqual(probability.tolist(), [0., 0., 1., 1.])
-        self.assertLess(scores[2], scores[3])  # Two profits still have distinct priority.
-
-    def test_only_inner_validation_labels_determine_curve(self):
-        from filters.breakout_quality.positive_rank_calibration import fit_score_calibration
-        _, _, args, baseline = self._fixture()
-        changed = args['raw_target'].copy(); changed[-1] = 1e12
-        self.assertEqual(fit_score_calibration(**{**args, 'raw_target': changed}), baseline)
-        changed = args['group_table'].copy(); changed.loc[6, 'label_eval_end_date'] = '2099-01-01'
-        self.assertEqual(fit_score_calibration(**{**args, 'group_table': changed}), baseline)
-
-    def test_overlap_censor_maturity_and_cutoff_are_rejected(self):
-        from filters.breakout_quality.positive_rank_calibration import fit_score_calibration
-        _, _, args, _ = self._fixture()
-        invalid = [dict(train_ids=[0, 2]), dict(validation_ids=[2, 2, 4, 5]),
-                   dict(information_cutoff='2020-01-06'), dict(scores=[.1, .2, .3, np.nan])]
-        raw = args['raw_target'].copy(); raw[2] = np.nan
-        invalid.append(dict(raw_target=raw))
-        groups = args['group_table'].copy(); groups.loc[0, 'label_eval_end_date'] = '2020-01-06'
-        invalid.append(dict(group_table=groups))
-        for override in invalid:
-            with self.subTest(override=list(override)), self.assertRaises(ValueError):
-                fit_score_calibration(**{**args, **override})
-
-    def test_constant_score_and_single_class_are_legal_not_invented_labels(self):
-        from filters.breakout_quality.positive_rank_calibration import fit_score_calibration, validate_score_calibration
-        _, _, args, _ = self._fixture()
-        same = fit_score_calibration(**{**args, 'scores': np.full(4, .7)})
-        np.testing.assert_array_equal(validate_score_calibration(same).predict([0., 1.]), [.5, .5])
-        raw = args['raw_target'].copy(); raw[2:6] = 1.
-        all_positive = fit_score_calibration(**{**args, 'raw_target': raw})
-        np.testing.assert_array_equal(validate_score_calibration(all_positive).predict([.1, .9]), [1., 1.])
-        self.assertEqual(float(positive_labels([1e-300])[0]), 1.)
-
-    def test_missing_corrupt_wrong_epoch_and_wrong_profile_checkpoint_fail(self):
-        from copy import deepcopy
-        from core.breakout_quality_registry import get_breakout_quality_experiment_profile, TRUE_DAILY_MINTRADE_NETPNL_POSITIVE_PROFILE
-        from filters.breakout_quality.positive_rank_calibration import attach_score_calibration, restore_score_calibration
-        profile, model, _, payload = self._fixture()
-        with self.assertRaises(ValueError):
-            restore_score_calibration(model, profile, {'selected_epoch': 1})
-        corrupt = deepcopy(payload); corrupt['y'][0] = .99
-        for candidate, epoch in ((corrupt, 1), (payload, 2)):
-            with self.assertRaises(ValueError):
-                attach_score_calibration(model, profile, {'score_calibration': candidate}, selected_epoch=epoch)
-        with self.assertRaises(ValueError):
-            attach_score_calibration(model, get_breakout_quality_experiment_profile(TRUE_DAILY_MINTRADE_NETPNL_POSITIVE_PROFILE),
-                                     {'score_calibration': payload}, selected_epoch=1)
-
-    def test_retired_dual_source_and_unknown_options_cannot_disable_gate(self):
+    def test_no_legacy_single_ranker_contract_or_unknown_secondary_options(self):
         from core.positive_netpnl_contract import requires_positive_score
         with self.assertRaises(ValueError):
             positive_score_admitted({'breakout_quality_ranking_options': 'invalid'})
-        for options in ({'positive_dl_id': 'retired'}, {'positive_dl_id': ''},
+        for options in ({'positive_dl_id': 'x'}, {'positive_dl_id': ''},
+                        {'positive_prediction_contract': 'single_ranker_calibrated_positive_v2'},
                         {'positive_score_column': POSITIVE_P_CLASS_COLUMN}, {'positive_typo': True}):
             with self.subTest(options=options), self.assertRaises(ValueError):
                 requires_positive_score(options)
+        good = {'positive_dl_id': 'CONT13CP_ROLL',
+                'positive_score_column': POSITIVE_P_CLASS_COLUMN,
+                'positive_probability_threshold': 0.5}
+        self.assertTrue(requires_positive_score(good))
 
-    def test_old_well_formed_oracle_schema_is_stale_not_corrupt(self):
-        from services.research.oracle_artifact_contract import oracle_ranking_options
-        from core.positive_netpnl_contract import requires_positive_score
-        old = {'positive_dl_id': 'CONT13CP_ROLL', 'positive_probability_threshold': .5}
-        current = {'positive_score_column': POSITIVE_P_CLASS_COLUMN,
-                   'positive_prediction_contract': POSITIVE_SCORE_CONTRACT,
-                   'positive_probability_threshold': .5}
-        self.assertEqual(oracle_ranking_options(old), old)
-        self.assertNotEqual(oracle_ranking_options(old), oracle_ranking_options(current))
-        with self.assertRaises(ValueError):
-            requires_positive_score(old)  # Historical metadata read != permission to execute.
-
-    def test_actual_scalar_fit_checkpoint_reload_for_each_calibrated_profile(self):
+    def test_true_two_class_pit_models_and_checkpoint_cpu_roundtrip(self):
+        import pandas as pd
+        from types import SimpleNamespace
         from contextlib import redirect_stdout
         from io import StringIO
-        from types import SimpleNamespace
-        import pandas as pd
-        import torch
-        from services.breakout_quality import train_continuous_ranker as trainer, continuous_ranker_pipeline as pipeline
-        from services.breakout_quality.fitted_model_artifacts import load_model_from_fitted_checkpoint
-        from filters.breakout_quality.torch_runtime import resolve_torch_execution_plan
+        from core.breakout_quality_registry import (get_breakout_quality_experiment_profile,
+                                                     DAILY_UNIVERSAL_NETPNL_POSITIVE_BINARY_PROFILE,
+                                                     TRUE_DAILY_MINTRADE_NETPNL_POSITIVE_PROFILE)
         from filters.breakout_quality.models.spec import get_model_spec
-        from filters.breakout_quality.continuous_ranker_data import build_same_date_percentile_targets
-        from core.breakout_quality_registry import get_breakout_quality_experiment_profile
-        settings = get_strategy_comparison_settings(STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE)
-        profiles = sorted({settings.dl_sources[arm.dl_id].experiment_profile
-                           for arm in settings.enabled_arms
-                           if (arm.dl_runtime_options or {}).get('positive_score_column')})
+        from services.breakout_quality import train_continuous_ranker as trainer
+        from services.breakout_quality import continuous_ranker_pipeline as pipeline
+        from services.breakout_quality.fitted_model_artifacts import load_model_from_fitted_checkpoint
+        from core.breakout_quality_runtime import get_continuous_ranker_training_policy
+        import torch
+        from filters.breakout_quality.torch_runtime import resolve_torch_execution_plan
         old_threads = torch.get_num_threads(); torch.set_num_threads(1)
-        self.addCleanup(torch.set_num_threads, old_threads)
+        self.addCleanup(torch.set_num_threads,old_threads)
         plan = resolve_torch_execution_plan(torch, requested_device='cpu', mixed_precision=False,
-                mixed_precision_dtype='auto', deterministic_algorithms=True, allow_tf32=False)
+            mixed_precision_dtype='auto', deterministic_algorithms=True, allow_tf32=False)
         features = np.random.default_rng(42).normal(size=(24, 300, 10)).astype(np.float32)
         context = np.empty((24, 0), dtype=np.float32)
         raw = np.tile([-40., -10., 0., 15., 60., 200.], 4).astype(np.float32)
         days = np.repeat(pd.to_datetime(['2020-01-01','2020-01-03','2020-01-06','2020-02-01']).to_numpy(), 6)
         groups = pd.DataFrame({'date': days, 'label_eval_end_date': days + np.timedelta64(1,'D'),
-                              'ticker': np.tile([str(1000+i) for i in range(6)], 4), 'label': (raw > 0).astype(int)})
-        percentiles = build_same_date_percentile_targets(raw, np.ones(24, dtype=bool), groups['date'])
-        for name in profiles:
+                              'ticker': np.tile([str(1000+i) for i in range(6)], 4),
+                              'label': (raw > 0).astype(int)})
+        percentiles = trainer.build_same_date_percentile_targets(raw, np.ones(24,dtype=bool), groups['date'])
+        for name in (DAILY_UNIVERSAL_NETPNL_POSITIVE_BINARY_PROFILE,
+                     TRUE_DAILY_MINTRADE_NETPNL_POSITIVE_PROFILE):
             with self.subTest(profile=name), redirect_stdout(StringIO()):
-                args = trainer.parse_args(['--experiment-profile', name, '--model-architecture', 'inception_time_v1',
-                    '--epochs', '1', '--batch-size', '64', '--evaluation-batch-size', '64', '--device', 'cpu',
-                    '--no-mixed-precision', '--train-prefetch-batches', '0'])
-                args.train_prefetch_workers = 0
-                selected = trainer.select_epoch(torch, features, context, groups, raw, percentiles,
-                    np.arange(12), np.arange(12,18), args=args, plan=plan, evaluate_train_metrics=False,
+                recipe = get_breakout_quality_experiment_profile(name)
+                self.assertEqual(get_continuous_ranker_training_policy(recipe.training_objective).categorical_class_count, 2)
+                args = trainer.parse_args(['--experiment-profile',name,'--model-architecture','inception_time_v1',
+                    '--epochs','1','--batch-size','64','--evaluation-batch-size','64','--device','cpu',
+                    '--no-mixed-precision','--train-prefetch-batches','0'])
+                args.train_prefetch_workers=0
+                selected=trainer.select_epoch(torch,features,context,groups,raw,percentiles,
+                    np.arange(12),np.arange(12,18),args=args,plan=plan,evaluate_train_metrics=False,
                     information_cutoff='2020-01-08')
-                model, _ = trainer.fit_final(torch, features, context, raw, percentiles, groups,
-                    np.arange(18), epochs=selected['best_epoch'], args=args, plan=plan, epoch_selection=selected)
-                bundle = SimpleNamespace(profile=get_breakout_quality_experiment_profile(name),
-                    model_spec=get_model_spec('inception_time_v1'), feature_bank=features, group_context=context,
-                    group_table=groups, target_manifest={}, raw_target=raw)
-                scores, columns = pipeline.predict_score_output_payload(torch, model, bundle,
-                    np.arange(18,24), batch_size=64, plan=plan)
-                payload = pipeline.build_checkpoint_payload(model, bundle, args=args, plan=plan,
-                    selected_epoch=selected['best_epoch'], fold_contract={})
+                model,_=trainer.fit_final(torch,features,context,raw,percentiles,groups,
+                    np.arange(18),epochs=selected['best_epoch'],args=args,plan=plan,epoch_selection=selected)
+                bundle=SimpleNamespace(profile=recipe,model_spec=get_model_spec('inception_time_v1'),
+                    feature_bank=features,group_context=context,group_table=groups,
+                    target_manifest={},raw_target=raw)
+                scores, columns=pipeline.predict_score_output_payload(torch,model,bundle,
+                    np.arange(18,24),batch_size=64,plan=plan)
+                self.assertIn(POSITIVE_P_CLASS_COLUMN, columns)
+                self.assertTrue(np.all((columns[POSITIVE_P_CLASS_COLUMN] >= 0)&
+                                       (columns[POSITIVE_P_CLASS_COLUMN] <= 1)))
+                np.testing.assert_allclose(scores,columns[POSITIVE_P_CLASS_COLUMN])
+                np.testing.assert_allclose(columns['positive_p_nonpositive'] + columns[POSITIVE_P_CLASS_COLUMN],1.0)
+                payload=pipeline.build_checkpoint_payload(model,bundle,args=args,plan=plan,
+                    selected_epoch=selected['best_epoch'],fold_contract={})
                 with TemporaryDirectory() as directory:
-                    path = Path(directory) / 'model.pt'; torch.save(payload, path)
-                    contract = SimpleNamespace(model_path=path, selected_epoch=selected['best_epoch'], manifest={}, source='synthetic')
-                    restored = load_model_from_fitted_checkpoint(torch, contract=contract, bundle=bundle, plan=plan)
-                    actual, restored_columns = pipeline.predict_score_output_payload(torch, restored, bundle,
-                        np.arange(18,24), batch_size=64, plan=plan)
-                    np.testing.assert_array_equal(scores, actual)
-                    np.testing.assert_array_equal(columns[POSITIVE_P_CLASS_COLUMN], restored_columns[POSITIVE_P_CLASS_COLUMN])
-                    payload.pop('score_calibration'); torch.save(payload, path)
-                    with self.assertRaises(ValueError):
-                        load_model_from_fitted_checkpoint(torch, contract=contract, bundle=bundle, plan=plan)
+                    path=Path(directory)/'model.pt';torch.save(payload,path)
+                    contract=SimpleNamespace(model_path=path,selected_epoch=selected['best_epoch'],
+                        manifest={},source='synthetic')
+                    restored=load_model_from_fitted_checkpoint(torch,contract=contract,bundle=bundle,plan=plan)
+                    actual,restored_columns=pipeline.predict_score_output_payload(torch,restored,bundle,
+                        np.arange(18,24),batch_size=64,plan=plan)
+                    np.testing.assert_array_equal(scores,actual)
+                    np.testing.assert_array_equal(columns[POSITIVE_P_CLASS_COLUMN],
+                                                  restored_columns[POSITIVE_P_CLASS_COLUMN])
 
 class ScoreOutputCompletenessCases(TestCase):
-    """Registry-driven persisted-output checks, also used by the PIT contract case."""
+    """Registry-driven binary-classifier output checks for PIT and OOS."""
 
     @staticmethod
     def profiles():
@@ -590,9 +612,10 @@ class ScoreOutputCompletenessCases(TestCase):
             get_breakout_quality_experiment_profile,
         )
         return [profile for name in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES
-                if (profile := get_breakout_quality_experiment_profile(name)).score_calibration]
+                if (profile := get_breakout_quality_experiment_profile(name)).training_objective
+                == 'daily_mintrade_netpnl_positive_binary_cross_entropy']
 
-    def test_calibrated_output_is_required_by_manifest_and_fold(self):
+    def test_classifier_output_is_required_by_manifest_and_fold(self):
         from types import SimpleNamespace
         import pandas as pd
         from services.breakout_quality.point_in_time_scores import (
@@ -621,6 +644,7 @@ class ScoreOutputCompletenessCases(TestCase):
                 with self.assertRaises(ValueError):
                     _validate_score_frame(frame, fold_contract=contract)
                 frame[POSITIVE_P_CLASS_COLUMN] = .6
+                frame['positive_p_nonpositive'] = .4
                 self.assertIn(POSITIVE_P_CLASS_COLUMN, _validate_score_frame(frame, fold_contract=contract))
 
     def test_forward_writer_and_both_readers_require_same_positive_output(self):
@@ -638,7 +662,8 @@ class ScoreOutputCompletenessCases(TestCase):
                 with self.assertRaises(ValueError):
                     _write_forward_score_frame(frame, path, profile=profile, score_extras={})
                 self.assertFalse(path.exists())
-                extras = {POSITIVE_P_CLASS_COLUMN: [.1, .9]}
+                extras = {POSITIVE_P_CLASS_COLUMN: [.1, .9],
+                          'positive_p_nonpositive': [.9,.1]}
                 _write_forward_score_frame(frame, path, profile=profile, score_extras=extras)
                 loaded = load_continuous_ranker_oos_score_table_from_path(str(path), profile.name)
                 self.assertIn(POSITIVE_P_CLASS_COLUMN, loaded)
@@ -654,6 +679,7 @@ class ScoreOutputCompletenessCases(TestCase):
                 with self.assertRaises(ValueError):
                     load_selection_point_in_time_score_table_from_path(str(path), experiment_profile=profile.name)
                 pit[POSITIVE_P_CLASS_COLUMN] = extras[POSITIVE_P_CLASS_COLUMN]
+                pit['positive_p_nonpositive'] = extras['positive_p_nonpositive']
                 pit.to_csv(path, index=False, compression="gzip")
                 self.assertIn(POSITIVE_P_CLASS_COLUMN, load_selection_point_in_time_score_table_from_path(
                     str(path), experiment_profile=profile.name))
@@ -665,8 +691,8 @@ class ScoreOutputCompletenessCases(TestCase):
         from services.research.oracle_artifact_contract import execution_context
         with self.assertRaises(ValueError):
             get_breakout_quality_experiment_profile("true_daily_universal_mintrade_fullcycle_netpnl_rank")
-        with self.assertRaises(ValueError):
-            get_continuous_ranker_training_policy("daily_netpnl_positive_binary_cross_entropy")
+        self.assertEqual(get_continuous_ranker_training_policy(
+            "daily_mintrade_netpnl_positive_binary_cross_entropy").categorical_class_count, 2)
         self.assertNotIn("CONT13CS_ROLL", STRATEGY_DL_SOURCES)
         self.assertIsNone(find_spec("core.oracle_positive_gate"))
         self.assertIsNone(find_spec("services.audit.positive_gate_evidence"))

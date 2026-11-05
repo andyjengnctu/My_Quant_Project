@@ -48,6 +48,7 @@ from core.breakout_quality_runtime import (
     TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_JOINT_MFE_D40_QUADRANT,
+    TRAINING_OBJECTIVE_DAILY_NETPNL_POSITIVE_BINARY,
     CONTINUOUS_RANKER_TRAINER_EVENT,
     CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
@@ -1734,29 +1735,27 @@ _EXPERIMENT_PROFILES = {
         name=DAILY_UNIVERSAL_NETPNL_POSITIVE_BINARY_PROFILE,
         optimizer_name="adam",
         training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
-        training_objective=TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
+        training_objective=TRAINING_OBJECTIVE_DAILY_NETPNL_POSITIVE_BINARY,
         continuous_target_id="daily_formal_mintrade_fullcycle_netpnl_per_seed_v1",
-        loss_name="pairwise_logistic",
-        epoch_selection_metric="mean_daily_spearman",
+        loss_name="netpnl_positive_cross_entropy",
+        epoch_selection_metric="positive_validation_cross_entropy",
         training_label_scope=TRAINING_LABEL_SCOPE_ALL,
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
         model_architecture="inception_time_v1",
-        fit_contract_version=2,
-        score_calibration="positive_rank_isotonic_validation_v1",
+        fit_contract_version=3,
     ),
     TRUE_DAILY_MINTRADE_NETPNL_POSITIVE_PROFILE: BreakoutQualityExperimentProfile(
         name=TRUE_DAILY_MINTRADE_NETPNL_POSITIVE_PROFILE,
         optimizer_name="adam",
         training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
-        training_objective=TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
+        training_objective=TRAINING_OBJECTIVE_DAILY_NETPNL_POSITIVE_BINARY,
         continuous_target_id="true_daily_universal_mintrade_fulltrade_netpnl_v1",
-        loss_name="pairwise_logistic",
-        epoch_selection_metric="mean_daily_spearman",
+        loss_name="netpnl_positive_cross_entropy",
+        epoch_selection_metric="positive_validation_cross_entropy",
         training_label_scope=TRAINING_LABEL_SCOPE_ALL,
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
         model_architecture="inception_time_v1",
-        fit_contract_version=3,
-        score_calibration="positive_rank_isotonic_validation_v1",
+        fit_contract_version=4,
     ),
     TRUE_DAILY_MINTRADE_NETPNL_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
         name=TRUE_DAILY_MINTRADE_NETPNL_PAIRWISE_PROFILE,
@@ -3447,22 +3446,20 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
     DAILY_UNIVERSAL_NETPNL_POSITIVE_BINARY_PROFILE: ContinuousRankerResearchSpec(
         profile_name=DAILY_UNIVERSAL_NETPNL_POSITIVE_BINARY_PROFILE,
         model_research_id="MR-13CP",
-        experiment_name="MR-13CP Full-cycle NetPnL Positive Ranker",
+        experiment_name="MR-13CP Full-cycle NetPnL Binary Classifier",
         phase="13CP",
         trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
         target_description=(
             "Same per-seed full-cycle matured broker NetPnL as MR-13CO; "
-            "continuous ranking plus strictly-positive calibration; censored NULL is never a loss"
+            "binary outcome NetPnL>0; censored NULL never creates a negative label"
         ),
         objective_description=(
-            "Single scalar full-list Delta-NDCG NetPnL ranker. A frozen monotone "
-            "Positive calibration of this same score is fitted from the selected "
-            "epoch's PIT-legal inner-validation predictions, never OOS. "
-            "No independent classifier, second DL source, or additional head."
+            "Independent two-class NetPnL>0 classifier with categorical cross-entropy. "
+            "Uses the same PIT-matured target and folds as the separate NetPnL ranker; "
+            "outputs P(Positive) only, never used for NetPnL ranking."
         ),
-        metric_scope="all_stock_days_formal_mintrade_fullcycle_netpnl_positive_rank",
-        score_semantic_id="daily_formal_mintrade_fullcycle_netpnl_positive_rank",
-        pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        metric_scope="all_stock_days_formal_mintrade_fullcycle_netpnl_positive_binary",
+        score_semantic_id="daily_formal_mintrade_fullcycle_netpnl_positive_probability",
         selection_pit_authorized=True,
         current_time_validation_authorized=True,
     ),
@@ -3477,14 +3474,12 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
             "positive iff raw NetPnL > 0, unfilled/unmatured are NULL."
         ),
         objective_description=(
-            "Single scalar full-list Delta-NDCG NetPnL ranker. A frozen monotone "
-            "Positive calibration of this same score is fitted from the selected "
-            "epoch's PIT-legal inner-validation predictions, never OOS. "
-            "No independent classifier, second DL source, or additional head."
+            "Independent two-class NetPnL>0 classifier with categorical cross-entropy. "
+            "Uses the same PIT-matured target and folds as the separate NetPnL ranker; "
+            "outputs P(Positive) only, never used for NetPnL ranking."
         ),
-        metric_scope="all_stock_days_true_daily_fullcycle_netpnl_positive_rank",
-        score_semantic_id="true_daily_mintrade_fullcycle_netpnl_positive_rank",
-        pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        metric_scope="all_stock_days_true_daily_fullcycle_netpnl_positive_binary",
+        score_semantic_id="true_daily_mintrade_fullcycle_netpnl_positive_probability",
         selection_pit_authorized=True,
         current_time_validation_authorized=True,
     ),
