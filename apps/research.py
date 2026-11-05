@@ -367,7 +367,45 @@ def _run_reusable_audit_method(module_id: str, method_id: str) -> int:
         )
         definition = get_formal_oracle_definition(module_id)
         preview = preview_oracle_replay_plan(definition, project_root=PROJECT_ROOT)
-        print("\n" + preview["text"])
+        # One approval matrix for both P16 and immutable Fixed-Min policy scopes.
+        # Existing signed P16 cells are not re-identified or re-executed.
+        from services.audit.fixed_min_oracle_scope import (
+            preview_fixed_min_oracle, execute_fixed_min_oracle,
+            render_fixed_min_oracle_result,
+        )
+        from services.audit.target_oracle_romd import render_replay_preflight
+        from core.audit_registry import (
+            resolve_current_oracle_comparisons, oracle_comparison_key,
+            oracle_target_semantics,
+        )
+        fixed_preview = preview_fixed_min_oracle(project_root=PROJECT_ROOT)
+        if tuple(preview["seed_set"]) != tuple(fixed_preview["seed_set"]):
+            raise ValueError("FixedMin Oracle eight-seed benchmark differs from existing Oracle")
+        registry = resolve_current_oracle_comparisons(definition.source)
+        descriptions = {oracle_comparison_key(row): oracle_target_semantics(row)
+                        for row in registry}
+        targets = tuple(preview["targets"]) + tuple(fixed_preview["targets"])
+        decisions = {**preview["preflight"], **fixed_preview["preflight"]}
+        if len(decisions) != len(preview["preflight"]) + len(fixed_preview["preflight"]):
+            raise ValueError("FixedMin Oracle target collides with historical Replay key")
+        names = {"C96": "C96", "C139": "Fixed Min (無 DL)"}
+        strategies = {"C96": "Breakout", "C139": "Breakout"}
+        selectors = {"C96": "-", "C139": "-"}
+        for key, (name, selector, entry_strategy) in descriptions.items():
+            names[key], selectors[key], strategies[key] = name, selector, entry_strategy
+        for row in definition.source["fixed_min_oracle_comparisons"]:
+            key = str(row["target"])
+            name, selector, entry_strategy = oracle_target_semantics(row)
+            names[key], selectors[key], strategies[key] = name, selector, entry_strategy
+        text = render_replay_preflight(
+            label="Fixed", seeds=list(preview["seed_set"]), targets=list(targets),
+            decisions=decisions, strategies=strategies,
+            display_targets=names, selectors=selectors,
+        )
+        print("\n" + text)
+        if fixed_preview["source_action"] != "REUSE":
+            print("Fixed Min 常數參數工件：" + fixed_preview["source_action"]
+                  + "（僅在授權後建立／補驗，無 Optimizer）")
         if preview["missing_p16"]:
             print(
                 f"前置 P16：{len(preview['seed_set']) - len(preview['missing_p16'])} 個 REUSE / "
@@ -393,6 +431,10 @@ def _run_reusable_audit_method(module_id: str, method_id: str) -> int:
         if any(row.get("status") == "CANCELLED" for row in result.values()):
             print("[Target 驗證] 未授權執行 Portfolio Replay，返回上一層。")
             return 0
+        fixed_result = execute_fixed_min_oracle(
+            project_root=PROJECT_ROOT, approved_plan=fixed_preview,
+        )
+        print("\n" + render_fixed_min_oracle_result(fixed_result))
     else:
         print("\n" + render_audit_status(
             module_id, project_root=PROJECT_ROOT, method_id=method_id,

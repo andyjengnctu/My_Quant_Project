@@ -7621,5 +7621,151 @@ class OracleEffectiveArtifactContractCases(TestCase):
                                   if state == "RUN"}, expected)
 
 
+
+class FixedMinOracleResearchContractCases(TestCase):
+    """Fixed constants must not borrow P16 Oracle receipts or score sources."""
+
+    def _signed_metrics(self, target, seed):
+        romd = 8.0 if target == "C139" else 16.0
+        yearly = [
+            {"year": str(year), "strategy_return_pct": 1.0,
+             "is_full_year": year != 2026}
+            for year in range(2021, 2027)
+        ]
+        return {
+            "target": target, "seed": seed,
+            "total_return_pct": 80.0, "annualized_return_pct": 12.0,
+            "mdd_pct": 10.0, "romd": romd, "ev_a_r": .5,
+            "win_rate_pct": 52.0, "trades": 200, "exposure_pct": 40.0,
+            "yearly": yearly,
+            **({"delta_romd_vs_c139": 8.0} if target != "C139" else {}),
+        }
+
+    def test_fixed_min_registry_and_plan_do_not_require_optimizer(self):
+        from services.audit import fixed_min_oracle_scope as fixed
+        self.assertEqual(tuple(row["strategy_arm_id"] for row in fixed._rows()),
+                         ("C140", "C141"))
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.object(fixed, "price_inventory_sha256", return_value="a" * 64) as inventory, \
+             patch.object(fixed, "_source_state", return_value="BUILD"):
+            plan = fixed.preview_fixed_min_oracle(project_root=Path(tmp))
+            self.assertEqual(len(plan["preflight"]), 24)
+            self.assertEqual(set(plan["preflight"].values()), {"RUN"})
+            self.assertEqual(plan["source_action"], "BUILD")
+            self.assertEqual(len(plan["seed_set"]), 8)
+            inventory.assert_called_once()
+            self.assertEqual(len(plan["identities"]), 24)
+            first = plan["identities"][(plan["seed_set"][0], "FixedMinTrade_NetPnL")]
+            self.assertEqual(first["fixed_min_params_signature"], fixed.fixed_min_signature())
+
+    def test_fixed_min_receipt_corruption_blocks_instead_of_false_reuse(self):
+        from services.audit import fixed_min_oracle_scope as fixed
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.object(fixed, "price_inventory_sha256", return_value="a" * 64), \
+             patch.object(fixed, "_source_state", return_value="REUSE"):
+            root = Path(tmp)
+            plan = fixed.preview_fixed_min_oracle(project_root=root)
+            seed = plan["seed_set"][0]
+            key = (seed, "C139")
+            identity = plan["identities"][key]
+            fixed._write_receipt(root, identity,
+                metrics=self._signed_metrics("C139", seed),
+                score_sha="baseline_no_score", cohort_sha="baseline_no_score")
+            after = fixed.preview_fixed_min_oracle(project_root=root)
+            self.assertEqual(after["preflight"][key], "REUSE")
+            self.assertEqual(sum(x == "RUN" for x in after["preflight"].values()), 23)
+            location = fixed._receipt_path(root, identity)
+            damaged = json.loads(location.read_text())
+            damaged["metrics"]["romd"] = 999999.0
+            location.write_text(json.dumps(damaged), encoding="utf-8")
+            with self.assertRaisesRegex(fixed.OracleBlockedError, "receipt corrupt"):
+                fixed.preview_fixed_min_oracle(project_root=root)
+
+    def test_fixed_min_pairwise_replay_and_full_reuse(self):
+        from contextlib import nullcontext
+        from services.audit import fixed_min_oracle_scope as fixed
+        from core.fixed_min_policy import fixed_min_param_payload
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            calls = []
+            ctx_calls = []
+            def fake_scenario(**kwargs):
+                calls.append(kwargs)
+                return {"stub": True}
+            def fake_metrics(_replay, *, target):
+                result = self._signed_metrics(target, -1)
+                result.pop("seed")
+                return result
+            def fake_ctx(*args, **kwargs):
+                ctx_calls.append(kwargs)
+                return nullcontext()
+            with patch.object(fixed, "price_inventory_sha256", return_value="a" * 64), \
+                 patch.object(fixed, "_source_state", return_value="REUSE"), \
+                 patch.object(fixed, "ensure_fixed_min_robustness_parameter_artifact"), \
+                 patch.object(fixed, "load_strategy_param_evaluation_view",
+                              return_value=(dict(fixed_min_param_payload(), kind="rolling_active_param_ensemble"), "b" * 64)), \
+                 patch.object(fixed, "_validate_requested_param_policy"), \
+                 patch.object(fixed, "_build_controlled_param_source_pair",
+                              return_value=("rolling_active_param_ensemble", "BASE", "RANK")), \
+                 patch.object(fixed, "get_dataset_dir", return_value=str(root)), \
+                 patch.object(fixed, "_build_truth", return_value=(
+                     {("2330", "2021-01-04"): 1.0}, "score-sha", "cohort-sha")) as truth, \
+                 patch.object(fixed, "_run_scenario", side_effect=fake_scenario), \
+                 patch.object(fixed, "_metrics", side_effect=fake_metrics), \
+                 patch.object(fixed, "audit_oracle_truth_score_context", side_effect=fake_ctx):
+                approved = fixed.preview_fixed_min_oracle(project_root=root)
+                result = fixed.execute_fixed_min_oracle(project_root=root, approved_plan=approved)
+                self.assertEqual(result["status"], "COMPLETED")
+                self.assertEqual(len(calls), 24)
+                self.assertEqual(sum(k["params"] == "BASE" for k in calls), 8)
+                self.assertEqual(sum(k["params"] == "RANK" for k in calls), 16)
+                self.assertEqual(len(ctx_calls), 16)
+                self.assertEqual(truth.call_count, 1)
+                second = fixed.preview_fixed_min_oracle(project_root=root)
+                self.assertEqual(set(second["preflight"].values()), {"REUSE"})
+                fixed.execute_fixed_min_oracle(project_root=root, approved_plan=second)
+                self.assertEqual(len(calls), 24, "REUSE must not replay already signed results")
+
+    def test_fixed_min_truth_uses_same_mature_fullcycle_netpnl_and_can_reuse(self):
+        from services.audit import fixed_min_oracle_scope as fixed
+        from core.breakout_quality_registry import get_breakout_quality_experiment_profile
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            settings, arms = fixed._settings()
+            profile_name = settings.dl_sources[arms["C140"].dl_id].experiment_profile
+            profile = get_breakout_quality_experiment_profile(profile_name)
+            group = pd.DataFrame([
+                {"ticker": "2330", "date": "2021-01-04"},
+                {"ticker": "2317", "date": "2021-01-04"},
+            ])
+            bundle = SimpleNamespace(
+                summary={"dataset": "full", "filter_id": fixed.SOURCE["filter_id"],
+                         "sample_scope": "daily_eligible_stock_days",
+                         "score_eligible_sample_count": 2},
+                target_manifest={"target_contract": {"target_id": profile.continuous_target_id}},
+                group_table=group,
+            )
+            inputs = [("2330", root / "2330.csv"), ("2317", root / "2317.csv")]
+            for _, file in inputs:
+                file.touch()
+            data = [
+                pd.DataFrame([{"ticker": "2317", "date": "2021-01-04", "realized_net_pnl": -4.0}]),
+                pd.DataFrame([{"ticker": "2330", "date": "2021-01-04", "realized_net_pnl": 12.0}]),
+            ]
+            with patch.object(fixed, "price_inventory_sha256", return_value="a" * 64), \
+                 patch.object(fixed, "load_profile_continuous_ranker_data", return_value=bundle), \
+                 patch.object(fixed, "discover_dataset_csv_inputs", return_value=(inputs, ())), \
+                 patch.object(fixed, "collect_canonical_exchange_sessions",
+                              return_value=pd.DatetimeIndex([pd.Timestamp("2021-01-04")])), \
+                 patch.object(fixed, "_run_ticker_outcomes", return_value=(data, 0, 0)) as producer:
+                identity = fixed._truth_identity(root)
+                scores, score_sha, cohort_sha = fixed._build_truth(root, identity)
+                self.assertEqual(scores[("2330", "2021-01-04")], 1.0)
+                self.assertEqual(scores[("2317", "2021-01-04")], 0.0)
+                self.assertEqual(producer.call_count, 1)
+                reused = fixed._build_truth(root, identity)
+                self.assertEqual(reused, (scores, score_sha, cohort_sha))
+                self.assertEqual(producer.call_count, 1, "Signed same identity must reuse truth")
+
 if __name__ == "__main__":
     main(verbosity=2)

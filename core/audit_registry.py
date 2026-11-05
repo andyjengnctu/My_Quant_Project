@@ -132,6 +132,13 @@ AUDIT_REUSABLE_REPORTS: dict[str, dict[str, Any]] = {
                     "DailyUniversal_MinTrade60_NetPnL": "LABEL-daily_universal_formal_min_roos_trade60_netpnl_v1",
                     "DailyUniversal_MinTrade60_NetPnL_Direct": "LABEL-daily_universal_formal_min_roos_trade60_netpnl_v1",
                 },
+                # Distinct fixed-parameter Oracle source scope.  This remains in the
+                # ONE Target Oracle Audit Registry, but must never borrow P16
+                # Replay receipts or parameter schedules.
+                "fixed_min_oracle_comparisons": (
+                    {"target": "FixedMinTrade_NetPnL", "description": "Prespecified constant Min full-cycle broker NetPnL; hindsight rank using same C139 fixed parameters", "selector": "exact", "strategy": "Breakout", "strategy_arm_id": "C140"},
+                    {"target": "FixedMinTrade_NetPnL_Direct", "description": "Same FixedMinTrade_NetPnL truth and rank; canonical Direct No-K/No-R0 selector", "selector": "direct", "strategy": "Breakout", "strategy_arm_id": "C141"},
+                ),
                 "oracle_comparisons": (
                     {"target": "MFE40_Control", "description": "40D MFE only (control, not target recommendation)", "score": "mfe", "provider": "pure_mfe40_provider", "selector": "exact"},
                     {"target": "R40", "description": "40D close-to-close terminal return divided by canonical risk budget R", "score": "terminal_r", "provider": "pure_mfe40_provider", "selector": "exact"},

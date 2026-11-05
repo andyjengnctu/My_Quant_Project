@@ -797,6 +797,39 @@ def collect_target_dl_overview(project_root: Path) -> dict[str, Any]:
                 "romd_seeds": robust[1] if robust else (),
                 "romd_benchmark": robust[2] if robust else "",
             })
+    # The same registered Oracle Audit has a distinct Fixed-Min parameter
+    # scope.  Its receipts are verified by that scope, never by P16/C96.
+    # Do not invent Oracle scores from FIT or Strategy Comparison reports.
+    from services.audit.fixed_min_oracle_scope import collect_fixed_min_oracle_results
+    from core.breakout_quality_registry import FIXED_MINTRADE_FULLCYCLE_NETPNL_PAIRWISE_PROFILE
+    fixed_results = collect_fixed_min_oracle_results(project_root=root)["metrics"]
+    fixed_profile = FIXED_MINTRADE_FULLCYCLE_NETPNL_PAIRWISE_PROFILE
+    fixed_model = get_continuous_ranker_research_spec(fixed_profile)
+    fixed_rho = _single_model_rho(*_model_paths(
+        root, filter_id=filter_id, profile=fixed_profile),
+        profile=fixed_profile, filter_id=filter_id, versions=versions)
+    if fixed_rho is None:
+        fixed_rho = (comparison_rolling.get(fixed_profile) or (None,))[0]
+    if not _rolling_fit_version_current(root, filter_id=filter_id, profile=fixed_profile):
+        fixed_rho = None
+    fixed_robust_rho, fixed_rho_seeds = robustness_rho.get(fixed_profile, (None, ()))
+    for fixed in definition.source["fixed_min_oracle_comparisons"]:
+        key = str(fixed["target"])
+        arm = str(fixed["strategy_arm_id"])
+        name, selector, entry_strategy = oracle_target_semantics(fixed)
+        observed = fixed_results.get(key) or {}
+        robust = robust_romd.get(arm)
+        rows.append({
+            "target": name, "entry_strategy": entry_strategy, "selector": selector,
+            "oracle_romd": observed.get("romd"), "win_rate_pct": observed.get("win_rate_pct"),
+            "model": fixed_model.model_research_id, "positive_model": "",
+            "rolling_rho": fixed_rho, "robustness_rho": fixed_robust_rho,
+            "rho_seeds": fixed_rho_seeds,
+            "strategy": arm, "rolling_romd": rolling_romd.get(arm),
+            "robustness_romd": robust[0] if robust else None,
+            "romd_seeds": robust[1] if robust else (),
+            "romd_benchmark": robust[2] if robust else "",
+        })
     rows.sort(key=lambda row: (
         row["oracle_romd"] is None,
         -(row["oracle_romd"] or 0.0),
