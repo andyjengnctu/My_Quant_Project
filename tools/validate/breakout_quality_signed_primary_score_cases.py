@@ -229,6 +229,15 @@ def case() -> None:
             ticker="T0004", signal_date="2021-01-04", score_path_override=str(forward),
         )
         assert found["available"] and found["score"] == scores[4]
+        # Multi-head probability profiles have required score sidecars.  Test
+        # missing-column rejection separately from the signed-score domain:
+        # otherwise an incomplete fixture fails before the [0,1] check and
+        # silently stops exercising the intended score-domain invariant.
+        _expect_rejected(lambda: load_continuous_ranker_oos_score_table_from_path(
+            str(forward), PROBABILITY_PROFILE
+        ), "raw_safety_score")
+        probability_forward = forward_frame.assign(raw_safety_score=0.5)
+        probability_forward.to_csv(forward, index=False, encoding="utf-8-sig")
         _expect_rejected(lambda: load_continuous_ranker_oos_score_table_from_path(
             str(forward), PROBABILITY_PROFILE
         ), "[0,1]")
