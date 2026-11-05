@@ -1,0 +1,55 @@
+My_Quant_Project - Target / Selector / Strategy Naming Refactor v2
+2026-11-05
+
+SOURCE ARCHIVE
+  test-branch-1_20261105_180829_4c90f210.zip
+
+THIS v2 PATCH REPLACES THE EARLIER NAMING PATCH; IT INCLUDES THE FULL v1 CHANGES.
+
+SCIENTIFIC NAMING RULES
+  Historical DailyUniversal_ (Breakout-signal truth) -> omit prefix: MinTrade_NetPnL.
+  Historical TrueDailyUniversal_ (independent daily-entry truth) -> DailyUniversal_: DailyUniversal_MinTrade_NetPnL.
+  _Positive remains part of Target and distinguishes NetPnL Positive admission.
+  _Direct is a Selector (Exact/Direct); remove from scientific Target.
+  _Control is an experiment role; remove from scientific Target.
+  Display Target / Strategy / Selector separately.
+
+EXAMPLES (LEGACY RECEIPT -> TARGET / STRATEGY / SELECTOR)
+  DailyUniversal_MinTrade_NetPnL_Direct -> MinTrade_NetPnL / Breakout / Direct
+  DailyUniversal_MinTrade_NetPnL_Positive -> MinTrade_NetPnL_Positive / Breakout / Exact
+  TrueDailyUniversal_MinTrade_NetPnL_Positive -> DailyUniversal_MinTrade_NetPnL_Positive / Breakout / Exact
+  TrueDailyUniversal_MinTrade_NetPnL_Positive::Daily -> DailyUniversal_MinTrade_NetPnL_Positive / Daily / Exact
+  TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct::Daily -> DailyUniversal_MinTrade_NetPnL_Positive / Daily / Direct
+  TrueDailyUniversal_MinTrade_NetPnL::Daily -> DailyUniversal_MinTrade_NetPnL / Daily / Exact
+  TrueDailyUniversal_MinTrade_NetPnL_Direct::Daily -> DailyUniversal_MinTrade_NetPnL / Daily / Direct
+
+SAFETY BOUNDARY
+  Display-only translation: existing signed Replay receipt keys and artifact names keep their old identity.
+  Do not rename FIT artifacts, DL Profile IDs, strategy arm IDs, cache keys, registry source entries,
+  or execution/truth source function names; this would invalidate completed REUSE and need an explicit migration.
+  A report heading was fixed to avoid incorrectly stripping the new DailyUniversal_ prefix a second time.
+  No model algorithm, truth, selector, policy, or data periods changed.
+
+IDENTITY COMPARISON: ORIGINAL SOURCE VS v2
+  Source sha: 9b34ccd78179f11f1f37403c48345c8df2ec631c04527e27eb5d3f49aca81e18  MATCH
+  Price score algorithm sha: d73b4ce20dd958cb75b094f49d6abac94d31e34ca7222fa5806675fd931964bd  MATCH
+  22 historical execution key identity sha: 2e27a67162e26364e67c44a9872041aa3b1af84c8d8831ed7f66e61e25bd0edc  MATCH
+
+REPORT CONTRACTS
+  audit.target_oracle_romd v13 (Target / Strategy / Selector)
+  research.target_dl_validation_overview v4 (Target / Strategy / Selector)
+  Report contract ledger retains historic approvals.
+
+VERIFICATION
+  75 passed: synthetic_positive_netpnl_contract_cases, synthetic_true_daily_mintrade_oracle_cases,
+             synthetic_daily_trade40_oracle_cases.
+  4 passed: Oracle publication/report + signed comparison reuse + replay identity.
+  2 passed: targeted new scientific rename and Daily report display tests.
+  Known pre-existing Oracle test failure: archived_default_oracle_source_reuses_all_56_without_current_truth_build
+  fails identically on original source archive and v2; not caused by display rename.
+  Full synthetic_target_oracle_cases suite was not completed.
+
+APPLICATION (PowerShell, adjust downloaded zip location)
+  Expand-Archive -LiteralPath 'C:\Users\User\Downloads\Quant_Naming_Refactor_20261105_v2_patch.zip' -DestinationPath 'C:\Users\User\Desktop\My_Quant_Project' -Force
+
+This ZIP contains the full naming-refactor patch (v1 + v2) with original relative paths.

@@ -700,12 +700,13 @@ PORTFOLIO_DRAWDOWN_REPORT = PersistentReportContract(
 # The current schema is declared directly; historical identities remain in
 # the compact report ledger and are not executable presentation templates.
 TARGET_ORACLE_ROMD_REPORT = PersistentReportContract(
-    report_id="audit.target_oracle_romd", version=12, role="persistent_reusable_hindsight_non_pit",
+    report_id="audit.target_oracle_romd", version=13, role="persistent_reusable_hindsight_non_pit",
     menu_path=("Research", "Target 驗證"),
     sections=(
         S("oracle_performance", 1, "Oracle Performance (8-seed mean)", tables=(T("performance", (
             C("target", "Target", alignment="left"),
             C("strategy", "Strategy", alignment="left"),
+            C("selector", "Selector", alignment="left"),
             C("total_return_pct", "Return Mean", 2, "%", "higher", "signed_pct"),
             C("annualized_return_pct", "Ann. Mean", 2, "%", "higher", "signed_pct"),
             C("mdd_pct", "MDD Mean", 2, "%", "lower", "pct"),
@@ -814,7 +815,7 @@ STRATEGY_CONSISTENCY_METRIC_KEYS = (
 # neutral and unavailable cells remain unstyled (no schema/metric changes).
 TARGET_DL_VALIDATION_OVERVIEW_REPORT = PersistentReportContract(
     report_id="research.target_dl_validation_overview",
-    version=3,
+    version=4,
     role="read_only_local_completed_report_summary",
     menu_path=("Research", "Target Validation", "Target x DL Overview"),
     sections=(
@@ -822,6 +823,7 @@ TARGET_DL_VALIDATION_OVERVIEW_REPORT = PersistentReportContract(
             T("target_dl", (
                 C("target", "Target", alignment="left"),
                 C("entry_strategy", "Strategy", alignment="left"),
+                C("selector", "Selector", alignment="left"),
                 C("oracle_romd", "Oracle RoMD", 2, preference="higher", format_kind="number"),
                 C("win_rate_pct", "Win Rate", 2, "%", "higher", "pct"),
                 C("model", "DL Model", alignment="left"),

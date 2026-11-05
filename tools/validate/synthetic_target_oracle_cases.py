@@ -2059,14 +2059,14 @@ class OracleAuditContractCases(TestCase):
             shutil.copy2(ROOT / "doc/scientific_contracts/REPORT_CONTRACT_VERSIONS.json", ledger_path)
             ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
             entry = next(x for x in ledger["reports"] if x["report_id"] == "audit.target_oracle_romd")
-            self.assertEqual(entry["versions"][-1]["version"], 12)
+            self.assertEqual(entry["versions"][-1]["version"], 13)
             entry["versions"].append({
-                "contract_id": "audit.target_oracle_romd@v13",
-                "version": 13,
+                "contract_id": "audit.target_oracle_romd@v14",
+                "version": 14,
                 "fingerprint": "1" * 16,
             })
             ledger_path.write_text(json.dumps(ledger, ensure_ascii=False), encoding="utf-8")
-            self.assertEqual(load_report_contract_versions(project)["audit.target_oracle_romd"][-1]["version"], 13)
+            self.assertEqual(load_report_contract_versions(project)["audit.target_oracle_romd"][-1]["version"], 14)
             self.assertEqual(report_contract_version_history_violations(project, approved), [])
             entry["versions"][7]["fingerprint"] = "0" * 16
             ledger_path.write_text(json.dumps(ledger, ensure_ascii=False), encoding="utf-8")
@@ -2096,16 +2096,17 @@ class OracleAuditContractCases(TestCase):
             with patch.object(oracle, "build_report", return_value=result):
                 published = oracle.run_formal_audit(self.definition, project_root=base, quiet=True)
             self.assertEqual(published["schema_version"], 8)
-            self.assertEqual(published["report_contract_id"], "audit.target_oracle_romd@v12")
+            self.assertEqual(published["report_contract_id"], "audit.target_oracle_romd@v13")
             latest = base / "outputs/audit" / self.definition.output_subdir / "latest"
             body = (latest / "audit.md").read_text(encoding="utf-8")
             for name in oracle._oracle_comparison_plan(self.definition)["aliases"]:
                 if name in dict(LEGACY_ORACLE_TARGETS):
-                    self.assertIn("**" + name + "**", body)
+                    self.assertIn("**" + oracle._oracle_display_name(name) + "**", body)
             self.assertIn("**R40**", body)
             self.assertIn("**T40**", body)
             self.assertIn("**T40-MFE**", body)
-            self.assertIn("**T40-MFE_Direct**", body)
+            self.assertNotIn("**T40-MFE_Direct**", body)
+            self.assertIn("Selector", body)
             self.assertNotIn("60D Mature Oracle", body)
             self.assertNotIn("**CH20_EqualRank**", body)
             self.assertIn("MAE40 >= 1R", body)
@@ -2119,7 +2120,16 @@ class OracleAuditContractCases(TestCase):
             expanded_body = oracle.render_result(expanded, target="markdown")
             self.assertIn(f"Oracle treatments: {len(LEGACY_ORACLE_TARGETS) + 1} ", expanded_body)
             self.assertIn("## 2. Target Definitions\n", expanded_body)
-            self.assertEqual(published["report_contract_id"], "audit.target_oracle_romd@v12")
+            daily_receipt = "TrueDailyUniversal_MinTrade_NetPnL_Positive"
+            daily_row = dict(summary(daily_receipt), strategy="Daily")
+            daily_report = {**result, "oracles": [*result["oracles"], daily_row],
+                            "definitions": {**result["definitions"],
+                                            daily_receipt: "Independent daily-entry NetPnL with Positive"}}
+            daily_body = oracle.render_result(daily_report, target="markdown")
+            self.assertIn("### DailyUniversal_MinTrade_NetPnL_Positive", daily_body)
+            self.assertNotIn("### TrueDailyUniversal_MinTrade_NetPnL_Positive", daily_body)
+            self.assertIn("**DailyUniversal_MinTrade_NetPnL_Positive**", daily_body)
+            self.assertEqual(published["report_contract_id"], "audit.target_oracle_romd@v13")
             json_data = json.loads((latest / "audit.json").read_text(encoding="utf-8"))
             self.assertEqual(len(json_data["oracles"]), len(LEGACY_ORACLE_TARGETS))
             self.assertIn("**MFE40**", body)

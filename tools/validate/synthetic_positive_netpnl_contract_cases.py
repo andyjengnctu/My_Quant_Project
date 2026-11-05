@@ -28,7 +28,8 @@ from core.strategy_compare_policy import get_strategy_comparison_settings
 from config.strategy_compare import STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE
 from services.research.target_oracle_application import get_formal_oracle_definition
 from core.audit_policy import get_active_audit_module_id
-from core.audit_registry import resolve_current_oracle_comparisons, oracle_comparison_key
+from core.audit_registry import (resolve_current_oracle_comparisons, oracle_comparison_key,
+                                 oracle_target_semantics)
 from core.report_contract_versions import load_report_contract_versions
 from core.research_report_contract import table_contract
 from services.audit.target_oracle_romd import (
@@ -54,6 +55,35 @@ class PositiveNetPnlContractCases(TestCase):
         self.assertTrue(np.isnan(labels[4]))
         with self.assertRaises(ValueError):
             positive_labels([[2.0]])
+
+    def test_scientific_target_and_selector_names_do_not_mutate_signed_receipt_ids(self):
+        from core.audit_registry import (oracle_scientific_target_name,
+                                         oracle_target_semantics)
+        d = get_formal_oracle_definition(get_active_audit_module_id())
+        rows = resolve_current_oracle_comparisons(d.source)
+        self.assertEqual(len(rows), len({oracle_target_semantics(x) for x in rows}))
+        by_legacy = {oracle_comparison_key(x): x for x in rows}
+        cases = (
+            ("MFE40_Control", "MFE40", "Exact", "Breakout"),
+            ("MFE40_Direct", "MFE40", "Direct", "Breakout"),
+            ("DailyUniversal_MinTrade_NetPnL", "MinTrade_NetPnL", "Exact", "Breakout"),
+            ("DailyUniversal_MinTrade_NetPnL_Direct", "MinTrade_NetPnL", "Direct", "Breakout"),
+            ("DailyUniversal_MinTrade_NetPnL_Positive", "MinTrade_NetPnL_Positive", "Exact", "Breakout"),
+            ("DailyUniversal_MinTrade_NetPnL_Positive_Direct", "MinTrade_NetPnL_Positive", "Direct", "Breakout"),
+            ("TrueDailyUniversal_MinTrade_NetPnL_Positive", "DailyUniversal_MinTrade_NetPnL_Positive", "Exact", "Breakout"),
+            ("TrueDailyUniversal_MinTrade_NetPnL_Positive::Daily", "DailyUniversal_MinTrade_NetPnL_Positive", "Exact", "Daily"),
+            ("TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct", "DailyUniversal_MinTrade_NetPnL_Positive", "Direct", "Breakout"),
+            ("TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct::Daily", "DailyUniversal_MinTrade_NetPnL_Positive", "Direct", "Daily"),
+            ("TrueDailyUniversal_MinTrade_NetPnL::Daily", "DailyUniversal_MinTrade_NetPnL", "Exact", "Daily"),
+            ("TrueDailyUniversal_MinTrade_NetPnL_Direct::Daily", "DailyUniversal_MinTrade_NetPnL", "Direct", "Daily"),
+        )
+        for receipt, target, selector, strategy in cases:
+            with self.subTest(receipt=receipt):
+                self.assertEqual(oracle_target_semantics(by_legacy[receipt]), (target, selector, strategy))
+                self.assertEqual(oracle_scientific_target_name(by_legacy[receipt]["target"]), target)
+                self.assertEqual(oracle_comparison_key(by_legacy[receipt]), receipt)
+        self.assertNotEqual(oracle_target_semantics(by_legacy["DailyUniversal_MinTrade_NetPnL"])[0],
+                            oracle_target_semantics(by_legacy["DailyUniversal_MinTrade_NetPnL_Positive"])[0])
 
     def test_current_positive_models_are_continuous_single_rankers(self):
         from core.breakout_quality_registry import get_breakout_quality_experiment_profile
@@ -240,6 +270,8 @@ class PositiveNetPnlContractCases(TestCase):
             self.assertTrue(true_daily)
             self.assertTrue({name + "::Daily" for name in true_daily}.isdisjoint(values))
             self.assertTrue(true_daily.isdisjoint(values))  # Old unverified binding is not re-certified.
+            scientific_daily = {oracle_target_semantics(row)[0] for row in comparisons
+                                if row.get("strategy") == "Daily"}
             ledger = Path(temp) / "doc/scientific_contracts/REPORT_CONTRACT_VERSIONS.json"
             ledger.parent.mkdir(parents=True)
             ledger.write_bytes((ROOT / "doc/scientific_contracts/REPORT_CONTRACT_VERSIONS.json").read_bytes())
@@ -247,21 +279,25 @@ class PositiveNetPnlContractCases(TestCase):
             rendered = render_target_dl_overview(overview)
             self.assertIn("Oracle: end_to_end_v2 | N=8 | 2021-01-01 ~ 2026-03-02", rendered)
             self.assertNotIn("no completed matching local report", rendered)
-            rows = [row for row in overview["rows"] if row["target"] == "MFE40_Control"]
+            rows = [row for row in overview["rows"] if row["target"] == "MFE40" and row["selector"] == "Exact"]
             self.assertTrue(rows)
             self.assertTrue(all(row["oracle_romd"] == 24.62 for row in rows))
             self.assertTrue(all(row["oracle_romd"] is None for row in overview["rows"]
-                                if row["target"] in {positive_exact, positive_direct}))
+                                if row["target"] == "MinTrade_NetPnL_Positive"))
             self.assertTrue(all(row["oracle_romd"] is None for row in overview["rows"]
-                                if row["target"] in true_daily and row["entry_strategy"] == "Daily"))
+                                if row["target"] in scientific_daily and row["entry_strategy"] == "Daily"))
             self.assertTrue(all(row["oracle_romd"] is None for row in overview["rows"]
-                                if row["target"] in true_daily and row["entry_strategy"] == "Breakout"))
+                                if row["target"] in scientific_daily and row["entry_strategy"] == "Breakout"))
+            daily_overview_rows = [row for row in overview["rows"]
+                                   if row["target"] in scientific_daily]
+            self.assertTrue(daily_overview_rows)
+            self.assertTrue(all(row["oracle_romd"] is None for row in daily_overview_rows))
             self.assertEqual(overview["rows"][0]["entry_strategy"], "Breakout")
             self.assertEqual({row["entry_strategy"] for row in overview["rows"]
-                              if row["target"] in true_daily}, {"Breakout", "Daily"})
+                              if row["target"] in scientific_daily}, {"Breakout", "Daily"})
             self.assertEqual(
-                table_contract("research.target_dl_validation_overview", "comparison", "target_dl").headers[:2],
-                ("Target", "Strategy"),
+                table_contract("research.target_dl_validation_overview", "comparison", "target_dl").headers[:3],
+                ("Target", "Strategy", "Selector"),
             )
 
             # A newly completed, matching report may publish both Positive rows.

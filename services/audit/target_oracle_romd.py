@@ -123,6 +123,7 @@ PERIOD_STATS_IMPLEMENTATION = "full_year_calendar_verified_20261026"
 # Resolve comparison membership from the Audit definition on every run.
 from core.audit_registry import (
     AUDIT_REUSABLE_REPORTS, resolve_current_oracle_comparisons, oracle_comparison_key,
+    oracle_target_semantics, oracle_scientific_target_name,
 )
 
 _ORACLE_CATALOG_SOURCE = AUDIT_REUSABLE_REPORTS["breakout_quality"]["target_oracle_romd"]["source"]
@@ -353,8 +354,8 @@ def _validated_execution_gates(definition, plan: Mapping[str, Any]) -> dict[str,
         raise OracleBlockedError(f"NON-PIT Oracle execution policy BLOCKED: {exc}") from exc
 
 
-# Display labels are intentionally separate from the immutable replay-cache keys.
-ORACLE_DISPLAY_NAMES = {"MFE40_Control": "MFE40"}
+# Scientific naming comes from the canonical Oracle Registry only.
+# Signed Replay receipt keys are never derived from these presentation values.
 
 
 def _canonical_score_map_sha256(scores: Mapping[tuple[str, str], float]) -> str:
@@ -412,7 +413,8 @@ def _oracle_target_strategy(definition, target: str) -> str:
 
 
 def _oracle_display_name(name: str) -> str:
-    return ORACLE_DISPLAY_NAMES.get(str(name), str(name))
+    """Historic report names use the same canonical normalization owner."""
+    return oracle_scientific_target_name(str(name))
 
 
 
@@ -1556,6 +1558,7 @@ def render_replay_preflight(
     reuse_diagnostic: str | None = None,
     strategies: Mapping[str, str] | None = None,
     display_targets: Mapping[str, str] | None = None,
+    selectors: Mapping[str, str] | None = None,
 ) -> str:
     """Render the one complete identity-backed Replay authorization plan.
 
@@ -1564,10 +1567,11 @@ def render_replay_preflight(
     """
     counts = {action: sum(action == value for value in decisions.values())
               for action in ("REUSE", "RUN", "BLOCKED")}
-    headers = ("Target", "Strategy", *(f"S{i + 1}" for i in range(len(seeds))))
+    headers = ("Target", "Strategy", "Selector", *(f"S{i + 1}" for i in range(len(seeds))))
     rows = [
-        ((display_targets or {}).get(target, target),
+        ((display_targets or {}).get(target, _oracle_display_name(target)),
          (strategies or {}).get(target, "Breakout"),
+         (selectors or {}).get(target, "-"),
          *(styled_workflow_status(decisions[(seed, target)]) for seed in seeds))
         for target in targets
     ]
@@ -3370,9 +3374,15 @@ def _run_single_stage_oracle(
                 # exists to certify; do NOT claim REUSE from a file inventory.
                 decisions[(seed, target)] = "RUN"
                 run_causes[(seed, target)] = "缺少合法 P16 參數來源"
+    scoped_rows = {str(row["target"]): row
+                   for row in definition.source["oracle_comparisons"]}
     preflight = render_replay_preflight(
         label="Fixed", seeds=seed_set, targets=list(targets), decisions=decisions,
         strategies={target: _oracle_target_strategy(definition, target) for target in targets},
+        display_targets={target: (oracle_target_semantics(scoped_rows[target])[0]
+                                  if target in scoped_rows else target) for target in targets},
+        selectors={target: (oracle_target_semantics(scoped_rows[target])[1]
+                            if target in scoped_rows else "-") for target in targets},
         reuse_diagnostic=_render_reuse_run_reasons(
             decisions=decisions, reasons=run_causes),
     )
@@ -3588,6 +3598,9 @@ def _oracle_combined_preview(definition, *, project_root: Path) -> tuple[dict[st
     ordered_keys = ["C96"]
     strategies = {"C96": "Breakout"}
     display_targets = {"C96": "C96"}
+    selectors = {"C96": "-"}
+    registry_rows = {oracle_comparison_key(row): row for row in
+                     resolve_current_oracle_comparisons(definition.source)}
     for strategy, preview in previews:
         if (tuple(preview["seed_set"]) != seeds or
                 tuple(preview["missing_p16"]) != pending or
@@ -3611,7 +3624,8 @@ def _oracle_combined_preview(definition, *, project_root: Path) -> tuple[dict[st
             if key not in strategies:
                 ordered_keys.append(key)
                 strategies[key] = strategy
-                display_targets[key] = target
+                row = registry_rows[key]
+                display_targets[key], selectors[key], _ = oracle_target_semantics(row)
     # The visible rows follow canonical Registry order, not internal scope order.
     registry_keys = ("C96", *(oracle_comparison_key(r) for r in
                               resolve_current_oracle_comparisons(definition.source)))
@@ -3620,6 +3634,7 @@ def _oracle_combined_preview(definition, *, project_root: Path) -> tuple[dict[st
     text = render_replay_preflight(
         label="Fixed", seeds=list(seeds), targets=list(registry_keys),
         decisions=decisions, strategies=strategies, display_targets=display_targets,
+        selectors=selectors,
     )
     return {"status": "PREVIEW", "preflight": decisions, "text": text,
             "missing_p16": pending, "seed_set": seeds,
@@ -3805,11 +3820,24 @@ def render_result(report: Mapping[str, Any], *, target: str) -> str:
     yearly_table = sections[2].tables[0]
     paired_table = sections[3].tables[0]
     baseline = dict(report["baseline"])
-    items = [dict(baseline, target="C96 Same-Window", strategy="Breakout", wins="-"),
-             *[dict(item, strategy=item.get("strategy", "Breakout"),
-                    target=_oracle_display_name(item["target"]),
+    # Presentation projection only; signed observations and Replay keys are not touched.
+    approved_rows = {oracle_comparison_key(row): row for row in
+                     resolve_current_oracle_comparisons(_ORACLE_CATALOG_SOURCE)}
+    def _present(item):
+        strategy = str(item.get("strategy", "Breakout"))
+        legacy = str(item["target"])
+        key = oracle_comparison_key({"target": legacy, "strategy": strategy})
+        scientific = approved_rows.get(key)
+        if scientific is not None:
+            name, selector, _ = oracle_target_semantics(scientific)
+        else:
+            # Historical-only receipts still render, but never gain a new
+            # active science or Selector identity merely from their label.
+            name, selector = _oracle_display_name(legacy), "-"
+        return dict(item, strategy=strategy, target=name, selector=selector,
                     wins=f'{item["positive_seed_count"]}/{item["seeds"]}')
-               for item in report["oracles"]]]
+    items = [dict(baseline, target="C96 Same-Window", strategy="Breakout",
+                  selector="-", wins="-"), *[_present(item) for item in report["oracles"]]]
     # Presentation-only sort; preserve the canonical comparison/Replay order.
     items.sort(key=lambda row: (float(row["romd"]), str(row["target"]),
                                 str(row.get("strategy", "Breakout"))))
@@ -3839,9 +3867,15 @@ def render_result(report: Mapping[str, Any], *, target: str) -> str:
              "| " + " | ".join(perf_table.headers) + " |",
              "|" + "|".join("---" for _ in perf_table.headers) + "|"]
     lines.extend("| " + " | ".join(row) + " |" for row in rows)
+    # Definitions describe *Targets* once, not each Exact/Direct selector.
+    # Published receipt names remain in the signed JSON for full provenance.
+    target_definitions: dict[str, str] = {}
+    for legacy_key, desc in report["definitions"].items():
+        name = _oracle_display_name(legacy_key)
+        if name not in target_definitions:
+            target_definitions[name] = str(desc).replace("D40", "MAE40")
     lines.extend(["", f"## {sections[1].display_title}",
-                  *[f"- **{_oracle_display_name(key)}** - {desc.replace('D40', 'MAE40')}"
-                    for key, desc in report["definitions"].items()],
+                  *[f"- **{name}** - {desc}" for name, desc in target_definitions.items()],
                   "", f"## {sections[2].display_title}"])
     all_years = [year for item in items for year in item["yearly"]]
     year_cells = iter(format_comparison_rows(
@@ -3851,9 +3885,11 @@ def render_result(report: Mapping[str, Any], *, target: str) -> str:
     from collections import Counter
     repeated_targets = Counter(str(item["target"]) for item in items)
     for item in items:
-        suffix = (f' ({item["strategy"]})'
+        suffix = (f' ({item["strategy"]} / {item["selector"]})'
                   if repeated_targets[str(item["target"])] > 1 else '')
-        lines.append(f'### {_oracle_display_name(item["target"])}{suffix}')
+        # Already a scientific name; the legacy-to-scientific mapping is
+        # intentionally one-way and must never be applied a second time.
+        lines.append(f'### {item["target"]}{suffix}')
         lines.extend(("| " + " | ".join(yearly_table.headers) + " |",
                       "|" + "|".join("---" for _ in yearly_table.headers) + "|"))
         for _year in item["yearly"]:
@@ -3863,8 +3899,9 @@ def render_result(report: Mapping[str, Any], *, target: str) -> str:
                   "|" + "|".join("---" for _ in paired_table.headers) + "|"])
     baselines = {int(x["seed"]): float(x["romd"]) for x in baseline["seed_observations"]}
     paired_rows = [
-        dict(obs, target=_oracle_display_name(item["target"]) + (
-            f' ({item["strategy"]})' if repeated_targets[str(item["target"])] > 1 else ''),
+        dict(obs, target=str(item["target"]) + (
+            f' ({item["strategy"]} / {item["selector"]})'
+            if repeated_targets[str(item["target"])] > 1 else ''),
              c96_romd=baselines[int(obs["seed"])])
         for item in items if item["target"] != "C96 Same-Window"
         for obs in item["seed_observations"]

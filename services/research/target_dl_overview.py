@@ -14,7 +14,7 @@ from typing import Any, Mapping
 
 from core.audit_policy import get_active_audit_module_id
 from core.audit_registry import (resolve_current_oracle_comparisons, oracle_comparison_key,
-                                 oracle_supervised_target_id)
+                                 oracle_supervised_target_id, oracle_target_semantics)
 from core.breakout_quality_registry import (
     SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES,
     get_predicted_upside_context_contract,
@@ -728,8 +728,10 @@ def collect_target_dl_overview(project_root: Path) -> dict[str, Any]:
             })
     entry_strategies = {oracle_comparison_key(item): str(item.get("strategy", "Breakout"))
                         for item in comparisons}
-    display_targets = {oracle_comparison_key(item): str(item["target"])
+    display_targets = {oracle_comparison_key(item): oracle_target_semantics(item)[0]
                        for item in comparisons}
+    display_selectors = {oracle_comparison_key(item): oracle_target_semantics(item)[1]
+                         for item in comparisons}
     rows = []
     for target in targets:
         # The canonical scientific profile registry already provides a stable
@@ -743,6 +745,7 @@ def collect_target_dl_overview(project_root: Path) -> dict[str, Any]:
             rows.append({
                 "target": display_targets.get(target, target),
                 "entry_strategy": entry_strategies.get(target, "Breakout"),
+                "selector": display_selectors.get(target, "-"),
                 "oracle_romd": metrics.get("oracle_romd"),
                 "win_rate_pct": metrics.get("win_rate_pct"),
                 "model": model.get("model") or "",

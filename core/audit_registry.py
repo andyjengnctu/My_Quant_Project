@@ -231,6 +231,55 @@ AUDIT_MODULES: dict[str, dict[str, Any]] = {
 }
 
 
+def oracle_scientific_target_name(legacy_receipt_key: str) -> str:
+    """One-way normalization of historical Replay IDs into scientific Target names.
+
+    Only for semantic reporting/validation; never for constructing receipt IDs.
+    """
+    name = str(legacy_receipt_key)
+    if name.endswith("_Direct"):
+        name = name[:-len("_Direct")]
+    if name == "MFE40_Control":
+        name = "MFE40"
+    # Historical names are only inputs to this one-way display mapping.
+    # The old DailyUniversal_ meant Breakout; the independent TrueDaily truth
+    # is now scientifically called DailyUniversal_ (not TrueDailyUniversal_).
+    if name.startswith("TrueDailyUniversal_"):
+        name = "DailyUniversal_" + name[len("TrueDailyUniversal_"):]
+    elif name.startswith("DailyUniversal_"):
+        name = name[len("DailyUniversal_"):]
+    return name
+
+
+def oracle_target_semantics(row: Mapping[str, Any]) -> tuple[str, str, str]:
+    """Scientific Target / Selector / Strategy, separate from signed Replay keys.
+
+    Existing ``row['target']`` is an immutable execution receipt key, not the
+    scientific Target displayed to users.  This is the sole legacy-name
+    boundary; it must not feed score/truth/portfolio/reuse fingerprints.
+
+    Positive is a scientific admission property of Target.  Direct and
+    Control are *not* target properties.  Historical DailyUniversal_ means
+    Breakout-signal truth (prefix removed); historical TrueDailyUniversal_
+    means independent daily-entry truth (displayed as DailyUniversal_).
+    """
+    raw = str(row.get("target") or "")
+    selector = str(row.get("selector") or "").lower()
+    strategy = str(row.get("strategy", "Breakout"))
+    if not raw or selector not in {"exact", "direct"} or strategy not in {"Breakout", "Daily"}:
+        raise ValueError(f"Invalid Oracle naming dimensions: {raw}/{selector}/{strategy}")
+    if raw.endswith("_Direct") != (selector == "direct"):
+        raise ValueError(f"Legacy receipt selector mismatch: {raw} / {selector}")
+    name = oracle_scientific_target_name(raw)
+    if raw.startswith("DailyUniversal_") and strategy != "Breakout":
+        raise ValueError(f"DailyUniversal is historically Breakout: {raw}")
+    if "_Control" in name or name.endswith("_Direct"):
+        raise ValueError(f"Non-target suffix remains in scientific Target: {name}")
+    if name.endswith("_Positive") != bool(row.get("positive_output")):
+        raise ValueError(f"Positive Target/admission contract mismatch: {raw}")
+    return name, selector.capitalize(), strategy
+
+
 def oracle_comparison_key(row: Mapping[str, Any]) -> str:
     """Stable Target x Strategy comparison key, not a new Target identity.
 
@@ -261,6 +310,7 @@ def resolve_current_oracle_comparisons(source: dict[str, Any]) -> tuple[dict[str
         | set(source.get("historical_only_oracle_targets") or ())
     )
     keys: set[str] = set()
+    scientific_keys: set[tuple[str, str, str]] = set()
     active: list[dict[str, Any]] = []
     for row in registered:
         if not isinstance(row, Mapping):
@@ -273,6 +323,10 @@ def resolve_current_oracle_comparisons(source: dict[str, Any]) -> tuple[dict[str
             raise ValueError(f"Historical-only Oracle target cannot be executable: {name}")
         keys.add(key)
         if row.get("enabled", True):
+            scientific_key = oracle_target_semantics(row)
+            if scientific_key in scientific_keys:
+                raise ValueError(f"Duplicate Target / Selector / Strategy: {scientific_key}")
+            scientific_keys.add(scientific_key)
             active.append(dict(row))
     return tuple(active)
 
@@ -282,6 +336,8 @@ __all__ = [
     "AUDIT_SCHEMA_VERSION",
     "resolve_current_oracle_comparisons",
     "oracle_comparison_key",
+    "oracle_target_semantics",
+    "oracle_scientific_target_name",
 ]
 
 
