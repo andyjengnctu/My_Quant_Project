@@ -257,6 +257,41 @@ class StrategyPromotionMVPTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "binding 已改變"):
                 assert_active_trading_release_ready(self.root)
 
+    def test_retired_fixed_min_has_no_live_target_model_strategy_or_oracle(self):
+        """Retirement removes execution paths, not the historical study records."""
+        from config.breakout_quality import (
+            BREAKOUT_QUALITY_MODEL_TEST_PROFILES,
+            BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE,
+        )
+        from core.breakout_quality_registry import (
+            _EXPERIMENT_PROFILES, _CONTINUOUS_RANKER_RESEARCH_SPECS,
+        )
+        from services.research.target_oracle_application import get_formal_oracle_definition
+        from core.strategy_compare_policy import get_strategy_multi_seed_robustness_settings
+
+        settings = get_strategy_comparison_settings(STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE)
+        self.assertTrue({"C139", "C140", "C141"}.isdisjoint(settings.arms))
+        self.assertTrue({"C139", "C140", "C141"}.isdisjoint(
+            {arm.arm_id for arm in settings.enabled_arms}))
+        self.assertNotIn("CONT13CV_ROLL", settings.dl_sources)
+        self.assertNotIn("fixed_min_constant_v1", settings.parameter_sources)
+        self.assertNotIn("MR-13CV", {name for name, _ in BREAKOUT_QUALITY_MODEL_TEST_PROFILES})
+        self.assertNotEqual(BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE[0], "MR-13CV")
+        profile = "fixed_mintrade_fullcycle_netpnl_full_list_ndcg_pairwise"
+        self.assertNotIn(profile, _EXPERIMENT_PROFILES)
+        self.assertNotIn(profile, _CONTINUOUS_RANKER_RESEARCH_SPECS)
+        self.assertNotIn("fixed_min_oracle_comparisons",
+                         get_formal_oracle_definition("breakout_quality").source)
+        robustness = get_strategy_multi_seed_robustness_settings(settings.profile_id)
+        self.assertTrue({"C139", "C140", "C141"}.isdisjoint(robustness.stochastic_arm_ids))
+        for path in (
+            "core/fixed_min_policy.py",
+            "services/breakout_quality/fixed_min_source.py",
+            "services/audit/fixed_min_oracle_scope.py",
+            "tools/validate/synthetic_fixed_min_cases.py",
+        ):
+            self.assertFalse((Path(__file__).resolve().parents[2] / path).exists())
+
     def test_all_options_exactly_match_compare_suite(self):
         settings = get_strategy_comparison_settings(STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE)
         self.assertEqual(
@@ -264,24 +299,6 @@ class StrategyPromotionMVPTest(unittest.TestCase):
             [arm.arm_id for arm in settings.enabled_arms],
         )
         self.assertFalse(next(arm for arm in current_strategy_rules() if arm["arm_id"] == "C97")["trading_supported"])
-
-    def test_research_only_fixed_min_is_visible_but_not_trading_capable(self):
-        """Do not borrow a canonical Optimizer profile for fixed constants."""
-        from core.strategy_promotion import current_strategy_rule
-        settings = get_strategy_comparison_settings(STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE)
-        enabled = {arm.arm_id for arm in settings.enabled_arms}
-        for arm_id in ("C139", "C140", "C141"):
-            if arm_id not in enabled:
-                continue
-            rule = current_strategy_rule(arm_id)
-            self.assertFalse(rule["trading_supported"])
-            self.assertIsNone(rule["training_profile_id"])
-            self.assertIsNone(rule["parameter_set_identity"])
-            self.assertTrue(any("Research-only" in msg for msg in rule["trading_blockers"]))
-            approve_current_strategy_rule(self.root, arm_id)
-            with self.assertRaisesRegex(RuntimeError, "Research-only"):
-                stage_trading_strategy_rule(self.root, arm_id)
-            self.assertIsNone(load_trading_release_state(self.root)["pending"])
 
     def test_approval_requires_rolling_evidence_and_pins_run(self):
         approval = approve_current_strategy_rule(self.root, "C98")

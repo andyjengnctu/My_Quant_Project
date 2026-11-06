@@ -439,7 +439,7 @@ class StrategyRobustnessUnitCases(unittest.TestCase):
             baseline.write_text("trade_id\n", encoding="utf-8")
             job = {
                 "profile_id": "broker_cash_dl_conversion_rolling",
-                "arm_id": "C140", "seed": 693545351,
+                "arm_id": "C123", "seed": 693545351,
                 "arm_order": 32, "seed_order": 1,
                 "comparison_start": "2021-01-01", "comparison_end": "2026-03-02",
                 "pair_dir": str(root / "replay"),
@@ -462,12 +462,12 @@ class StrategyRobustnessUnitCases(unittest.TestCase):
         from services.research import strategy_multi_seed_robustness as robust
         settings, cfg, _, seeds, _ = _registered_fixture()
         seed = seeds[0]
-        baseline, model = settings.arms["C139"], settings.arms["C140"]
+        baseline, model = settings.arms["C96"], settings.arms["C123"]
         plan = RobustnessWorkPlan.build(
             fingerprint="fixture", units={(baseline.arm_id, seed), (model.arm_id, seed)},
             reuse_units={(baseline.arm_id, seed)}, dependencies={model.arm_id: (model.dl_id,)},
         )
-        saved = {"arm_id": baseline.arm_id, "seed": seed, "return_over_max_drawdown": 2.29,
+        saved = {"arm_id": baseline.arm_id, "seed": seed, "return_over_max_drawdown": 8.36,
                  "selected_epoch": 0, "fold_count": None}
         years = [{"arm_id": baseline.arm_id, "seed": seed, "year": 2021,
                   "return_pct": 4.0, "is_complete_year": True}]

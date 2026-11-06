@@ -876,7 +876,6 @@ def _validate_strategy_comparison_parameter_sources(settings: StrategyComparison
                 "optimizer_validation_budget_refit_strategy_params",
                 "optimizer_fixed_multiseed_strategy_params",
                 "optimizer_raw_price_strategy_params",
-                "research_fixed_min_constant_params",
             },
             validation_profile_cache=validation_profile_cache,
         )

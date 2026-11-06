@@ -14,7 +14,6 @@ from .synthetic_param_cases import (
     validate_synthetic_single_backtest_not_gated_by_own_history_case,
     validate_use_compounding_failfast_guardrail_case,
 )
-from .synthetic_fixed_min_cases import validate_fixed_min_end_to_end_contract_case
 from .synthetic_history_cases import (
     validate_synthetic_setup_index_prev_day_only_case,
 )
@@ -408,7 +407,6 @@ def _entry(validator, *, layer, cost_class):
 
 def get_synthetic_validator_entries():
     return [
-        _entry(validate_fixed_min_end_to_end_contract_case, layer="strategy_contract", cost_class="fast"),
         _entry(validate_synthetic_same_day_buy_sell_forbidden_case, layer="core_invariant", cost_class="fast"),
         _entry(validate_synthetic_intraday_reprice_forbidden_case, layer="core_invariant", cost_class="fast"),
         _entry(validate_synthetic_no_intraday_switch_after_failed_fill_case, layer="core_invariant", cost_class="fast"),

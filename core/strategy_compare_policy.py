@@ -181,7 +181,6 @@ _ROBUSTNESS_PARAMETER_BUILDER_TYPES = frozenset({
     "optimizer_validation_budget_refit_strategy_params",
     "optimizer_fixed_multiseed_strategy_params",
     "optimizer_raw_price_strategy_params",
-    "research_fixed_min_constant_params",
 })
 
 

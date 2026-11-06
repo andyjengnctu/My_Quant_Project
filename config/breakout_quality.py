@@ -114,8 +114,8 @@ BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "daily_universal_no_time_full_lis
 # Restore the last approved valid research profile without changing its identity.
 # All historical MR checkpoints and audit results remain intact.
 BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE = (
-    "MR-13CV",
-    "fixed_mintrade_fullcycle_netpnl_full_list_ndcg_pairwise",
+    "MR-13CU",
+    "true_daily_universal_mintrade_fullcycle_netpnl_full_list_ndcg_pairwise",
 )
 # Compatibility alias for call sites that only need the executable profile slug.
 BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = (

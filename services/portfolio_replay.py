@@ -84,10 +84,8 @@ def _replay_preparation_key(
             tuple((str(member["params_signature"]), str(member.get("member_index") or ""))
                   for member in members),
         ))
-    # A non-Optimizer source (e.g. Fixed Min) legitimately has no pinned
-    # raw-universe boundary. Preserve that absence in the session cache key:
-    # the context builder then derives its minimum rows from the signed params.
-    # Never coerce None to 0 or a P16 boundary, which could change the universe.
+    # A source may legitimately have no pinned raw-universe boundary. Keep
+    # that absence distinct from an explicit integer filter in the cache key.
     universe_boundary = coerce_raw_universe_required_min_rows(
         raw_universe_required_min_rows, allow_none=True,
     )

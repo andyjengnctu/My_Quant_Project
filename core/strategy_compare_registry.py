@@ -134,8 +134,7 @@ STRATEGY_COMPARE_SUITES = {
     "broker_cash_dl_conversion_v1": {
         "filter_by_current_model_list": True,
         # Single scientific matrix shared by OOS/Rolling and multi-seed robustness.
-        # Historical DL arms reuse C96/P16; Fixed Min C139-C141 have their own
-        # prespecified constant param source, never the Optimizer/P16 teacher.
+        # Historical DL arms reuse C96/P16; source identity remains registry-owned.
         # Historical AO/CH/CI/Direct arms remain registered but filtered by the
         # canonical Model Compare list; C104 is explicitly retired from this suite.
         # Current CJ/CK Direct and K/AH Exact/Direct use the same P16 broker-cash
@@ -143,7 +142,7 @@ STRATEGY_COMPARE_SUITES = {
         "arm_ids": (
             "C96", "C97", "C98", "C99", "C100", "C101", "C102", "C103",
             "C105", "C106", "C107", "C108", "C109", "C110",
-            "C111", "C112", "C115", "C116", "C117", "C118", "C119", "C120", "C121", "C122", "C123", "C124", "C125", "C126", "C133", "C134", "C135", "C136", "C137", "C138", "C139", "C140", "C141",
+            "C111", "C112", "C115", "C116", "C117", "C118", "C119", "C120", "C121", "C122", "C123", "C124", "C125", "C126", "C133", "C134", "C135", "C136", "C137", "C138",
         ),
         # A compact connected contrast graph supports each selected model
         # versus C96 plus the matched CK/CJ label contrast. Historical AO/CH
@@ -159,7 +158,6 @@ STRATEGY_COMPARE_SUITES = {
             "C109-C107", "C110-C108", "C111-C112", "C115-C116", "C105-C117", "C106-C118", "C119-C120", "C121-C122", "C123-C124", "C125-C126", "C123-C125", "C124-C126", "C121-C123", "C122-C124", "C133-C134", "C135-C136", "C133-C135", "C134-C136",
             "C110-C109", "C111-C115", "C112-C116",
             "C137-C96", "C138-C96", "C137-C138", "C137-C133", "C138-C134",
-            "C139-C96", "C140-C139", "C141-C139", "C140-C123", "C140-C141",
         ),
         "display_name_bases": {
             "C96": "Min Base-Finalist-Best / Broker-Cash",
@@ -196,9 +194,6 @@ STRATEGY_COMPARE_SUITES = {
             "C136": "Min MR-13CU Rank + MR-13CT Positive Direct No-K No-R0 / Broker-Cash",
             "C137": "Daily Min MR-13CU NetPnL Rank Exact K/R0 / Broker-Cash",
             "C138": "Daily Min MR-13CU NetPnL Rank Direct No-K No-R0 / Broker-Cash",
-            "C139": "Fixed Min (no DL) / Broker-Cash",
-            "C140": "Fixed Min MR-13CV NetPnL Exact K/R0 / Broker-Cash",
-            "C141": "Fixed Min MR-13CV NetPnL Direct No-K No-R0 / Broker-Cash",
         },
     },
     "non_dl_c85_same_signal_revalidation_v1": {
@@ -999,13 +994,12 @@ STRATEGY_COMPARE_PROFILES = {
     },
 }
 
-# Canonical broker-cash DL strategy conversion work stage.  Reuse the registered
-# No-DL parameter truth and PIT timing; the six DL arms have no new optimizer stage.
+# Canonical broker-cash DL strategy conversion work stage. Reuse the registered
+# No-DL parameter truth and PIT timing; the DL arms have no new optimizer stage.
 # These are new profile identities, not in-place mutations of historical No-DL runs.
 _BROKER_CASH_DL_ARM_IDS = tuple(
     arm_id for arm_id in STRATEGY_COMPARE_SUITES["broker_cash_dl_conversion_v1"]["arm_ids"]
     if arm_id not in STRATEGY_COMPARE_SUITES["non_dl_broker_cash_v1"]["arm_ids"]
-    and arm_id not in {"C139", "C140", "C141"}
 )
 for _mode in ("oos", "rolling"):
     _baseline_profile = STRATEGY_COMPARE_PROFILES[f"non_dl_broker_cash_{_mode}"]
@@ -1481,16 +1475,6 @@ STRATEGY_PARAM_SOURCES = {
 # not expand the production/current menu contract. The resolver merges them for
 # profiles that explicitly opt in.
 STRATEGY_EXPERIMENTAL_PARAM_SOURCES = {
-    "fixed_min_constant_v1": {
-        "path_template": "models/research/breakout_quality/strategy_params/fixed_min_constant_v1/{param_filename}",
-        "identity_manifest_path": None,
-        "description": "Prespecified non-optimized Fixed Min constants 200/14/1.5/2/3.5; all years same.",
-        "trained_with_dl_id": None,
-        "consumption_evaluation_mode": "rolling",
-        "artifact_contract": {"fixed_min_contract_id": "fixed_min_constant_v1",
-                              "fixed_min_contract_version": 1},
-        "builder": {"enabled": True, "builder_type": "research_fixed_min_constant_params", "options": {}},
-    },
     # New scientific fee treatment uses one physical parameter truth for OOS/Rolling.
     # Compatibility builder name also accepts registered single-seed profiles;
     # the Optimizer is still the sole producer and validates profile capability.
@@ -2272,16 +2256,6 @@ STRATEGY_DL_SOURCES = {
             "options": {"resume": True, "allow_stale_source": False},
         },
     },
-    "CONT13CV_ROLL": {
-        "filter_id": "breakout_quality_v1",
-        "model_architecture": "inception_time_v1",
-        "experiment_profile": "fixed_mintrade_fullcycle_netpnl_full_list_ndcg_pairwise",
-        "threshold": None, "score_source": "selection_point_in_time",
-        "single_seed_strategy_conversion_authorized": True,
-        "description": "MR-13CV: predeclared Fixed Min full-cycle NetPnL; expanding FIT history, no P16 Optimizer.",
-        "forward_scores_builder": {"enabled": True, "builder_type": "selection_pit_from_existing_folds",
-                                   "options": {"resume": True, "allow_stale_source": False}},
-    },
     "CONT13CP_ROLL": {
         "filter_id": "breakout_quality_v1",
         "model_architecture": "inception_time_v1",
@@ -2814,38 +2788,6 @@ STRATEGY_COMPARE_ARMS = {
         },
         "robustness_role": "off", "entry_strategy": "Daily",
     },
-    "C139": {
-        "replay_contract_version": 1,
-        "name": "Fixed Min (no DL) / Broker-Cash",
-        "description": "Prespecified non-optimized Fixed Min constants for all dates; exact baseline portfolio.",
-        "param_source": "fixed_min_constant_v1", "param_policy": "base-finalist-best",
-        "rule_policy": "all_off", "dl_enabled": False,
-        "dl_id": None, "dl_runtime_mode": None, "robustness_role": "off",
-    },
-    "C140": {
-        "replay_contract_version": 1,
-        "name": "Fixed Min MR-13CV NetPnL Exact K/R0 / Broker-Cash",
-        "description": "Fixed Min full-cycle broker NetPnL PIT rank; same fixed parameters as C139.",
-        "param_source": "fixed_min_constant_v1", "param_policy": "base-finalist-best",
-        "rule_policy": "all_off", "dl_enabled": True, "dl_id": "CONT13CV_ROLL",
-        "dl_runtime_mode": "resource-aware-continuous-score-constrained-optimal",
-        "dl_runtime_options": {"preserve_k_r0": True,
-                               "constrained_solver": "exact_branch_and_bound_v1",
-                               "selection_only": True},
-        "robustness_role": "off",
-    },
-    "C141": {
-        "replay_contract_version": 1,
-        "name": "Fixed Min MR-13CV NetPnL Direct No-K No-R0 / Broker-Cash",
-        "description": "Identical Fixed Min PIT rank; only Direct selector differs from C140.",
-        "param_source": "fixed_min_constant_v1", "param_policy": "base-finalist-best",
-        "rule_policy": "all_off", "dl_enabled": True, "dl_id": "CONT13CV_ROLL",
-        "dl_runtime_mode": "resource-aware-continuous-score-no-k-no-r0",
-        "dl_runtime_options": {"preserve_k": False, "preserve_r0": False,
-                               "selection_order": "model_score_desc_then_canonical_tie_v1",
-                               "selection_only": True},
-        "robustness_role": "off",
-    },
     "C95": {
         "name": "Full Adjusted Price Corrected Same-Signal Agree 4x300",
         "description": (
@@ -3280,11 +3222,6 @@ STRATEGY_COMPARE_CONTRASTS = {
     "C123-C125": {"left": "C123", "right": "C125", "description": "CO rank without/with independent CP classifier: Exact"},
     "C124-C126": {"left": "C124", "right": "C126", "description": "CO rank without/with independent CP classifier: Direct"},
     "C121-C122": {"left": "C121", "right": "C122", "description": "Same MR-13CN PIT score, Exact versus Direct"},
-    "C139-C96": {"left": "C139", "right": "C96", "description": "Prespecified Fixed Min versus rolling Min, no DL"},
-    "C140-C139": {"left": "C140", "right": "C139", "description": "Fixed Min NetPnL DL Exact versus same constant Min baseline"},
-    "C141-C139": {"left": "C141", "right": "C139", "description": "Fixed Min NetPnL DL Direct versus same constant Min baseline"},
-    "C140-C123": {"left": "C140", "right": "C123", "description": "Fixed versus rolling Min NetPnL, Exact K/R0"},
-    "C140-C141": {"left": "C140", "right": "C141", "description": "Same Fixed Min DL Exact versus Direct selector"},
     "C123-C124": {"left": "C123", "right": "C124", "description": "Same MR-13CO PIT score, Exact versus Direct"},
     "C121-C123": {"left": "C121", "right": "C123", "description": "Full-cycle NetR versus NetPnL, same P16 Exact"},
     "C122-C124": {"left": "C122", "right": "C124", "description": "Full-cycle NetR versus NetPnL, same P16 Direct"},

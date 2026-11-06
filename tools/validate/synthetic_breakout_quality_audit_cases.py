@@ -160,7 +160,6 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     # Research [1] -> Target Validation [1] shows the Target x Seed matrix
     # BEFORE the one execution approval, even if canonical P16 inputs are missing.
     from services.audit import target_oracle_romd as oracle_handler
-    from services.audit import fixed_min_oracle_scope as fixed_oracle_handler
     from services.audit.target_oracle_romd import render_replay_preflight
     from services.research import target_oracle_application as oracle_application
     from core.audit_registry import (
@@ -171,54 +170,34 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     registered_oracle = oracle_application.get_formal_oracle_definition("breakout_quality")
     benchmark_seeds = tuple(get_robustness_benchmark_policy_snapshot()["resolved_seeds"])
 
-    # The live Research [1] route renders ONE approved matrix containing the
-    # historical P16 scope and the independent fixed-parameter scope. Keep the
-    # fixture independent of the user's local signed receipts and OHLCV files.
+    # The live Research [1] route owns the P16 Oracle matrix and one approval.
+    # The fixture is independent of local signed receipts and market data.
     current_rows = resolve_current_oracle_comparisons(registered_oracle.source)
     original_key = oracle_comparison_key(current_rows[0])
     existing_targets = ("C96", original_key)
-    fixed_rows = tuple(registered_oracle.source["fixed_min_oracle_comparisons"])
-    fixed_targets = ("C139", *(str(row["target"]) for row in fixed_rows))
     old_decisions = {
         (seed, target): ("REUSE" if seed in benchmark_seeds[:4] else "RUN")
         for seed in benchmark_seeds for target in existing_targets
     }
-    fixed_decisions = {
-        (seed, target): "RUN"
-        for seed in benchmark_seeds for target in fixed_targets
-    }
     preview_plan = {
-        "status": "PREVIEW", "text": "P16-only preview must not be displayed",
+        "status": "PREVIEW", "text": "synthetic certified Oracle preview",
         "seed_set": benchmark_seeds, "missing_p16": benchmark_seeds[4:],
         "producer_kwargs": {"benchmark_id": "end_to_end_v2"},
         "targets": existing_targets, "preflight": old_decisions,
     }
-    fixed_plan = {
-        "seed_set": benchmark_seeds, "targets": fixed_targets,
-        "preflight": fixed_decisions, "source_action": "REUSE",
-    }
-    names = {"C96": "C96", "C139": "Fixed Min (無 DL)"}
-    strategies = {"C96": "Breakout", "C139": "Breakout"}
-    selectors = {"C96": "-", "C139": "-"}
+    names = {"C96": "C96"}
+    strategies = {"C96": "Breakout"}
+    selectors = {"C96": "-"}
     for row in current_rows:
         key = oracle_comparison_key(row)
         names[key], selectors[key], strategies[key] = oracle_target_semantics(row)
-    for row in fixed_rows:
-        key = str(row["target"])
-        names[key], selectors[key], strategies[key] = oracle_target_semantics(row)
     preview = render_replay_preflight(
         label="Fixed", seeds=list(benchmark_seeds),
-        targets=list(existing_targets + fixed_targets),
-        decisions={**old_decisions, **fixed_decisions},
+        targets=list(existing_targets), decisions=old_decisions,
         strategies=strategies, display_targets=names, selectors=selectors,
     )
     route_console = io.StringIO()
     prompts = []
-
-    def fake_fixed_executor(*, project_root, approved_plan):
-        assert approved_plan is fixed_plan
-        assert project_root == research_app.PROJECT_ROOT
-        return {"status": "COMPLETED", "metrics": {}}
     executions = []
     # Root Enter -> Target submenu Enter -> Oracle approval Enter ->
     # Target submenu 0 -> Research root 0.  Menu navigation must not count
@@ -240,8 +219,6 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     with patch("builtins.input", side_effect=input_after_plan), \
          patch.object(research_app, "render_audit_status") as expensive_status, \
          patch.object(oracle_handler, "preview_oracle_replay_plan", return_value=preview_plan) as preview_owner, \
-         patch.object(fixed_oracle_handler, "preview_fixed_min_oracle", return_value=fixed_plan) as fixed_preview_owner, \
-         patch.object(fixed_oracle_handler, "execute_fixed_min_oracle", side_effect=fake_fixed_executor) as fixed_executor, \
          patch.object(oracle_application, "ensure_authorized_oracle_parameters") as ensure, \
          patch.object(research_app, "run_enabled_audits", side_effect=fake_target_runner) as oracle_runner, \
          patch.object(research_app, "render_latest_audit_summary", return_value="LATEST"), \
@@ -252,7 +229,6 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         "target_validation_runs_once_from_research_target_submenu_enter",
         route_rc == 0 and preview_owner.call_count == 1
         and ensure.call_count == 1 and oracle_runner.call_count == 1
-        and fixed_preview_owner.call_count == 1 and fixed_executor.call_count == 1
         and oracle_runner.call_args.kwargs.get("method_id") == oracle_method_id
         and callable(oracle_runner.call_args.kwargs.get("preflight_approval"))
         and oracle_runner.call_args.kwargs.get("preflight_display") == "summary"
@@ -277,34 +253,6 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         and executions == ["replayed missing arms"]
         and "LATEST" in root_text,
     )
-
-    # Incompatible multi-scope plans must fail closed before approval. A
-    # synthetic P16-vs-FixedMin seed mismatch or receipt-key collision must
-    # never silently reuse, authorize, or re-run a historical result.
-    for incompatible_fixed_plan in (
-        {**fixed_plan, "seed_set": benchmark_seeds[:-1]},
-        {**fixed_plan, "targets": (original_key, *fixed_targets[1:]),
-         "preflight": {
-             (seed, (original_key if target == "C139" else target)): action
-             for (seed, target), action in fixed_decisions.items()
-         }},
-    ):
-        with patch.object(oracle_handler, "preview_oracle_replay_plan", return_value=preview_plan), \
-             patch.object(fixed_oracle_handler, "preview_fixed_min_oracle", return_value=incompatible_fixed_plan), \
-             patch.object(oracle_application, "ensure_authorized_oracle_parameters") as refused_producer, \
-             patch.object(research_app, "run_enabled_audits") as refused_p16, \
-             patch.object(fixed_oracle_handler, "execute_fixed_min_oracle") as refused_fixed, \
-             patch("builtins.input", side_effect=AssertionError("must not ask for approval")), \
-             redirect_stdout(io.StringIO()):
-            refused = raises_expected(
-                ValueError,
-                lambda: research_app._run_reusable_audit_method("breakout_quality", oracle_method_id),
-            )
-        check_true(
-            "target_mixed_scope_plan_rejects_incompatible_seed_or_replay_key_before_execution",
-            refused and refused_producer.call_count == 0
-            and refused_p16.call_count == 0 and refused_fixed.call_count == 0,
-        )
 
     # The second submenu item must only consume existing reports; navigating
     # to the overview is not authorization to FIT, build P16, or run Replay.
@@ -335,8 +283,6 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     cancellation = io.StringIO()
     with patch("builtins.input", return_value="0") as cancel_input, \
          patch.object(oracle_handler, "preview_oracle_replay_plan", return_value=preview_plan), \
-         patch.object(fixed_oracle_handler, "preview_fixed_min_oracle", return_value=fixed_plan), \
-         patch.object(fixed_oracle_handler, "execute_fixed_min_oracle", side_effect=fake_fixed_executor) as fixed_cancelled, \
          patch.object(oracle_application, "ensure_authorized_oracle_parameters") as producer, \
          patch.object(research_app, "render_audit_status") as status, \
          patch.object(research_app, "run_enabled_audits") as cancelled_runner, \
@@ -346,7 +292,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     check_true(
         "target_single_enter_cancel_is_before_any_expensive_work",
         cancel_input.call_count == 1 and producer.call_count == 0
-        and cancelled_runner.call_count == 0 and fixed_cancelled.call_count == 0
+        and cancelled_runner.call_count == 0
         and not latest.called and not status.called
         and cancellation.getvalue().count(preview) == 1
         and "未授權執行" in cancellation.getvalue(),
@@ -377,8 +323,6 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     changed_plan_console = io.StringIO()
     with patch("builtins.input", return_value="") as single_input, \
          patch.object(oracle_handler, "preview_oracle_replay_plan", return_value=preview_plan), \
-         patch.object(fixed_oracle_handler, "preview_fixed_min_oracle", return_value=fixed_plan), \
-         patch.object(fixed_oracle_handler, "execute_fixed_min_oracle", side_effect=fake_fixed_executor) as fixed_after_failed_p16, \
          patch.object(oracle_application, "ensure_authorized_oracle_parameters") as producer, \
          patch.object(research_app, "run_enabled_audits", side_effect=changed_plan), \
          patch.object(research_app, "render_latest_audit_summary") as latest, \
@@ -391,7 +335,6 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         "target_exact_verified_plan_runs_without_more_confirmation",
         changed_plan_refused and single_input.call_count == 1
         and producer.call_count == 1 and len(verified_calls) == 1
-        and fixed_after_failed_p16.call_count == 0
         and changed_plan_console.getvalue().count(preview) == 1
         and not latest.called,
     )
@@ -403,8 +346,6 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         truth_prompts.append((prompt, preview in missing_truth_view.getvalue()))
         return "0"
     with patch.object(oracle_handler, "preview_oracle_replay_plan", return_value=preview_plan) as planner, \
-         patch.object(fixed_oracle_handler, "preview_fixed_min_oracle", return_value=fixed_plan) as fixed_planner, \
-         patch.object(fixed_oracle_handler, "execute_fixed_min_oracle", side_effect=fake_fixed_executor) as fixed_executor, \
          patch.object(oracle_application, "ensure_authorized_oracle_parameters") as producer, \
          patch.object(oracle_handler, "_execute_single_stage_missing") as expensive, \
          patch("builtins.input", side_effect=abort_after_matrix), \
@@ -431,8 +372,6 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         return {"target_oracle_romd": {"status": "COMPLETED"}}
     with patch("builtins.input", side_effect=one_stage_input), \
          patch.object(oracle_handler, "preview_oracle_replay_plan", return_value=preview_plan), \
-         patch.object(fixed_oracle_handler, "preview_fixed_min_oracle", return_value=fixed_plan), \
-         patch.object(fixed_oracle_handler, "execute_fixed_min_oracle", side_effect=fake_fixed_executor), \
          patch.object(oracle_application, "ensure_authorized_oracle_parameters") as producer, \
          patch.object(research_app, "run_enabled_audits", side_effect=one_stage_runner) as approved_runner, \
          patch.object(research_app, "render_latest_audit_summary", return_value="LATEST") as approved_latest, \
