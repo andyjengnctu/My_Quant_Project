@@ -220,7 +220,7 @@ def audit_oracle_truth_score_context(
             raise ValueError("Oracle score start requires an information-date lookup")
     if _ORACLE_TRUTH_SCORES.get() is not None:
         raise RuntimeError("Oracle Audit不得巢狀覆寫未來真值score")
-    from core.positive_netpnl_contract import requires_positive_score
+    from core.positive_score_admission import requires_positive_score
     requires_positive = requires_positive_score(dict(ranking_options or {}))
     if requires_positive != (positive_scores is not None):
         raise ValueError("Oracle dual-output score requires matching Positive score map")
@@ -327,19 +327,26 @@ def resolve_breakout_quality_candidate_rank(
             "score_date": date, "filter_id": str(filter_id),
             "score_source": SCORE_SOURCE_AUDIT_ORACLE_FUTURE_TRUTH,
         }
-        from core.positive_netpnl_contract import requires_positive_score
+        from core.positive_score_admission import requires_positive_score, uses_primary_positive_classifier
         if requires_positive_score(dict(context.ranking_options or {})):
             positive_values = _ORACLE_POSITIVE_SCORES.get()
             if positive_values is None:
                 raise RuntimeError("Oracle Positive score output is missing")
             positive_value = positive_values.get(key)
             available = positive_value is not None and math.isfinite(float(positive_value))
-            payload.update({
-                "positive_probability": float(positive_value) if available else None,
-                "positive_available": bool(available),
-                "positive_score_date": date,
-                "positive_score_source": SCORE_SOURCE_AUDIT_ORACLE_FUTURE_TRUTH,
-            })
+            if uses_primary_positive_classifier(context.ranking_options):
+                payload.update({
+                    "score": float(positive_value) if available else None,
+                    "available": bool(available),
+                    "unavailable_reason": "" if available else "missing_positive_truth",
+                })
+            else:
+                payload.update({
+                    "positive_probability": float(positive_value) if available else None,
+                    "positive_available": bool(available),
+                    "positive_score_date": date,
+                    "positive_score_source": SCORE_SOURCE_AUDIT_ORACLE_FUTURE_TRUTH,
+                })
         return payload
     if context.score_source == SCORE_SOURCE_CANONICAL_RUNTIME:
         lookup_date = _candidate_score_lookup_date(
@@ -469,8 +476,8 @@ def resolve_breakout_quality_candidate_rank(
                 "safety_model_architecture": safety_architecture,
                 "safety_experiment_profile": safety_profile,
             })
-        from core.positive_netpnl_contract import requires_positive_score
-        if requires_positive_score(options):
+        from core.positive_score_admission import requires_positive_score, uses_primary_positive_classifier
+        if requires_positive_score(options) and not uses_primary_positive_classifier(options):
             positive_source = str(options.get("positive_score_source") or "").strip()
             positive_filter = str(options.get("positive_filter_id") or "").strip()
             positive_arch = str(options.get("positive_model_architecture") or "").strip()

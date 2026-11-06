@@ -21,6 +21,7 @@ from core.breakout_quality_policy import (
 )
 from core.buy_sort import (
     BREAKOUT_QUALITY_RANKING_POLICY_SCORE,
+    BREAKOUT_QUALITY_RANKING_POLICY_POSITIVE_ONLY_DEFAULT,
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL,
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0,
     SUPPORTED_BREAKOUT_QUALITY_RANKING_POLICIES,
@@ -152,9 +153,10 @@ def audit_oracle_ranking_policy_context(
     allowed = {
         BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL,
         BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0,
+        BREAKOUT_QUALITY_RANKING_POLICY_POSITIVE_ONLY_DEFAULT,
     }
     if ranking_policy not in allowed:
-        raise ValueError("Oracle Audit只允許canonical Exact K/R0 或 No-K/No-R0 ranking policy")
+        raise ValueError("Oracle Audit只允許正式 Exact／Direct／Default Positive selector policy")
     context = BreakoutQualityRankingSourceContext(
         score_source=SCORE_SOURCE_AUDIT_ORACLE_FUTURE_TRUTH,
         ranking_policy=ranking_policy,

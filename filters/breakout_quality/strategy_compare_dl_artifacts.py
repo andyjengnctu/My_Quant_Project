@@ -142,9 +142,9 @@ def resolve_arm_runtime_dl_source_ids(
         source_ids.append(safety_dl_id)
 
 
-    from core.positive_netpnl_contract import requires_positive_score
+    from core.positive_score_admission import requires_positive_score, uses_primary_positive_classifier
     options = dict(arm.dl_runtime_options or {})
-    if requires_positive_score(options):
+    if requires_positive_score(options) and not uses_primary_positive_classifier(options):
         positive_dl_id = str(options["positive_dl_id"])
         if positive_dl_id not in settings.dl_sources or positive_dl_id == primary:
             raise ValueError(f"arm {arm.arm_id} requires an independent registered Positive DL")

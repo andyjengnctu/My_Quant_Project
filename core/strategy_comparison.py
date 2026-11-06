@@ -13,6 +13,7 @@ from core.file_integrity import canonical_json_sha256
 
 
 STRATEGY_DL_RUNTIME_MODE_HARD_FILTER = 'hard-filter'
+STRATEGY_DL_RUNTIME_MODE_POSITIVE_ONLY_DEFAULT = _buy_sort.BREAKOUT_QUALITY_RANKING_POLICY_POSITIVE_ONLY_DEFAULT
 STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_BINARY = _buy_sort.BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY
 STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_BINARY_BASKET = _buy_sort.BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY_BASKET
 STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS = _buy_sort.BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS
@@ -38,6 +39,7 @@ STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_NO_R0_CONSTRAIN
 STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_PARETO_NO_R0_CONSTRAINED_OPTIMAL = _buy_sort.BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_PARETO_NO_R0_CONSTRAINED_OPTIMAL
 SUPPORTED_STRATEGY_DL_RUNTIME_MODES = (
     STRATEGY_DL_RUNTIME_MODE_HARD_FILTER,
+    STRATEGY_DL_RUNTIME_MODE_POSITIVE_ONLY_DEFAULT,
     *_buy_sort.RESOURCE_AWARE_BREAKOUT_QUALITY_RANKING_POLICY_ORDER,
 )
 
@@ -1177,9 +1179,32 @@ def _validate_strategy_comparison_arm_runtime(settings: StrategyComparisonSettin
                 )
             if options.get("selection_only") is not True:
                 raise ValueError(f"arm {key} Excess-Alpha constrained必須selection_only=True")
-        from core.positive_netpnl_contract import requires_positive_score, POSITIVE_PROBABILITY_THRESHOLD
+        from core.positive_score_admission import (
+            requires_positive_score, uses_primary_positive_classifier,
+            POSITIVE_P_CLASS_COLUMN, POSITIVE_PROBABILITY_THRESHOLD,
+        )
+        if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_POSITIVE_ONLY_DEFAULT and not uses_primary_positive_classifier(options):
+            raise ValueError(f"arm {key} Default Positive selector requires primary classifier-only admission")
         if requires_positive_score(options):
             from core.breakout_quality_registry import get_breakout_quality_experiment_profile
+            if uses_primary_positive_classifier(options):
+                source = settings.dl_sources[arm.dl_id]
+                profile = get_breakout_quality_experiment_profile(source.experiment_profile)
+                from core.breakout_quality_runtime import get_continuous_ranker_training_policy
+                policy = get_continuous_ranker_training_policy(profile.training_objective)
+                if (arm.dl_runtime_mode != STRATEGY_DL_RUNTIME_MODE_POSITIVE_ONLY_DEFAULT
+                        or source.score_source != "selection_point_in_time"
+                        or options.get("selection_only") is not True
+                        or options.get("primary_score_column") != POSITIVE_P_CLASS_COLUMN
+                        or options.get("positive_score_column") != POSITIVE_P_CLASS_COLUMN
+                        or options.get("positive_probability_threshold") != POSITIVE_PROBABILITY_THRESHOLD
+                        or policy.loss_handler != "categorical_cross_entropy"
+                        or policy.categorical_class_count != 2
+                        or policy.categorical_primary_class != 1
+                        or policy.uses_pairwise_loss
+                        or POSITIVE_P_CLASS_COLUMN not in policy.categorical_score_columns):
+                    raise ValueError(f"arm {key} requires one genuine binary PIT classifier and Default ordering")
+                return
             if arm.dl_runtime_mode not in {
                 STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL,
                 STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0,

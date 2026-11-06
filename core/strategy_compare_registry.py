@@ -142,7 +142,7 @@ STRATEGY_COMPARE_SUITES = {
         "arm_ids": (
             "C96", "C97", "C98", "C99", "C100", "C101", "C102", "C103",
             "C105", "C106", "C107", "C108", "C109", "C110",
-            "C111", "C112", "C115", "C116", "C117", "C118", "C119", "C120", "C121", "C122", "C123", "C124", "C125", "C126", "C133", "C134", "C135", "C136", "C137", "C138", "C142", "C143",
+            "C111", "C112", "C115", "C116", "C117", "C118", "C119", "C120", "C121", "C122", "C123", "C124", "C125", "C126", "C133", "C134", "C135", "C136", "C137", "C138", "C144",
         ),
         # A compact connected contrast graph supports each selected model
         # versus C96 plus the matched CK/CJ label contrast. Historical AO/CH
@@ -158,7 +158,7 @@ STRATEGY_COMPARE_SUITES = {
             "C109-C107", "C110-C108", "C111-C112", "C115-C116", "C105-C117", "C106-C118", "C119-C120", "C121-C122", "C123-C124", "C125-C126", "C123-C125", "C124-C126", "C121-C123", "C122-C124", "C133-C134", "C135-C136", "C133-C135", "C134-C136",
             "C110-C109", "C111-C115", "C112-C116",
             "C137-C96", "C138-C96", "C137-C138", "C137-C133", "C138-C134",
-            "C142-C96", "C143-C96", "C142-C143", "C142-C107", "C143-C109",
+            "C144-C96",
         ),
         "display_name_bases": {
             "C96": "Min Base-Finalist-Best / Broker-Cash",
@@ -195,8 +195,7 @@ STRATEGY_COMPARE_SUITES = {
             "C136": "Min MR-13CU Rank + MR-13CT Positive Direct No-K No-R0 / Broker-Cash",
             "C137": "Daily Min MR-13CU NetPnL Rank Exact K/R0 / Broker-Cash",
             "C138": "Daily Min MR-13CU NetPnL Rank Direct No-K No-R0 / Broker-Cash",
-            "C142": "Min MR-13CJ T40 Rank + MR-13CW Positive Exact K/R0 / Broker-Cash",
-            "C143": "Min MR-13CJ T40 Rank + MR-13CW Positive Direct No-K No-R0 / Broker-Cash",
+            "C144": "Min MR-13CW Positive-only Default / Broker-Cash",
         },
     },
     "non_dl_c85_same_signal_revalidation_v1": {
@@ -2303,7 +2302,7 @@ STRATEGY_DL_SOURCES = {
         "single_seed_strategy_conversion_authorized": True,
         "description": (
             "MR-13CW independent T40>0 two-class PIT classifier; "
-            "C142/C143 rank exclusively with the existing MR-13CJ T40 source."
+            "C144 uses only this PIT classifier to admit candidates; C142/C143 are historical."
         ),
         "forward_scores_builder": {"enabled": True, "builder_type": "selection_pit_from_existing_folds",
                                    "options": {"resume": True, "allow_stale_source": False}},
@@ -2837,6 +2836,23 @@ STRATEGY_COMPARE_ARMS = {
         },
         "robustness_role": "off",
     },
+    "C144": {
+        "replay_contract_version": 1,
+        "name": "Min MR-13CW T40 Positive-only Default Selector / Broker-Cash",
+        "description": "Only the independent PIT CW two-class P(T40>0)>0.5 admits Breakout candidates. No Rank DL or continuous-score ordering; same C96 Default buy sort, P16, cash, costs and exits.",
+        "param_source": "min_best_broker_cash_rolling_experiment",
+        "param_policy": "base-finalist-best", "rule_policy": "all_off",
+        "dl_enabled": True, "dl_id": "CONT13CW_ROLL",
+        "dl_runtime_mode": "positive-only-default",
+        "dl_runtime_options": {
+            "positive_source_mode": "primary_classifier",
+            "primary_score_column": "positive_p_positive",
+            "positive_score_column": "positive_p_positive",
+            "positive_probability_threshold": 0.5,
+            "selection_only": True,
+        },
+        "robustness_role": "off",
+    },
     "C95": {
         "name": "Full Adjusted Price Corrected Same-Signal Agree 4x300",
         "description": (
@@ -3273,6 +3289,7 @@ STRATEGY_COMPARE_CONTRASTS = {
     "C142-C143": {"left": "C142", "right": "C143", "description": "Same CJ rank and CW classifier; Exact versus Direct"},
     "C142-C107": {"left": "C142", "right": "C107", "description": "Same CJ T40 PIT rank/P16 Exact: with versus without CW Positive gate"},
     "C143-C109": {"left": "C143", "right": "C109", "description": "Same CJ T40 PIT rank/P16 Direct: with versus without CW Positive gate"},
+    "C144-C96": {"left": "C144", "right": "C96", "description": "CW PIT binary Positive gate with untouched Default C96 candidate ordering and cash allocation"},
     "C123-C125": {"left": "C123", "right": "C125", "description": "CO rank without/with independent CP classifier: Exact"},
     "C124-C126": {"left": "C124", "right": "C126", "description": "CO rank without/with independent CP classifier: Direct"},
     "C121-C122": {"left": "C121", "right": "C122", "description": "Same MR-13CN PIT score, Exact versus Direct"},

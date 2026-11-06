@@ -251,7 +251,7 @@ def _oracle_comparison_plan(definition) -> dict[str, Any]:
         # Removing a row does not free its name for a different recipe.
         if name in _ORACLE_RETIRED_TARGETS or str(entry.get("score_source") or "") in _ORACLE_RETIRED_TARGETS:
             raise OracleBlockedError(f"Oracle retired Target identity不得重新啟用或改作其他score：{name}")
-        if selector not in {"exact", "direct"}:
+        if selector not in {"exact", "direct", "default"}:
             raise OracleBlockedError(f"Oracle comparison selector未支援：{name} {selector}")
         # Scientific target names are immutable. A previous name cannot be
         # reused for a different recipe or score source by changing the list.
@@ -451,7 +451,21 @@ def _target_reference_arm(definition, settings, plan, target, exact, direct):
     arm = settings.arms[arm_id]
     if arm.entry_strategy != str(selected.get("strategy", "Breakout")):
         raise OracleBlockedError(f"Oracle formal arm entry strategy mismatch: {target}/{arm_id}")
-    base = direct if plan["selectors"].get(target) == "direct" else exact
+    selector = plan["selectors"].get(target)
+    if selector == "default":
+        from core.positive_score_admission import uses_primary_positive_classifier, requires_positive_score
+        options = dict(arm.dl_runtime_options or {})
+        baseline = settings.arms[str(definition.source["baseline_arm_id"])]
+        if (not arm.dl_enabled or arm.dl_runtime_mode != "positive-only-default"
+                or not uses_primary_positive_classifier(options) or not requires_positive_score(options)
+                or str(selected.get("positive_output") or "") != "t40_positive_probability_v1"
+                or arm.param_source != baseline.param_source
+                or arm.param_policy != baseline.param_policy
+                or arm.rule_policy != baseline.rule_policy
+                or arm.entry_strategy != baseline.entry_strategy):
+            raise OracleBlockedError(f"Oracle Default Positive-only reference arm mismatch: {target}/{arm_id}")
+        return arm
+    base = direct if selector == "direct" else exact
     if base is None or not arm.dl_enabled or arm.dl_runtime_mode != base.dl_runtime_mode:
         raise OracleBlockedError(f"Oracle matching selector unavailable: {target}/{arm_id}")
     if (arm.param_source, arm.param_policy, arm.rule_policy,
@@ -459,7 +473,7 @@ def _target_reference_arm(definition, settings, plan, target, exact, direct):
             base.param_source, base.param_policy, base.rule_policy,
             _unqualified_selector_options(base.dl_runtime_options)):
         raise OracleBlockedError(f"Oracle target-scoped strategy differs from formal selector: {arm_id}")
-    from core.positive_netpnl_contract import requires_positive_score
+    from core.positive_score_admission import requires_positive_score
     qualified = bool(selected.get("positive_output"))
     options = dict(arm.dl_runtime_options or {})
     if qualified != requires_positive_score(options):
@@ -607,8 +621,9 @@ def _resolve_oracle_target_score_contracts(definition, settings, plan) -> dict[s
         if positive_output:
             options = dict(arm.dl_runtime_options or {})
             threshold = options.get("positive_probability_threshold")
-            from core.positive_netpnl_contract import (
+            from core.positive_score_admission import (
                 POSITIVE_P_CLASS_COLUMN, POSITIVE_SCORE_CONTRACT, requires_positive_score,
+                uses_primary_positive_classifier,
             )
             if (positive_output != oracle_positive_output_for_recipe(recipe)
                     or not isinstance(threshold, (int, float)) or isinstance(threshold, bool)
@@ -624,14 +639,15 @@ def _resolve_oracle_target_score_contracts(definition, settings, plan) -> dict[s
             if (raw_comparison is None or
                     primary_profile.continuous_target_id != oracle_supervised_target_id(raw_comparison)):
                 raise OracleBlockedError(f"Oracle and Positive ranker supervise different raw targets: {name}")
-            positive_dl_id = str(options["positive_dl_id"])
+            primary_only = uses_primary_positive_classifier(options)
+            positive_dl_id = str(arm.dl_id if primary_only else options["positive_dl_id"])
             classifier_source = settings.dl_sources[positive_dl_id]
             classifier_profile = get_breakout_quality_experiment_profile(classifier_source.experiment_profile)
             if classifier_profile.continuous_target_id != primary_profile.continuous_target_id:
                 raise OracleBlockedError(f"Oracle rank/classifier Target lineage mismatch: {name}")
             categorical = get_continuous_ranker_execution_recipe(
                 classifier_source.experiment_profile).training_policy
-            from core.positive_netpnl_contract import POSITIVE_P_CLASS_COLUMN
+            from core.positive_score_admission import POSITIVE_P_CLASS_COLUMN
             if (categorical.loss_handler != "categorical_cross_entropy"
                     or categorical.categorical_class_count != 2
                     or categorical.categorical_primary_class != 1
@@ -659,7 +675,11 @@ def _resolve_oracle_target_score_contracts(definition, settings, plan) -> dict[s
             "score_start_date": start,
             "perfect_score_mapping": str(definition.dimensions["oracle_score_method"]),
             "percentile_method": str(definition.dimensions["percentile_method"]),
-            "score_semantics": "declared_hypothetical_perfect_target_percentile_not_unique_raw_pairwise_logits",
+            "score_semantics": (
+                "raw_target_gt_zero_perfect_binary_classifier_without_ranking"
+                if positive_output and uses_primary_positive_classifier(arm.dl_runtime_options)
+                else "declared_hypothetical_perfect_target_percentile_not_unique_raw_pairwise_logits"
+            ),
             "selector": str(plan["selectors"][name]),
             "model_fit_required": False,
         }
@@ -1809,6 +1829,19 @@ def _canonical_oracle_replay_policy(definition, *, base_arm, exact_arm=None) -> 
 
 
 
+def _uses_primary_positive_arm(definition, target: str) -> bool:
+    """Only active registered admissions select the primary-only code witness."""
+    from core.positive_score_admission import uses_primary_positive_classifier
+    item = next((row for row in definition.source["oracle_comparisons"]
+                 if row["target"] == target), None)
+    if not item:
+        return False
+    from core.strategy_compare_policy import get_strategy_comparison_settings
+    settings = get_strategy_comparison_settings(str(definition.source["strategy_profile_id"]))
+    arm = settings.arms[str(item["strategy_arm_id"])]
+    return uses_primary_positive_classifier(arm.dl_runtime_options)
+
+
 def _arm_replay_policy(definition, *, plan: Mapping[str, Any], target: str,
                        replay_policy: Mapping[str, Any],
                        daily_evidence: Mapping[str, Any] | None = None,
@@ -1837,7 +1870,11 @@ def _arm_replay_policy(definition, *, plan: Mapping[str, Any], target: str,
             "contract": str(selected["positive_output"]),
             "selector_arm_id": str(selected["strategy_arm_id"]),
             "shared_admission_code_sha256": compute_file_sha256(
-                code_root / "core/positive_netpnl_contract.py"),
+                code_root / (
+                    "core/positive_score_admission.py"
+                    if _uses_primary_positive_arm(definition, target)
+                    else "core/positive_netpnl_contract.py"
+                )),
         }
     if target != str(definition.source["baseline_arm_id"]):
         if not score_sha256 or len(score_sha256) != 64 or not score_contract:

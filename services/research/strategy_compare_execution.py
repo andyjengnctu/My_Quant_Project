@@ -98,8 +98,8 @@ def resolve_strategy_compare_ranking_options(
     """
 
     options = dict(arm.dl_runtime_options or {})
-    from core.positive_netpnl_contract import requires_positive_score
-    if requires_positive_score(options):
+    from core.positive_score_admission import requires_positive_score, uses_primary_positive_classifier
+    if requires_positive_score(options) and not uses_primary_positive_classifier(options):
         positive_dl_id = str(options["positive_dl_id"])
         if positive_dl_id == str(arm.dl_id) or positive_dl_id not in settings.dl_sources:
             raise ValueError(f"arm {arm.arm_id} requires independent Positive model source")
@@ -308,8 +308,9 @@ def run_strategy_compare_active_arm(
                     )
                 )
 
-    from core.positive_netpnl_contract import requires_positive_score
-    if expected_seed_override is not None and requires_positive_score(arm.dl_runtime_options):
+    from core.positive_score_admission import requires_positive_score, uses_primary_positive_classifier
+    if (expected_seed_override is not None and requires_positive_score(arm.dl_runtime_options)
+            and not uses_primary_positive_classifier(arm.dl_runtime_options)):
         positive_dl_id = str(arm.dl_runtime_options["positive_dl_id"])
         secondary = dict(overrides.get(positive_dl_id) or {})
         if not secondary.get("score_path") or not secondary.get("manifest_path"):

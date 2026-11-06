@@ -127,6 +127,7 @@ AUDIT_REUSABLE_REPORTS: dict[str, dict[str, Any]] = {
                 # testable, but formal selection requires current registration.
                 "historical_only_oracle_targets": {
                     "CG40_EqualRank": "40D MFE + full D40 Safety, 50/50 daily rank",
+                    "T40_Positive_Direct": "Retired 2026-11-06: old CJ+CW dual-Model Direct C143; receipt kept historically",
                     "DailyUniversal_MinTrade60_NetR": "LABEL-daily_universal_formal_min_roos_trade60_netr_v1",
                     "DailyUniversal_MinTrade60_NetR_Direct": "LABEL-daily_universal_formal_min_roos_trade60_netr_v1",
                     "DailyUniversal_MinTrade60_NetPnL": "LABEL-daily_universal_formal_min_roos_trade60_netpnl_v1",
@@ -140,8 +141,7 @@ AUDIT_REUSABLE_REPORTS: dict[str, dict[str, Any]] = {
                     {"target": "MFE40_Direct", "description": "Same MFE40_Control score; canonical No-K/No-R0 direct allocation", "score_source": "MFE40_Control", "selector": "direct"},
                     {"target": "R40_Direct", "description": "Same R40 score; canonical No-K/No-R0 direct allocation", "score_source": "R40", "selector": "direct"},
                     {"target": "T40_Direct", "description": "Same T40 score; canonical No-K/No-R0 direct allocation", "score_source": "T40", "selector": "direct"},
-                    {"target": "T40_Positive", "description": "Formal perfect T40 percentile rank with independent perfect binary P(raw T40>0) admission; Exact K/R0", "score_source": "T40", "selector": "exact", "positive_output": "t40_positive_probability_v1", "strategy_arm_id": "C142"},
-                    {"target": "T40_Positive_Direct", "description": "Same formal perfect T40 rank and P(raw T40>0) admission; Direct No-K/No-R0", "score_source": "T40", "selector": "direct", "positive_output": "t40_positive_probability_v1", "strategy_arm_id": "C143"},
+                    {"target": "T40_Positive", "description": "Perfect raw T40>0 binary admission with Default C96 candidate order; no Rank DL, no Exact/Direct allocation", "score_source": "T40", "selector": "default", "positive_output": "t40_positive_probability_v1", "strategy_arm_id": "C144"},
                     {"target": "T40-MFE_Direct", "description": "Same T40-MFE score; canonical No-K/No-R0 direct allocation", "score_source": "T40-MFE", "selector": "direct"},
                     {"target": "DailyUniversal_MinTrade40_NetR", "description": "Formal Min ROOS Net-R, natural exit / 40 sessions / Research cutoff (earliest), hindsight ranking", "score": "daily_trade_path_net_r", "provider": "daily_trade40_profile", "selector": "exact"},
                     {"target": "DailyUniversal_MinTrade40_NetR_Direct", "description": "Same formal per-seed Min ROOS daily truth and ranks; canonical No-K/No-R0 selector", "score_source": "DailyUniversal_MinTrade40_NetR", "selector": "direct"},
@@ -281,7 +281,7 @@ def oracle_target_semantics(row: Mapping[str, Any]) -> tuple[str, str, str]:
     raw = str(row.get("target") or "")
     selector = str(row.get("selector") or "").lower()
     strategy = str(row.get("strategy", "Breakout"))
-    if not raw or selector not in {"exact", "direct"} or strategy not in {"Breakout", "Daily"}:
+    if not raw or selector not in {"exact", "direct", "default"} or strategy not in {"Breakout", "Daily"}:
         raise ValueError(f"Invalid Oracle naming dimensions: {raw}/{selector}/{strategy}")
     if raw.endswith("_Direct") != (selector == "direct"):
         raise ValueError(f"Legacy receipt selector mismatch: {raw} / {selector}")

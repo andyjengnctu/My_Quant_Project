@@ -7,6 +7,7 @@ BUY_LIMIT_OVERAGE_SORT_METHOD = 'BUY_LIMIT_OVERAGE_THEN_PROJ_COST'
 ENTRY_TYPE_THEN_PROJ_COST_SORT_METHOD = 'ENTRY_TYPE_THEN_PROJ_COST'
 
 BREAKOUT_QUALITY_RANKING_POLICY_SCORE = 'score'
+BREAKOUT_QUALITY_RANKING_POLICY_POSITIVE_ONLY_DEFAULT = 'positive-only-default'
 BREAKOUT_QUALITY_RANKING_POLICY_CAPITAL_ADJUSTED = 'capital-adjusted-score'
 BREAKOUT_QUALITY_RANKING_POLICY_CAPITAL_BUCKET = 'capital-bucket-then-score'
 BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY = 'resource-aware-binary'
@@ -115,6 +116,7 @@ CONTINUOUS_SCORE_SOURCE_BREAKOUT_QUALITY_RANKING_POLICIES = (
 
 SUPPORTED_BREAKOUT_QUALITY_RANKING_POLICIES = (
     BREAKOUT_QUALITY_RANKING_POLICY_SCORE,
+    BREAKOUT_QUALITY_RANKING_POLICY_POSITIVE_ONLY_DEFAULT,
     BREAKOUT_QUALITY_RANKING_POLICY_CAPITAL_ADJUSTED,
     BREAKOUT_QUALITY_RANKING_POLICY_CAPITAL_BUCKET,
     *sorted(RESOURCE_AWARE_BREAKOUT_QUALITY_RANKING_POLICIES),
@@ -129,6 +131,7 @@ _DEFAULT_BREAKOUT_QUALITY_SCORE_RANKING_ORDER = (
     'ticker_deterministic',
 )
 _BREAKOUT_QUALITY_NON_RESOURCE_SCORE_ORDER_OVERRIDES = {
+    BREAKOUT_QUALITY_RANKING_POLICY_POSITIVE_ONLY_DEFAULT: ('existing_buy_sort', 'ticker_deterministic'),
     BREAKOUT_QUALITY_RANKING_POLICY_SCORE: ('breakout_quality_score_desc', 'existing_buy_sort', 'ticker_deterministic'),
     BREAKOUT_QUALITY_RANKING_POLICY_CAPITAL_ADJUSTED: ('capital_adjusted_score_desc', 'existing_buy_sort', 'ticker_deterministic'),
     BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_RESIDUAL_SAFETY_CONSTRAINED_OPTIMAL: ('same_param_exact_resource_baseline', 'fixed_baseline_order_count_and_r0', 'frozen_primary_continuous_dl_score', 'frozen_secondary_low_adverse_score',
@@ -329,7 +332,8 @@ def build_breakout_quality_capital_aware_ranking_contract(ranking_policy, *, ran
                 'source': 'config/strategy_compare.py',
             }]
         return contract
-    if ranking_policy == BREAKOUT_QUALITY_RANKING_POLICY_SCORE:
+    if ranking_policy in {BREAKOUT_QUALITY_RANKING_POLICY_SCORE,
+                          BREAKOUT_QUALITY_RANKING_POLICY_POSITIVE_ONLY_DEFAULT}:
         return None
     return {
         'projected_capital_fraction_source': 'canonical_pretrade_proj_cost_div_sizing_capital',
@@ -602,6 +606,8 @@ def build_breakout_quality_ranking_prefixes(rows):
     if not rows or not _ranking_enabled_for_rows(rows):
         return {id(item): () for item in rows}
     policy = resolve_breakout_quality_ranking_policy(rows)
+    if policy == BREAKOUT_QUALITY_RANKING_POLICY_POSITIVE_ONLY_DEFAULT:
+        return {id(item): () for item in rows}
     if policy == BREAKOUT_QUALITY_RANKING_POLICY_SCORE:
         return {id(item): _quality_score_desc_key(item) for item in rows}
     if policy == BREAKOUT_QUALITY_RANKING_POLICY_CAPITAL_ADJUSTED:
@@ -652,7 +658,10 @@ def sort_candidate_rows(rows, method=None):
         if quality_ranking and not resource_aware_quality
         else {}
     )
-    quality_ranking_for_sort = bool(quality_ranking and not resource_aware_quality)
+    quality_ranking_for_sort = bool(
+        quality_ranking and not resource_aware_quality
+        and ranking_policy != BREAKOUT_QUALITY_RANKING_POLICY_POSITIVE_ONLY_DEFAULT
+    )
 
     def quality_prefix(item):
         return quality_prefixes.get(id(item), ())

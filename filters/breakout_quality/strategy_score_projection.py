@@ -60,8 +60,8 @@ def runtime_score_projection_requirements(
     if safety_dl_id and safety_score_column:
         requirements.setdefault(safety_dl_id, set()).add(safety_score_column)
 
-    from core.positive_netpnl_contract import requires_positive_score
-    if requires_positive_score(options):
+    from core.positive_score_admission import requires_positive_score, uses_primary_positive_classifier
+    if requires_positive_score(options) and not uses_primary_positive_classifier(options):
         positive_dl_id = str(options["positive_dl_id"])
         if not dl_id or positive_dl_id == dl_id or positive_dl_id not in dl_sources:
             raise ValueError("Positive score column requires a distinct registered classifier DL")

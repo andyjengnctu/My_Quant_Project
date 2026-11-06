@@ -248,7 +248,7 @@ def reorder_candidates_for_resource_aware_quality(
     policy = _resource_aware_quality_policy(rows)
     # A configured PIT Positive output qualifies the common Exact/Direct membership.
     # Rank order, K/R0, broker cash and the canonical reservation owner stay unchanged.
-    from core.positive_netpnl_contract import admit_positive_score_rows
+    from core.positive_score_admission import admit_positive_score_rows
     rows = admit_positive_score_rows(rows)
     selector, handler, static_kwargs = _RESOURCE_AWARE_POLICY_SPECS.get(
         policy,

@@ -10,6 +10,7 @@ from core.strategy_comparison import (
 )
 from core.buy_sort import (
     BREAKOUT_QUALITY_RANKING_POLICY_SCORE,
+    BREAKOUT_QUALITY_RANKING_POLICY_POSITIVE_ONLY_DEFAULT,
     RESOURCE_AWARE_BREAKOUT_QUALITY_RANKING_POLICIES,
 )
 from filters.breakout_quality.strategy_compare_contracts import (
@@ -27,6 +28,14 @@ def _arm_runtime_spec(arm: StrategyComparisonArm) -> dict[str, str]:
             "active_key": "quality_filter",
             "yearly_key": "quality_filter_return_pct",
             "active_trades_filename": "quality_filter_trades.csv",
+        }
+    if mode == BREAKOUT_QUALITY_RANKING_POLICY_POSITIVE_ONLY_DEFAULT:
+        return {
+            "comparison_mode": COMPARISON_MODE_SCORE_RANKING,
+            "ranking_policy": mode,
+            "active_key": "score_ranking",
+            "yearly_key": "score_ranking_return_pct",
+            "active_trades_filename": "score_ranking_trades.csv",
         }
     if mode in RESOURCE_AWARE_BREAKOUT_QUALITY_RANKING_POLICIES:
         return {

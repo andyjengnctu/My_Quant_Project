@@ -45,7 +45,9 @@ from core.strategy_compare_policy import (
     get_strategy_multi_seed_robustness_settings,
 )
 from core.strategy_compare_registry import STRATEGY_COMPARE_ARMS, STRATEGY_DL_SOURCES
-from core.positive_netpnl_contract import POSITIVE_P_CLASS_COLUMN, requires_positive_score
+from core.positive_score_admission import (
+    POSITIVE_P_CLASS_COLUMN, requires_positive_score, uses_primary_positive_classifier,
+)
 from filters.breakout_quality.strategy_compare_dl_artifacts import resolve_arm_runtime_dl_source_ids
 from filters.breakout_quality.strategy_compare_pit_contract import (
     resolve_strategy_compare_selection_pit_bundle_dir,
@@ -293,7 +295,8 @@ def _positive_classifier_for_arm(arm: Mapping[str, Any], target_id: str) -> str 
     options = dict(arm.get("dl_runtime_options") or {})
     if not requires_positive_score(options):
         return None
-    positive_source = STRATEGY_DL_SOURCES.get(str(options["positive_dl_id"])) or {}
+    positive_id = arm.get("dl_id") if uses_primary_positive_classifier(options) else options["positive_dl_id"]
+    positive_source = STRATEGY_DL_SOURCES.get(str(positive_id)) or {}
     profile = str(positive_source.get("experiment_profile") or "")
     if (profile not in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES
             or not _is_positive_classification(profile, target_id)):
@@ -482,7 +485,10 @@ def _strategy_bindings(*, target_names: tuple[str, ...],
             continue
         entry_strategy = str(comparison.get("strategy", "Breakout"))
         selector = str(comparison["selector"])
-        desired_mode = _DIRECT_MODE if selector == "direct" else _EXACT_MODE
+        desired_mode = (
+            "positive-only-default" if selector == "default"
+            else _DIRECT_MODE if selector == "direct" else _EXACT_MODE
+        )
         declared_arm_id = str(comparison.get("strategy_arm_id") or "")
         arm_choices = (
             ((declared_arm_id, STRATEGY_COMPARE_ARMS[declared_arm_id]),)
@@ -509,6 +515,12 @@ def _strategy_bindings(*, target_names: tuple[str, ...],
             # scientific Target before [1][2] may publish model/strategy SOP
             # metrics.  In particular CO/CP event NetPnL cannot impersonate
             # a TrueDaily independently-entered NetPnL model.
+            if uses_primary_positive_classifier(options):
+                if (primary_profile not in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES
+                        or not _is_positive_classification(primary_profile, str(score_targets[target]))):
+                    continue
+                candidates.setdefault((target, ""), set()).add(str(arm_id))
+                continue
             if (primary_profile not in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES
                     or not _is_exact_supervision(primary_profile, str(score_targets[target]))):
                 continue

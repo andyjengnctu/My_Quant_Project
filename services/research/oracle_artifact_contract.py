@@ -759,8 +759,9 @@ def _reference_arm_payload(arm_id, settings, *, effective):
         raise ValueError(f"Oracle reference arm missing: {arm_id}")
     arm = settings.arms[arm_id]
     source_ids = [str(arm.dl_id)]
-    from core.positive_netpnl_contract import requires_positive_score
+    from core.positive_score_admission import (requires_positive_score, uses_primary_positive_classifier)
     requires_positive_score(arm.dl_runtime_options or {})
+    primary_positive_only = uses_primary_positive_classifier(arm.dl_runtime_options or {})
     sources = {}
     for index, source_id in enumerate(source_ids):
         if source_id not in settings.dl_sources:
@@ -778,7 +779,8 @@ def _reference_arm_payload(arm_id, settings, *, effective):
                 "single_seed_strategy_conversion_authorized", "point_in_time_dirname"}}
             payload.update(sample_scope=profile.training_sample_scope,
                            input_requirements=_feature_input_requirements(source.model_architecture))
-        sources[("rank" if index == 0 else "positive") if effective else source_id] = payload
+        role = "positive" if primary_positive_only else ("rank" if index == 0 else "positive")
+        sources[role if effective else source_id] = payload
     arm_contract = {
         key: value for key, value in arm.as_dict().items()
         if key not in {"name", "description"}
