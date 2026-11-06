@@ -140,6 +140,8 @@ AUDIT_REUSABLE_REPORTS: dict[str, dict[str, Any]] = {
                     {"target": "MFE40_Direct", "description": "Same MFE40_Control score; canonical No-K/No-R0 direct allocation", "score_source": "MFE40_Control", "selector": "direct"},
                     {"target": "R40_Direct", "description": "Same R40 score; canonical No-K/No-R0 direct allocation", "score_source": "R40", "selector": "direct"},
                     {"target": "T40_Direct", "description": "Same T40 score; canonical No-K/No-R0 direct allocation", "score_source": "T40", "selector": "direct"},
+                    {"target": "T40_Positive", "description": "Formal perfect T40 percentile rank with independent perfect binary P(raw T40>0) admission; Exact K/R0", "score_source": "T40", "selector": "exact", "positive_output": "t40_positive_probability_v1", "strategy_arm_id": "C142"},
+                    {"target": "T40_Positive_Direct", "description": "Same formal perfect T40 rank and P(raw T40>0) admission; Direct No-K/No-R0", "score_source": "T40", "selector": "direct", "positive_output": "t40_positive_probability_v1", "strategy_arm_id": "C143"},
                     {"target": "T40-MFE_Direct", "description": "Same T40-MFE score; canonical No-K/No-R0 direct allocation", "score_source": "T40-MFE", "selector": "direct"},
                     {"target": "DailyUniversal_MinTrade40_NetR", "description": "Formal Min ROOS Net-R, natural exit / 40 sessions / Research cutoff (earliest), hindsight ranking", "score": "daily_trade_path_net_r", "provider": "daily_trade40_profile", "selector": "exact"},
                     {"target": "DailyUniversal_MinTrade40_NetR_Direct", "description": "Same formal per-seed Min ROOS daily truth and ranks; canonical No-K/No-R0 selector", "score_source": "DailyUniversal_MinTrade40_NetR", "selector": "direct"},
@@ -229,6 +231,19 @@ AUDIT_MODULES: dict[str, dict[str, Any]] = {
         "audits": {},
     },
 }
+
+
+# Only the canonical raw-score recipe decides a perfect Positive output's
+# supervised meaning. Consumers must not infer it from an MR/C arm identity.
+_ORACLE_POSITIVE_OUTPUT_BY_RECIPE = {
+    "terminal_mae_gate": "t40_positive_probability_v1",
+    "daily_trade_path_net_pnl": "netpnl_positive_probability_v1",
+    "daily_trade_path_true_net_pnl": "netpnl_positive_probability_v1",
+}
+
+
+def oracle_positive_output_for_recipe(recipe: str) -> str | None:
+    return _ORACLE_POSITIVE_OUTPUT_BY_RECIPE.get(str(recipe))
 
 
 def oracle_scientific_target_name(legacy_receipt_key: str) -> str:
@@ -338,6 +353,7 @@ __all__ = [
     "oracle_comparison_key",
     "oracle_target_semantics",
     "oracle_scientific_target_name",
+    "oracle_positive_output_for_recipe",
 ]
 
 

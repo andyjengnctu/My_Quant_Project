@@ -176,6 +176,8 @@ class PositiveNetPnlContractCases(TestCase):
         from filters.breakout_quality.strategy_compare_dl_artifacts import resolve_arm_runtime_dl_source_ids
         settings = get_strategy_comparison_settings(STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE)
         cases = (
+            ("T40_Positive", "Breakout", "Exact", "C142", "MR-13CJ", "MR-13CW"),
+            ("T40_Positive", "Breakout", "Direct", "C143", "MR-13CJ", "MR-13CW"),
             ("MinTrade_NetPnL", "Breakout", "Exact", "C123", "MR-13CO", ""),
             ("MinTrade_NetPnL", "Breakout", "Direct", "C124", "MR-13CO", ""),
             ("MinTrade_NetPnL_Positive", "Breakout", "Exact", "C125", "MR-13CO", "MR-13CP"),
@@ -760,6 +762,107 @@ class ScoreOutputCompletenessCases(TestCase):
                 max_positions=10, evaluation_mode="rolling", ranking_policy="test", ranking_options={},
                 replay_policy={}, score_contract=None, source_contract=None, dataset_inputs=None,
                 execution_gate="fullcycle_reference_net_pnl_strictly_positive_v1")
+
+
+
+class PriceRawPositiveOracleCases(TestCase):
+    def test_price_classification_is_from_raw_scalar_not_daily_percentile(self):
+        from services.audit.oracle_price_positive_truth import load_or_build_price_positive_scores
+        from core.audit_registry import oracle_positive_output_for_recipe
+        self.assertEqual(oracle_positive_output_for_recipe("terminal_mae_gate"),
+                         "t40_positive_probability_v1")
+        self.assertEqual(oracle_positive_output_for_recipe("daily_trade_path_net_pnl"),
+                         "netpnl_positive_probability_v1")
+        day = "2021-01-05"
+        keys = [("1101", day), ("1102", day), ("1103", day)]
+        # The second rank is above 0.5, although the raw T40 is zero.
+        rank = dict(zip(keys, (0.6, 0.8, 0.2)))
+        raw = dict(zip(keys, (-0.25, 0.0, 0.0002)))
+        identity = {"source": "canonical_t40", "price_sha256": "a" * 64,
+                    "rank_sha256": "b" * 64}
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            first = load_or_build_price_positive_scores(
+                cache_root=root, identity=identity, canonical_scores=rank,
+                build_raw=lambda: raw, allow_build=True,
+            )
+            self.assertEqual([first[k] for k in keys], [0.0, 0.0, 1.0])
+            second = load_or_build_price_positive_scores(
+                cache_root=root, identity=identity, canonical_scores=rank,
+                build_raw=lambda: self.fail("cached truth MUST NOT rebuild"), allow_build=False,
+            )
+            self.assertEqual(second, first)
+            file = next((root / "price_positive_truth").glob("*.npz"))
+            file.write_bytes(b"tampered")
+            with self.assertRaisesRegex(ValueError, "corrupt"):
+                load_or_build_price_positive_scores(
+                    cache_root=root, identity=identity, canonical_scores=rank,
+                    build_raw=lambda: raw, allow_build=True,
+                )
+
+    def test_missing_positive_truth_is_never_inferred_from_ranks(self):
+        from services.audit.oracle_price_positive_truth import load_or_build_price_positive_scores
+        rank = {("1101", "2021-01-05"): 0.9, ("1102", "2021-01-05"): 0.2}
+        with TemporaryDirectory() as temp:
+            base = dict(cache_root=Path(temp), identity={"source": "raw-positive"},
+                        canonical_scores=rank)
+            with self.assertRaisesRegex(ValueError, "missing signed"):
+                load_or_build_price_positive_scores(**base, build_raw=lambda: {}, allow_build=False)
+            with self.assertRaisesRegex(ValueError, "missing/extra"):
+                load_or_build_price_positive_scores(
+                    **base, build_raw=lambda: {next(iter(rank)): 1.0}, allow_build=True)
+            with self.assertRaisesRegex(ValueError, "non-finite"):
+                load_or_build_price_positive_scores(
+                    **base, build_raw=lambda: {**dict.fromkeys(rank, 0.0),
+                                                next(iter(rank)): float("nan")}, allow_build=True)
+            self.assertEqual(list((Path(temp) / "price_positive_truth").glob("*.npz")), [])
+
+    def test_positive_only_comparison_uses_unselected_immutable_t40_recipe(self):
+        from dataclasses import replace
+        from services.audit import target_oracle_romd as oracle
+        active = get_formal_oracle_definition(get_active_audit_module_id())
+        scoped = replace(active, source={**active.source, "oracle_comparisons": tuple(
+            row for row in active.source["oracle_comparisons"]
+            if row.get("positive_output") == "t40_positive_probability_v1"
+        )})
+        plan = oracle._oracle_comparison_plan(scoped)
+        settings, _base, _exact = oracle._contract(scoped)
+        contracts = oracle._resolve_oracle_target_score_contracts(scoped, settings, plan)
+        self.assertEqual(tuple(plan["recipes"]), ("T40",))
+        self.assertEqual(oracle._price_positive_source_recipe(scoped, "T40")["score"],
+                         "terminal_mae_gate")
+        for name, _description in plan["targets"]:
+            self.assertEqual(plan["aliases"][name], "T40")
+            self.assertEqual(contracts[name]["perfect_positive_output"],
+                             "t40_positive_probability_v1")
+
+    def test_oracle_two_views_use_one_registry_and_dual_dl_pair(self):
+        definition = get_formal_oracle_definition(get_active_audit_module_id())
+        comparisons = resolve_current_oracle_comparisons(definition.source)
+        plan = _oracle_comparison_plan(definition)
+        settings, _, _ = _contract(definition)
+        contracts = _resolve_oracle_target_score_contracts(definition, settings, plan)
+        selected = [row for row in comparisons if row.get("positive_output") ==
+                    "t40_positive_probability_v1"]
+        self.assertEqual({row["target"] for row in selected},
+                         {"T40_Positive", "T40_Positive_Direct"})
+        score_targets = {oracle_comparison_key(row): __import__(
+            'core.audit_registry', fromlist=['oracle_supervised_target_id']).oracle_supervised_target_id(
+                next(other for other in comparisons
+                     if other['target'] == row.get('score_source', row['target'])))
+            for row in comparisons}
+        bindings = _strategy_bindings(
+            target_names=tuple(score_targets), score_targets=score_targets, definition=definition)
+        for row in selected:
+            with self.subTest(arm=row['strategy_arm_id']):
+                name = oracle_comparison_key(row)
+                profile = settings.dl_sources[settings.arms[row['strategy_arm_id']].dl_id].experiment_profile
+                self.assertEqual(bindings[(name, profile)], row['strategy_arm_id'])
+                self.assertEqual(contracts[name]['reference_arm_id'], row['strategy_arm_id'])
+                self.assertEqual(contracts[name]['perfect_positive_output'],
+                                 't40_positive_probability_v1')
+                self.assertEqual(plan['aliases'][name], 'T40')
+        self.assertEqual(plan['recipes']['T40'], ('terminal_mae_gate', 'pure_mfe40_provider'))
 
 
 if __name__ == '__main__':

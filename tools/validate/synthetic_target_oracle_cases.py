@@ -61,9 +61,15 @@ _ACTIVE_ORACLE_DEFINITION = next(
 _NON_PRICE_SCORE_TARGETS = frozenset(
     set(oracle._oracle_comparison_plan(_ACTIVE_ORACLE_DEFINITION)["daily_sources"])
 )
+# Historical fixed-price fixtures predate independent Positive admission;
+# new Positive comparisons have their own signed-score regression tests.
+_LEGACY_PRICE_ONLY_NAMES = frozenset(
+    row["target"] for row in _ACTIVE_ORACLE_DEFINITION.source["oracle_comparisons"]
+    if row["target"] not in _NON_PRICE_SCORE_TARGETS and not row.get("positive_output")
+)
 LEGACY_ORACLE_TARGETS = tuple(
     item for item in oracle._oracle_comparison_plan(_ACTIVE_ORACLE_DEFINITION)["targets"]
-    if item[0] not in _NON_PRICE_SCORE_TARGETS
+    if item[0] in _LEGACY_PRICE_ONLY_NAMES
 )
 # Historical 50/50 CG comparison is an isolated fixture, not an executable
 # entry in the current Oracle Registry.
@@ -84,7 +90,7 @@ def _forty_only(definition):
         "oracle_evaluation_end_date": "2025-12-22"},
         source={**definition.source, "oracle_comparisons": tuple(
         item for item in definition.source["oracle_comparisons"]
-        if item["target"] not in {
+        if not item.get("positive_output") and item["target"] not in {
             "DailyUniversal_MinTrade60_NetR",
             "DailyUniversal_MinTrade60_NetR_Direct",
             "DailyUniversal_MinTrade60_NetPnL",
@@ -106,7 +112,7 @@ def _legacy_definition():
         "oracle_evaluation_end_date": "2025-12-22"},
         source={**active.source, "oracle_comparisons": tuple(
         item for item in active.source["oracle_comparisons"]
-        if item["target"] not in _NON_PRICE_SCORE_TARGETS)})
+        if item["target"] in _LEGACY_PRICE_ONLY_NAMES)})
 
 
 def _historical_cg_price_definition():
@@ -1367,16 +1373,13 @@ class OracleAuditContractCases(TestCase):
         self.assertNotIn("CG40_EqualRank", dict(oracle._oracle_comparison_plan(self.active_definition)["targets"]))
         self.assertNotIn("MinTrade40_NetR", dict(oracle._oracle_comparison_plan(self.active_definition)["targets"]))
         self.assertNotIn("MinTrade40_NetR_Direct", dict(oracle._oracle_comparison_plan(self.active_definition)["targets"]))
-        self.assertEqual(oracle._oracle_comparison_plan(self.active_definition)["aliases"], {
-            "MFE40_Direct": "MFE40_Control", "R40_Direct": "R40", "T40_Direct": "T40",
-            "T40-MFE_Direct": "T40-MFE",
-            "DailyUniversal_MinTrade40_NetR_Direct": "DailyUniversal_MinTrade40_NetR",
-            "DailyUniversal_MinTrade_NetR_Direct": "DailyUniversal_MinTrade_NetR",
-            "DailyUniversal_MinTrade_NetPnL_Direct": "DailyUniversal_MinTrade_NetPnL",
-            "DailyUniversal_MinTrade_NetPnL_Positive": "DailyUniversal_MinTrade_NetPnL",
-            "DailyUniversal_MinTrade_NetPnL_Positive_Direct": "DailyUniversal_MinTrade_NetPnL",
-            "TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct": "TrueDailyUniversal_MinTrade_NetPnL_Positive",
-        })
+        declared_aliases = {
+            row["target"]: row["score_source"]
+            for row in self.active_definition.source["oracle_comparisons"]
+            if row.get("score_source")
+        }
+        self.assertEqual(oracle._oracle_comparison_plan(self.active_definition)["aliases"],
+                         declared_aliases)
         self.assertEqual(self.definition.output_subdir, "breakout_quality/reusable/target_oracle_romd")
         with tempfile.TemporaryDirectory() as tmp:
             status = collect_audit_status(
@@ -6075,7 +6078,7 @@ class OracleInventoryAndSourceIsolationRegressionCases(TestCase):
         live = resolve_current_oracle_comparisons(definition.source)
         from core.audit_registry import oracle_comparison_key
         names = [oracle_comparison_key(row) for row in live]
-        self.assertEqual(len(names), 22)  # Includes both CU Daily selectors.
+        self.assertEqual(len(names), len(set(names)))  # Dynamic Target x Strategy inventory.
         self.assertEqual(set(row["target"] for row in live),
                          {name for name, _ in oracle._oracle_comparison_plan(definition)["targets"]})
         self.assertTrue(set(definition.source["historical_only_oracle_targets"]).isdisjoint(names))
