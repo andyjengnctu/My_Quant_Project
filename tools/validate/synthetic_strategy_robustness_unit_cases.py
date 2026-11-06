@@ -521,11 +521,20 @@ class StrategyRobustnessUnitCases(unittest.TestCase):
         from tools.validate.synthetic_portfolio_common import build_synthetic_competing_candidates_case
         from tools.validate.synthetic_frame_utils import write_synthetic_csv_bundle
 
+        from core.positive_score_admission import uses_primary_positive_classifier
+
         settings, _, arms, _, _ = _registered_fixture()
         positive_arms = [arm for arm in arms if arm.dl_enabled
                          and (arm.dl_runtime_options or {}).get("positive_score_column")]
-        self.assertGreaterEqual(len(positive_arms), 2)
-        # Registered same-source Positive arms exercise both selector modes.
+        dual_by_mode = {
+            arm.dl_runtime_mode: arm for arm in positive_arms
+            if not uses_primary_positive_classifier(arm.dl_runtime_options)
+        }
+        primary_arms = [arm for arm in positive_arms
+                        if uses_primary_positive_classifier(arm.dl_runtime_options)]
+        self.assertGreaterEqual(len(dual_by_mode), 2)
+        self.assertTrue(primary_arms)
+        # Exercise each registered dual selector mode plus classifier-only Default.
         fixture = build_synthetic_competing_candidates_case(V16StrategyParams())
         dates = sorted({str(day)[:10] for frame in fixture["frames"].values() for day in frame["Date"]})
         start, end = dates[0], dates[-1]
@@ -538,16 +547,19 @@ class StrategyRobustnessUnitCases(unittest.TestCase):
             params_path.write_text("{}")
             score_file = root / "scores.csv"
             score_file.write_text("fixture")
-            for arm in positive_arms[-2:]:
+            for arm in (*dual_by_mode.values(), primary_arms[-1]):
                 source = settings.dl_sources[arm.dl_id]
                 options = dict(arm.dl_runtime_options or {})
-                secondary_id = options['positive_dl_id']
-                secondary = settings.dl_sources[secondary_id]
-                self.assertEqual(resolve_arm_runtime_dl_source_ids(settings, arm), (arm.dl_id, secondary_id))
-                options.update(positive_filter_id=secondary.filter_id,
-                    positive_score_source=secondary.score_source,
-                    positive_model_architecture=secondary.model_architecture,
-                    positive_experiment_profile=secondary.experiment_profile)
+                if uses_primary_positive_classifier(options):
+                    self.assertEqual(resolve_arm_runtime_dl_source_ids(settings, arm), (arm.dl_id,))
+                else:
+                    secondary_id = options['positive_dl_id']
+                    secondary = settings.dl_sources[secondary_id]
+                    self.assertEqual(resolve_arm_runtime_dl_source_ids(settings, arm), (arm.dl_id, secondary_id))
+                    options.update(positive_filter_id=secondary.filter_id,
+                        positive_score_source=secondary.score_source,
+                        positive_model_architecture=secondary.model_architecture,
+                        positive_experiment_profile=secondary.experiment_profile)
                 for gate_allows in (True, False):
                     with self.subTest(arm=arm.arm_id, gate_allows=gate_allows):
                         pit = SimpleNamespace(available_from=start, available_through=end,
@@ -611,6 +623,12 @@ class StrategyRobustnessUnitCases(unittest.TestCase):
                             paired = engine.run_comparison(**common, output_dir_override=paired_dir)
                             active = engine.run_comparison(**common, output_dir_override=active_dir, replay_active_only=True)
                         self.assertEqual(calls, ["no_filter", "score_ranking", "score_ranking"])
+                        if gate_allows:
+                            self.assertGreater(active["score_ranking"]["trade_count"], 0,
+                                               "positive PIT classifier must admit tradeable candidates")
+                        else:
+                            self.assertEqual(active["score_ranking"]["trade_count"], 0,
+                                             "non-positive PIT classifier must block all new entries")
                         # Wall-clock telemetry is not an economic result (F9).
                         economic = lambda values: {k: v for k, v in values.items()
                                                    if not k.startswith("resource_aware_selector_timing_")}
