@@ -1,4 +1,6 @@
 
+真實交易路徑的dl/target不好學，那是否依好學又有考慮上漲下跌的dl/target，設計成breakout策略，使其oracle的勝率還是接近100%
+
 - bug
     - 0050 cannot be selected by any DL
 

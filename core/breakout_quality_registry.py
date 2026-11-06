@@ -49,6 +49,7 @@ from core.breakout_quality_runtime import (
     TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_JOINT_MFE_D40_QUADRANT,
     TRAINING_OBJECTIVE_DAILY_NETPNL_POSITIVE_BINARY,
+    TRAINING_OBJECTIVE_DAILY_SCALAR_SIGN_POSITIVE_BINARY,
     CONTINUOUS_RANKER_TRAINER_EVENT,
     CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
@@ -396,6 +397,7 @@ DAILY_UNIVERSAL_SHARED_FULL_D20_SAFETY_HS_CONDITIONAL_MFE_PROFILE = (
 )
 DAILY_UNIVERSAL_TERMINAL_R40_PAIRWISE_PROFILE = "daily_universal_terminal_r40_full_list_ndcg_pairwise"
 DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_PAIRWISE_PROFILE = "daily_universal_terminal_mae_gated_t40_full_list_ndcg_pairwise"
+DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_POSITIVE_PROFILE = "daily_universal_terminal_mae_gated_t40_positive_binary"
 DAILY_UNIVERSAL_FULL_HORIZON_MAE_GATED_MFE_T40_PAIRWISE_PROFILE = "daily_universal_full_horizon_mae_gated_mfe_t40_full_list_ndcg_pairwise"
 DAILY_UNIVERSAL_COUNTERFACTUAL_MINTRADE40_NETR_PAIRWISE_PROFILE = "daily_universal_counterfactual_mintrade40_netr_full_list_ndcg_pairwise"
 DAILY_UNIVERSAL_FORMAL_MINTRADE40_NETR_PAIRWISE_PROFILE = "daily_universal_formal_mintrade40_netr_per_seed_full_list_ndcg_pairwise"
@@ -1679,6 +1681,18 @@ _EXPERIMENT_PROFILES = {
         continuous_target_id="daily_terminal_mae_gated_t40_v1",
         loss_name="pairwise_logistic",
         epoch_selection_metric="mean_daily_spearman",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+        model_architecture="inception_time_v1",
+    ),
+    DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_POSITIVE_PROFILE: BreakoutQualityExperimentProfile(
+        name=DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_POSITIVE_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_SCALAR_SIGN_POSITIVE_BINARY,
+        continuous_target_id="daily_terminal_mae_gated_t40_v1",
+        loss_name="scalar_sign_positive_cross_entropy",
+        epoch_selection_metric="positive_validation_cross_entropy",
         training_label_scope=TRAINING_LABEL_SCOPE_ALL,
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
         model_architecture="inception_time_v1",
@@ -3352,6 +3366,27 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         metric_scope="all_stock_days_terminal_mae_gated_t40",
         score_semantic_id="daily_terminal_mae_gated_t40_rank",
         pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        selection_pit_authorized=True,
+        current_time_validation_authorized=True,
+    ),
+    DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_POSITIVE_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_POSITIVE_PROFILE,
+        model_research_id="MR-13CW",
+        experiment_name="MR-13CW Daily T40 Positive Binary Classifier",
+        phase="13CW",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description=(
+            "Matured T40=(1-min(MAE40_R,1))*R40-min(MAE40_R,1); "
+            "Positive iff raw T40>0, nonpositive iff <=0; incomplete 40D path stays NULL"
+        ),
+        objective_description=(
+            "Independent two-class cross-entropy binary classifier, trained on the "
+            "same legal daily T40 source, 300x10 InceptionTime inputs, folds and "
+            "maturity as MR-13CJ, but no CJ weights or future values as inputs. "
+            "Output is PIT P(T40>0); the separate CJ ranker still orders T40."
+        ),
+        metric_scope="all_stock_days_terminal_mae_gated_t40_positive_binary",
+        score_semantic_id="daily_terminal_mae_gated_t40_positive_probability",
         selection_pit_authorized=True,
         current_time_validation_authorized=True,
     ),

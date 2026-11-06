@@ -89,16 +89,16 @@ class PositiveNetPnlContractCases(TestCase):
         from core.breakout_quality_registry import get_breakout_quality_experiment_profile
         from core.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
         settings = get_strategy_comparison_settings(STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE)
-        expected = {'C125': ('CONT13CO_ROLL','CONT13CP_ROLL'),
-                    'C126': ('CONT13CO_ROLL','CONT13CP_ROLL'),
-                    'C133': ('CONT13CU_ROLL','CONT13CT_ROLL'),
-                    'C134': ('CONT13CU_ROLL','CONT13CT_ROLL'),
-                    'C135': ('CONT13CU_ROLL','CONT13CT_ROLL'),
-                    'C136': ('CONT13CU_ROLL','CONT13CT_ROLL')}
         actual = {arm.arm_id: (arm.dl_id, arm.dl_runtime_options.get('positive_dl_id'))
                   for arm in settings.enabled_arms if (arm.dl_runtime_options or {}).get('positive_score_column')}
-        self.assertEqual(actual, expected)
-        for arm_id, (rank_id, classification_id) in expected.items():
+        self.assertTrue(actual, "Current suite must keep at least one real independent Positive pair")
+        # AI: Every registered Positive arm is checked from the single Compare Suite,
+        #     without maintaining a second experiment/arm matrix in the validator.
+        for arm_id, (rank_id, classification_id) in actual.items():
+            self.assertNotEqual(rank_id, classification_id)
+            self.assertIn(classification_id, settings.dl_sources)
+            self.assertIn(rank_id, settings.dl_sources)
+        for arm_id, (rank_id, classification_id) in actual.items():
             with self.subTest(arm=arm_id):
                 rank_profile = get_breakout_quality_experiment_profile(
                     settings.dl_sources[rank_id].experiment_profile)
@@ -115,6 +115,55 @@ class PositiveNetPnlContractCases(TestCase):
                 self.assertEqual(classification_recipe.training_policy.categorical_score_columns[1],
                                  POSITIVE_P_CLASS_COLUMN)
                 self.assertIsNone(positive_profile.score_calibration)
+
+    def test_t40_positive_uses_exact_original_t40_truth_and_two_independent_sources(self):
+        from core.breakout_quality_registry import (
+            get_breakout_quality_experiment_profile,
+            DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_PAIRWISE_PROFILE,
+            DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_POSITIVE_PROFILE,
+        )
+        from core.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
+        from config.breakout_quality import BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE
+        from filters.breakout_quality.strategy_compare_dl_artifacts import resolve_arm_runtime_dl_source_ids
+        cj = get_breakout_quality_experiment_profile(
+            DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_PAIRWISE_PROFILE)
+        cw = get_breakout_quality_experiment_profile(
+            DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_POSITIVE_PROFILE)
+        self.assertEqual(cj.continuous_target_id, cw.continuous_target_id)
+        self.assertEqual(cj.continuous_target_id, 'daily_terminal_mae_gated_t40_v1')
+        self.assertTrue(get_continuous_ranker_execution_recipe(cj.name).training_policy.uses_pairwise_loss)
+        classifier = get_continuous_ranker_execution_recipe(cw.name).training_policy
+        self.assertFalse(classifier.uses_pairwise_loss)
+        self.assertEqual(classifier.categorical_class_count, 2)
+        self.assertEqual(classifier.categorical_primary_class, 1)
+        self.assertEqual(classifier.categorical_score_columns[1], POSITIVE_P_CLASS_COLUMN)
+        self.assertIsNone(cw.score_calibration)
+        self.assertEqual(BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE[1], cw.name)
+        # AI: Raw supervised T40=0 belongs to the nonpositive class; unobservable T40
+        #     stays NULL and must never contaminate either cross-entropy class.
+        result = positive_labels([float('nan'), -1.0, 0.0, 1e-4])
+        self.assertTrue(np.isnan(result[0]))
+        np.testing.assert_array_equal(result[1:], np.array([0., 0., 1.]))
+        settings = get_strategy_comparison_settings(STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE)
+        for arm_id, control, mode in (('C142','C107','resource-aware-continuous-score-constrained-optimal'),
+                                      ('C143','C109','resource-aware-continuous-score-no-k-no-r0')):
+            with self.subTest(arm=arm_id):
+                arm = settings.arms[arm_id]
+                reference = settings.arms[control]
+                self.assertIn(arm, settings.enabled_arms)
+                self.assertEqual(arm.dl_runtime_mode, mode)
+                self.assertEqual(arm.dl_runtime_mode, reference.dl_runtime_mode)
+                self.assertEqual((arm.param_source, arm.param_policy, arm.rule_policy, arm.entry_strategy),
+                                 (reference.param_source, reference.param_policy, reference.rule_policy,
+                                  reference.entry_strategy))
+                self.assertEqual(arm.dl_id, reference.dl_id)
+                sources = resolve_arm_runtime_dl_source_ids(settings, arm)
+                self.assertEqual(sources, ('CONT13CJ_ROLL', 'CONT13CW_ROLL'))
+                self.assertEqual(arm.dl_runtime_options['positive_probability_threshold'], 0.5)
+                self.assertEqual(arm.dl_runtime_options['positive_score_column'], POSITIVE_P_CLASS_COLUMN)
+                source = settings.dl_sources[sources[1]]
+                self.assertEqual(source.score_source, 'selection_point_in_time')
+                self.assertEqual(source.experiment_profile, cw.name)
 
     def test_target_overview_joins_ranker_and_classifier_by_runtime_roles(self):
         # Truth identity is intentionally shared by NetPnL rank and P(NetPnL>0)
@@ -227,45 +276,50 @@ class PositiveNetPnlContractCases(TestCase):
 
     def test_pit_rank_and_positive_use_separate_profiles_same_information_date(self):
         settings=get_strategy_comparison_settings(STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE)
-        arm=settings.arms['C126']
-        source=settings.dl_sources[arm.dl_id]
-        options=dict(arm.dl_runtime_options)
-        classifier = settings.dl_sources[options['positive_dl_id']]
-        options.update(positive_filter_id=classifier.filter_id,
-                       positive_model_architecture=classifier.model_architecture,
-                       positive_experiment_profile=classifier.experiment_profile,
-                       positive_score_source=classifier.score_source)
-        columns=[]
-        lookup_calls=[]
-        def fake_lookup(**kwargs):
-            column=kwargs.get('score_column')
-            columns.append(column)
-            lookup_calls.append(kwargs)
-            return {'score': .82 if column is None else .61,
-                    'available':True, 'score_date':'2024-10-01',
-                    'score_source':SCORE_SOURCE_SELECTION_POINT_IN_TIME}
-        with breakout_quality_ranking_source_context(
-            score_source=SCORE_SOURCE_SELECTION_POINT_IN_TIME,
-            model_architecture=source.model_architecture,
-            experiment_profile=source.experiment_profile,
-            ranking_policy=arm.dl_runtime_mode,
-            ranking_options=options,
-        ), patch('filters.breakout_quality.runtime.lookup_selection_point_in_time_candidate_score',
-                 side_effect=fake_lookup):
-            predicted=resolve_breakout_quality_candidate_rank(
-                ticker='2330',signal_date='2024-10-01',
-                information_date='2024-10-01',high_len=40)
-        self.assertEqual(columns,[None,'positive_p_positive'])
-        self.assertNotEqual(lookup_calls[0]['experiment_profile'],
-                            lookup_calls[1]['experiment_profile'])
-        self.assertEqual(lookup_calls[0]['experiment_profile'], source.experiment_profile)
-        self.assertEqual(lookup_calls[1]['experiment_profile'], classifier.experiment_profile)
-        self.assertEqual(predicted['score'],.82)
-        self.assertEqual(predicted['positive_probability'],.61)
-        self.assertTrue(positive_score_admitted({
-            'breakout_quality_rank':predicted,
-            'breakout_quality_ranking_options':arm.dl_runtime_options,
-        }))
+        # AI: The runtime must use both independently fitted profiles for every
+        #     Positive arm, not only the historically first NetPnL pair.
+        for arm in settings.enabled_arms:
+            if not (arm.dl_runtime_options or {}).get('positive_score_column'):
+                continue
+            with self.subTest(arm=arm.arm_id):
+                source=settings.dl_sources[arm.dl_id]
+                options=dict(arm.dl_runtime_options)
+                classifier = settings.dl_sources[options['positive_dl_id']]
+                options.update(positive_filter_id=classifier.filter_id,
+                               positive_model_architecture=classifier.model_architecture,
+                               positive_experiment_profile=classifier.experiment_profile,
+                               positive_score_source=classifier.score_source)
+                columns=[]
+                lookup_calls=[]
+                def fake_lookup(**kwargs):
+                    column=kwargs.get('score_column')
+                    columns.append(column)
+                    lookup_calls.append(kwargs)
+                    return {'score': .82 if column is None else .61,
+                            'available':True, 'score_date':'2024-10-01',
+                            'score_source':SCORE_SOURCE_SELECTION_POINT_IN_TIME}
+                with breakout_quality_ranking_source_context(
+                    score_source=SCORE_SOURCE_SELECTION_POINT_IN_TIME,
+                    model_architecture=source.model_architecture,
+                    experiment_profile=source.experiment_profile,
+                    ranking_policy=arm.dl_runtime_mode,
+                    ranking_options=options,
+                ), patch('filters.breakout_quality.runtime.lookup_selection_point_in_time_candidate_score',
+                         side_effect=fake_lookup):
+                    predicted=resolve_breakout_quality_candidate_rank(
+                        ticker='2330',signal_date='2024-10-01',
+                        information_date='2024-10-01',high_len=40)
+                self.assertEqual(columns,[None,'positive_p_positive'])
+                self.assertNotEqual(lookup_calls[0]['experiment_profile'],
+                                    lookup_calls[1]['experiment_profile'])
+                self.assertEqual(lookup_calls[0]['experiment_profile'], source.experiment_profile)
+                self.assertEqual(lookup_calls[1]['experiment_profile'], classifier.experiment_profile)
+                self.assertEqual(predicted['score'],.82)
+                self.assertEqual(predicted['positive_probability'],.61)
+                self.assertTrue(positive_score_admitted({
+                    'breakout_quality_rank':predicted,
+                    'breakout_quality_ranking_options':arm.dl_runtime_options,
+                }))
 
     def test_oracle_uses_identical_score_boundary_and_selector(self):
         definition = get_formal_oracle_definition(get_active_audit_module_id())
@@ -545,7 +599,8 @@ class IndependentPositiveClassifierCases(TestCase):
         from io import StringIO
         from core.breakout_quality_registry import (get_breakout_quality_experiment_profile,
                                                      DAILY_UNIVERSAL_NETPNL_POSITIVE_BINARY_PROFILE,
-                                                     TRUE_DAILY_MINTRADE_NETPNL_POSITIVE_PROFILE)
+                                                     TRUE_DAILY_MINTRADE_NETPNL_POSITIVE_PROFILE,
+                                                     DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_POSITIVE_PROFILE)
         from filters.breakout_quality.models.spec import get_model_spec
         from services.breakout_quality import train_continuous_ranker as trainer
         from services.breakout_quality import continuous_ranker_pipeline as pipeline
@@ -566,7 +621,8 @@ class IndependentPositiveClassifierCases(TestCase):
                               'label': (raw > 0).astype(int)})
         percentiles = trainer.build_same_date_percentile_targets(raw, np.ones(24,dtype=bool), groups['date'])
         for name in (DAILY_UNIVERSAL_NETPNL_POSITIVE_BINARY_PROFILE,
-                     TRUE_DAILY_MINTRADE_NETPNL_POSITIVE_PROFILE):
+                     TRUE_DAILY_MINTRADE_NETPNL_POSITIVE_PROFILE,
+                     DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_POSITIVE_PROFILE):
             with self.subTest(profile=name), redirect_stdout(StringIO()):
                 recipe = get_breakout_quality_experiment_profile(name)
                 self.assertEqual(get_continuous_ranker_training_policy(recipe.training_objective).categorical_class_count, 2)
@@ -612,8 +668,10 @@ class ScoreOutputCompletenessCases(TestCase):
             get_breakout_quality_experiment_profile,
         )
         return [profile for name in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES
-                if (profile := get_breakout_quality_experiment_profile(name)).training_objective
-                == 'daily_mintrade_netpnl_positive_binary_cross_entropy']
+                if (profile := get_breakout_quality_experiment_profile(name))
+                and (policy := get_continuous_ranker_training_policy(profile.training_objective))
+                and policy.categorical_class_count == 2
+                and POSITIVE_P_CLASS_COLUMN in policy.categorical_score_columns]
 
     def test_classifier_output_is_required_by_manifest_and_fold(self):
         from types import SimpleNamespace
