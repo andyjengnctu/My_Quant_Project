@@ -307,6 +307,8 @@ class StrategyRobustnessUnitCases(unittest.TestCase):
             self.assertTrue(job["replay_active_only"])
             self.assertIsNone(job["baseline_dir"])
             self.assertEqual(job["training_elapsed_sec"], 0)
+            self.assertTrue(Path(job["baseline_trade_path"]).is_file())
+            self.assertTrue(job["baseline_trade_sha256"])
             seen.append(unit)
             return {"arm_id": unit[0], "seed": unit[1], "return_over_max_drawdown": 9.0,
                     "arm_order": job["arm_order"], "seed_order": job["seed_order"],
@@ -327,7 +329,15 @@ class StrategyRobustnessUnitCases(unittest.TestCase):
                  {unit: {"action": r.RESULT_ACTION_REUSE} for unit in old_units}))
             mock("_run_fixed_baselines", return_value={})
             no_fit = mock("_train_one_unit", side_effect=AssertionError("unexpected FIT"))
-            no_baseline = mock("_run_strategy_only_benchmark_unit", side_effect=AssertionError("unexpected old baseline replay"))
+            def retained_context(**kwargs):
+                # A present, verified transient baseline remains REUSE even if
+                # new CV arms require its trades for direct selection-R.
+                candidate = Path(kwargs["output_dir"])
+                candidate.mkdir(parents=True, exist_ok=True)
+                (candidate / "no_filter_trades.csv").write_text("trade_id\n", encoding="utf-8")
+                return True
+            mock("_strategy_only_baseline_context_available", side_effect=retained_context)
+            no_baseline = mock("_run_strategy_only_benchmark_unit", side_effect=AssertionError("unexpected baseline context rebuild"))
             no_inspection = mock("inspect_reusable_model_research_rolling_score", side_effect=AssertionError("plan was already resolved"))
             mock("_model_prediction_metrics_from_training_artifacts", return_value={})
             wake_on_completion = mock("wait", wraps=r.wait)
@@ -357,6 +367,150 @@ class StrategyRobustnessUnitCases(unittest.TestCase):
             self.assertNotIn("built:6", out.getvalue())
             self.assertNotIn("elapsed=", out.getvalue())
 
+
+    def test_active_only_selection_r_uses_verified_external_baseline_trades(self):
+        """Same metric owner, no fake baseline inside the model-only directory."""
+        from services.research import strategy_comparison as compare
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            pair_dir = root / "active_only"
+            baseline_dir = root / "baseline"
+            pair_dir.mkdir(); baseline_dir.mkdir()
+            (baseline_dir / "no_filter_trades.csv").write_text("dummy\n", encoding="utf-8")
+            (pair_dir / "score_ranking_trades.csv").write_text("dummy\n", encoding="utf-8")
+            def rounds(_frame, *, scenario):
+                if scenario == "no_filter":
+                    return pd.DataFrame({"match_key": ["A", "B"], "r_multiple": [1.0, 2.0]})
+                return pd.DataFrame({"match_key": ["B", "C"], "r_multiple": [2.0, 4.0]})
+            with patch.object(compare, "reconstruct_round_trips", side_effect=rounds):
+                with self.assertRaisesRegex(FileNotFoundError, "no_filter_trades"):
+                    compare._load_direct_selection_r(
+                        pair_dir, root=root,
+                        active_trades_filename="score_ranking_trades.csv",
+                    )
+                selection_r = compare._load_direct_selection_r(
+                    pair_dir, root=root,
+                    active_trades_filename="score_ranking_trades.csv",
+                    baseline_trades_path=baseline_dir / "no_filter_trades.csv",
+                )
+                self.assertEqual(selection_r, 3.0)  # exclusive C +4 minus A +1
+
+    def test_empty_trade_csv_is_legal_only_for_verified_zero_trades(self):
+        from services.research import strategy_comparison as compare
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            baseline = root / "baseline" / "no_filter_trades.csv"
+            active_dir = root / "active"
+            baseline.parent.mkdir()
+            active_dir.mkdir()
+            # The canonical engine writes a BOM plus a newline for a zero-row,
+            # zero-column pandas trade history (not literally zero bytes).
+            baseline.write_bytes(b"\xef\xbb\xbf\n")
+            (active_dir / "score_ranking_trades.csv").write_bytes(b"\xef\xbb\xbf\n")
+            self.assertEqual(compare._load_direct_selection_r(
+                active_dir, root=root, active_trades_filename="score_ranking_trades.csv",
+                baseline_trades_path=baseline,
+                baseline_trade_count=0, active_trade_count=0,
+            ), 0.0)
+            with self.assertRaisesRegex(ValueError, "零交易證據"):
+                compare._load_direct_selection_r(
+                    active_dir, root=root, active_trades_filename="score_ranking_trades.csv",
+                    baseline_trades_path=baseline,
+                    baseline_trade_count=1, active_trade_count=0,
+                )
+            with self.assertRaisesRegex(ValueError, "零交易證據"):
+                compare._load_direct_selection_r(
+                    active_dir, root=root, active_trades_filename="score_ranking_trades.csv",
+                    baseline_trades_path=baseline,
+                    baseline_trade_count=0, active_trade_count=5,
+                )
+            with self.assertRaisesRegex(ValueError, "零交易證據"):
+                compare._load_direct_selection_r(
+                    active_dir, root=root, active_trades_filename="score_ranking_trades.csv",
+                    baseline_trades_path=baseline,
+                )
+
+    def test_active_only_rejects_changed_same_seed_baseline_bytes(self):
+        from services.research import strategy_multi_seed_robustness as robust
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            baseline = root / "baseline" / "no_filter_trades.csv"
+            baseline.parent.mkdir()
+            baseline.write_text("trade_id\n", encoding="utf-8")
+            job = {
+                "profile_id": "broker_cash_dl_conversion_rolling",
+                "arm_id": "C140", "seed": 693545351,
+                "arm_order": 32, "seed_order": 1,
+                "comparison_start": "2021-01-01", "comparison_end": "2026-03-02",
+                "pair_dir": str(root / "replay"),
+                "result_path": str(root / "result.json"),
+                "baseline_trade_path": str(baseline),
+                "baseline_trade_sha256": "0" * 64,
+                "replay_active_only": True,
+                "keep_attribution_source": False,
+                "keep_replay_details": True,
+                "params_path": "unused.json", "score_overrides": {},
+            }
+            with (patch.object(robust, "PROJECT_ROOT", new=root),
+                  patch.object(robust, "run_strategy_compare_active_arm", return_value={"score_ranking": {}}),
+                  patch.object(robust, "_load_direct_selection_r", side_effect=AssertionError("unverified baseline must not be read"))):
+                with self.assertRaisesRegex(RuntimeError, "SHA"):
+                    robust._replay_one_unit(job)
+            self.assertFalse((root / "result.json").exists())
+
+    def test_signed_baseline_context_rebuild_is_not_scientific_replay(self):
+        from services.research import strategy_multi_seed_robustness as robust
+        settings, cfg, _, seeds, _ = _registered_fixture()
+        seed = seeds[0]
+        baseline, model = settings.arms["C139"], settings.arms["C140"]
+        plan = RobustnessWorkPlan.build(
+            fingerprint="fixture", units={(baseline.arm_id, seed), (model.arm_id, seed)},
+            reuse_units={(baseline.arm_id, seed)}, dependencies={model.arm_id: (model.dl_id,)},
+        )
+        saved = {"arm_id": baseline.arm_id, "seed": seed, "return_over_max_drawdown": 2.29,
+                 "selected_epoch": 0, "fold_count": None}
+        years = [{"arm_id": baseline.arm_id, "seed": seed, "year": 2021,
+                  "return_pct": 4.0, "is_complete_year": True}]
+        calls = []
+        def rebuild(**kwargs):
+            calls.append(kwargs)
+            path = Path(kwargs["output_dir"])
+            path.mkdir(parents=True, exist_ok=True)
+            (path / "no_filter_trades.csv").write_text("trade_id\n", encoding="utf-8")
+            return {**saved, "yearly": [{"year": 2021, "return_pct": 4.0,
+                                        "is_complete_year": True}]}
+        with tempfile.TemporaryDirectory() as temp:
+            with (patch.object(robust, "_strategy_only_baseline_context_available", return_value=False),
+                  patch.object(robust, "_run_strategy_only_benchmark_unit", side_effect=rebuild)):
+                paths, actions, rows, yearly = robust._prepare_strategy_only_baseline_units(
+                    cfg=replace(cfg, cpu_replay_workers=1), settings=settings,
+                    run_root=Path(temp), stochastic_arms=(baseline, model),
+                    model_arms=(model,), strategy_only_arms=(baseline,),
+                    seeds=(seed,), benchmark_bindings={(baseline.arm_id, seed): {
+                        "path": "unused.json", "sha256": "param", "manifest_sha256": "manifest",
+                        "evaluation_mode": "rolling", "parameter_payload_ready": True,
+                    }}, comparison_start="2021-01-01", comparison_end="2026-03-02",
+                    scientific_completed={(baseline.arm_id, seed)},
+                    completed={(baseline.arm_id, seed)},
+                    rows=[dict(saved)], yearly_rows=list(years), work_plan=plan,
+                )
+            self.assertEqual(actions[(baseline.arm_id, seed)], "REBUILD_CONTEXT")
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(rows, [saved], "signed seed observation cannot be overwritten")
+            self.assertEqual(yearly, years)
+            self.assertTrue((Path(paths[(baseline.arm_id, seed)]) / "no_filter_trades.csv").exists())
+
+    def test_real_robustness_registry_maps_every_model_to_one_same_param_baseline(self):
+        from services.research import strategy_multi_seed_robustness as robust
+        settings, cfg, arms, _, _ = _registered_fixture()
+        baselines = tuple(arm for arm in arms if not arm.dl_enabled)
+        for model in (arm for arm in arms if arm.dl_enabled):
+            with self.subTest(arm=model.arm_id):
+                baseline = robust._resolve_same_seed_baseline_arm(
+                    settings=settings, strategy_only_arms=baselines, model_arm=model,
+                )
+                self.assertEqual(baseline.param_source, model.param_source)
+                self.assertEqual(baseline.rule_policy, model.rule_policy)
 
     def test_active_only_matches_paired_real_broker_cash_replay(self):
         """Run the real engine; only fixture score/parameter I/O is injected."""
@@ -478,6 +632,24 @@ class StrategyRobustnessUnitCases(unittest.TestCase):
                         self.assertFalse((active_dir / "no_filter_trades.csv").exists())
                         self.assertFalse((active_dir / "strategy_comparison.json").exists())
                         self.assertTrue((active_dir / "strategy_observation.json").exists())
+                        # The real pair and Active-only observation must yield
+                        # identical selection R from the same base/active trades.
+                        from services.research.strategy_comparison import _load_direct_selection_r
+                        self.assertAlmostEqual(
+                            _load_direct_selection_r(
+                                paired_dir, root=root,
+                                active_trades_filename="score_ranking_trades.csv",
+                                baseline_trade_count=paired["no_filter"]["trade_count"],
+                                active_trade_count=paired["score_ranking"]["trade_count"],
+                            ),
+                            _load_direct_selection_r(
+                                active_dir, root=root,
+                                active_trades_filename="score_ranking_trades.csv",
+                                baseline_trades_path=paired_dir / "no_filter_trades.csv",
+                                baseline_trade_count=paired["no_filter"]["trade_count"],
+                                active_trade_count=active["score_ranking"]["trade_count"],
+                            ), places=10,
+                        )
 
 
 

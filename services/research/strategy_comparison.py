@@ -533,21 +533,49 @@ def _exclusive_selection_r_from_trade_files(
     pair_dir: Path,
     *,
     active_trades_filename: str,
+    baseline_trades_path: Path | None = None,
+    baseline_trade_count: int | float | None = None,
+    active_trade_count: int | float | None = None,
 ) -> float:
-    baseline_path = pair_dir / "no_filter_trades.csv"
+    # Normal comparisons keep both trades under one pair. Robustness active-only
+    # replay instead consumes a verified same-seed baseline from its own directory.
+    baseline_path = (
+        pair_dir / "no_filter_trades.csv"
+        if baseline_trades_path is None else Path(baseline_trades_path)
+    )
     active_path = pair_dir / active_trades_filename
     if not baseline_path.is_file() or not active_path.is_file():
         raise FileNotFoundError(
             "缺少直接選擇R所需交易工件: "
             f"{baseline_path.name}, {active_path.name}"
         )
-    baseline = reconstruct_round_trips(
-        pd.read_csv(baseline_path, encoding="utf-8-sig"),
-        scenario="no_filter",
+    def verified_round_trips(path: Path, *, scenario: str, expected_count: object) -> pd.DataFrame:
+        try:
+            trades = pd.read_csv(path, encoding="utf-8-sig")
+        except pd.errors.EmptyDataError as exc:
+            # Canonical replay may serialize a legitimately empty trade history
+            # as zero bytes. Require affirmative zero-trade economic evidence;
+            # never silently treat a missing/truncated nonzero result as zero.
+            raw = path.read_bytes()
+            # Pandas .to_csv(encoding="utf-8-sig") emits BOM + a blank line
+            # for an empty DataFrame on some platforms (4-5 bytes).
+            empty_csv = not (raw[3:] if raw.startswith(b"\xef\xbb\xbf") else raw).strip()
+            if (
+                empty_csv
+                and isinstance(expected_count, (int, float))
+                and not isinstance(expected_count, bool)
+                and math.isfinite(float(expected_count))
+                and float(expected_count) == 0.0
+            ):
+                return pd.DataFrame(columns=("match_key", "r_multiple"))
+            raise ValueError(f"交易檔為空但沒有合法的零交易證據: {path.name}") from exc
+        return reconstruct_round_trips(trades, scenario=scenario)
+
+    baseline = verified_round_trips(
+        baseline_path, scenario="no_filter", expected_count=baseline_trade_count,
     )
-    active = reconstruct_round_trips(
-        pd.read_csv(active_path, encoding="utf-8-sig"),
-        scenario="active",
+    active = verified_round_trips(
+        active_path, scenario="active", expected_count=active_trade_count,
     )
     left = baseline.set_index("match_key", drop=False) if not baseline.empty else baseline
     right = active.set_index("match_key", drop=False) if not active.empty else active
@@ -565,6 +593,9 @@ def _load_direct_selection_r(
     *,
     root: Path,
     active_trades_filename: str,
+    baseline_trades_path: Path | None = None,
+    baseline_trade_count: int | float | None = None,
+    active_trade_count: int | float | None = None,
 ) -> float:
     path = pair_dir / "trade_attribution.json"
     if path.is_file():
@@ -584,6 +615,9 @@ def _load_direct_selection_r(
     return _exclusive_selection_r_from_trade_files(
         pair_dir,
         active_trades_filename=active_trades_filename,
+        baseline_trades_path=baseline_trades_path,
+        baseline_trade_count=baseline_trade_count,
+        active_trade_count=active_trade_count,
     )
 
 
@@ -1433,6 +1467,8 @@ def run_strategy_comparison(
                 pair_dir,
                 root=root,
                 active_trades_filename=runtime_spec["active_trades_filename"],
+                baseline_trade_count=dict(pair_payload.get("no_filter") or {}).get("trade_count"),
+                active_trade_count=dict(pair_payload.get(runtime_spec["active_key"]) or {}).get("trade_count"),
             )
             baseline_sources[baseline_group_key] = pair_dir
             if off_arm.arm_id not in arm_execution_timing:
@@ -1600,6 +1636,8 @@ def run_strategy_comparison(
             pair_dir,
             root=root,
             active_trades_filename=runtime_spec["active_trades_filename"],
+            baseline_trade_count=dict(pair_payload.get("no_filter") or {}).get("trade_count"),
+            active_trade_count=dict(pair_payload.get(runtime_spec["active_key"]) or {}).get("trade_count"),
         )
         baseline_sources[baseline_group_key] = pair_dir
         arm_finished = time.perf_counter()

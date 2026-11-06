@@ -4734,8 +4734,32 @@ def _replay_one_unit(job: dict[str, Any]) -> dict[str, Any]:
         capture_selection_target_diagnostics=False,
     )
     metrics = dict(payload.get("score_ranking") or {})
+    # Active-only deliberately does not publish no_filter_trades.csv under the
+    # model pair. Use the same-seed, same-param, verified baseline context once
+    # for all model arms. Never replace missing evidence with 0 or a wrong seed.
+    baseline_trades_path = None
+    if bool(job.get("replay_active_only")):
+        baseline_path_text = str(job.get("baseline_trade_path") or "")
+        baseline_sha = str(job.get("baseline_trade_sha256") or "").strip().lower()
+        if not baseline_path_text or not baseline_sha:
+            raise RuntimeError("Active-only robustness缺少已驗證same-seed baseline交易證據")
+        baseline_trades_path = Path(baseline_path_text).resolve()
+        baseline_trades_path.relative_to(PROJECT_ROOT)
+        if (not baseline_trades_path.is_file()
+                or compute_file_sha256(baseline_trades_path).lower() != baseline_sha):
+            raise RuntimeError("Active-only robustness baseline trades SHA不一致；拒絕錯誤的DL選擇R")
+    baseline_count = None
+    if baseline_trades_path is not None:
+        baseline_evidence = _read_json(
+            baseline_trades_path.parent / "strategy_comparison.json"
+        )
+        baseline_count = dict(baseline_evidence.get("no_filter") or {}).get("trade_count")
     metrics["direct_selection_r"] = _load_direct_selection_r(
-        pair_dir, root=PROJECT_ROOT, active_trades_filename=runtime_spec["active_trades_filename"]
+        pair_dir, root=PROJECT_ROOT,
+        active_trades_filename=runtime_spec["active_trades_filename"],
+        baseline_trades_path=baseline_trades_path,
+        baseline_trade_count=baseline_count,
+        active_trade_count=metrics.get("trade_count"),
     )
     model_prediction = dict(job.get("model_prediction_metrics") or {})
     result = {
@@ -5799,7 +5823,14 @@ def _build_robustness_replay_job(
         "param_evaluation_mode": str(param_binding["evaluation_mode"]),
         "comparison_start": comparison_start,
         "comparison_end": comparison_end,
+        # The validated trade-only baseline is a metric dependency, not a
+        # request to run the paired baseline again in this model worker.
         "baseline_dir": None,
+        "baseline_trade_path": str(Path(baseline_dir).resolve() / "no_filter_trades.csv") if baseline_dir else None,
+        "baseline_trade_sha256": (
+            compute_file_sha256(Path(baseline_dir) / "no_filter_trades.csv")
+            if baseline_dir else None
+        ),
         "replay_active_only": True,
         "score_path": primary["score"],
         "score_manifest_path": primary.get("manifest"),
@@ -5961,8 +5992,26 @@ def _prepare_strategy_only_baseline_units(
     # Missing disposable pair directories never authorize replay of old results.
     benchmark_baseline_dirs: dict[tuple[str, int], str] = {}
     stochastic_order = {arm.arm_id: index for index, arm in enumerate(stochastic_arms, start=1)}
-    # Active-only observation replay never needs a transient DL-off pair.
-    required_baseline_units: set[tuple[str, int]] = set()
+    # Active-only does not replay DL-off for every model arm, but the canonical
+    # exclusive-selection R metric needs one same-seed baseline trade set per
+    # parameter/rule group. Reconstruct only MISSING transient contexts, never
+    # invalidate an already-signed baseline scientific observation.
+    pending_model_units = (
+        set(work_plan.replay_units)
+        if work_plan is not None
+        else {(arm.arm_id, seed) for arm in model_arms for seed in seeds}
+    )
+    required_baseline_units = {
+        (
+            _resolve_same_seed_baseline_arm(
+                settings=settings, strategy_only_arms=strategy_only_arms,
+                model_arm=arm,
+            ).arm_id,
+            int(seed),
+        )
+        for arm in model_arms for seed in seeds
+        if (arm.arm_id, int(seed)) in pending_model_units
+    }
 
     strategy_only_actions: dict[tuple[str, int], str] = {}
     strategy_results_changed = False
@@ -6019,7 +6068,9 @@ def _prepare_strategy_only_baseline_units(
                 benchmark_bindings[unit_identity] = refreshed
                 binding = refreshed
 
-            if work_plan is not None:
+            # Rebuilding transient trades for an already-signed C96/C139 is
+            # not permission to re-execute or overwrite that scientific result.
+            if work_plan is not None and action == "RUN_SCIENTIFIC":
                 work_plan.require_replay(unit_identity)
             baseline_jobs.append((unit_identity, action, {
                 "profile_id": str(settings.profile_id),
@@ -6078,6 +6129,23 @@ def _prepare_strategy_only_baseline_units(
         for (unit_identity, action, job), result in zip(baseline_jobs, results, strict=True):
             benchmark_baseline_dirs[unit_identity] = str(Path(job["output_dir"]).resolve())
             if action == "REBUILD_CONTEXT":
+                # Verified old seed results remain authoritative. A re-created
+                # baseline must agree with them before its trades can be used
+                # to calculate any model's selection R.
+                signed_rows = [row for row in rows if (
+                    str(row.get("arm_id")), int(row.get("seed"))
+                ) == unit_identity]
+                if len(signed_rows) != 1:
+                    raise RuntimeError("baseline context缺少唯一的已簽章same-seed scientific result")
+                signed_yearly = pd.DataFrame([
+                    row for row in yearly_rows if (
+                        str(row.get("arm_id")), int(row.get("seed"))
+                    ) == unit_identity
+                ])
+                _validate_rebuilt_observation(
+                    existing_row=signed_rows[0], rebuilt=result,
+                    existing_yearly=signed_yearly,
+                )
                 continue
             rows = [
                 row for row in rows
@@ -6593,7 +6661,15 @@ def _execute_robustness_under_lock(
         if any(key not in trained_artifacts for key in source_keys):
             return
         work_plan.require_replay(unit_identity)
-        baseline_dir = None
+        baseline_arm = _resolve_same_seed_baseline_arm(
+            settings=settings, strategy_only_arms=strategy_only_arms,
+            model_arm=arm,
+        )
+        baseline_dir = benchmark_baseline_dirs.get((baseline_arm.arm_id, int(seed)))
+        if not baseline_dir:
+            raise RuntimeError(
+                f"Robustness缺少same-seed baseline context: {arm.arm_id}/seed={seed}"
+            )
         source_artifacts = {
             dl_id: dict(trained_artifacts[(dl_id, int(seed))])
             for dl_id in required_dl_ids
