@@ -83,7 +83,7 @@ class PairwiseConfidenceCases(unittest.TestCase):
                                     group_dates=dates)
         np.testing.assert_allclose(subset, full[[2, 0, 4]], atol=0)
 
-    def test_scientific_registration_and_four_canonical_strategies(self):
+    def test_scientific_registration_and_retired_daily_strategies(self):
         spec = get_continuous_ranker_research_spec(DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_PROBABILISTIC_PROFILE)
         self.assertEqual(spec.model_research_id, 'MR-13CX')
         self.assertEqual(spec.pairwise_reduction, 'equal_pair_weight')
@@ -91,6 +91,15 @@ class PairwiseConfidenceCases(unittest.TestCase):
         self.assertEqual(recipe.training_policy.loss_handler, 'pairwise_bernoulli_probability')
         self.assertEqual(recipe.target_policy.component_target_id, 'daily_terminal_mae_gated_t40_v1')
         self.assertEqual(STRATEGY_DL_SOURCES['CONT13CX_ROLL']['experiment_profile'], spec.profile_name)
+        from core.strategy_compare_policy import (
+            get_strategy_comparison_settings, get_strategy_multi_seed_robustness_settings,
+            get_strategy_compare_model_bindings,
+        )
+        from config.strategy_compare import (
+            STRATEGY_COMPARE_CURRENT_OOS_PROFILE, STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE,
+            STRATEGY_COMPARE_CURRENT_OOS_ROBUSTNESS,
+            STRATEGY_COMPARE_CURRENT_ROLLING_ROBUSTNESS,
+        )
         for arm_id, mode, entry in [
             ('C147', 'resource-aware-continuous-score-constrained-optimal', 'Breakout'),
             ('C148', 'resource-aware-continuous-score-no-k-no-r0', 'Breakout'),
@@ -101,6 +110,20 @@ class PairwiseConfidenceCases(unittest.TestCase):
             self.assertEqual(arm['dl_runtime_mode'], mode)
             self.assertEqual(arm.get('entry_strategy', 'Breakout'), entry)
             self.assertNotIn('positive_dl_id', arm['dl_runtime_options'])
+        for profile in (STRATEGY_COMPARE_CURRENT_OOS_PROFILE, STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE):
+            settings = get_strategy_comparison_settings(profile)
+            current = {arm.arm_id for arm in settings.enabled_arms}
+            self.assertTrue({'C147', 'C148', 'C145', 'C146'}.issubset(current))
+            self.assertTrue({'C149', 'C150'}.isdisjoint(current))
+            self.assertTrue(all('C149' not in c.contrast_id and 'C150' not in c.contrast_id
+                                for c in settings.enabled_contrasts))
+        for profile in (STRATEGY_COMPARE_CURRENT_OOS_ROBUSTNESS,
+                        STRATEGY_COMPARE_CURRENT_ROLLING_ROBUSTNESS):
+            settings = get_strategy_multi_seed_robustness_settings(profile)
+            self.assertTrue({'C149', 'C150'}.isdisjoint(set(settings.stochastic_arm_ids)))
+        cx_bindings = next(row for row in get_strategy_compare_model_bindings()
+                           if row['model_id'] == 'MR-13CX')
+        self.assertEqual(set(cx_bindings['strategy_arm_ids']), {'C147', 'C148'})
 
     def test_target_overview_maps_both_models_to_same_t40_truth(self):
         definition = get_formal_oracle_definition(get_active_audit_module_id())
@@ -119,13 +142,24 @@ class PairwiseConfidenceCases(unittest.TestCase):
         for strategy, selector, cx, cj in [
             ('Breakout', 'exact', 'C147', 'C107'),
             ('Breakout', 'direct', 'C148', 'C109'),
-            ('Daily', 'exact', 'C149', 'C145'),
-            ('Daily', 'direct', 'C150', 'C146')]:
+        ]:
             key = next(oracle_comparison_key(i) for i in comparisons if
                        i['target'] == ('T40' if selector == 'exact' else 'T40_Direct') and str(i.get('strategy', 'Breakout')) == strategy
                        and i['selector'] == selector)
             self.assertEqual(bindings[(key, profile_cx)], cx)
             self.assertIn(cj, bindings.values())
+        for selector, cj in (('exact', 'C145'), ('direct', 'C146')):
+            key = next(oracle_comparison_key(i) for i in comparisons if
+                       i['target'] == ('T40' if selector == 'exact' else 'T40_Direct')
+                       and str(i.get('strategy', 'Breakout')) == 'Daily'
+                       and i['selector'] == selector)
+            self.assertNotIn((key, profile_cx), bindings)
+            self.assertIn(cj, bindings.values())
+        from pathlib import Path
+        from services.research.target_dl_overview import collect_target_dl_overview
+        rows = collect_target_dl_overview(Path(__file__).resolve().parents[2])['rows']
+        self.assertTrue(all(not (row['model'] == 'MR-13CX' and row['entry_strategy'] == 'Daily')
+                            for row in rows))
 
 
 if __name__ == '__main__':

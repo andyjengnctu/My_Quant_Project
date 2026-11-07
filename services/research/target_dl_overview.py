@@ -42,9 +42,12 @@ from core.console_report import render_table, render_title
 from core.report_style import best_worst_signals, styled_signal
 from core.strategy_compare_policy import (
     get_strategy_comparison_settings,
+    get_strategy_compare_suite,
     get_strategy_multi_seed_robustness_settings,
 )
-from core.strategy_compare_registry import STRATEGY_COMPARE_ARMS, STRATEGY_DL_SOURCES
+from core.strategy_compare_registry import (
+    STRATEGY_COMPARE_ARMS, STRATEGY_COMPARE_PROFILES, STRATEGY_DL_SOURCES,
+)
 from core.positive_score_admission import (
     POSITIVE_P_CLASS_COLUMN, requires_positive_score, uses_primary_positive_classifier,
 )
@@ -476,6 +479,10 @@ def _strategy_bindings(*, target_names: tuple[str, ...],
                    for item in resolve_current_oracle_comparisons(definition.source)}
     positive_targets = {key for key, item in comparisons.items()
                         if item.get("positive_output")}
+    # Only active Compare Suite arms can be bound to current Target x DL rows;
+    # historical strategy definitions are still available for old artifacts.
+    suite_id = str(STRATEGY_COMPARE_PROFILES[STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE]["suite_id"])
+    active_arms = set(get_strategy_compare_suite(suite_id)["arm_ids"])
     candidates: dict[tuple[str, str], set[str]] = {}
     for target in target_names:
         if target == baseline or not score_targets.get(target):
@@ -495,7 +502,7 @@ def _strategy_bindings(*, target_names: tuple[str, ...],
         # for read-only Target x DL display, with strict downstream binding.
         if declared_arm_id and declared_arm_id not in STRATEGY_COMPARE_ARMS:
             raise ValueError(f"Oracle reference arm not registered: {declared_arm_id}")
-        arm_choices = STRATEGY_COMPARE_ARMS.items()
+        arm_choices = ((arm_id, STRATEGY_COMPARE_ARMS[arm_id]) for arm_id in active_arms)
         for arm_id, arm in arm_choices:
             if (not arm.get("dl_enabled") or arm.get("dl_runtime_mode") != desired_mode
                     or str(arm.get("entry_strategy", "Breakout")) != entry_strategy
@@ -779,6 +786,9 @@ def collect_target_dl_overview(project_root: Path) -> dict[str, Any]:
     display_selectors = {oracle_comparison_key(item): oracle_target_semantics(item)[1]
                          for item in comparisons}
     rows = []
+    profiles_with_current_strategies = {
+        profile for (_, profile), arm_id in bindings.items() if profile and arm_id
+    }
     for target in targets:
         # The canonical scientific profile registry already provides a stable
         # chronology; keep historical model groups (e.g. K / AH / AK) together.
@@ -786,6 +796,11 @@ def collect_target_dl_overview(project_root: Path) -> dict[str, Any]:
         for model in models:
             profile = str(model.get("profile") or "")
             arm = bindings.get((target, profile), "")
+            # A model bound to a current strategy must not reappear under a
+            # different entry/selector solely through a retired historical arm.
+            # Keep purely model-only research rows unchanged.
+            if profile in profiles_with_current_strategies and not arm:
+                continue
             classifier = (
                 _positive_classifier_for_arm(STRATEGY_COMPARE_ARMS[arm], str(score_targets[target]))
                 if arm and target in positive_targets else None

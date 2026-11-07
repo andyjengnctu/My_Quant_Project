@@ -142,7 +142,7 @@ STRATEGY_COMPARE_SUITES = {
         "arm_ids": (
             "C96", "C97", "C98", "C99", "C100", "C101", "C102", "C103",
             "C105", "C106", "C107", "C108", "C109", "C110",
-            "C111", "C112", "C115", "C116", "C117", "C118", "C119", "C120", "C121", "C122", "C123", "C124", "C125", "C126", "C133", "C134", "C135", "C136", "C137", "C138", "C145", "C146", "C147", "C148", "C149", "C150",
+            "C111", "C112", "C115", "C116", "C117", "C118", "C119", "C120", "C121", "C122", "C123", "C124", "C125", "C126", "C133", "C134", "C135", "C136", "C137", "C138", "C145", "C146", "C147", "C148",
         ),
         # A compact connected contrast graph supports each selected model
         # versus C96 plus the matched CK/CJ label contrast. Historical AO/CH
@@ -159,8 +159,8 @@ STRATEGY_COMPARE_SUITES = {
             "C110-C109", "C111-C115", "C112-C116",
             "C137-C96", "C138-C96", "C137-C138", "C137-C133", "C138-C134",
             "C145-C96", "C146-C96", "C145-C146", "C145-C107", "C146-C109",
-            "C147-C107", "C148-C109", "C149-C145", "C150-C146",
-            "C147-C148", "C149-C150", "C147-C149", "C148-C150",
+            "C147-C107", "C148-C109",
+            "C147-C148",
         ),
         "display_name_bases": {
             "C96": "Min Base-Finalist-Best / Broker-Cash",
@@ -201,8 +201,6 @@ STRATEGY_COMPARE_SUITES = {
             "C146": "Daily Min MR-13CJ T40 Rank Direct No-K No-R0 / Broker-Cash",
             "C147": "Min MR-13CX T40 Pairwise-Confidence Exact K/R0 / Broker-Cash",
             "C148": "Min MR-13CX T40 Pairwise-Confidence Direct No-K No-R0 / Broker-Cash",
-            "C149": "Daily Min MR-13CX T40 Pairwise-Confidence Exact K/R0 / Broker-Cash",
-            "C150": "Daily Min MR-13CX T40 Pairwise-Confidence Direct No-K No-R0 / Broker-Cash",
         },
     },
     "non_dl_c85_same_signal_revalidation_v1": {

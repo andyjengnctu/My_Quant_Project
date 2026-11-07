@@ -5342,6 +5342,23 @@ Assessment: `USER_REPORTED_ROLLING_RESULT_AVAILABLE / FULL_HORIZON_MAE_SMALL_PAI
 - **歷史結果與依賴：** TrueDaily Producer revision 1→2；此前四組 Oracle（Breakout／Daily × Exact／Direct）共 32 個 8-Seed 單位的舊收據不可視為 current；CT FIT v2→v3 且 PIT Scores 失效；Daily C133/C134 Replay v2→v3；CT Breakout C135/C136 下游 Scores 失效但其 Breakout 入場算法不變。Event-driven DailyUniversal、CO／CP、其他非受影響 Truth／Oracle／策略工件仍依正式簽章 REUSE。舊結果留存為歷史，不被新總覽當成當前績效。
 - **隔離驗證：** 原版 168 份**合成**正式簽章收據在新 Oracle 身分下為 136 REUSE／32 RUN／0 BLOCKED；完成同鏈單元／合成 Replay 回歸，未執行使用者 Windows 正式完整 Test Suite 或全市場價格資料的 E13 parity。本次修正不得被解讀為新 Market RoMD 成果或自動升格 Trading。
 
+### 2026-11-07 · MR-13CX T40 Pairwise-Confidence 首次單 Seed Rolling OOS 結果
+
+- **比較條件與證據**：使用者回報 `貼上的文字 (1)(20261107-053036).txt` 的正式 Research `[4]→[2] Rolling OOS Test`、`[1]→[2] Target × DL 驗證總覽`；對應程式基準 `test-branch-1_20261107_121551_b962d659.zip`。研究區間 `2021-01-01～2026-03-02`；config `RESEARCH_SINGLE_SEED=42`。兩模型使用相同 T40 真值與 PIT 合法學習股票日、相同 Min P16/Broker-Cash、同 Selector（Exact 或 Direct）及進場政策（Breakout 或 Daily），變數為 CJ 原本 Delta-NDCG Pairwise 排序對 CX Bernoulli 機率式 Pairwise 排序。此為反覆使用的**迭代 OOS 證據**，非 untouched holdout。ZIP 未提供全市場逐日 score、fills、canonical manifest 與多 Seed Replay，因此數值為 **USER_REPORTED**、未在 GPT 端完整獨立重跑。
+
+| 配對（CX vs CJ） | Total Return（CX / CJ） | MDD（CX / CJ） | RoMD（CX / CJ；差） | Trades（CX / CJ） | EV(A)（CX / CJ） | Fill（CX / CJ） |
+|---|---:|---:|---:|---:|---:|---:|
+| Breakout Exact C147/C107 | +123.65% / +143.78% | 13.86% / 13.01% | 8.92 / 11.05；**−2.13** | 359 / 359 | +0.67R / +0.76R | 99.17% / 99.72% |
+| Breakout Direct C148/C109 | +137.19% / +99.09% | 15.15% / 13.78% | 9.06 / 7.19；**+1.87** | 394 / 401 | +0.66R / +0.45R | 100.00% / 100.00% |
+| Daily Exact C149/C145 | +53.51% / +53.78% | 8.26% / 9.55% | 6.48 / 5.63；**+0.85** | 177 / 185 | +0.40R / +0.31R | 71.08% / 79.06% |
+| Daily Direct C150/C146 | +67.60% / +67.45% | 17.51% / 16.68% | 3.86 / 4.04；**−0.18** | 323 / 289 | +0.26R / +0.20R | 67.43% / 69.47% |
+
+- **模型與 Oracle**：`[1][2]` 回報 CX Rolling ρ `0.2104`，CJ `0.2194`（CX −0.0090），CX Robustness ρ 空白；未提供配對機率可靠度圖、Brier 或 ECE。CX 與 CJ 在相同 T40／進場／Selector 下列示**同一份**已有的 Oracle RoMD，這不是兩種模型各自提升 Oracle 的證據。 此次總覽所示 Daily C145/C149 Exact Oracle `53.85`、C146/C150 Direct `10727.62`，與先前 CJ 報告一致，但 E13 完整逐日等價尚未於本輪重驗。CX 四策略的 Robustness RoMD 均空白；`Model Robustness: N=4` 不能代替 CX 已完成多 Seed。
+- **可觀察歸因與限制**：Breakout Direct C148 的總報酬 +38.10pp、EV(A) +0.21R，雖 MDD 增 1.37pp，RoMD 仍增加 1.87。Daily Exact C149 總報酬反而少 0.27pp，但 MDD 降 1.29pp，RoMD 增 0.85；因此其改善主要表現在報告層級回撤，不是累積報酬。Breakout Exact C147 與 Daily Direct C150 未改善。CX 機率是模型估計，無相對排名可信度校準證據，不得宣稱已可靠量化個股排名把握程度；各配對尚無逐日 selection／fill 歸因，也不能把變化直接歸因於 confidence。
+- **研究判定**：`USER_REPORTED_SINGLE_SEED_ROLLING_AVAILABLE / 2_OF_4_ROMD_IMPROVED / BREAKOUT_DIRECT_PROMISING_BUT_UNVERIFIED / EXACT_AND_DAILY_MIXED / ITERATIVE_OOS / MODEL_AND_STRATEGY_ROBUSTNESS_PENDING / PROBABILITY_CALIBRATION_PENDING / NO_RESEARCH_ID_OR_TARGET_CHANGE / NO_TRADING / NO_PROMOTION`。維持 MR-13CJ 原權重與 C107/C109/C145/C146，不改 CX loss、Selector、人工權重或 Score threshold。優先使用正式入口取得 CX 與 CJ **同 Seed** Rolling Robustness；必要時以一次性唯讀 Audit 檢查 OOF pairwise 機率與真實 pair 命中可靠度，再決定是否繼續研究。原 Oracle E13 parity 尚未本輪重新確證。
+
+- **2026-11-07 user retirement decision (C149/C150 only)**: Retire CX Daily Exact `C149` and Daily Direct `C150` from the active Research Strategy Compare (OOS/Rolling/Robustness) and Target x DL display; keep CX model `MR-13CX` and Breakout `C147/C148` active. Historical single-seed observations remain as recorded above: C149 6.48 versus CJ C145 5.63 RoMD, C150 3.86 versus CJ C146 4.04 RoMD. Retiring these two arms is a user scope decision, not a claim that C149 failed every scientific metric. Retain IDs, Replay v1 definitions, signed artifacts and original evidence for historical interpretation; no FIT/Replay version bump or deletion of C145/C146/C147/C148 results.
+
 ## 6. 後續新增規則
 
 **只有新科學證據或舊科學證據有效性更正才能增加本文件內容。** 記錄必須有實驗／Target 身分、期間／Seed、控制變數、原始結果、負結果與決策，並指向正式證據。沒有市場／模型結果的工程測試、提交紀錄、打包、格式調整或一次性 Audit 清理，不可追加研究章節。本文件不再生成封存副本或研究待辦。

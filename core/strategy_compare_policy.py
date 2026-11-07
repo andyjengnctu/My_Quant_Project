@@ -664,10 +664,16 @@ def get_strategy_compare_suite(suite_id: str) -> dict[str, object]:
 def get_strategy_compare_model_bindings() -> tuple[dict[str, object], ...]:
     """Resolve shared model-list bindings without authorizing new strategy conversions."""
 
+    # Historical arm contracts remain registered for artifact interpretation,
+    # but current model-to-strategy bindings must use the active Compare Suite.
+    suite_id = str(STRATEGY_COMPARE_PROFILES[STRATEGY_COMPARE_DEFAULT_PROFILE]["suite_id"])
+    active_ids = set(get_strategy_compare_suite(suite_id)["arm_ids"])
     rows = []
     for model_id, profile in get_breakout_quality_model_test_settings().model_profiles:
         bound = []
         for arm_id, arm_raw in STRATEGY_COMPARE_ARMS.items():
+            if arm_id not in active_ids:
+                continue
             arm = dict(arm_raw)
             if not bool(arm.get("dl_enabled")):
                 continue
