@@ -669,11 +669,9 @@ class OracleExecutionIndex:
         if oracle_ranking_options(identity["ranking_options"]) != oracle_ranking_options(context["ranking_options"]):
             raise ValueError("execution reference selector options differ")
         policy = oracle_replay_policy(identity.get("replay_policy") or {})
-        for key, value in oracle_replay_policy(context["replay_policy"]).items():
-            if key == "oracle_parity_implementation" and context["target"] == "C96":
-                continue
-            if policy.get(key) != value:
-                raise ValueError(f"execution reference economic policy differs: {key}")
+        differences = self._economic_policy_differences(context, identity)
+        if differences:
+            raise ValueError(f"execution reference economic policy differs: {differences[0]}")
         if context["score_contract"] is not None:
             expected_score = context["score_contract"]
             if expected_score.get("perfect_positive_output") == _POSITIVE_OUTPUT_ID:
@@ -692,7 +690,26 @@ class OracleExecutionIndex:
         self.store.validate_completed_origin(identity, observation)
 
     @staticmethod
+    def _economic_policy_differences(context, identity) -> tuple[str, ...]:
+        """Verify signed economics independently of the claimed context SHA.
+
+        Earlier C96 control receipts did not carry the parity marker; every
+        other executable policy field still has to agree.
+        """
+        signed = oracle_replay_policy(identity.get("replay_policy") or {})
+        required = oracle_replay_policy(context["replay_policy"])
+        return tuple(key for key, value in required.items()
+                     if not (key == "oracle_parity_implementation" and context["target"] == "C96")
+                     and signed.get(key) != value)
+
+    @staticmethod
     def _native_context_matches(context, identity):
+        # A historical Replay can carry a matching effective-context digest
+        # while its actual signed economic implementation is different.
+        # It is not a current REUSE candidate. Preserve the historical signed
+        # receipt and let the authorized canonical Replay create a new one.
+        if OracleExecutionIndex._economic_policy_differences(context, identity):
+            return False
         digest = (identity.get("replay_policy") or {}).get("effective_execution_contract_sha256")
         if digest == canonical_json_sha256(context):
             return True

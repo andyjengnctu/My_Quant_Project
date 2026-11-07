@@ -898,6 +898,12 @@ class OracleReplayStore:
         contract = (identity.get("replay_policy") or {}).get("effective_execution_contract_sha256")
         if contract is not None:
             for peer in self.existing_completed_identities(seed=identity["seed"], target=identity["target"]):
+                # A historical origin may have claimed the current effective
+                # SHA despite a different signed implementation revision.
+                # Such a receipt is not the same economic Replay, even when
+                # the claimed digest happens to match; keep it independently.
+                if _independent_source_revision(peer, identity, bind_origin_provenance=True):
+                    continue
                 if (peer.get("replay_policy") or {}).get("effective_execution_contract_sha256") == contract:
                     completed = self.with_win_rate(peer, self.read(peer))
                     if completed is not None and completed != dict(observation):

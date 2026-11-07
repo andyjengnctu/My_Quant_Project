@@ -590,6 +590,55 @@ class OraclePerfectOutputReuseCases(TestCase):
                     self.assertIsNone(index.read(changed))
                     self.assertIsNone(index.native_completed(changed))
 
+    def test_historical_parity_receipt_never_reuses_or_blocks_four_seed_replay(self):
+        """The native context digest cannot override older signed economics."""
+        from core.file_integrity import canonical_json_sha256
+        from services.research.oracle_artifact_contract import OracleExecutionIndex
+        with TemporaryDirectory() as folder:
+            root = Path(folder)
+            fixture = self._fixture(root, seed_count=4)
+            seed = fixture[1][0]
+            key = (seed, "TrueDailyUniversal_MinTrade_NetPnL_Positive::Daily")
+            context = fixture[6][key]
+            store = fixture[5]
+            index = OracleExecutionIndex(store)
+            identity, observation = index.read(context)
+            index._path(context).unlink()
+            store._path(identity).unlink()
+            historical_identity = copy.deepcopy(identity)
+            historical_identity["replay_policy"]["oracle_parity_implementation"] = (
+                "previous_oracle_parity_implementation")
+            # This digest was stamped before its origin's parity was checked.
+            # A digest match must never be sufficient to certify REUSE.
+            self.assertEqual(historical_identity["replay_policy"][
+                "effective_execution_contract_sha256"], canonical_json_sha256(context))
+            store.write(historical_identity, observation, origin="historical_implementation")
+            old_receipt = store._path(historical_identity).read_bytes()
+            before = {file: file.read_bytes() for file in root.rglob("*") if file.is_file()}
+            self.assertIsNone(index.read(context))
+            self.assertIsNone(index.native_completed(context))
+            with self.assertRaisesRegex(ValueError, "economic policy differs: oracle_parity_implementation"):
+                index._validate_binding(context, historical_identity, observation)
+            # Four-seed Target preflight must stay read-only, RUN only the
+            # invalid old implementation, and preserve the other 3 REUSE.
+            with self._environment(root, fixture), patch.object(
+                    oracle, "compute_strategy_param_scientific_sha256",
+                    return_value=fixture[3]):
+                preview = oracle.preview_oracle_replay_plan(fixture[0], project_root=root)
+            self.assertEqual(preview["preflight"][key], "RUN")
+            for other_seed in fixture[1][1:]:
+                self.assertEqual(preview["preflight"][
+                    (other_seed, "TrueDailyUniversal_MinTrade_NetPnL_Positive::Daily")], "REUSE")
+            self.assertEqual(before, {file: file.read_bytes()
+                                      for file in root.rglob("*") if file.is_file()})
+            # The current implementation may have different metrics. The old
+            # signed result is preserved rather than declared a contradiction.
+            current_result = {**observation, "romd": observation["romd"] + 3.0}
+            store.write(identity, current_result, origin="current_implementation")
+            index.publish(context, identity, current_result)
+            self.assertEqual(index.read(context), (identity, current_result))
+            self.assertEqual(store._path(historical_identity).read_bytes(), old_receipt)
+
     def test_corrupt_reference_and_conflicting_signed_observations_fail_closed(self):
         from core.file_integrity import canonical_json_sha256
         from services.research.oracle_artifact_contract import OracleExecutionIndex
