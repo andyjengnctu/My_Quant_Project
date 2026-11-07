@@ -32,11 +32,23 @@ _REVIEWED = {
         "file_sha256": "b06df905611f7d10db03683cacd3b69ec11a13127fdb3cff0582b3e6d27e8a33",
         "original_file_sha256": "917b0e84a7506a578109d110b239645e14c9c3c14a6daafe3523f673c23d015e",
         "calculations": {},
+        # 2026-11-08 Full/P17: only additive rank/classifier profile and
+        # research-spec entries; unchanged existing Oracle provider contracts.
+        "reviewed_model_only_revisions": {
+            "0361bee2c35cab50b11f2991cec777e200df5354a117f34c44fcc52f876d4186":
+            "60c2d5a0c6e0107ccc2f3b5fdf4a07dc85b10abebd4daad9637c79876e414f1d",
+        },
     },
     "core/breakout_quality_runtime.py": {
         "file_sha256": "3ba08563d94a60a0ad93e44387dbd67c0380c42a3450cd258a84102354d4a630",
         "original_file_sha256": "0095a9a8d8d726cce05213e0237cb401ffb073fe4b6f84c1b3dfb89bc4f1131f",
         "calculations": {},
+        # 2026-11-08 Full/P17: only a new Target ID and a distinct
+        # target-policy dictionary entry; existing Target policies are intact.
+        "reviewed_model_only_revisions": {
+            "a5606816fa2b8bc56a6dd5e66df4dd49866d8d8f8fc02b5d83316a96f81b2b90":
+            "3e20eee163cd32a7fd0c9ed5db41dcd52439f7403cc8869932f19f32df1e184b",
+        },
     },
     "config/breakout_quality.py": {
         "file_sha256": "e66bd41bab7a60cbe4d9b96c8a11f9b146b261616d96a15f3921df278472d391",
@@ -57,16 +69,21 @@ RESOURCE_ONLY_DEPENDENCIES = frozenset({
 })
 
 
-# A research-menu model switch is not a price/feature/Target change.
-# Proof anchor: test-branch-1_20261107_072649_85be9915.zip
-# (SHA256 d36e32296daed6bee8f4a0b0893fd00de2a3c1c4fd3e4316ecfbc73ab999e6e7).
-# This reviewed configuration additionally registers MR-13CX as a model-test
-# reference beside the active MR-13CY selection; neither changes price inputs.
-# The entire remaining configuration AST is pinned as-is. Only the literal
-# (model ID, executable profile ID) selection tuple may vary. Any subsequent
-# change to reference membership, price settings or executable code fails closed
-# to the actual physical SHA rather than receiving the price-only equivalence.
+# A research-menu model selection is not a price/feature/Target change.
+# Prior proof: test-branch-1_20261107_072649_85be9915.zip; the archived
+# model-comparison roster is preserved as a separately exact-pinned AST.
+# Full/P17 proof: independently compared the config AST in the source ZIP
+# test-branch-1_20261108_012908_5e28bc05.zip to the current FullTrade ZIP.
+# The only executable AST changes were the selected model/profile pair and
+# insertion of two literal model-test reference pairs (CZ, DA). No price,
+# eligibility, trading or Target configuration AST changed. Both reviewed
+# configurations are independently pinned; subsequent changes to any model
+# references, price settings or executable code fail closed to physical SHA.
+# Only the active literal (model ID, profile ID) tuple is interchangeable.
 _RESEARCH_SELECTION_ONLY_CONFIG_AST_SHA256 = (
+    "19fd080bb82875e2298a321021bda3d21d0fd1e9f373707436d4beb8a9ced711"
+)
+_RESEARCH_SELECTION_ONLY_CONFIG_LEGACY_AST_SHA256 = (
     "7ab1d4e0b6a06053b596dfa4c970b0866464499586e66ab5994551fc8fa97b46"
 )
 _RESEARCH_SELECTION_ONLY_CONFIG_BASELINE_SHA256 = (
@@ -110,7 +127,10 @@ def _certified_model_selection_only_config_sha256(relative: str, actual: str) ->
     if count != 1:
         return actual
     selection_free_ast = ast.dump(tree, annotate_fields=True, include_attributes=False)
-    if sha256(selection_free_ast.encode("utf-8")).hexdigest() == _RESEARCH_SELECTION_ONLY_CONFIG_AST_SHA256:
+    if sha256(selection_free_ast.encode("utf-8")).hexdigest() in (
+        _RESEARCH_SELECTION_ONLY_CONFIG_AST_SHA256,
+        _RESEARCH_SELECTION_ONLY_CONFIG_LEGACY_AST_SHA256,
+    ):
         return _RESEARCH_SELECTION_ONLY_CONFIG_BASELINE_SHA256
     return actual
 
@@ -120,8 +140,15 @@ def reviewed_execution_source_sha256(relative: str, actual: str) -> str:
     if normalized != actual:
         return normalized
     proof = _REVIEWED.get(relative)
-    if proof is not None and actual == proof["file_sha256"]:
-        return proof["original_file_sha256"]
+    if proof is not None:
+        if actual == proof["file_sha256"]:
+            return proof["original_file_sha256"]
+        # Exact, independently reviewed additive declarations only.  Older
+        # certified source identities and unrelated executable revisions never
+        # enter this rule; unknown bytes always keep their physical SHA.
+        model_only_previous = proof.get("reviewed_model_only_revisions", {}).get(actual)
+        if model_only_previous is not None:
+            return model_only_previous
     return actual
 
 

@@ -3227,6 +3227,9 @@ class ExecutionAccelerationCases(unittest.TestCase):
             self.assertEqual(reviewed_execution_source_sha256(relative, unknown), unknown)
             self.assertEqual(reviewed_execution_source_sha256(relative, proof["file_sha256"]),
                              proof["original_file_sha256"])
+            for certified, predecessor in proof.get("reviewed_model_only_revisions", {}).items():
+                self.assertEqual(reviewed_execution_source_sha256(relative, certified), predecessor)
+                self.assertEqual(reviewed_calculation_sha256(relative, certified, unknown), unknown)
             self.assertEqual(reviewed_calculation_sha256(relative, proof["file_sha256"], unknown), unknown)
             for syntax, original in proof["calculations"].items():
                 self.assertEqual(reviewed_calculation_sha256(relative, unknown, syntax), syntax)
