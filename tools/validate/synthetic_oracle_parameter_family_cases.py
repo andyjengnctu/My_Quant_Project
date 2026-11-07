@@ -261,35 +261,22 @@ class OracleParameterFamilyCases(TestCase):
         # counterpart; shared Target/Selector rows remain supported.
         self.assertGreater(len(active), len(d.source["oracle_comparisons"]))
 
-    def test_one_authorization_builds_only_missing_full_parameters(self):
-        """Full/P17 missing seeds cannot consume Min/P16 source or permission."""
+    def test_oracle_never_builds_missing_full_parameters(self):
+        """[1] cannot authorize missing Full/P17 Optimizer seeds or borrow Min/P16."""
         from services.research import target_oracle_application as app
-        from contextlib import redirect_stdout
-        from io import StringIO
-
+        from services.optimizer import strategy_param_service
         d = definition()
         seeds = (693545351, 2014432738)
-        full_ready = {seeds[0]}
         profiles = {"C96": "broker_cash_min_best_seed42_current",
                     "C97": "broker_cash_full_best_seed42_current"}
-        calls = []
-
         def inspect(scoped, *, project_root):
             baseline = scoped.source["baseline_arm_id"]
-            rows = tuple({"seed": seed, "ready": baseline == "C96" or seed in full_ready,
-                          "action": "REUSE" if baseline == "C96" or seed in full_ready else "BUILD",
-                          "status": "READY" if baseline == "C96" or seed in full_ready else "MISSING"}
-                         for seed in seeds)
-            return {"rows": rows, "producer_kwargs": {"training_profile_id": profiles[baseline]}}
-
-        def resolve(_root, *, replication_seed, **kwargs):
-            return {"ready": replication_seed in full_ready, "action": "BUILD",
-                    "status": "MISSING"}
-
-        def build(_root, *, replication_seed, **kwargs):
-            calls.append((replication_seed, kwargs["training_profile_id"]))
-            full_ready.add(replication_seed)
-
+            return {"rows": tuple({
+                "seed": seed, "ready": baseline == "C96" or seed == seeds[0],
+                "action": "REUSE" if baseline == "C96" or seed == seeds[0] else "BUILD",
+                "status": "READY" if baseline == "C96" or seed == seeds[0] else "MISSING",
+            } for seed in seeds),
+                "producer_kwargs": {"training_profile_id": profiles[baseline]}}
         plans = {
             "C96": {"seed_set": seeds, "missing": (),
                     "producer_kwargs": {"training_profile_id": profiles["C96"]}},
@@ -298,21 +285,19 @@ class OracleParameterFamilyCases(TestCase):
         }
         with TemporaryDirectory() as temp, \
              patch.object(app, "inspect_oracle_parameter_prerequisites", side_effect=inspect), \
-             patch.object(app, "resolve_fixed_multiseed_robustness_strategy_parameter_artifact", side_effect=resolve), \
-             patch.object(app, "ensure_fixed_multiseed_robustness_strategy_parameter_artifact", side_effect=build), \
-             redirect_stdout(StringIO()):
-            # A legacy Min-only approval cannot quietly authorize new Full.
-            with self.assertRaisesRegex(RuntimeError, "parameter-family source plans"):
+             patch.object(strategy_param_service, "ensure_fixed_multiseed_robustness_strategy_parameter_artifact",
+                          side_effect=AssertionError("Optimizer must not run")) as producer:
+            with self.assertRaisesRegex(RuntimeError, "缺少正式參數家族"):
                 app.ensure_authorized_oracle_parameters(
                     project_root=Path(temp), definition=d,
                     approved_plan={"missing_p16": (), "seed_set": seeds},
                 )
-            self.assertFalse(calls)
-            app.ensure_authorized_oracle_parameters(
-                project_root=Path(temp), definition=d,
-                approved_plan={"parameter_plans": plans},
-            )
-        self.assertEqual(calls, [(seeds[1], profiles["C97"])])
+            with self.assertRaisesRegex(RuntimeError, "不執行 Optimizer"):
+                app.ensure_authorized_oracle_parameters(
+                    project_root=Path(temp), definition=d,
+                    approved_plan={"parameter_plans": plans},
+                )
+            producer.assert_not_called()
 
     def test_full_baseline_receipts_have_different_reuse_keys_and_plan(self):
         d = definition()

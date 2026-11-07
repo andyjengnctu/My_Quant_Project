@@ -5925,57 +5925,47 @@ class OracleEightSeedParameterDependencyRegressionCases(TestCase):
                 "producer_kwargs": fixture["producer_kwargs"],
                 "missing": missing,
             }},
-            "preflight": {(row["seed"], "C96"): "REUSE" if row["ready"] else "RUN"
+            "preflight": {(row["seed"], "C96"): "REUSE" if row["ready"] else "BLOCKED"
                           for row in rows},
             "text": "[Target 驗證 Fixed | Portfolio Replay 正式計畫]\n"
                     "Target  S1  S2  S3  S4  S5  S6  S7  S8\n"
-                    "C96     REUSE REUSE REUSE REUSE RUN RUN RUN RUN",
+                    "C96     REUSE REUSE REUSE REUSE BLOCKED BLOCKED BLOCKED BLOCKED",
         }
 
-    def test_research_builds_only_four_approved_missing_seeds(self):
+    def test_research_refuses_missing_parameters_without_optimizer(self):
+        """Oracle Enter does not authorize canonical Optimizer parameter fitting."""
         from services.research import target_oracle_application as application
         from core.training_policy import get_robustness_benchmark_policy_snapshot
+        from services.optimizer import strategy_param_service
         seeds = get_robustness_benchmark_policy_snapshot()["resolved_seeds"]
         ready = set(seeds[:4])
-        built = []
-        def inspect(_definition, *, project_root):
-            return self._fixture(ready_seeds=ready)
-        def resolve(_root, *, replication_seed, **kwargs):
-            return {"ready": replication_seed in ready,
-                    "action": "REUSE" if replication_seed in ready else "BUILD",
-                    "status": "READY" if replication_seed in ready else "ARTIFACT_MISSING_OR_INVALID"}
-        def build(_root, *, replication_seed, **kwargs):
-            self.assertNotIn(replication_seed, ready)
-            built.append(replication_seed)
-            ready.add(replication_seed)
-            return {"action": "BUILD"}
-        preview = self._approved_preview(self._fixture(ready_seeds=ready))
-        with patch.object(application, "inspect_oracle_parameter_prerequisites", side_effect=inspect), \
-             patch.object(application, "resolve_fixed_multiseed_robustness_strategy_parameter_artifact", side_effect=resolve), \
-             patch.object(application, "ensure_fixed_multiseed_robustness_strategy_parameter_artifact", side_effect=build), \
-             redirect_stdout(io.StringIO()):
-            application.ensure_authorized_oracle_parameters(
-                project_root=Path("/mock"), definition=self._min_only_definition(),
-                approved_plan=preview,
-            )
-        self.assertEqual(built, seeds[4:])
-        self.assertEqual(ready, set(seeds))
+        fixture = self._fixture(ready_seeds=ready)
+        preview = self._approved_preview(fixture)
+        with patch.object(application, "inspect_oracle_parameter_prerequisites", return_value=fixture), \
+             patch.object(strategy_param_service, "ensure_fixed_multiseed_robustness_strategy_parameter_artifact",
+                          side_effect=AssertionError("Oracle must never fit P16/P17")) as producer:
+            with self.assertRaisesRegex(RuntimeError, "不執行 Optimizer"):
+                application.ensure_authorized_oracle_parameters(
+                    project_root=Path("/mock"), definition=self._min_only_definition(),
+                    approved_plan=preview,
+                )
+            producer.assert_not_called()
+        self.assertEqual(ready, set(seeds[:4]))
 
     def test_all_ready_never_invokes_optimizer(self):
         from services.research import target_oracle_application as application
         from core.training_policy import get_robustness_benchmark_policy_snapshot
+        from services.optimizer import strategy_param_service
         seeds = get_robustness_benchmark_policy_snapshot()["resolved_seeds"]
         fixture = self._fixture(ready_seeds=set(seeds))
         with patch.object(application, "inspect_oracle_parameter_prerequisites", return_value=fixture), \
-             patch.object(application, "resolve_fixed_multiseed_robustness_strategy_parameter_artifact") as probe, \
-             patch.object(application, "ensure_fixed_multiseed_robustness_strategy_parameter_artifact") as produce, \
-             redirect_stdout(io.StringIO()):
+             patch.object(strategy_param_service, "ensure_fixed_multiseed_robustness_strategy_parameter_artifact",
+                          side_effect=AssertionError("Optimizer forbidden in Oracle")) as producer:
             application.ensure_authorized_oracle_parameters(
                 project_root=Path("/mock"), definition=self._min_only_definition(),
                 approved_plan=self._approved_preview(fixture),
             )
-        probe.assert_not_called()
-        produce.assert_not_called()
+        producer.assert_not_called()
 
     def test_p16_conflict_and_new_unapproved_seed_never_fit(self):
         from services.research import target_oracle_application as application
@@ -5984,7 +5974,7 @@ class OracleEightSeedParameterDependencyRegressionCases(TestCase):
         fixture = self._fixture(ready_seeds=set(seeds[:4]), invalid_seed=seeds[4])
         authorized = self._approved_preview(self._fixture(ready_seeds=set(seeds[:4])))
         with patch.object(application, "inspect_oracle_parameter_prerequisites", return_value=fixture), \
-             patch.object(application, "ensure_fixed_multiseed_robustness_strategy_parameter_artifact") as producer, \
+             patch("services.optimizer.strategy_param_service.ensure_fixed_multiseed_robustness_strategy_parameter_artifact") as producer, \
              redirect_stdout(io.StringIO()):
             with self.assertRaisesRegex(RuntimeError, "身分衝突"):
                 application.ensure_authorized_oracle_parameters(
@@ -5994,8 +5984,8 @@ class OracleEightSeedParameterDependencyRegressionCases(TestCase):
             producer.assert_not_called()
         lost = self._fixture(ready_seeds=set(seeds[:3]))
         with patch.object(application, "inspect_oracle_parameter_prerequisites", return_value=lost), \
-             patch.object(application, "ensure_fixed_multiseed_robustness_strategy_parameter_artifact") as producer, \
-             self.assertRaisesRegex(RuntimeError, "原為 REUSE"):
+             patch("services.optimizer.strategy_param_service.ensure_fixed_multiseed_robustness_strategy_parameter_artifact") as producer, \
+             self.assertRaisesRegex(RuntimeError, "狀態已改變"):
             application.ensure_authorized_oracle_parameters(
                 project_root=Path("/mock"), definition=self._min_only_definition(),
                 approved_plan=authorized,
@@ -6069,7 +6059,7 @@ class OracleEightSeedParameterDependencyRegressionCases(TestCase):
                 self.assertEqual(view["preflight"][(seed, "R40")], "REUSE")
             for seed in seeds[4:]:
                 self.assertEqual({view["preflight"][(seed, key)]
-                                  for key in ("C96", "R40", "T40")}, {"RUN"})
+                                  for key in ("C96", "R40", "T40")}, {"BLOCKED"})
             self.assertEqual(sum(x == "REUSE" for x in view["preflight"].values()), 8)
 
     def test_partial_missing_p16_still_previews_registered_target_matrix(self):
@@ -6107,7 +6097,7 @@ class OracleEightSeedParameterDependencyRegressionCases(TestCase):
             self.assertEqual(preview["preflight"][(first, "R40")], "REUSE")
             for seed in seeds[4:]:
                 self.assertEqual({preview["preflight"][(seed, target)]
-                                  for target in ("C96", "R40", "T40")}, {"RUN"})
+                                  for target in ("C96", "R40", "T40")}, {"BLOCKED"})
             self.assertIn("Target", preview["text"])
             self.assertIn("T40", preview["text"])
             self.assertNotIn("P16 前置工件計畫", preview["text"])

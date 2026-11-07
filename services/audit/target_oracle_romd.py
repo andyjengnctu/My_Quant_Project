@@ -697,10 +697,10 @@ def _resolve_oracle_target_score_contracts(definition, settings, plan) -> dict[s
 
 
 def _oracle_parameter_reuse_plan(definition, root: Path) -> dict[str, Any]:
-    """Read-only, one-contract P16 inspection for Oracle and its Research caller.
+    """Read-only, one-contract parameter inspection for each Oracle scope.
 
-    Each seed is independently resolved by the canonical Optimizer owner.
-    A missing P16 is not an Oracle Replay RUN; the Audit itself stays read-only.
+    Each seed is resolved by the canonical Optimizer owner without building.
+    A missing parameter source blocks Replay; Oracle never performs fitting.
     """
     settings, baseline, _exact = _contract(definition)
     # AI: Oracle selects the registered 8-seed benchmark explicitly. The
@@ -763,10 +763,9 @@ def _oracle_parameter_reuse_plan(definition, root: Path) -> dict[str, Any]:
 def inspect_oracle_parameter_prerequisites(
     definition, *, project_root: Path,
 ) -> dict[str, Any]:
-    """Validate Oracle source legality before offering any Optimizer work.
+    """Read-only Oracle source legality and parameter availability check.
 
-    Called by the separate Research entry orchestrator; this function cannot
-    FIT parameters or write Replay/truth artifacts.
+    No parameter fitting or Replay/truth artifacts are produced here.
     """
     root = Path(project_root).resolve()
     settings, _base, _exact = _contract(definition)
@@ -1729,7 +1728,7 @@ def render_replay_preflight(
         f"Portfolio REUSE {counts['REUSE']} / RUN（需回放）{counts['RUN']} / "
         f"BLOCKED {counts['BLOCKED']}；REUSE=零Portfolio交易重算，"
         "RUN=舊執行身分過時或合法結果缺件，由系統只計算該項；"
-        "BLOCKED=資料損毀或同一執行身分證據矛盾，須停止以避免覆寫；尚未開始回放",
+        "BLOCKED=前置參數缺件、資料損毀或執行身分矛盾；須停止該次回放，尚未開始回放",
         "註：本表只核對 Portfolio Replay；Target 真值及 Score 另依各自簽章 REUSE／RUN。",
         *((reuse_diagnostic,) if reuse_diagnostic else ()),
     ))
@@ -3079,9 +3078,8 @@ def _run_single_stage_oracle(
     contracts = _resolve_oracle_target_score_contracts(definition, settings, plan)
     pending_p16: tuple[int, ...] = ()
     if preview_only:
-        # The Research entry must show the *Target* plan before building P16.
-        # The Audit stays read-only: existing seeds undergo the same complete
-        # Replay attestation below; missing P16 can only be provisional RUN.
+        # Preserve certified REUSE for ready parameter seeds. Missing inputs
+        # cannot authorize a Portfolio RUN and must remain explicit blockers.
         parameter_plan = inspect_oracle_parameter_prerequisites(definition, project_root=root)
         unsafe = [row for row in parameter_plan["rows"]
                   if not row["ready"] and row["action"] not in {"BUILD", "REPAIR"}]
@@ -3572,10 +3570,9 @@ def _run_single_stage_oracle(
     if preview_only:
         for seed in pending_p16:
             for target in targets:
-                # Without canonical P16 parameters no full Replay identity
-                # exists to certify; do NOT claim REUSE from a file inventory.
-                decisions[(seed, target)] = "RUN"
-                run_causes[(seed, target)] = "缺少合法 P16 參數來源"
+                # No canonical execution identity exists without the parameter
+                # source. This is neither a REUSE nor an executable Replay RUN.
+                decisions[(seed, target)] = "BLOCKED"
     scoped_rows = {str(row["target"]): row
                    for row in definition.source["oracle_comparisons"]}
     preflight = render_replay_preflight(

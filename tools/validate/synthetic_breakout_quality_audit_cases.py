@@ -184,7 +184,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     parameter_plans = {
         baselines[family]: {
             "seed_set": benchmark_seeds,
-            "missing": benchmark_seeds[4:] if family == "min" else benchmark_seeds,
+            "missing": (),
             "producer_kwargs": {"benchmark_id": "end_to_end_v2",
                                 "training_profile_id": f"synthetic_{family}"},
         }
@@ -201,8 +201,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     }
     old_decisions = {
         (seed, target): (
-            "RUN" if seed in parameter_plans[target_baselines[target]]["missing"]
-            else "REUSE"
+            "REUSE" if target == target_baselines[target] else "RUN"
         )
         for seed in benchmark_seeds for target in existing_targets
     }
@@ -278,11 +277,11 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         and "[9]" in root_text and "策略升格" in root_text,
     )
     check_true(
-        "target_validation_delegates_both_parameter_family_plans_as_authorized",
+        "target_validation_verifies_both_parameter_family_plans_before_replay",
         ensure.call_count == 1
         and ensure.call_args.kwargs.get("approved_plan") is preview_plan
         and set(preview_plan["parameter_plans"]) == set(baselines.values())
-        and all(f"前置 {base}：" in root_text for base in baselines.values())
+        and all(f"前置 {base}：" not in root_text for base in baselines.values())
         and preview_plan["parameter_plans"][baselines["min"]]["producer_kwargs"]
             != preview_plan["parameter_plans"][baselines["full"]]["producer_kwargs"],
     )
@@ -297,6 +296,43 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         and root_text.index(preview) < root_text.index("[RUN] Target")
         and executions == ["replayed missing arms"]
         and "LATEST" in root_text,
+    )
+
+    # Regression: a Full seed with no P17 is not a Portfolio RUN. Research
+    # [1] must stop before either approval prompt, Replay, or Optimizer.
+    pending_plan = {
+        **preview_plan,
+        "parameter_plans": {
+            **preview_plan["parameter_plans"],
+            baselines["full"]: {
+                **preview_plan["parameter_plans"][baselines["full"]],
+                "missing": (benchmark_seeds[4],),
+            },
+        },
+    }
+    pending_decisions = dict(preview_plan["preflight"])
+    for target, base in target_baselines.items():
+        if base == baselines["full"]:
+            pending_decisions[(benchmark_seeds[4], target)] = "BLOCKED"
+    pending_plan["preflight"] = pending_decisions
+    pending_plan["text"] = render_replay_preflight(
+        label="Fixed", seeds=list(benchmark_seeds),
+        targets=list(existing_targets), decisions=pending_decisions,
+        strategies=strategies, display_targets=names, selectors=selectors,
+    )
+    blocked_console = io.StringIO()
+    with patch.object(oracle_handler, "preview_oracle_replay_plan", return_value=pending_plan), \
+         patch("builtins.input", side_effect=AssertionError("Oracle BLOCKED must not prompt")) as prompt, \
+         patch.object(oracle_application, "ensure_authorized_oracle_parameters") as verifier, \
+         patch.object(research_app, "run_enabled_audits") as replay, \
+         redirect_stdout(blocked_console):
+        research_app._run_reusable_audit_method("breakout_quality", oracle_method_id)
+    check_true(
+        "target_missing_full_parameter_stops_before_optimizer_or_replay",
+        prompt.call_count == 0 and verifier.call_count == 0 and replay.call_count == 0
+        and f"[前置未就緒] {baselines['full']}" in blocked_console.getvalue()
+        and "BLOCKED" in blocked_console.getvalue()
+        and "不啟動 Optimizer" in blocked_console.getvalue(),
     )
 
     # The second submenu item must only consume existing reports; navigating
