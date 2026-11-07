@@ -168,7 +168,9 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     )
     from core.training_policy import get_robustness_benchmark_policy_snapshot
     registered_oracle = oracle_application.get_formal_oracle_definition("breakout_quality")
-    benchmark_seeds = tuple(get_robustness_benchmark_policy_snapshot()["resolved_seeds"])
+    benchmark = get_robustness_benchmark_policy_snapshot()
+    benchmark_seeds = tuple(benchmark["resolved_seeds"])
+    assert benchmark_seeds, "Current Oracle benchmark requires at least one seed"
 
     # The Research [1] route owns one Min/Full Oracle matrix and one approval.
     # Model both parameter families in this isolated fixture, independently of
@@ -185,7 +187,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         baselines[family]: {
             "seed_set": benchmark_seeds,
             "missing": (),
-            "producer_kwargs": {"benchmark_id": "end_to_end_v2",
+            "producer_kwargs": {"benchmark_id": benchmark["benchmark_id"],
                                 "training_profile_id": f"synthetic_{family}"},
         }
         for family in sampled_rows
@@ -289,7 +291,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         "target_validation_only_one_confirm_even_if_verified_run_count_changes",
         len(prompts) == 5
         and not prompts[0][1] and not prompts[1][1] and prompts[2][1]
-        and "執行正式 REUSE／RUN 計畫" in prompts[2][0]
+        and "必要參數自動補建" in prompts[2][0]
         and all("輸入 RUN" not in prompt for prompt, _ in prompts)
         and root_text.count(preview) == 1
         and "P16 前置工件計畫" not in root_text
@@ -298,41 +300,85 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         and "LATEST" in root_text,
     )
 
-    # Regression: a Full seed with no P17 is not a Portfolio RUN. Research
-    # [1] must stop before either approval prompt, Replay, or Optimizer.
+    # A missing legal Full/P17 seed is a canonical Optimizer prerequisite,
+    # not an authorization failure.  The unchanged four-seed matrix and single
+    # approval must authorize the producer before the Portfolio consumer.
+    pending_seed = benchmark_seeds[-1]
     pending_plan = {
         **preview_plan,
         "parameter_plans": {
             **preview_plan["parameter_plans"],
             baselines["full"]: {
                 **preview_plan["parameter_plans"][baselines["full"]],
-                "missing": (benchmark_seeds[4],),
+                "missing": (pending_seed,),
             },
         },
     }
     pending_decisions = dict(preview_plan["preflight"])
     for target, base in target_baselines.items():
         if base == baselines["full"]:
-            pending_decisions[(benchmark_seeds[4], target)] = "BLOCKED"
+            pending_decisions[(pending_seed, target)] = "RUN"
     pending_plan["preflight"] = pending_decisions
-    pending_plan["text"] = render_replay_preflight(
+    pending_preview = render_replay_preflight(
         label="Fixed", seeds=list(benchmark_seeds),
         targets=list(existing_targets), decisions=pending_decisions,
         strategies=strategies, display_targets=names, selectors=selectors,
     )
-    blocked_console = io.StringIO()
+    pending_plan["text"] = pending_preview
+    pending_console = io.StringIO()
+    pending_events = []
+
+    def pending_input(prompt):
+        pending_events.append(("approval", pending_preview in pending_console.getvalue()))
+        return ""
+
+    def pending_ensure(*args, **kwargs):
+        assert kwargs["approved_plan"] is pending_plan
+        pending_events.append(("optimizer", True))
+        return {"reused": len(benchmark_seeds) * len(baselines) - 1,
+                "built_or_repaired": 1}
+
+    def pending_replay(*args, **kwargs):
+        assert kwargs["approved_replay_decisions"] == pending_decisions
+        pending_events.append(("replay", True))
+        return {"target_oracle_romd": {"status": "COMPLETED"}}
+
     with patch.object(oracle_handler, "preview_oracle_replay_plan", return_value=pending_plan), \
-         patch("builtins.input", side_effect=AssertionError("Oracle BLOCKED must not prompt")) as prompt, \
+         patch("builtins.input", side_effect=pending_input) as prompt, \
+         patch.object(oracle_application, "ensure_authorized_oracle_parameters",
+                      side_effect=pending_ensure) as verifier, \
+         patch.object(research_app, "run_enabled_audits", side_effect=pending_replay) as replay, \
+         patch.object(research_app, "render_latest_audit_summary", return_value="LATEST"), \
+         redirect_stdout(pending_console):
+        research_app._run_reusable_audit_method("breakout_quality", oracle_method_id)
+    check_true(
+        "target_missing_full_parameter_delegates_to_optimizer_before_replay",
+        prompt.call_count == 1 and verifier.call_count == 1 and replay.call_count == 1
+        and pending_events == [("approval", True), ("optimizer", True), ("replay", True)]
+        and f"[參數前置待補] {baselines['full']}" in pending_console.getvalue()
+        and "Optimizer 自動補建" in pending_console.getvalue()
+        and pending_console.getvalue().count(pending_preview) == 1,
+    )
+
+    # A genuine scientific/identity conflict must still prevent approval,
+    # canonical Optimizer delegation and downstream Replay. Do not convert it
+    # to an untrusted RUN just because a seed-specific file is unavailable.
+    from services.audit.target_oracle_romd import OracleBlockedError
+    blocked_console = io.StringIO()
+    with patch.object(oracle_handler, "preview_oracle_replay_plan",
+                      side_effect=OracleBlockedError("P17 parameter scientific identity conflict")), \
+         patch("builtins.input", side_effect=AssertionError("conflict must not prompt")) as prompt, \
          patch.object(oracle_application, "ensure_authorized_oracle_parameters") as verifier, \
          patch.object(research_app, "run_enabled_audits") as replay, \
          redirect_stdout(blocked_console):
-        research_app._run_reusable_audit_method("breakout_quality", oracle_method_id)
+        blocked_before_approval = raises_expected(
+            OracleBlockedError,
+            lambda: research_app._run_reusable_audit_method("breakout_quality", oracle_method_id),
+        )
     check_true(
-        "target_missing_full_parameter_stops_before_optimizer_or_replay",
-        prompt.call_count == 0 and verifier.call_count == 0 and replay.call_count == 0
-        and f"[前置未就緒] {baselines['full']}" in blocked_console.getvalue()
-        and "BLOCKED" in blocked_console.getvalue()
-        and "不啟動 Optimizer" in blocked_console.getvalue(),
+        "target_parameter_identity_conflict_blocks_before_optimizer_or_replay",
+        blocked_before_approval and prompt.call_count == 0
+        and verifier.call_count == 0 and replay.call_count == 0,
     )
 
     # The second submenu item must only consume existing reports; navigating
@@ -435,7 +481,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     check_true(
         "target_missing_truth_shows_certified_reuse_run_matrix_before_first_and_only_approval",
         len(truth_prompts) == 1 and truth_prompts[0][1]
-        and "執行正式 REUSE／RUN 計畫" in truth_prompts[0][0]
+        and "必要參數自動補建" in truth_prompts[0][0]
         and "P16 前置工件計畫" not in missing_truth_view.getvalue()
         and missing_truth_view.getvalue().count(preview) == 1
         and planner.call_count == 1 and producer.call_count == 0 and expensive.call_count == 0,
@@ -461,7 +507,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     check_true(
         "target_truth_and_portfolio_are_owned_by_one_certified_approval_only",
         len(approvals) == 1 and approvals[0][1]
-        and "執行正式 REUSE／RUN 計畫" in approvals[0][0]
+        and "必要參數自動補建" in approvals[0][0]
         and one_stage.getvalue().count(preview) == 1
         and producer.call_count == 1
         and one_stage.getvalue().index(preview)
