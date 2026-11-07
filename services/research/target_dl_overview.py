@@ -545,6 +545,104 @@ def _strategy_bindings(*, target_names: tuple[str, ...],
     return bindings
 
 
+def _other_param_family_rows(
+    *, definition, comparisons, score_targets, model_map, bindings,
+    rolling_romd, robust_romd,
+) -> list[dict[str, Any]]:
+    """Show active non-Min controls and same-score DL treatments read-only.
+
+    An Oracle receipt computed using Min/P16 is NOT an Oracle result for Full/P17.
+    Until that different parameter-family Replay has been E13-certified, the
+    corresponding Oracle cells intentionally remain empty. No synthetic
+    Target/receipt, report schema, or FIT identity is created by this view.
+    """
+    baseline = STRATEGY_COMPARE_ARMS[str(definition.source["baseline_arm_id"])]
+    suite_id = STRATEGY_COMPARE_PROFILES[STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE]["suite_id"]
+    active = set(get_strategy_compare_suite(suite_id)["arm_ids"])
+    controls = {
+        (raw["param_source"], raw["param_policy"], raw["rule_policy"],
+         str(raw.get("entry_strategy", "Breakout"))): arm_id
+        for arm_id, raw in STRATEGY_COMPARE_ARMS.items()
+        if arm_id in active and not raw.get("dl_enabled")
+        and raw["param_policy"] == "base-finalist-best"
+    }
+    extra: list[dict[str, Any]] = []
+    used_controls: set[str] = set()
+    for key, comparison in comparisons.items():
+        label = score_targets.get(key)
+        if not label or comparison.get("positive_output") or comparison.get("positive_gate"):
+            continue
+        selector = str(comparison["selector"])
+        if selector not in {"exact", "direct"}:
+            continue
+        mode = _EXACT_MODE if selector == "exact" else _DIRECT_MODE
+        entry = str(comparison.get("strategy", "Breakout"))
+        for model in model_map.get(key, ()):
+            profile = str(model.get("profile") or "")
+            if not profile:
+                continue
+            main_arm_id = bindings.get((key, profile))
+            if not main_arm_id:
+                continue
+            main_arm = STRATEGY_COMPARE_ARMS[main_arm_id]
+            if main_arm["dl_runtime_mode"] != mode:
+                continue
+            candidates = []
+            for arm_id in active:
+                arm = STRATEGY_COMPARE_ARMS[arm_id]
+                if (not arm.get("dl_enabled") or arm["param_source"] == baseline["param_source"]
+                        or arm.get("dl_id") != main_arm.get("dl_id")
+                        or arm.get("dl_runtime_mode") != mode
+                        or dict(arm.get("dl_runtime_options") or {}) !=
+                           dict(main_arm.get("dl_runtime_options") or {})
+                        or str(arm.get("entry_strategy", "Breakout")) != entry):
+                    continue
+                control_id = controls.get((
+                    arm["param_source"], arm["param_policy"], arm["rule_policy"], entry,
+                ))
+                if control_id:
+                    candidates.append((arm_id, control_id))
+            if len(candidates) > 1:
+                raise ValueError(f"Ambiguous additional parameter-family binding: {key}/{profile}")
+            if not candidates:
+                continue
+            arm_id, control_id = candidates[0]
+            used_controls.add(control_id)
+            control = STRATEGY_COMPARE_ARMS[control_id]
+            family = str(control["name"]).split(" ", 1)[0]
+            robust = robust_romd.get(arm_id)
+            extra.append({
+                "target": f"{oracle_target_semantics(comparison)[0]} ({family})",
+                "entry_strategy": entry,
+                "selector": selector.capitalize(),
+                "oracle_romd": None, "win_rate_pct": None,
+                "model": model.get("model") or "", "positive_model": "",
+                "rolling_rho": model.get("rolling_rho"),
+                "robustness_rho": model.get("robustness_rho"),
+                "rho_seeds": model.get("rho_seeds") or (),
+                "strategy": arm_id,
+                "rolling_romd": rolling_romd.get(arm_id),
+                "robustness_romd": robust[0] if robust else None,
+                "romd_seeds": robust[1] if robust else (),
+                "romd_benchmark": robust[2] if robust else "",
+            })
+    for control_id in sorted(used_controls):
+        control = STRATEGY_COMPARE_ARMS[control_id]
+        family = str(control["name"]).split(" ", 1)[0]
+        robust = robust_romd.get(control_id)
+        extra.append({
+            "target": f"{family} No DL", "entry_strategy": "Breakout",
+            "selector": "-", "oracle_romd": None, "win_rate_pct": None,
+            "model": "", "positive_model": "", "rolling_rho": None,
+            "robustness_rho": None, "rho_seeds": (), "strategy": control_id,
+            "rolling_romd": rolling_romd.get(control_id),
+            "robustness_romd": robust[0] if robust else None,
+            "romd_seeds": robust[1] if robust else (),
+            "romd_benchmark": robust[2] if robust else "",
+        })
+    return extra
+
+
 def _arm_fit_lineage_current(
     *, root: Path, settings: Any, arm_id: str,
     artifact_identities: Mapping[str, Any],
@@ -825,6 +923,12 @@ def collect_target_dl_overview(project_root: Path) -> dict[str, Any]:
                 "romd_seeds": robust[1] if robust else (),
                 "romd_benchmark": robust[2] if robust else "",
             })
+    rows.extend(_other_param_family_rows(
+        definition=definition,
+        comparisons={oracle_comparison_key(item): item for item in comparisons},
+        score_targets=score_targets, model_map=model_map, bindings=bindings,
+        rolling_romd=rolling_romd, robust_romd=robust_romd,
+    ))
     rows.sort(key=lambda row: (
         row["oracle_romd"] is None,
         -(row["oracle_romd"] or 0.0),
