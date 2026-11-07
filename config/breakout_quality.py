@@ -111,11 +111,11 @@ BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "daily_universal_no_time_full_lis
 # Original AO/CC, CG and direct U40 CE/CF fitting identities remain frozen.
 # MR-13CL label was retired: it used a separate P2/P16 parameter teacher, not
 # the same per-seed formal Min ROOS execution truth being compared by Oracle.
-# Current B experiment: relative T40 rank confidence through same-day pairwise
-# probabilities. MR-13CJ and its FIT/strategy identities remain unchanged.
+# Current head-priority T40 listwise experiment. CJ/CX FIT and replay IDs remain frozen;
+# no sign head, confidence threshold or K-dependent training target.
 BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE = (
-    "MR-13CX",
-    "daily_universal_terminal_mae_gated_t40_probabilistic_pairwise",
+    "MR-13CY",
+    "daily_universal_terminal_mae_gated_t40_head_weighted_listwise",
 )
 # Compatibility alias for call sites that only need the executable profile slug.
 BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = (
@@ -382,6 +382,7 @@ BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES = (
     ("MR-13CG", "daily_universal_shared_full_d40_safety_hs_conditional_mfe_full_list_ndcg_pairwise"),
     ("MR-13CI", "daily_universal_terminal_r40_full_list_ndcg_pairwise"),
     ("MR-13CJ", "daily_universal_terminal_mae_gated_t40_full_list_ndcg_pairwise"),
+    ("MR-13CX", "daily_universal_terminal_mae_gated_t40_probabilistic_pairwise"),
     ("MR-13CK", "daily_universal_full_horizon_mae_gated_mfe_t40_full_list_ndcg_pairwise"),
     ("MR-13CM", "daily_universal_formal_mintrade40_netr_per_seed_full_list_ndcg_pairwise"),
     ("MR-13CN", "daily_universal_formal_mintrade_fullcycle_netr_per_seed_full_list_ndcg_pairwise"),

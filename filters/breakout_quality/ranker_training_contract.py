@@ -27,6 +27,7 @@ from core.breakout_quality_runtime import (
     CONTINUOUS_RANKER_SEMANTICS_DIRECT_HMHS,
     CONTINUOUS_RANKER_SEMANTICS_DUAL_COMPONENT_R,
     CONTINUOUS_RANKER_SEMANTICS_LISTWISE,
+    CONTINUOUS_RANKER_SEMANTICS_HEAD_WEIGHTED_LISTWISE,
     CONTINUOUS_RANKER_SEMANTICS_PAIRWISE,
     CONTINUOUS_RANKER_SEMANTICS_RAW_R,
     CONTINUOUS_RANKER_SEMANTICS_SAFETY_CONDITIONAL_MFE,
@@ -648,6 +649,23 @@ def training_semantics(profile) -> dict[str, Any]:
         return _extended_semantics(
             batching=pairwise_contract["batching"],
             pairwise_contract=pairwise_contract,
+        )
+
+    if semantics_key == CONTINUOUS_RANKER_SEMANTICS_HEAD_WEIGHTED_LISTWISE:
+        return _extended_semantics(
+            batching="whole_date_pack_no_date_split",
+            listwise_contract={
+                "list_scope": "same_date_complete_mature_stock_days",
+                "target": "within_date_mature_T40_order_average_rank_ties",
+                "loss": "tie_aware_sequential_choice_cross_entropy",
+                "tie_handling": "uniform_winner_mass_then_remove_whole_equal_truth_group",
+                "position_weight": "log2_discount(rank_start)-log2_discount(next_group_rank)",
+                "date_weighting": "equal_rankable_dates",
+                "model_margin": "pass_logit_minus_reject_logit",
+                "runtime_score": "bounded_monotone_listwise_rank_utility_not_probability",
+                "epoch_selection": "mean_daily_head_discounted_gain_then_spearman",
+                "fixed_k_or_manual_mixing": False,
+            },
         )
 
     if semantics_key == CONTINUOUS_RANKER_SEMANTICS_LISTWISE:
