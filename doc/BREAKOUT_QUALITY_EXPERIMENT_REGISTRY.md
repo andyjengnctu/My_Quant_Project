@@ -857,3 +857,13 @@ Decision：`CURRENT_EIGHT_SEED_REPORT_USER_REPORTED_AVAILABLE / AGGREGATE_ARITHM
 - **界線**：C96（Min／P16）與 C97（Full／P17）是 Default Selector、無 DL／Target 的同 Seed 對照，並非 Perfect-score Oracle。`[1][1]` 為配對驗證保留其基準 Replay 收據；`[1][2]` 的兩個無 DL 列不填 `Oracle RoMD`／Oracle 勝率，名稱與 `[1][1]` 均從 `core/audit_registry.py` 派生為 `C96`／`C97`。
 - **可共用證據**：`[1][2]` 只在既有 `[4]` 四 Seed Robustness 的已簽章觀測、參數科學 SHA、Benchmark Seed 前綴、交易／期間契約，及 S1～S4 報酬、MDD、RoMD 與 `[1][1]` 已簽章的八 Seed 無分數基準逐項一致時，讀取後者八筆 RoMD 計算 8S Mean 並明確標記 `(8S)`；缺少／不相容則保持既有 `(4S)` 結果，不能假 REUSE。
 - **不擴大研究**：其他 DL 策略、Model ρ 及 `[4]` 正式 Robustness 仍維持現有四 Seed 科學身分及原報表；CJ 的 PIT Robustness 不得借用 T40 完美分數 Oracle。此調整不執行 Replay／Optimizer，不回填／覆寫 `[4]` 或既有收據、不更改交易／費稅／FIT／Target／Trading。C97 S5～S8 的 P17 參數及完整基準 Replay 若未具備合法證據，不能標示 8S；由原本正式流程獨立建立後才可重新核對。
+
+
+### 2026-11-08 — Oracle／Robustness 現行四 Seed 收斂（覆蓋 10-30／11-07 的 current 指向）
+
+- **現行唯一 Benchmark**：`end_to_end_v1`（S1～S4：`693545351, 2014432738, 104504529, 762252050`）。Research `[1]` Target Oracle、模型 Robustness、策略 Robustness 及其參數前置均從 `config/robustness_benchmark.py` 同一 current pointer 取得四個 Seeds。現行 Oracle 清單由 Registry 派生，28 個 Target／Strategy／參數家族對象 ×4 Seeds =112 個 Replay cells；不新增 Target、Strategy、Report 版本或新的四 Seed 科學身份。
+- **歷史 8S 保留**：`end_to_end_v2` 仍以原 fingerprint／8 種 Seeds 永久註冊；原 P16/P17、Oracle Replay、Robustness signed receipts／原始研究結果不刪除、不覆寫、不追認為現行四 Seed 聚合。只允許 S1～S4 以完整相同的參數、來源、score、時間、選股、交易及簽章身分逐筆 REUSE；S5～S8 不納入四 Seed 統計，8S 聚合不得直接轉作 4S Mean／RoMD／ρ。
+- **缺參數自動補建**：`[1]` 的唯讀預覽先列 REUSE/RUN；若合法 P16/P17 參數缺件，使用者確認同一計畫後，由 canonical Optimizer Producer 建立／修復缺的 Seed，重新核對 signed READY 才進入 Oracle Replay。Identity 衝突、未授權或缺少原始真理仍 BLOCKED，不容許假 REUSE、替代 Profile 或 Oracle 自行最佳化。
+- **效力界線**：此為使用者新決策的 current benchmark 選擇，不改寫 2026-10-30 的八 Seed 市場報表與 2026-11-07 的歷史 cross-workflow 比較紀錄；目前未取得本機四 Seed完整 Replay 與 E13 逐日合法等價認證，正式 RoMD 以重建後通過簽章檢查的結果為準。
+
+Decision：`CURRENT_BENCHMARK_END_TO_END_V1_FOUR_SEEDS / ALL_ORACLE_AND_ROBUSTNESS_CURRENT_4S / HISTORICAL_V2_IMMUTABLE / PER_SEED_CERTIFIED_REUSE_ONLY / CANONICAL_PARAMETER_PRODUCER_AUTOBUILD / NO_EIGHT_SEED_AGGREGATE_REUSE / E13_DAILY_PARITY_PENDING`。

@@ -5646,34 +5646,44 @@ class OracleEightSeedSinglePipelineCases(TestCase):
             observation["delta_romd_vs_c96"] = 0.0
         return observation
 
-    def test_single_8_seed_current_registration_preserves_historical_prefix(self):
+    def test_current_four_seed_contract_accepts_same_seed_historical_eight_receipts(self):
         from core.training_policy import (
             get_robustness_benchmark_policy_snapshot,
             benchmark_seed_execution_equivalent,
         )
-        old = get_robustness_benchmark_policy_snapshot("end_to_end_v1")
+        from config.robustness_benchmark import (
+            TARGET_ORACLE_ROBUSTNESS_BENCHMARK_ID,
+            MODEL_STRATEGY_ROBUSTNESS_BENCHMARK_ID,
+        )
         current = get_robustness_benchmark_policy_snapshot()
-        self.assertEqual(current["seed_count"], 8)
-        self.assertEqual(current["benchmark_id"], "end_to_end_v2")
-        self.assertEqual(tuple(old["resolved_seeds"]), tuple(current["resolved_seeds"][:4]))
-        self.assertEqual(len(set(current["resolved_seeds"])), 8)
+        historical = get_robustness_benchmark_policy_snapshot("end_to_end_v2")
+        self.assertEqual((current["benchmark_id"], current["seed_count"]),
+                         ("end_to_end_v1", 4))
+        self.assertEqual(historical["seed_count"], 8)
+        self.assertEqual(tuple(historical["resolved_seeds"][:4]),
+                         tuple(current["resolved_seeds"]))
+        self.assertEqual(TARGET_ORACLE_ROBUSTNESS_BENCHMARK_ID,
+                         MODEL_STRATEGY_ROBUSTNESS_BENCHMARK_ID)
+        self.assertEqual(TARGET_ORACLE_ROBUSTNESS_BENCHMARK_ID, current["benchmark_id"])
         self.assertTrue(all(benchmark_seed_execution_equivalent(
-            recorded_benchmark=old["benchmark_id"], active_benchmark=current["benchmark_id"], seed=s,
-        ) for s in old["resolved_seeds"]))
+            recorded_benchmark=historical["benchmark_id"],
+            active_benchmark=current["benchmark_id"], seed=seed,
+        ) for seed in current["resolved_seeds"]))
+        self.assertTrue(all(benchmark_seed_execution_equivalent(
+            recorded_benchmark=current["benchmark_id"],
+            active_benchmark=historical["benchmark_id"], seed=seed,
+        ) for seed in current["resolved_seeds"]))
         self.assertFalse(benchmark_seed_execution_equivalent(
-            recorded_benchmark=old["benchmark_id"], active_benchmark=current["benchmark_id"],
-            seed=current["resolved_seeds"][-1],
-        ))
-        self.assertFalse(benchmark_seed_execution_equivalent(
-            recorded_benchmark=current["benchmark_id"], active_benchmark=old["benchmark_id"],
-            seed=old["resolved_seeds"][0],
+            recorded_benchmark=current["benchmark_id"],
+            active_benchmark=historical["benchmark_id"],
+            seed=historical["resolved_seeds"][-1],
         ))
 
     def test_old_four_signed_replays_reuse_new_four_run_and_future_target_uses_8(self):
         from core.training_policy import get_robustness_benchmark_policy_snapshot
         from services.audit.oracle_replay_artifacts import OracleReplayStore
         v1 = get_robustness_benchmark_policy_snapshot("end_to_end_v1")
-        current = get_robustness_benchmark_policy_snapshot()
+        current = get_robustness_benchmark_policy_snapshot("end_to_end_v2")
         with tempfile.TemporaryDirectory(prefix="oracle_eight_seed_single_pipeline_") as temp:
             store = OracleReplayStore(Path(temp), "breakout_quality/reusable/target_oracle_romd")
             originals = {}
@@ -5704,11 +5714,33 @@ class OracleEightSeedSinglePipelineCases(TestCase):
             }
             self.assertEqual(sum(action == "RUN" for action in store.plan_execution(unseen).actions().values()), 8)
 
+    def test_signed_eight_seed_replay_receipts_reuse_current_four_without_copy(self):
+        from core.training_policy import get_robustness_benchmark_policy_snapshot
+        from services.audit.oracle_replay_artifacts import OracleReplayStore
+        historical = get_robustness_benchmark_policy_snapshot("end_to_end_v2")
+        current = get_robustness_benchmark_policy_snapshot()
+        with tempfile.TemporaryDirectory() as temp:
+            store = OracleReplayStore(Path(temp), "breakout_quality/reusable/target_oracle_romd")
+            originals = {}
+            planned = {}
+            for seed in current["resolved_seeds"]:
+                old = self._identity(seed, "C96", historical["benchmark_id"])
+                store.write(old, self._observation(seed, "C96"), origin="historical_signed_replay")
+                originals[store._path(old)] = store._path(old).read_bytes()
+                planned[(seed, "C96")] = self._identity(seed, "C96", current["benchmark_id"])
+            plan = store.plan_execution(planned)
+            self.assertEqual(len(plan.actions()), 4)
+            self.assertTrue(all(value == "REUSE" for value in plan.actions().values()))
+            self.assertFalse(plan.blocked())
+            self.assertTrue(all(path.read_bytes() == original
+                                for path, original in originals.items()))
+            self.assertTrue(all(not store._path(identity).exists() for identity in planned.values()))
+
     def test_unrelated_changed_inputs_are_never_reused_as_8_seed_expansion(self):
         from core.training_policy import get_robustness_benchmark_policy_snapshot
         from services.audit.oracle_replay_artifacts import OracleReplayStore
         v1 = get_robustness_benchmark_policy_snapshot("end_to_end_v1")
-        current = get_robustness_benchmark_policy_snapshot()
+        current = get_robustness_benchmark_policy_snapshot("end_to_end_v2")
         seed = int(v1["resolved_seeds"][0])
         with tempfile.TemporaryDirectory() as tmp:
             store = OracleReplayStore(Path(tmp), "breakout_quality/reusable/target_oracle_romd")
@@ -5725,7 +5757,7 @@ class OracleEightSeedSinglePipelineCases(TestCase):
         from core.training_policy import get_robustness_benchmark_policy_snapshot
         from services.optimizer import strategy_param_service as producer
         v1 = get_robustness_benchmark_policy_snapshot("end_to_end_v1")
-        v2 = get_robustness_benchmark_policy_snapshot()
+        v2 = get_robustness_benchmark_policy_snapshot("end_to_end_v2")
         seed = int(v1["resolved_seeds"][0])
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -5782,11 +5814,53 @@ class OracleEightSeedSinglePipelineCases(TestCase):
             self.assertFalse(newer["ready"])
             self.assertEqual(observations, [v2["benchmark_id"]])
 
+    def test_canonical_optimizer_reads_signed_eight_seed_as_current_four(self):
+        from core.training_policy import get_robustness_benchmark_policy_snapshot
+        from services.optimizer import strategy_param_service as producer
+        current = get_robustness_benchmark_policy_snapshot()
+        old = get_robustness_benchmark_policy_snapshot("end_to_end_v2")
+        seed = int(current["resolved_seeds"][0])
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            signed = root / "old_eight_signed.json"
+            signed.write_text('{"fitting":"identical"}', encoding="utf-8")
+            current_missing = dict(ready=False, action="BUILD",
+                                   status="ARTIFACT_MISSING_OR_INVALID",
+                                   path=root / "new_four_missing.json",
+                                   manifest_path=root / "new_four_missing.manifest.json",
+                                   scientific_identity={"same_seed": True},
+                                   build_contract={"benchmark_id": current["benchmark_id"],
+                                                   "optimizer_seed": seed, "trials_per_fold": 300})
+            history = dict(ready=True, action="REUSE", status="READY", path=signed,
+                           manifest_path=root / "eight.manifest.json",
+                           scientific_identity={"same_seed": True},
+                           build_contract={"benchmark_id": old["benchmark_id"],
+                                           "optimizer_seed": seed, "trials_per_fold": 300})
+            seen = []
+            def inspect(_root, *, benchmark_id, **_kwargs):
+                seen.append(benchmark_id)
+                return dict(history if benchmark_id == old["benchmark_id"] else current_missing)
+            kwargs = dict(training_profile_id="production_multiseed_current",
+                          benchmark_id=current["benchmark_id"], replication_seed=seed,
+                          policy="base-finalists-agree", comparison_end_date="2026-03-02",
+                          dataset="full", max_positions=10, rotation="off",
+                          fixed_risk=1.0, max_position_cap_pct=100.0)
+            with patch.object(producer,
+                              "inspect_fixed_multiseed_robustness_strategy_parameter_artifact",
+                              side_effect=inspect):
+                result = producer.resolve_fixed_multiseed_robustness_strategy_parameter_artifact(
+                    root, **kwargs)
+            self.assertTrue(result["ready"])
+            self.assertEqual(result["path"], signed)
+            self.assertEqual(result["origin_benchmark_id"], "end_to_end_v2")
+            self.assertEqual(result["current_benchmark_id"], "end_to_end_v1")
+            self.assertEqual(seen, ["end_to_end_v1", "end_to_end_v2"])
+
     def test_canonical_optimizer_producer_reuses_verified_history_without_copying(self):
         from core.training_policy import get_robustness_benchmark_policy_snapshot
         from services.optimizer import strategy_param_service as producer
         v1 = get_robustness_benchmark_policy_snapshot("end_to_end_v1")
-        v2 = get_robustness_benchmark_policy_snapshot()
+        v2 = get_robustness_benchmark_policy_snapshot("end_to_end_v2")
         seed = int(v1["resolved_seeds"][0])
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -5832,9 +5906,9 @@ class OracleEightSeedParameterDependencyRegressionCases(TestCase):
     """[1] must coordinate missing P16 without changing read-only Oracle semantics."""
 
     @staticmethod
-    def _fixture(*, ready_seeds, invalid_seed=None):
+    def _fixture(*, ready_seeds, invalid_seed=None, benchmark_id="end_to_end_v1"):
         from core.training_policy import get_robustness_benchmark_policy_snapshot
-        seeds = get_robustness_benchmark_policy_snapshot()["resolved_seeds"]
+        seeds = get_robustness_benchmark_policy_snapshot(benchmark_id)["resolved_seeds"]
         rows = []
         for seed in seeds:
             ready = int(seed) in ready_seeds
@@ -5848,10 +5922,10 @@ class OracleEightSeedParameterDependencyRegressionCases(TestCase):
                 manifest_path=Path(f"/unittest/P16/{seed}.manifest.json"),
             ))
         return dict(
-            robustness=SimpleNamespace(benchmark_id="end_to_end_v2"),
+            robustness=SimpleNamespace(benchmark_id=benchmark_id),
             producer_kwargs={
                 "training_profile_id": "broker_cash_min_best_seed42_current",
-                "benchmark_id": "end_to_end_v2", "policy": "base-finalist-best",
+                "benchmark_id": benchmark_id, "policy": "base-finalist-best",
                 "comparison_end_date": "2026-03-02", "dataset": "full",
                 "max_positions": 10, "rotation": "off", "fixed_risk": 0.05,
                 "max_position_cap_pct": 1.0,
@@ -5862,15 +5936,15 @@ class OracleEightSeedParameterDependencyRegressionCases(TestCase):
     def test_p16_inspection_uses_one_registered_source_for_all_benchmark_seeds(self):
         from core.training_policy import get_robustness_benchmark_policy_snapshot
         current = get_robustness_benchmark_policy_snapshot()
-        legacy = get_robustness_benchmark_policy_snapshot("end_to_end_v1")
+        ready = set(current["resolved_seeds"][:2])
         seen = []
 
         def inspect(_root, *, replication_seed, **kwargs):
             seen.append((replication_seed, kwargs))
             return dict(
-                ready=replication_seed in legacy["resolved_seeds"],
-                action="REUSE" if replication_seed in legacy["resolved_seeds"] else "BUILD",
-                status="READY" if replication_seed in legacy["resolved_seeds"] else "ARTIFACT_MISSING_OR_INVALID",
+                ready=replication_seed in ready,
+                action="REUSE" if replication_seed in ready else "BUILD",
+                status="READY" if replication_seed in ready else "ARTIFACT_MISSING_OR_INVALID",
                 path=Path(f"/mock/P16/{replication_seed}.json"),
                 manifest_path=Path(f"/mock/P16/{replication_seed}.manifest.json"),
             )
@@ -5879,7 +5953,7 @@ class OracleEightSeedParameterDependencyRegressionCases(TestCase):
                           side_effect=inspect):
             plan = oracle._oracle_parameter_reuse_plan(_ACTIVE_ORACLE_DEFINITION, Path("/mock"))
         self.assertEqual([row["seed"] for row in plan["rows"]], current["resolved_seeds"])
-        self.assertEqual([row["action"] for row in plan["rows"]], ["REUSE"] * 4 + ["BUILD"] * 4)
+        self.assertEqual([row["action"] for row in plan["rows"]], ["REUSE"] * 2 + ["BUILD"] * 2)
         self.assertEqual(len(seen), len(current["resolved_seeds"]))
         self.assertTrue(all(kwargs["benchmark_id"] == current["benchmark_id"] for _, kwargs in seen))
         self.assertTrue(all(kwargs["training_profile_id"] ==
@@ -5890,11 +5964,11 @@ class OracleEightSeedParameterDependencyRegressionCases(TestCase):
     def test_p16_missing_cannot_be_accepted_by_read_only_audit(self):
         from core.training_policy import get_robustness_benchmark_policy_snapshot
         seeds = get_robustness_benchmark_policy_snapshot()["resolved_seeds"]
-        fixture = self._fixture(ready_seeds=set(seeds[:4]))
+        fixture = self._fixture(ready_seeds=set(seeds[:2]))
         with patch.object(oracle, "inspect_oracle_parameter_prerequisites", return_value=fixture):
             status = oracle.collect_status(_ACTIVE_ORACLE_DEFINITION, project_root=Path("/mock"))
         self.assertEqual(status["status"], "BLOCKED")
-        self.assertIn(str(seeds[4]), status["reason"])
+        self.assertIn(str(seeds[2]), status["reason"])
         self.assertIn("只讀Audit", status["reason"])
 
     @staticmethod
@@ -5925,32 +5999,62 @@ class OracleEightSeedParameterDependencyRegressionCases(TestCase):
                 "producer_kwargs": fixture["producer_kwargs"],
                 "missing": missing,
             }},
-            "preflight": {(row["seed"], "C96"): "REUSE" if row["ready"] else "BLOCKED"
+            "preflight": {(row["seed"], "C96"): "REUSE" if row["ready"] else "RUN"
                           for row in rows},
             "text": "[Target 驗證 Fixed | Portfolio Replay 正式計畫]\n"
-                    "Target  S1  S2  S3  S4  S5  S6  S7  S8\n"
-                    "C96     REUSE REUSE REUSE REUSE BLOCKED BLOCKED BLOCKED BLOCKED",
+                    "Target  " + " ".join(f"S{i}" for i in range(1, len(seeds) + 1)) + "\n"
+                    + "C96     " + " ".join("REUSE" if row["ready"] else "RUN" for row in rows),
         }
 
-    def test_research_refuses_missing_parameters_without_optimizer(self):
-        """Oracle Enter does not authorize canonical Optimizer parameter fitting."""
+    def test_research_builds_only_approved_missing_seeds_via_canonical_optimizer(self):
+        """Authorized missing P16 seeds are delegated only to the canonical Optimizer."""
         from services.research import target_oracle_application as application
         from core.training_policy import get_robustness_benchmark_policy_snapshot
         from services.optimizer import strategy_param_service
-        seeds = get_robustness_benchmark_policy_snapshot()["resolved_seeds"]
-        ready = set(seeds[:4])
-        fixture = self._fixture(ready_seeds=ready)
-        preview = self._approved_preview(fixture)
-        with patch.object(application, "inspect_oracle_parameter_prerequisites", return_value=fixture), \
-             patch.object(strategy_param_service, "ensure_fixed_multiseed_robustness_strategy_parameter_artifact",
-                          side_effect=AssertionError("Oracle must never fit P16/P17")) as producer:
-            with self.assertRaisesRegex(RuntimeError, "不執行 Optimizer"):
-                application.ensure_authorized_oracle_parameters(
-                    project_root=Path("/mock"), definition=self._min_only_definition(),
-                    approved_plan=preview,
-                )
-            producer.assert_not_called()
-        self.assertEqual(ready, set(seeds[:4]))
+        seeds = tuple(get_robustness_benchmark_policy_snapshot()["resolved_seeds"])
+        initial = self._fixture(ready_seeds=set(seeds[:2]))
+        completed = self._fixture(ready_seeds=set(seeds))
+        preview = self._approved_preview(initial)
+        calls = []
+        def inspect(scoped, *, project_root):
+            calls.append(scoped.source["baseline_arm_id"])
+            return initial if len(calls) <= 2 else completed
+        with patch.object(application, "inspect_oracle_parameter_prerequisites", side_effect=inspect), \
+             patch.object(strategy_param_service,
+                          "ensure_fixed_multiseed_robustness_strategy_parameter_artifact",
+                          return_value={"action": "BUILD"}) as producer, \
+             redirect_stdout(io.StringIO()):
+            result = application.ensure_authorized_oracle_parameters(
+                project_root=Path("/mock"), definition=self._min_only_definition(),
+                approved_plan=preview,
+            )
+        self.assertEqual(result, {"reused": 2, "built_or_repaired": 2})
+        self.assertEqual(producer.call_count, 2)
+        self.assertEqual([call.kwargs["replication_seed"] for call in producer.call_args_list],
+                         list(seeds[2:]))
+        self.assertTrue(all(call.kwargs["resume_parameter_training"] is True
+                            and call.kwargs["force_rebuild"] is False
+                            for call in producer.call_args_list))
+        self.assertGreaterEqual(len(calls), 3)
+
+    def test_canonical_optimizer_return_is_not_signed_ready_proof(self):
+        from services.research import target_oracle_application as application
+        from core.training_policy import get_robustness_benchmark_policy_snapshot
+        from services.optimizer import strategy_param_service
+        seeds = tuple(get_robustness_benchmark_policy_snapshot()["resolved_seeds"])
+        initial = self._fixture(ready_seeds=set(seeds[:2]))
+        with patch.object(application, "inspect_oracle_parameter_prerequisites",
+                          return_value=initial), \
+             patch.object(strategy_param_service,
+                          "ensure_fixed_multiseed_robustness_strategy_parameter_artifact",
+                          return_value={"action": "BUILD"}) as producer, \
+             redirect_stdout(io.StringIO()), \
+             self.assertRaisesRegex(RuntimeError, "尚未通過簽章READY"):
+            application.ensure_authorized_oracle_parameters(
+                project_root=Path("/mock"), definition=self._min_only_definition(),
+                approved_plan=self._approved_preview(initial),
+            )
+        self.assertEqual(producer.call_count, 2)
 
     def test_all_ready_never_invokes_optimizer(self):
         from services.research import target_oracle_application as application
@@ -5971,8 +6075,8 @@ class OracleEightSeedParameterDependencyRegressionCases(TestCase):
         from services.research import target_oracle_application as application
         from core.training_policy import get_robustness_benchmark_policy_snapshot
         seeds = get_robustness_benchmark_policy_snapshot()["resolved_seeds"]
-        fixture = self._fixture(ready_seeds=set(seeds[:4]), invalid_seed=seeds[4])
-        authorized = self._approved_preview(self._fixture(ready_seeds=set(seeds[:4])))
+        fixture = self._fixture(ready_seeds=set(seeds[:2]), invalid_seed=seeds[2])
+        authorized = self._approved_preview(self._fixture(ready_seeds=set(seeds[:2])))
         with patch.object(application, "inspect_oracle_parameter_prerequisites", return_value=fixture), \
              patch("services.optimizer.strategy_param_service.ensure_fixed_multiseed_robustness_strategy_parameter_artifact") as producer, \
              redirect_stdout(io.StringIO()):
@@ -5982,7 +6086,7 @@ class OracleEightSeedParameterDependencyRegressionCases(TestCase):
                     approved_plan=authorized,
                 )
             producer.assert_not_called()
-        lost = self._fixture(ready_seeds=set(seeds[:3]))
+        lost = self._fixture(ready_seeds=set(seeds[:1]))
         with patch.object(application, "inspect_oracle_parameter_prerequisites", return_value=lost), \
              patch("services.optimizer.strategy_param_service.ensure_fixed_multiseed_robustness_strategy_parameter_artifact") as producer, \
              self.assertRaisesRegex(RuntimeError, "狀態已改變"):
@@ -6031,7 +6135,7 @@ class OracleEightSeedParameterDependencyRegressionCases(TestCase):
             root = Path(tmp)
             definition, _b, old_seed, price_sha, param_sha, *_ = (
                 OracleOnePlanRealCacheCases()._fixture(root))
-            seeds = get_robustness_benchmark_policy_snapshot()["resolved_seeds"]
+            seeds = get_robustness_benchmark_policy_snapshot("end_to_end_v2")["resolved_seeds"]
             store = OracleReplayStore(root, definition.output_subdir)
             # Isolated synthetic receipts from the same source contract; the
             # production system never copies one seed's real P16 or Replay.
@@ -6041,12 +6145,13 @@ class OracleEightSeedParameterDependencyRegressionCases(TestCase):
                 for seed in seeds[1:4]:
                     store.write({**identity, "seed": seed}, {**original, "seed": seed},
                                 origin="synthetic_8seed_upgrade_reuse")
-            fixture = self._fixture(ready_seeds=set(seeds[:4]))
+            fixture = self._fixture(ready_seeds=set(seeds[:4]), benchmark_id="end_to_end_v2")
             fixture["robustness"] = SimpleNamespace(benchmark_id="end_to_end_v2")
             def prepare(_definition, *, root, parameter_paths, **_kwargs):
                 return ([(seed, param_sha, "synthetic", None, None)
                          for seed, _path in parameter_paths], {})
-            with patch.object(oracle, "inspect_oracle_parameter_prerequisites", return_value=fixture), \
+            with patch.object(oracle, "compute_strategy_param_scientific_sha256", return_value="e" * 64), \
+                 patch.object(oracle, "inspect_oracle_parameter_prerequisites", return_value=fixture), \
                  patch.object(oracle, "_prepare_oracle_parameters", side_effect=prepare), \
                  patch.object(oracle, "price_inventory_sha256", return_value=price_sha), \
                  patch.object(oracle, "_read_only_score_keys", side_effect=AssertionError(
@@ -6059,7 +6164,7 @@ class OracleEightSeedParameterDependencyRegressionCases(TestCase):
                 self.assertEqual(view["preflight"][(seed, "R40")], "REUSE")
             for seed in seeds[4:]:
                 self.assertEqual({view["preflight"][(seed, key)]
-                                  for key in ("C96", "R40", "T40")}, {"BLOCKED"})
+                                  for key in ("C96", "R40", "T40")}, {"RUN"})
             self.assertEqual(sum(x == "REUSE" for x in view["preflight"].values()), 8)
 
     def test_partial_missing_p16_still_previews_registered_target_matrix(self):
@@ -6070,14 +6175,15 @@ class OracleEightSeedParameterDependencyRegressionCases(TestCase):
                 OracleOnePlanRealCacheCases()._fixture(root))
             from core.training_policy import get_robustness_benchmark_policy_snapshot
             seeds = get_robustness_benchmark_policy_snapshot()["resolved_seeds"]
-            fixture = self._fixture(ready_seeds=set(seeds[:4]))
-            fixture["robustness"] = SimpleNamespace(benchmark_id="end_to_end_v2")
+            fixture = self._fixture(ready_seeds=set(seeds[:2]))
+            fixture["robustness"] = SimpleNamespace(benchmark_id="end_to_end_v1")
             def prepare(_definition, *, root, parameter_paths, **_kwargs):
                 return ([(seed, param_sha, "synthetic", None, None)
                          for seed, _path in parameter_paths], {})
             before_preview = {str(path.relative_to(root)): path.read_bytes()
                               for path in root.rglob("*") if path.is_file()}
-            with patch.object(oracle, "inspect_oracle_parameter_prerequisites", return_value=fixture), \
+            with patch.object(oracle, "compute_strategy_param_scientific_sha256", return_value="e" * 64), \
+                 patch.object(oracle, "inspect_oracle_parameter_prerequisites", return_value=fixture), \
                  patch.object(oracle, "_prepare_oracle_parameters", side_effect=prepare), \
                  patch.object(oracle, "price_inventory_sha256", return_value=price_sha), \
                  patch.object(oracle, "_read_only_score_keys", side_effect=AssertionError("No Target producer before approval")), \
@@ -6091,13 +6197,13 @@ class OracleEightSeedParameterDependencyRegressionCases(TestCase):
             }, "PREVIEW must not migrate execution or truth references")
             self.assertEqual(preview["status"], "PREVIEW")
             self.assertEqual(preview["seed_set"], tuple(seeds))
-            self.assertEqual(preview["missing_p16"], tuple(seeds[4:]))
-            self.assertEqual(len(preview["preflight"]), 8 * 3)
+            self.assertEqual(preview["missing_p16"], tuple(seeds[2:]))
+            self.assertEqual(len(preview["preflight"]), 4 * 3)
             self.assertEqual(preview["preflight"][(first, "C96")], "REUSE")
             self.assertEqual(preview["preflight"][(first, "R40")], "REUSE")
-            for seed in seeds[4:]:
+            for seed in seeds[2:]:
                 self.assertEqual({preview["preflight"][(seed, target)]
-                                  for target in ("C96", "R40", "T40")}, {"BLOCKED"})
+                                  for target in ("C96", "R40", "T40")}, {"RUN"})
             self.assertIn("Target", preview["text"])
             self.assertIn("T40", preview["text"])
             self.assertNotIn("P16 前置工件計畫", preview["text"])

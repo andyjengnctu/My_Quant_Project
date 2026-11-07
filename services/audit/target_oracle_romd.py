@@ -698,15 +698,14 @@ def _resolve_oracle_target_score_contracts(definition, settings, plan) -> dict[s
 
 
 def _oracle_parameter_reuse_plan(definition, root: Path) -> dict[str, Any]:
-    """Read-only, one-contract parameter inspection for each Oracle scope.
+    """Read-only parameter inspection; missing legal seeds are producer work.
 
-    Each seed is resolved by the canonical Optimizer owner without building.
-    A missing parameter source blocks Replay; Oracle never performs fitting.
+    Oracle itself performs no optimization. After user approval the Research
+    application delegates BUILD/REPAIR to the canonical Optimizer owner.
     """
     settings, baseline, _exact = _contract(definition)
-    # AI: Oracle selects the registered 8-seed benchmark explicitly. The
-    # shared Strategy Compare suite uses its original 4-seed benchmark; only
-    # its selector, parameter-source and P16 contract are reused here.
+    # Oracle and Strategy Robustness use the same registered benchmark; their
+    # per-seed fitting, selector and execution contracts remain independent.
     robustness = get_strategy_multi_seed_robustness_settings(settings.profile_id)
     oracle_benchmark = get_robustness_benchmark_policy_snapshot(
         TARGET_ORACLE_ROBUSTNESS_BENCHMARK_ID,
@@ -3079,8 +3078,8 @@ def _run_single_stage_oracle(
     contracts = _resolve_oracle_target_score_contracts(definition, settings, plan)
     pending_p16: tuple[int, ...] = ()
     if preview_only:
-        # Preserve certified REUSE for ready parameter seeds. Missing inputs
-        # cannot authorize a Portfolio RUN and must remain explicit blockers.
+        # Preserve certified REUSE for ready parameters. Legal missing P16
+        # seeds are planned RUN cells, executed only after Optimizer fills them.
         parameter_plan = inspect_oracle_parameter_prerequisites(definition, project_root=root)
         unsafe = [row for row in parameter_plan["rows"]
                   if not row["ready"] and row["action"] not in {"BUILD", "REPAIR"}]
@@ -3571,9 +3570,10 @@ def _run_single_stage_oracle(
     if preview_only:
         for seed in pending_p16:
             for target in targets:
-                # No canonical execution identity exists without the parameter
-                # source. This is neither a REUSE nor an executable Replay RUN.
-                decisions[(seed, target)] = "BLOCKED"
+                # Approval covers both canonical P16 preparation and the later
+                # Portfolio RUN. REUSE may be discovered after P16 is ready.
+                decisions[(seed, target)] = "RUN"
+                run_causes[(seed, target)] = "合法策略參數待 Optimizer 自動補建"
     scoped_rows = {str(row["target"]): row
                    for row in definition.source["oracle_comparisons"]}
     preflight = render_replay_preflight(

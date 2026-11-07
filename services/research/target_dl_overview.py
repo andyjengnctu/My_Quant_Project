@@ -68,6 +68,11 @@ from filters.breakout_quality.paths import (
     resolve_filter_output_dir,
 )
 from services.research.target_oracle_application import get_formal_oracle_definition
+from core.training_policy import get_robustness_benchmark_policy_snapshot
+from config.robustness_benchmark import (
+    TARGET_ORACLE_ROBUSTNESS_BENCHMARK_ID,
+    MODEL_STRATEGY_ROBUSTNESS_BENCHMARK_ID,
+)
 from services.research.oracle_artifact_contract import reference_arm_execution_matches
 from config.strategy_compare import STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE
 
@@ -158,6 +163,9 @@ def _oracle_rows(root: Path, definition, versions: Mapping[str, tuple]):
                  / "latest" / "audit.json")
     doc_path = data_path.with_name("audit.md")
     payload = _json(data_path)
+    current_oracle = get_robustness_benchmark_policy_snapshot(
+        TARGET_ORACLE_ROBUSTNESS_BENCHMARK_ID
+    )
     oracle_info: dict[str, Any] = {"path": None, "benchmark": "", "seeds": (), "period": ""}
     metrics: dict[str, dict[str, float | None]] = {}
     # Signed per-seed results are the canonical truth shared with [1][1].
@@ -182,8 +190,8 @@ def _oracle_rows(root: Path, definition, versions: Mapping[str, tuple]):
             and _approved(payload, "audit.target_oracle_romd", versions)
             and isinstance(payload.get("oracles"), list)
             and isinstance(payload.get("seeds"), list)
-            and len(payload["seeds"]) >= 2
-            and len(set(payload["seeds"])) == len(payload["seeds"])
+            and payload.get("benchmark_id") == current_oracle["benchmark_id"]
+            and tuple(payload["seeds"]) == tuple(current_oracle["resolved_seeds"])
             and payload.get("start_date") and payload.get("end_date")
             and payload.get("strategy_profile_id") == definition.source["strategy_profile_id"]):
         seen: set[str] = set()
@@ -441,6 +449,9 @@ def _model_comparison_rhos(root: Path, *, filter_id: str, versions: Mapping[str,
     # [3]~[6] can publish a comparison without publishing individual SOP files.
     # Never construct a multi-seed rho from a single-seed report.
     scope = "rolling_oos_robustness" if robustness else "rolling_oos"
+    current_robustness_seeds = (tuple(get_robustness_benchmark_policy_snapshot(
+        MODEL_STRATEGY_ROBUSTNESS_BENCHMARK_ID)["resolved_seeds"])
+        if robustness else ())
     path = (resolve_filter_output_dir(root, filter_id=filter_id) /
             "standard_model_comparison" / scope / "standard_model_comparison.json")
     payload = _json(path)
@@ -456,8 +467,9 @@ def _model_comparison_rhos(root: Path, *, filter_id: str, versions: Mapping[str,
             continue
         if robustness:
             seeds = tuple(model.get("benchmark_seeds") or ())
-            if (len(seeds) < 2 or any(type(seed) is not int for seed in seeds)
-                    or len(set(seeds)) != len(seeds) or model.get("seed") is not None):
+            if (seeds != current_robustness_seeds
+                    or any(type(seed) is not int for seed in seeds)
+                    or model.get("seed") is not None):
                 continue
         else:
             seed = model.get("seed")
@@ -818,6 +830,8 @@ def _strategy_robustness_metrics(
     from config.strategy_compare import STRATEGY_COMPARE_CURRENT_ROLLING_ROBUSTNESS
     cfg = get_strategy_multi_seed_robustness_settings(STRATEGY_COMPARE_CURRENT_ROLLING_ROBUSTNESS)
     current_settings = get_strategy_comparison_settings(cfg.profile_id)
+    current_benchmark = get_robustness_benchmark_policy_snapshot(cfg.benchmark_id)
+    active_seeds = tuple(current_benchmark["resolved_seeds"])
     base = root / cfg.output_root
     pointer = _json(base / "latest.json") or {}
     names = [str(pointer.get("fingerprint") or "")]
@@ -842,8 +856,11 @@ def _strategy_robustness_metrics(
                 or expected.get("benchmark_id") != contract.get("benchmark_id")):
             continue
         seeds = tuple(contract.get("resolved_seeds") or ())
-        if (len(seeds) < 2 or len(seeds) != _count(contract.get("seed_count"))
-                or len(set(seeds)) != len(seeds)):
+        # Historical eight-seed run aggregates remain immutable evidence,
+        # never a current four-seed robustness metric or a partial substitute.
+        if (contract.get("benchmark_id") != current_benchmark["benchmark_id"]
+                or seeds != active_seeds
+                or _count(contract.get("seed_count")) != len(active_seeds)):
             continue
         # Benchmark results already pin each Seed's scientific model profile
         # manifest in its published stochastic-arm contract. Reject a pre-v2
@@ -865,20 +882,9 @@ def _strategy_robustness_metrics(
                 continue
             value = _number(item.get("mean"))
             if value is not None and _count(item.get("n")) == len(seeds):
-                resolved = (value, seeds, str(contract.get("benchmark_id") or ""))
-                # Only Oracle's unscored controls can feed an 8S robustness
-                # view, and only after first-four seed scientific parity.
-                baselines = (oracle_baseline_arm_ids(oracle_source)
-                             if oracle_source is not None else {})
-                if arm_id in baselines.values() and oracle_info:
-                    promoted = _certified_no_dl_oracle_8s(
-                        root=root, run=run, manifest=manifest, contract=contract,
-                        oracle_info=oracle_info, arm_id=arm_id,
-                        settings=current_settings, four_seeds=seeds,
-                        published_four_mean=value,
-                    )
-                    if promoted is not None:
-                        resolved = promoted
+                # Aggregates are cohort-specific. Never relabel a historical
+                # eight-seed Oracle statistic as current four-seed Robustness.
+                resolved = (value, seeds, str(contract["benchmark_id"]))
                 results[arm_id] = resolved
     return results
 
@@ -994,8 +1000,7 @@ def collect_target_dl_overview(project_root: Path) -> dict[str, Any]:
                 _positive_classifier_for_arm(STRATEGY_COMPARE_ARMS[arm], str(score_targets[target]))
                 if arm and target in positive_targets else None
             )
-            # C96/C97 are genuine no-DL controls; their signed 8-seed baseline
-            # observations are not a Perfect-score Oracle treatment.
+            # C96/C97 are no-DL controls, not Perfect-score Oracle treatments.
             is_baseline = target in oracle_baseline_arm_ids(definition.source).values()
             metrics = {} if is_baseline else (oracle.get(target) or {})
             robust = robust_romd.get(arm) if arm else None

@@ -142,27 +142,26 @@ def get_robustness_benchmark_policy_snapshot(benchmark_id: str | None = None) ->
 def benchmark_seed_execution_equivalent(
     *, recorded_benchmark: str, active_benchmark: str, seed: int,
 ) -> bool:
-    """Can one signed seed fit be consumed in an expanded aggregate?
+    """Accept an immutable per-seed execution across nested benchmark cohorts.
 
-    This is a generic cohort identity check, not Target-specific routing.
-    The caller still must verify the complete per-seed strategy parameter,
-    price, score, execution and Replay identity. Registration is immutable.
+    This is symmetric for a signed 4S <-> 8S transition: only their common
+    registered prefix seeds have identical outer execution membership. It does
+    not authorize an aggregate, a different seed, or an artifact with changed
+    parameter/score/portfolio identity; the caller checks those independently.
     """
     if not recorded_benchmark or not active_benchmark:
         return False
-    if str(recorded_benchmark) == str(active_benchmark):
-        return True
-    earlier = get_robustness_benchmark_policy_snapshot(benchmark_id=recorded_benchmark)
+    recorded = get_robustness_benchmark_policy_snapshot(benchmark_id=recorded_benchmark)
     active = get_robustness_benchmark_policy_snapshot(benchmark_id=active_benchmark)
-    old = tuple(earlier["resolved_seeds"])
+    old = tuple(recorded["resolved_seeds"])
     current = tuple(active["resolved_seeds"])
-    return (int(seed) in old
-            and len(old) <= len(current)
-            and old == current[:len(old)]
-            and earlier["seed_generator_seed"] == active["seed_generator_seed"]
-            and earlier["strategy_trials_per_fold"] == active["strategy_trials_per_fold"]
-            and earlier["train_window_months"] == active["train_window_months"]
-            and earlier["oos_horizon_months"] == active["oos_horizon_months"])
+    common = min(len(old), len(current))
+    return (int(seed) in old[:common] and int(seed) in current[:common]
+            and old[:common] == current[:common]
+            and recorded["seed_generator_seed"] == active["seed_generator_seed"]
+            and recorded["strategy_trials_per_fold"] == active["strategy_trials_per_fold"]
+            and recorded["train_window_months"] == active["train_window_months"]
+            and recorded["oos_horizon_months"] == active["oos_horizon_months"])
 
 
 def set_optimizer_runtime_model_mode(model_mode) -> None:

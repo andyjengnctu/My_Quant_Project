@@ -434,8 +434,17 @@ class PositiveNetPnlContractCases(TestCase):
                     json.dumps(payload), encoding="utf-8")
                 return _oracle_rows(Path(temp), definition, versions)
 
+            # Legacy 8S aggregate remains on disk but cannot be read as current 4S.
+            self.assertEqual(read_rows()[3], {})
+            from core.training_policy import get_robustness_benchmark_policy_snapshot
+            current = get_robustness_benchmark_policy_snapshot()
+            seeds[:] = list(current["resolved_seeds"])
+            payload["benchmark_id"] = current["benchmark_id"]
+            payload["baseline"]["seeds"] = len(seeds)
+            for historical_row in payload["oracles"]:
+                historical_row["seeds"] = len(seeds)
             targets, _, _, values, info = read_rows()
-            self.assertEqual(info["benchmark"], "end_to_end_v2")
+            self.assertEqual(info["benchmark"], "end_to_end_v1")
             self.assertEqual(info["seeds"], tuple(seeds))
             self.assertEqual(values["C96"]["oracle_romd"], 9.17)
             self.assertEqual(values["MFE40_Control"]["oracle_romd"], 24.62)
@@ -457,7 +466,7 @@ class PositiveNetPnlContractCases(TestCase):
             ledger.write_bytes((ROOT / "doc/scientific_contracts/REPORT_CONTRACT_VERSIONS.json").read_bytes())
             overview = collect_target_dl_overview(Path(temp))
             rendered = render_target_dl_overview(overview)
-            self.assertIn("Oracle: end_to_end_v2 | N=8 | 2021-01-01 ~ 2026-03-02", rendered)
+            self.assertIn("Oracle: end_to_end_v1 | N=4 | 2021-01-01 ~ 2026-03-02", rendered)
             self.assertNotIn("no completed matching local report", rendered)
             rows = [row for row in overview["rows"] if row["target"] == "MFE40" and row["selector"] == "Exact"]
             self.assertTrue(rows)

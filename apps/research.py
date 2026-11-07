@@ -358,8 +358,8 @@ def _run_reusable_audit_method(module_id: str, method_id: str) -> int:
         print("目前沒有啟用此Reusable module的參數設定；保留固定選單但本次不執行。")
         return 0
     if method.menu_location == "research_root":
-        # The Target x 8-Seed plan is read-only until Replay authorization.
-        # Missing parameter truth is a prerequisite blocker, never a Replay RUN.
+        # One canonical read-only preview authorizes both parameter
+        # preparation and the subsequent strictly limited Replay plan.
         from services.audit.target_oracle_romd import preview_oracle_replay_plan
         from services.research.target_oracle_application import (
             ensure_authorized_oracle_parameters,
@@ -367,25 +367,17 @@ def _run_reusable_audit_method(module_id: str, method_id: str) -> int:
         )
         definition = get_formal_oracle_definition(module_id)
         preview = preview_oracle_replay_plan(definition, project_root=PROJECT_ROOT)
-        # The preview is the canonical display, not a second menu-owned list.
         print("\n" + preview["text"])
-        missing_parameters = False
         for baseline, plan in preview["parameter_plans"].items():
             if plan["missing"]:
-                missing_parameters = True
                 missing_seeds = ", ".join(str(seed) for seed in plan["missing"])
                 print(
-                    f"[前置未就緒] {baseline}："
+                    f"[參數前置待補] {baseline}："
                     f"{len(plan['seed_set']) - len(plan['missing'])} 個 REUSE / "
-                    f"{len(plan['missing'])} 個缺少合法參數（Seed：{missing_seeds}）。"
+                    f"{len(plan['missing'])} 個由 Optimizer 自動補建（Seed：{missing_seeds}）。"
                 )
-        if missing_parameters:
-            print("[Target 驗證] 本次停止 Replay；[1] 不啟動 Optimizer。"
-                  "缺少的參數須由對應 P16／P17 科學契約的正式參數 Producer 獨立建立；"
-                  "其他訓練 Profile 不可替代。")
-            return 0
         try:
-            answer = input("👉 按 Enter 執行正式 REUSE／RUN 計畫；輸入 0 返回：").strip().lower()
+            answer = input("👉 按 Enter 執行（含必要參數自動補建與 REUSE／RUN）；輸入 0 返回：").strip().lower()
         except EOFError:
             answer = "0"
         if answer not in {"", "1"}:

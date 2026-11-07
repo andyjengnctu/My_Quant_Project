@@ -82,7 +82,7 @@ class OracleParameterFamilyCases(TestCase):
         self.assertEqual(daily_scoped.source["baseline_arm_id"], "C96")
         self.assertNotEqual(full_scoped.output_subdir, min_scoped.output_subdir)
 
-    def test_min_and_full_have_distinct_canonical_optimizer_sources_for_all_eight_seeds(self):
+    def test_min_and_full_have_distinct_canonical_optimizer_sources_for_four_seeds(self):
         d = definition()
         source_kwargs = {}
 
@@ -103,8 +103,8 @@ class OracleParameterFamilyCases(TestCase):
         self.assertEqual(set(plans), {"C96", "C97"})
         self.assertNotEqual(plans["C96"]["producer_kwargs"]["training_profile_id"],
                             plans["C97"]["producer_kwargs"]["training_profile_id"])
-        self.assertEqual(len(plans["C96"]["rows"]), 8)
-        self.assertEqual(len(plans["C97"]["rows"]), 8)
+        self.assertEqual(len(plans["C96"]["rows"]), 4)
+        self.assertEqual(len(plans["C97"]["rows"]), 4)
         self.assertEqual(set(source_kwargs), {plans["C96"]["producer_kwargs"]["training_profile_id"],
                                              plans["C97"]["producer_kwargs"]["training_profile_id"]})
         self.assertTrue(all(not row["ready"] and row["action"] == "BUILD"
@@ -182,6 +182,7 @@ class OracleParameterFamilyCases(TestCase):
 
     def test_published_full_report_requires_own_control_and_consumer_proofs(self):
         import json
+        from core.training_policy import get_robustness_benchmark_policy_snapshot
         from core.report_contract_versions import load_report_contract_versions
         from core.strategy_compare_policy import get_strategy_comparison_settings
         from services.research.oracle_artifact_contract import reference_arm_execution_binding
@@ -196,21 +197,22 @@ class OracleParameterFamilyCases(TestCase):
                          if oracle_parameter_family(row) == "min"), "C97",
                 *(oracle_comparison_key(row) for row in comparisons
                   if oracle_parameter_family(row) == "full")]
+        seeds = list(get_robustness_benchmark_policy_snapshot()["resolved_seeds"])
         report = {
             "status": "COMPLETED", "read_only": True, "hindsight_non_pit": True,
             "report_contract_id": current["contract_id"],
             "report_contract_fingerprint": current["fingerprint"],
             "strategy_profile_id": d.source["strategy_profile_id"],
-            "benchmark_id": "end_to_end_v2", "seeds": list(range(1, 9)),
+            "benchmark_id": "end_to_end_v1", "seeds": seeds,
             "start_date": "2021-01-01", "end_date": "2026-03-02",
-            "baseline": {"target": "C96", "strategy": "Breakout", "seeds": 8,
+            "baseline": {"target": "C96", "strategy": "Breakout", "seeds": len(seeds),
                          "romd": 9.0, "win_rate_pct": 40.0},
             "control_baselines": [{"target": "C97", "strategy": "Breakout",
-                                   "parameter_family": "full", "seeds": 8,
+                                   "parameter_family": "full", "seeds": len(seeds),
                                    "romd": 14.5, "win_rate_pct": 44.0}],
             "oracles": [{"target": row["target"], "strategy": row.get("strategy", "Breakout"),
                          "parameter_family": oracle_parameter_family(row),
-                         "comparison_key": oracle_comparison_key(row), "seeds": 8,
+                         "comparison_key": oracle_comparison_key(row), "seeds": len(seeds),
                          "romd": 42.0 if oracle_parameter_family(row) == "full" else 24.0,
                          "win_rate_pct": 61.0} for row in comparisons],
             "definitions": {row["target"]: row["description"] for row in comparisons},
@@ -229,6 +231,12 @@ class OracleParameterFamilyCases(TestCase):
                 return _oracle_rows(root, d, versions)[3]
             values = inspect()
             self.assertEqual(set(values), set(keys))
+            # An old 8S aggregate is historical-only; it cannot supply current 4S rows.
+            report["benchmark_id"] = "end_to_end_v2"
+            report["seeds"] = [*seeds, 9734312, 1020806211, 116293459, 1234683984]
+            self.assertEqual(inspect(), {})
+            report["benchmark_id"] = "end_to_end_v1"
+            report["seeds"] = seeds
             self.assertEqual(values["C96"]["oracle_romd"], 9.0)
             self.assertEqual(values["C97"]["oracle_romd"], 14.5)
             self.assertEqual(values["T40::Full"]["oracle_romd"], 42.0)
@@ -238,7 +246,7 @@ class OracleParameterFamilyCases(TestCase):
             report["control_baselines"] = []
             self.assertEqual(inspect(), {})
             report["control_baselines"] = [{"target": "C97", "strategy": "Breakout",
-                                            "parameter_family": "full", "seeds": 8,
+                                            "parameter_family": "full", "seeds": len(seeds),
                                             "romd": 14.5, "win_rate_pct": 44.0}]
             report["comparison_reference_arms"].pop("T40_Direct::Full")
             values = inspect()
@@ -261,47 +269,61 @@ class OracleParameterFamilyCases(TestCase):
         # counterpart; shared Target/Selector rows remain supported.
         self.assertGreater(len(active), len(d.source["oracle_comparisons"]))
 
-    def test_oracle_never_builds_missing_full_parameters(self):
-        """[1] cannot authorize missing Full/P17 Optimizer seeds or borrow Min/P16."""
+    def test_oracle_authorized_missing_full_parameters_use_own_canonical_producer(self):
+        """Missing Full/P17 is built on its own source; Min/P16 remains reused."""
         from services.research import target_oracle_application as app
         from services.optimizer import strategy_param_service
         d = definition()
-        seeds = (693545351, 2014432738)
+        from core.training_policy import get_robustness_benchmark_policy_snapshot
+        seeds = tuple(get_robustness_benchmark_policy_snapshot()["resolved_seeds"])
         profiles = {"C96": "broker_cash_min_best_seed42_current",
                     "C97": "broker_cash_full_best_seed42_current"}
+        done = {"value": False}
         def inspect(scoped, *, project_root):
             baseline = scoped.source["baseline_arm_id"]
             return {"rows": tuple({
-                "seed": seed, "ready": baseline == "C96" or seed == seeds[0],
-                "action": "REUSE" if baseline == "C96" or seed == seeds[0] else "BUILD",
-                "status": "READY" if baseline == "C96" or seed == seeds[0] else "MISSING",
+                "seed": seed,
+                "ready": baseline == "C96" or seed != seeds[-1] or done["value"],
+                "action": "REUSE" if (baseline == "C96" or seed != seeds[-1] or done["value"]) else "BUILD",
+                "status": "READY" if (baseline == "C96" or seed != seeds[-1] or done["value"]) else "MISSING",
             } for seed in seeds),
                 "producer_kwargs": {"training_profile_id": profiles[baseline]}}
         plans = {
             "C96": {"seed_set": seeds, "missing": (),
                     "producer_kwargs": {"training_profile_id": profiles["C96"]}},
-            "C97": {"seed_set": seeds, "missing": (seeds[1],),
+            "C97": {"seed_set": seeds, "missing": (seeds[-1],),
                     "producer_kwargs": {"training_profile_id": profiles["C97"]}},
         }
         with TemporaryDirectory() as temp, \
              patch.object(app, "inspect_oracle_parameter_prerequisites", side_effect=inspect), \
-             patch.object(strategy_param_service, "ensure_fixed_multiseed_robustness_strategy_parameter_artifact",
-                          side_effect=AssertionError("Optimizer must not run")) as producer:
-            with self.assertRaisesRegex(RuntimeError, "缺少正式參數家族"):
+             patch.object(strategy_param_service,
+                          "ensure_fixed_multiseed_robustness_strategy_parameter_artifact") as producer:
+            # Missing an entire family from approval must be rejected without fitting.
+            with self.assertRaisesRegex(RuntimeError, "缺少 C97"):
                 app.ensure_authorized_oracle_parameters(
                     project_root=Path(temp), definition=d,
-                    approved_plan={"missing_p16": (), "seed_set": seeds},
-                )
-            with self.assertRaisesRegex(RuntimeError, "不執行 Optimizer"):
-                app.ensure_authorized_oracle_parameters(
-                    project_root=Path(temp), definition=d,
-                    approved_plan={"parameter_plans": plans},
+                    approved_plan={"parameter_plans": {"C96": plans["C96"]}},
                 )
             producer.assert_not_called()
+            def build(_root, *, replication_seed, training_profile_id, **kwargs):
+                self.assertEqual(training_profile_id, profiles["C97"])
+                self.assertEqual(replication_seed, seeds[-1])
+                self.assertTrue(kwargs["resume_parameter_training"])
+                done["value"] = True
+                return {"action": "BUILD"}
+            producer.side_effect = build
+            result = app.ensure_authorized_oracle_parameters(
+                project_root=Path(temp), definition=d,
+                approved_plan={"parameter_plans": plans},
+            )
+            self.assertEqual(result["built_or_repaired"], 1)
+            producer.assert_called_once()
 
     def test_full_baseline_receipts_have_different_reuse_keys_and_plan(self):
         d = definition()
-        seeds = (1, 2)
+        from core.training_policy import get_robustness_benchmark_policy_snapshot
+        seeds = tuple(get_robustness_benchmark_policy_snapshot()["resolved_seeds"])
+        self.assertEqual(len(seeds), 4)
         comparisons = resolve_current_oracle_comparisons(d.source)
         def fake_run(scoped, *, preview_only=False, **_kwargs):
             self.assertTrue(preview_only)
@@ -311,7 +333,7 @@ class OracleParameterFamilyCases(TestCase):
             return {"status": "PREVIEW", "preflight": {
                 (seed, target): ("RUN" if family == "full" else "REUSE")
                 for seed in seeds for target in targets},
-                "benchmark_id": "end_to_end_v2", "start_date": "2021-01-01",
+                "benchmark_id": "end_to_end_v1", "start_date": "2021-01-01",
                 "end_date": "2026-03-02", "seed_set": seeds,
                 "completed_observations": {}, "missing_p16": (),
                 "producer_kwargs": {"training_profile_id": family}, "targets": targets}
@@ -319,6 +341,7 @@ class OracleParameterFamilyCases(TestCase):
             preview = oracle.preview_oracle_replay_plan(d, project_root=Path("/tmp"))
         keys = preview["targets"]
         self.assertEqual(len(keys), 28)
+        self.assertEqual(len(preview["preflight"]), 112)  # 28 Target × 4 Seeds.
         self.assertEqual(len(preview["preflight"]), len(keys) * len(seeds))
         self.assertTrue(all(preview["preflight"][(seed, key)] == "REUSE"
                             for seed in seeds for key in keys[:25]))
@@ -438,7 +461,7 @@ class BaselineRobustnessReuseCases(TestCase):
                 self.assertIsNone(_certified_no_dl_oracle_8s(**{**kwargs, "oracle_info": {
                     **oracle_info, "benchmark": "unknown"}}))
 
-    def test_overview_upgrades_only_certified_no_dl_arm_and_leaves_dl_four_seed(self):
+    def test_current_four_seed_overview_never_promotes_historical_eight_seed_aggregate(self):
         import json
         from config.strategy_compare import STRATEGY_COMPARE_CURRENT_ROLLING_ROBUSTNESS
         from core.report_contract_versions import load_report_contract_versions
@@ -481,8 +504,7 @@ class BaselineRobustnessReuseCases(TestCase):
                     root, versions, oracle_info=oracle_info,
                     oracle_source=definition().source,
                 )
-            self.assertEqual(result["C96"][1], eight)
-            self.assertAlmostEqual(result["C96"][0], 9.5)
+            self.assertEqual(result["C96"], (mean, four, "end_to_end_v1"))
             self.assertEqual(result["C97"], (6.44, four, "end_to_end_v1"))
             self.assertEqual(result["C107"], (10.45, four, "end_to_end_v1"))
 

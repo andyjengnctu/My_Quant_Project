@@ -3653,14 +3653,12 @@ def resolve_fixed_multiseed_robustness_strategy_parameter_artifact(
     comparison_end_date: str, dataset: str, max_positions: int,
     rotation: str, fixed_risk: float, max_position_cap_pct: float,
 ) -> dict[str, Any]:
-    """Single per-seed P16 reader for the active benchmark and its ancestors.
+    """One signed per-seed P16 reader across nested registered seed cohorts.
 
-    A benchmark's member count does not affect one seed's optimizer fitting.
-    Reuse an older, signed artifact only if the registered historical seed
-    sequence is an exact prefix of the active sequence and the *complete*
-    concrete build/scientific identities differ only in their cohort tag.
-    Old files and manifests are never copied, relabeled, or overwritten.
-    This is artifact provenance resolution, not a second optimizer path.
+    A complete historical 8S replicate may supply the identical seed of the
+    current 4S cohort (and conversely). This never reuses an 8S aggregate;
+    every parameter/scientific identity and signed SHA is still checked.
+    Existing paths and manifests are never copied or rewritten.
     """
     from core.training_policy import get_robustness_benchmark_policy_snapshot
     from core.file_integrity import compute_file_sha256
@@ -3691,9 +3689,14 @@ def resolve_fixed_multiseed_robustness_strategy_parameter_artifact(
             continue
         previous = get_robustness_benchmark_policy_snapshot(benchmark_id=old_id)
         earlier = previous["resolved_seeds"]
-        if (len(earlier) >= len(active["resolved_seeds"])
-                or active["resolved_seeds"][:len(earlier)] != earlier
-                or seed not in earlier):
+        current_seeds = tuple(active["resolved_seeds"])
+        overlap = min(len(earlier), len(current_seeds))
+        if (tuple(earlier[:overlap]) != current_seeds[:overlap]
+                or seed not in earlier[:overlap]
+                or previous["seed_generator_seed"] != active["seed_generator_seed"]
+                or previous["strategy_trials_per_fold"] != active["strategy_trials_per_fold"]
+                or previous["train_window_months"] != active["train_window_months"]
+                or previous["oos_horizon_months"] != active["oos_horizon_months"]):
             continue
         candidate = inspect_fixed_multiseed_robustness_strategy_parameter_artifact(
             project_root, benchmark_id=old_id, **kwargs,
