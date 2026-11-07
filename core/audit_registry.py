@@ -149,6 +149,8 @@ AUDIT_REUSABLE_REPORTS: dict[str, dict[str, Any]] = {
                     {"target": "T40_Direct", "description": "Same T40 score; canonical No-K/No-R0 direct allocation", "score_source": "T40", "selector": "direct", "strategy_arm_id": "C146", "strategy": "Daily"},
                     {"target": "T40", "description": "(1 - min(MAE40, 1R)) * R40 - min(MAE40, 1R); MAE40 is nonnegative in R", "score": "terminal_mae_gate", "provider": "pure_mfe40_provider", "selector": "exact", "strategy_arm_id": "C153", "parameter_family": "full"},
                     {"target": "T40_Direct", "description": "Same T40 score; canonical No-K/No-R0 direct allocation", "score_source": "T40", "selector": "direct", "strategy_arm_id": "C154", "parameter_family": "full"},
+                    {"target": "FullTrade_NetPnL_Positive", "description": "Verified Full/P17 per-seed natural-exit broker NetPnL; perfect daily rank and strict positive membership; Exact K/R0", "score": "daily_trade_path_full_net_pnl", "provider": "daily_trade40_profile", "horizon_mode": "full_trade_cycle", "selector": "exact", "positive_output": "netpnl_positive_probability_v1", "strategy_arm_id": "C155", "parameter_family": "full"},
+                    {"target": "FullTrade_NetPnL_Positive_Direct", "description": "Same Full/P17 NetPnL truth and positive membership; No-K/No-R0 Direct", "score_source": "FullTrade_NetPnL_Positive", "selector": "direct", "positive_output": "netpnl_positive_probability_v1", "strategy_arm_id": "C156", "parameter_family": "full"},
                     {"target": "T40-MFE_Direct", "description": "Same T40-MFE score; canonical No-K/No-R0 direct allocation", "score_source": "T40-MFE", "selector": "direct"},
                     {"target": "DailyUniversal_MinTrade40_NetR", "description": "Formal Min ROOS Net-R, natural exit / 40 sessions / Research cutoff (earliest), hindsight ranking", "score": "daily_trade_path_net_r", "provider": "daily_trade40_profile", "selector": "exact"},
                     {"target": "DailyUniversal_MinTrade40_NetR_Direct", "description": "Same formal per-seed Min ROOS daily truth and ranks; canonical No-K/No-R0 selector", "score_source": "DailyUniversal_MinTrade40_NetR", "selector": "direct"},
@@ -246,6 +248,7 @@ _ORACLE_POSITIVE_OUTPUT_BY_RECIPE = {
     "terminal_mae_gate": "t40_positive_probability_v1",
     "daily_trade_path_net_pnl": "netpnl_positive_probability_v1",
     "daily_trade_path_true_net_pnl": "netpnl_positive_probability_v1",
+    "daily_trade_path_full_net_pnl": "netpnl_positive_probability_v1",
 }
 
 
@@ -492,6 +495,7 @@ def oracle_supervised_target_id(comparison):
         DAILY_FORMAL_MINTRADE_FULLCYCLE_NETR_TARGET_ID,
         DAILY_FORMAL_MINTRADE_FULLCYCLE_NETPNL_TARGET_ID,
         TRUE_DAILY_MINTRADE_FULLCYCLE_NETPNL_TARGET_ID,
+        FULLTRADE_FULLCYCLE_NETPNL_TARGET_ID,
     )
     recipe = comparison.get("score")
     if comparison.get("horizon_mode") == "full_trade_cycle":
@@ -499,6 +503,7 @@ def oracle_supervised_target_id(comparison):
             "daily_trade_path_net_r": DAILY_FORMAL_MINTRADE_FULLCYCLE_NETR_TARGET_ID,
             "daily_trade_path_net_pnl": DAILY_FORMAL_MINTRADE_FULLCYCLE_NETPNL_TARGET_ID,
             "daily_trade_path_true_net_pnl": TRUE_DAILY_MINTRADE_FULLCYCLE_NETPNL_TARGET_ID,
+            "daily_trade_path_full_net_pnl": FULLTRADE_FULLCYCLE_NETPNL_TARGET_ID,
         }.get(recipe)
     if recipe == "daily_trade_path_net_r":
         return (DAILY_FORMAL_MINTRADE40_NETR_TARGET_ID

@@ -171,7 +171,18 @@ def load_or_build_positive_truth(
 ) -> tuple[dict[tuple[str, str], float], Path]:
     """Return exact, finite raw PnLs; absent/NULL keys are rejected by the gate."""
     root = Path(project_root).resolve()
-    if (canonical_evidence.get('truth_source_sha256') != truth_producer_fingerprint('net_pnl')
+    source_ids = {str(period.source_id) for period in canonical_schedule}
+    if source_ids == {'formal_full_roos_seed'}:
+        from services.audit.fulltrade_oracle_truth import truth_producer_fingerprint as full_truth_fingerprint
+        expected_fingerprint = full_truth_fingerprint()
+        expected_origin = 'formal_full_roos_rolling_per_seed'
+    elif source_ids == {'formal_min_roos_seed'}:
+        expected_fingerprint = truth_producer_fingerprint('net_pnl')
+        expected_origin = 'formal_min_roos_rolling_per_seed'
+    else:
+        raise ValueError('positive gate requires one verified Min/P16 or Full/P17 teacher source')
+    if (canonical_evidence.get('truth_source_sha256') != expected_fingerprint
+            or canonical_evidence.get('teacher', {}).get('origin') != expected_origin
             or canonical_evidence.get('teacher', {}).get('seed') != seed
             or canonical_evidence.get('teacher', {}).get('param_identity_sha256') != param_sha256
             or canonical_evidence.get('horizon_sessions') is not None):
@@ -233,7 +244,7 @@ def load_or_build_positive_truth(
             research_cutoff=research_cutoff, include_net_pnl=True,
         )
         if any(reason == 'no_historical_effective_Min_param' for reason in batch.reasons):
-            raise ValueError('positive gate missing formal P16 effective period')
+            raise ValueError('positive gate missing verified effective teacher period')
         frames.append(pd.DataFrame({
             'ticker': ticker, 'date': selected['date'].dt.strftime('%Y-%m-%d').to_numpy(),
             'realized_net_pnl': np.asarray(batch.target_raw_pnl, dtype=np.float64),

@@ -120,6 +120,35 @@ def _fullcycle_loader(outcome_metric: str):
 
 
 
+def _full_loader(*, project_root: str | Path, seed: int, authorized_build: bool):
+    from services.breakout_quality.formal_fulltrade_training_source import (
+        resolve_fulltrade_loader_kwargs,
+    )
+    return resolve_fulltrade_loader_kwargs(
+        project_root=project_root, seed=seed, authorized_build=authorized_build,
+    )
+
+
+def _full_current_inspect(*, project_root: str | Path, seed: int):
+    from services.breakout_quality.formal_fulltrade_training_source import inspect_current_full
+    return inspect_current_full(project_root=project_root, seed=seed)
+
+
+def _full_current_execute(*, project_root: str | Path, seed: int):
+    from services.breakout_quality.formal_fulltrade_training_source import execute_current_full
+    return execute_current_full(project_root=project_root, seed=seed)
+
+
+def _full_history_inspect(*, project_root: str | Path, seed: int):
+    from services.breakout_quality.formal_fulltrade_training_source import inspect_full_history
+    return inspect_full_history(project_root=project_root, seed=seed)
+
+
+def _full_history_execute(*, project_root: str | Path, seed: int):
+    from services.breakout_quality.formal_fulltrade_training_source import prepare_full_history
+    return prepare_full_history(project_root=project_root, seed=seed, authorized=True)
+
+
 _TRADE_PATH_SOURCES: dict[str, TradePathSource] = {
     "formal_seed_mintrade40_netr": TradePathSource(
         contract_kind="formal_seed_mintrade40_netr",
@@ -144,6 +173,16 @@ _TRADE_PATH_SOURCES: dict[str, TradePathSource] = {
         contract_kind="formal_seed_mintrade_fullcycle_netpnl",
         loader=_fullcycle_loader("net_pnl"),
         dependencies=(),
+    ),
+    "formal_seed_fulltrade_fullcycle_netpnl": TradePathSource(
+        contract_kind="formal_seed_fulltrade_fullcycle_netpnl",
+        loader=_full_loader,
+        dependencies=(
+            TeacherDependency("formal_fulltrade_p17", "optimizer_formal_fulltrade_p17", 30,
+                              _full_current_inspect, _full_current_execute),
+            TeacherDependency("formal_fulltrade_history", "optimizer_formal_fulltrade_history", 40,
+                              _full_history_inspect, _full_history_execute),
+        ),
     ),
     "true_daily_seed_mintrade_fullcycle_netpnl": TradePathSource(
         contract_kind="true_daily_seed_mintrade_fullcycle_netpnl",

@@ -134,7 +134,8 @@ class OracleParameterFamilyCases(TestCase):
         self.assertEqual([(name, scope.source["baseline_arm_id"],
                            len(scope.source["oracle_comparisons"])) for name, scope in scopes],
                          [("Breakout", "C96", 18), ("Daily", "C96", 6),
-                          ("Breakout::Full", "C97", 2)])
+                          ("Breakout::Full", "C97", len([row for row in comparisons
+                          if oracle_parameter_family(row) == "full"]))])
         with TemporaryDirectory() as temp:
             root = Path(temp)
             ledger = root / "doc/scientific_contracts/REPORT_CONTRACT_VERSIONS.json"
@@ -143,7 +144,7 @@ class OracleParameterFamilyCases(TestCase):
                                 "doc/scientific_contracts/REPORT_CONTRACT_VERSIONS.json").read_bytes())
             targets, *_ = _oracle_rows(root, d, {})
             overview = collect_target_dl_overview(root)
-        self.assertEqual(len(targets), 28)
+        self.assertEqual(len(targets), len(comparisons) + len(baselines))
         self.assertEqual(targets, (
             "C96", *(oracle_comparison_key(row) for row in comparisons
                      if oracle_parameter_family(row) == "min"),
@@ -519,8 +520,7 @@ class OracleParameterFamilyCases(TestCase):
         with patch.object(oracle, "_run_single_stage_oracle", side_effect=fake_run):
             preview = oracle.preview_oracle_replay_plan(d, project_root=Path("/tmp"))
         keys = preview["targets"]
-        self.assertEqual(len(keys), 28)
-        self.assertEqual(len(preview["preflight"]), 112)  # 28 Target × 4 Seeds.
+        self.assertEqual(len(keys), len(comparisons) + len(oracle_baseline_arm_ids(d.source)))
         self.assertEqual(len(preview["preflight"]), len(keys) * len(seeds))
         self.assertTrue(all(preview["preflight"][(seed, key)] == "REUSE"
                             for seed in seeds for key in keys[:25]))
@@ -530,7 +530,9 @@ class OracleParameterFamilyCases(TestCase):
         self.assertNotEqual(preview["parameter_plans"]["C96"]["producer_kwargs"],
                             preview["parameter_plans"]["C97"]["producer_kwargs"])
         self.assertEqual(tuple(row["target"] for row in comparisons if
-                               oracle_parameter_family(row) == "full"), ("T40", "T40_Direct"))
+                               oracle_parameter_family(row) == "full"),
+                         ("T40", "T40_Direct", "FullTrade_NetPnL_Positive",
+                          "FullTrade_NetPnL_Positive_Direct"))
 
 
 class BaselineRobustnessReuseCases(TestCase):

@@ -274,6 +274,16 @@ def load_or_build_positive_truth(*, execution, cache_root, **kwargs):
         if len(existing) != int(evidence["settled_net_pnl_rows"]):
             raise ValueError("positive raw witness settled count differs from certified truth")
         return existing, path
-    from services.audit.daily_trade40_oracle import truth_producer_fingerprint
-    current_evidence = {**evidence, "truth_source_sha256": truth_producer_fingerprint("net_pnl")}
+    source_ids = {str(item.source_id) for item in kwargs["canonical_schedule"]}
+    if source_ids == {"formal_full_roos_seed"}:
+        from services.audit.fulltrade_oracle_truth import truth_producer_fingerprint
+        current_sha = truth_producer_fingerprint()
+        if evidence.get("truth_source_sha256") != current_sha:
+            raise ValueError("FullTrade source reference cannot be relabelled as current Full code")
+    elif source_ids == {"formal_min_roos_seed"}:
+        from services.audit.daily_trade40_oracle import truth_producer_fingerprint
+        current_sha = truth_producer_fingerprint("net_pnl")
+    else:
+        raise ValueError("Positive witness requires a uniform formal teacher parameter family")
+    current_evidence = {**evidence, "truth_source_sha256": current_sha}
     return positive.load_or_build_positive_truth(**{**kwargs, "canonical_evidence": current_evidence})

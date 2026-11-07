@@ -79,7 +79,7 @@ def slice_formal_mintrade40_pit_source_for_fold(
     if (type(source.seed) is not int or source.seed <= 0 or
             len(source.param_sha256) != 64 or
             any(c not in "0123456789abcdef" for c in source.param_sha256.lower()) or
-            source.source_id != "formal_min_roos_seed" or
+            source.source_id not in {"formal_min_roos_seed", "formal_full_roos_seed"} or
             not source.schedule or
             len(source.schedule) != len(source.publication_dates)):
         raise FormalMinTrade40PITBlocked("Unverified formal MinTrade40 parent source identity")
@@ -128,6 +128,11 @@ def slice_formal_mintrade40_pit_source_for_fold(
             for p, d in zip(source.schedule, source.publication_dates)
         ],
     )
+    if source.source_id == "formal_full_roos_seed":
+        from core.file_integrity import canonical_json_sha256
+        teacher_digest = canonical_json_sha256({
+            "source_id": source.source_id, "asof_teacher_sha256": teacher_digest,
+        })
     return as_of_source, teacher_digest
 
 
@@ -152,7 +157,7 @@ def verify_formal_mintrade40_pit_source(
     if (len(source.param_sha256) != 64 or
             any(char not in "0123456789abcdef" for char in source.param_sha256.lower())):
         raise FormalMinTrade40PITBlocked("Missing canonical Optimizer parameter SHA256")
-    if source.source_id != "formal_min_roos_seed":
+    if source.source_id not in {"formal_min_roos_seed", "formal_full_roos_seed"}:
         raise FormalMinTrade40PITBlocked("Retired or nonformal Min teacher source rejected")
     schedule = source.schedule
     if not schedule or len(schedule) != len(source.publication_dates):

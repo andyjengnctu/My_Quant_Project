@@ -47,10 +47,10 @@ _BROKER_CASH_ROLLING_PROFILE = 'broker_cash_dl_conversion_rolling'
 _BASELINE_ARM = 'C96'
 
 
-def _current_p16_policy(seed: int):
+def _current_p16_policy(seed: int, *, baseline_arm: str = _BASELINE_ARM):
     """One canonical P16 reference/producer contract for read and build paths."""
     settings = get_strategy_comparison_settings(_BROKER_CASH_ROLLING_PROFILE)
-    arm = settings.arms[_BASELINE_ARM]
+    arm = settings.arms[baseline_arm]
     source = settings.parameter_sources[arm.param_source]
     builder = source.builder
     if builder is None or not builder.enabled or builder.builder_type != 'optimizer_fixed_multiseed_strategy_params':
@@ -73,11 +73,11 @@ def _current_p16_policy(seed: int):
 
 
 def inspect_formal_mintrade40_p16_teacher(
-    *, project_root: str | Path, seed: int,
+    *, project_root: str | Path, seed: int, baseline_arm: str = _BASELINE_ARM,
 ) -> dict[str, object]:
     """Read-only same-seed P16 status; never starts the canonical Optimizer."""
     root = Path(project_root).resolve()
-    settings, arm, benchmark, optimizer_args = _current_p16_policy(seed)
+    settings, arm, benchmark, optimizer_args = _current_p16_policy(seed, baseline_arm=baseline_arm)
     if seed == int(RESEARCH_SINGLE_SEED):
         path = resolve_param_source_path(
             root, settings, arm.param_source, param_policy=arm.param_policy,
@@ -109,8 +109,9 @@ def inspect_formal_mintrade40_p16_teacher(
 
 def _current_p16_seed_artifact(
     root: Path, seed: int, *, authorized_build: bool = False,
+    baseline_arm: str = _BASELINE_ARM,
 ) -> tuple[Path, str, str, str]:
-    settings, arm, benchmark, optimizer_args = _current_p16_policy(seed)
+    settings, arm, benchmark, optimizer_args = _current_p16_policy(seed, baseline_arm=baseline_arm)
     benchmark_seeds = tuple(int(value) for value in benchmark.resolved_seeds)
     if seed == int(RESEARCH_SINGLE_SEED):
         path = resolve_param_source_path(

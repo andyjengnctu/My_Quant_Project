@@ -31,7 +31,7 @@ PRICE_CALCULATION_REVISIONS = {
     "equal_rank_mfe_safety": 1, "mfe": 1, "terminal_r": 1,
     "terminal_mae_gate": 1, "mfe_mae_gate": 1,
 }
-DAILY_CALCULATION_REVISIONS = {"daily_trade_path_net_r": 1, "daily_trade_path_net_pnl": 1, "daily_trade_path_true_net_pnl": 2}
+DAILY_CALCULATION_REVISIONS = {"daily_trade_path_net_r": 1, "daily_trade_path_net_pnl": 1, "daily_trade_path_true_net_pnl": 2, "daily_trade_path_full_net_pnl": 1}
 FEATURE_UNIVERSE_CALCULATION_REVISION = 1
 REPLAY_CALCULATION_REVISION = 1
 _SCHEMA = 1
@@ -407,7 +407,7 @@ def source_implementation_sha256(recipe: str, profile_id: str) -> str:
     elif recipe in DAILY_CALCULATION_REVISIONS:
         parts.update({key: calculation_source("filters/breakout_quality/daily_trade40_target.py", name,
                          bound_literals=({"signal_state_reset_date": None,
-                                          "include_net_pnl": recipe == "daily_trade_path_net_pnl"}
+                                          "include_net_pnl": recipe in {"daily_trade_path_net_pnl", "daily_trade_path_full_net_pnl"}}
                                          if key == "min_path" else None))
                       for key, name in (
                           ("min_path", "compute_counterfactual_trade40_batch"),
@@ -416,6 +416,16 @@ def source_implementation_sha256(recipe: str, profile_id: str) -> str:
                           ("active_period", "resolve_historical_min_period"))})
         parts["broker_path"] = calculation_source(
             "filters/breakout_quality/trade_path_label.py", "simulate_realized_trade_path_label")
+        if recipe == "daily_trade_path_full_net_pnl":
+            # The economic order/exit engine is shared; the Full/P17 source
+            # and historical PIT parameter lineage must have a distinct AST.
+            # The old Min recipe fingerprint is deliberately unchanged.
+            parts["full_source_schedule"] = calculation_source(
+                "services/breakout_quality/formal_fulltrade_training_source.py",
+                "_full_execution_schedule")
+            parts["full_oracle_truth"] = calculation_source(
+                "services/audit/fulltrade_oracle_truth.py",
+                "build_fulltrade_oracle_scores")
     else:
         from core.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
         from filters.breakout_quality import continuous_target as targets

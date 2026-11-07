@@ -36,7 +36,7 @@ from core.report_contract_versions import load_report_contract_versions
 from core.research_report_contract import table_contract
 from services.audit.target_oracle_romd import (
     _oracle_comparison_plan, _contract, _resolve_oracle_target_score_contracts,
-    _oracle_merge_scoped_reports,
+    _oracle_merge_scoped_reports, _oracle_strategy_scopes,
 )
 from services.research.oracle_artifact_contract import reference_arm_execution_binding
 from services.research.target_dl_overview import (
@@ -349,10 +349,12 @@ class PositiveNetPnlContractCases(TestCase):
                 }))
 
     def test_oracle_uses_identical_score_boundary_and_selector(self):
-        definition = get_formal_oracle_definition(get_active_audit_module_id())
-        plan=_oracle_comparison_plan(definition)
-        settings, baseline, exact=_contract(definition)
-        contracts=_resolve_oracle_target_score_contracts(definition,settings,plan)
+        inventory = get_formal_oracle_definition(get_active_audit_module_id())
+        definition = next(scoped for scope, scoped in _oracle_strategy_scopes(inventory)
+                          if scope == "Breakout")
+        plan = _oracle_comparison_plan(definition)
+        settings, baseline, exact = _contract(definition)
+        contracts = _resolve_oracle_target_score_contracts(definition, settings, plan)
         expected={'DailyUniversal_MinTrade_NetPnL_Positive': 'C125',
                   'DailyUniversal_MinTrade_NetPnL_Positive_Direct':'C126'}
         for target,arm_id in expected.items():
@@ -522,8 +524,11 @@ class PositiveNetPnlContractCases(TestCase):
                 })
             # A historical signed report cannot claim newly registered Full/P17
             # Oracle items. It retains only its own completed Min inventory.
-            payload["comparison_inventory"] = [key for key in targets
-                                                if key not in {"C97", "T40::Full", "T40_Direct::Full"}]
+            full_keys = {"C97"} | {
+                oracle_comparison_key(row) for row in comparisons
+                if oracle_parameter_family(row) != "min"
+            }
+            payload["comparison_inventory"] = [key for key in targets if key not in full_keys]
             # Legacy aggregate reports have no per-row source-arm receipt.
             # Old Breakout remains readable, but previous C131/C132 Daily
             # results must not be re-labelled as C133/C134 evidence.
@@ -538,8 +543,8 @@ class PositiveNetPnlContractCases(TestCase):
             }
             _, _, _, values, info = read_rows()
             self.assertEqual(set(values), set(payload["comparison_inventory"]))
-            self.assertEqual(len(values), len(targets) - 3)  # No Full/P17 receipts in the old report.
-            self.assertTrue({"C97", "T40::Full", "T40_Direct::Full"}.isdisjoint(values))
+            self.assertEqual(len(values), len(targets) - len(full_keys))
+            self.assertTrue(full_keys.isdisjoint(values))
             self.assertEqual(values[positive_direct]["oracle_romd"], 204.88)
             self.assertEqual(values["TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct"]["oracle_romd"], 24.62)
             self.assertEqual(values["TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct::Daily"]["oracle_romd"], 41.0)

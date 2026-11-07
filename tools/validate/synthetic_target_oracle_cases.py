@@ -7706,7 +7706,9 @@ class OracleEffectiveArtifactContractCases(TestCase):
         with self._changed_source("filters/breakout_quality/daily_trade40_target.py", lambda text:
                 text.replace("net_pnl[row] = float(pnl_value)", "net_pnl[row] = 10.0 * float(pnl_value)")):
             changed = self._implementations()
-        self.assertEqual({key for key in before if before[key] != changed[key]}, {"daily_trade_path_net_pnl"})
+        self.assertEqual({key for key in before if before[key] != changed[key]}, {
+            "daily_trade_path_net_pnl", "daily_trade_path_full_net_pnl",
+        })
 
     def test_completed_reference_keeps_same_source_conflicts_visible(self):
         helper = OracleSingleOwnerExecutionCases()

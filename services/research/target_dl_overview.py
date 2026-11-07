@@ -297,6 +297,7 @@ def _shares_oracle_scalar_truth(profile: str, target_id: str) -> bool:
                     "formal_seed_mintrade40_netr",
                     "formal_seed_mintrade_fullcycle_netr",
                     "formal_seed_mintrade_fullcycle_netpnl",
+                    "formal_seed_fulltrade_fullcycle_netpnl",
                     "true_daily_seed_mintrade_fullcycle_netpnl",
                 })
         )

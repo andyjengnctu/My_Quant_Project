@@ -142,7 +142,7 @@ STRATEGY_COMPARE_SUITES = {
         "arm_ids": (
             "C96", "C97", "C98", "C99", "C100", "C101", "C102", "C103",
             "C105", "C106", "C107", "C108", "C109", "C110",
-            "C111", "C112", "C115", "C116", "C117", "C118", "C119", "C120", "C121", "C122", "C123", "C124", "C125", "C126", "C133", "C134", "C135", "C136", "C137", "C138", "C145", "C146", "C147", "C148", "C151", "C152", "C153", "C154",
+            "C111", "C112", "C115", "C116", "C117", "C118", "C119", "C120", "C121", "C122", "C123", "C124", "C125", "C126", "C133", "C134", "C135", "C136", "C137", "C138", "C145", "C146", "C147", "C148", "C151", "C152", "C153", "C154", "C155", "C156",
         ),
         # A compact connected contrast graph supports each selected model
         # versus C96 plus the matched CK/CJ label contrast. Historical AO/CH
@@ -163,6 +163,7 @@ STRATEGY_COMPARE_SUITES = {
             "C147-C148",
             "C151-C107", "C152-C109", "C151-C147", "C152-C148", "C151-C152",
             "C153-C97", "C154-C97", "C153-C107", "C154-C109", "C154-C153",
+            "C155-C97", "C156-C97", "C155-C156", "C155-C153", "C156-C154",
         ),
         "display_name_bases": {
             "C96": "Min Base-Finalist-Best / Broker-Cash",
@@ -207,6 +208,8 @@ STRATEGY_COMPARE_SUITES = {
             "C152": "Min MR-13CY T40 Head-Weighted Listwise Direct No-K No-R0 / Broker-Cash",
             "C153": "Full MR-13CJ T40 Exact K/R0 / Broker-Cash",
             "C154": "Full MR-13CJ T40 Direct No-K No-R0 / Broker-Cash",
+            "C155": "Full MR-13CZ Rank + MR-13DA Positive Exact K/R0 / Broker-Cash",
+            "C156": "Full MR-13CZ Rank + MR-13DA Positive Direct No-K No-R0 / Broker-Cash",
         },
     },
     "non_dl_c85_same_signal_revalidation_v1": {
@@ -2316,6 +2319,24 @@ STRATEGY_DL_SOURCES = {
             "options": {"resume": True, "allow_stale_source": False},
         },
     },
+    "CONT13CZ_ROLL": {
+        "filter_id": "breakout_quality_v1", "model_architecture": "inception_time_v1",
+        "experiment_profile": "daily_universal_formal_fulltrade_fullcycle_netpnl_full_list_ndcg_pairwise",
+        "threshold": None, "score_source": "selection_point_in_time",
+        "single_seed_strategy_conversion_authorized": True,
+        "description": "MR-13CZ per-seed verified Full/P17 PIT broker NetPnL rank, not Min/P16",
+        "forward_scores_builder": {"enabled": True, "builder_type": "selection_pit_from_existing_folds",
+                                   "options": {"resume": True, "allow_stale_source": False}},
+    },
+    "CONT13DA_ROLL": {
+        "filter_id": "breakout_quality_v1", "model_architecture": "inception_time_v1",
+        "experiment_profile": "daily_universal_formal_fulltrade_fullcycle_netpnl_positive_binary",
+        "threshold": None, "score_source": "selection_point_in_time",
+        "single_seed_strategy_conversion_authorized": True,
+        "description": "MR-13DA independent Full/P17 binary NetPnL>0 PIT classifier",
+        "forward_scores_builder": {"enabled": True, "builder_type": "selection_pit_from_existing_folds",
+                                   "options": {"resume": True, "allow_stale_source": False}},
+    },
     "CONT13CT_ROLL": {
         "filter_id": "breakout_quality_v1",
         "model_architecture": "inception_time_v1",
@@ -3003,6 +3024,37 @@ STRATEGY_COMPARE_ARMS = {
         },
         "robustness_role": "off",
     },
+    "C155": {
+        "replay_contract_version": 1,
+        "name": "Full MR-13CZ Rank + MR-13DA Positive Exact K/R0 / Broker-Cash",
+        "description": "Two independently FIT Full/P17 models: CZ continuous NetPnL rank and DA true binary NetPnL>0 admission; same Full control C97.",
+        "param_source": "full_best_broker_cash_rolling_experiment",
+        "param_policy": "base-finalist-best", "rule_policy": "formal",
+        "dl_enabled": True, "dl_id": "CONT13CZ_ROLL",
+        "dl_runtime_mode": "resource-aware-continuous-score-constrained-optimal",
+        "dl_runtime_options": {
+            "preserve_k_r0": True, "constrained_solver": "exact_branch_and_bound_v1",
+            "selection_only": True, "positive_score_column": "positive_p_positive",
+            "positive_dl_id": "CONT13DA_ROLL", "positive_probability_threshold": 0.5,
+        },
+        "robustness_role": "off",
+    },
+    "C156": {
+        "replay_contract_version": 1,
+        "name": "Full MR-13CZ Rank + MR-13DA Positive Direct No-K No-R0 / Broker-Cash",
+        "description": "Same Full/P17 CZ rank and DA Positive independent PIT sources as C155; only selector changes to Direct.",
+        "param_source": "full_best_broker_cash_rolling_experiment",
+        "param_policy": "base-finalist-best", "rule_policy": "formal",
+        "dl_enabled": True, "dl_id": "CONT13CZ_ROLL",
+        "dl_runtime_mode": "resource-aware-continuous-score-no-k-no-r0",
+        "dl_runtime_options": {
+            "preserve_k": False, "preserve_r0": False,
+            "selection_order": "model_score_desc_then_canonical_tie_v1",
+            "selection_only": True, "positive_score_column": "positive_p_positive",
+            "positive_dl_id": "CONT13DA_ROLL", "positive_probability_threshold": 0.5,
+        },
+        "robustness_role": "off",
+    },
     "C149": {
         "replay_contract_version": 1,
         "name": "Daily Min MR-13CX T40 Pairwise-Confidence Exact K/R0 / Broker-Cash",
@@ -3418,6 +3470,11 @@ for _mode in ("oos", "rolling"):
 
 STRATEGY_COMPARE_CONTRASTS = {
     "C97-C96": {"left": "C97", "right": "C96", "description": "same-fee broker cash Full vs Min overall policy comparison"},
+    "C155-C97": {"left": "C155", "right": "C97", "description": "Full/P17 CZ/DA Exact versus Full DL-off C97"},
+    "C156-C97": {"left": "C156", "right": "C97", "description": "Full/P17 CZ/DA Direct versus Full DL-off C97"},
+    "C155-C156": {"left": "C155", "right": "C156", "description": "Full/P17 CZ+DA same scores, Exact versus Direct"},
+    "C155-C153": {"left": "C155", "right": "C153", "description": "Full/P17 Exact: NetPnL Positive versus T40"},
+    "C156-C154": {"left": "C156", "right": "C154", "description": "Full/P17 Direct: NetPnL Positive versus T40"},
     "C153-C97": {"left": "C153", "right": "C97", "description": "Full P17 CJ T40 Exact vs same-Full no-DL control"},
     "C154-C97": {"left": "C154", "right": "C97", "description": "Full P17 CJ T40 Direct vs same-Full no-DL control"},
     "C153-C107": {"left": "C153", "right": "C107", "description": "CJ T40 Exact: Full P17 vs Min P16"},

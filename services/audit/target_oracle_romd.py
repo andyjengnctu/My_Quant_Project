@@ -145,10 +145,16 @@ _ORACLE_DAILY_SCORE_RECIPES = {
     "daily_trade_path_net_r": "net_r",
     "daily_trade_path_net_pnl": "net_pnl",
     "daily_trade_path_true_net_pnl": "net_pnl",
+    "daily_trade_path_full_net_pnl": "net_pnl",
 }
 
 
 def _daily_truth_identity(recipe: str, horizon: int | None) -> tuple[str, str]:
+    if recipe == "daily_trade_path_full_net_pnl":
+        if horizon is not None:
+            raise OracleBlockedError("FullTrade NetPnL cannot have a fixed-session cap")
+        from services.audit.fulltrade_oracle_truth import TARGET_ID, LABEL_ID
+        return TARGET_ID, LABEL_ID
     if recipe == "daily_trade_path_true_net_pnl":
         if horizon is not None:
             raise OracleBlockedError("TrueDaily full-cycle NetPnL cannot have a fixed-session cap")
@@ -166,6 +172,9 @@ def _daily_truth_entry_policy(recipe: str) -> str | None:
 
 
 def _daily_truth_fingerprint(recipe: str) -> str:
+    if recipe == "daily_trade_path_full_net_pnl":
+        from services.audit.fulltrade_oracle_truth import truth_producer_fingerprint
+        return truth_producer_fingerprint()
     if recipe == "daily_trade_path_true_net_pnl":
         from services.audit.true_daily_mintrade_oracle import truth_producer_fingerprint
         return truth_producer_fingerprint()
@@ -174,6 +183,9 @@ def _daily_truth_fingerprint(recipe: str) -> str:
 
 
 def _build_daily_truth(recipe: str, *, output_subdir: str, **kwargs):
+    if recipe == "daily_trade_path_full_net_pnl":
+        from services.audit.fulltrade_oracle_truth import build_fulltrade_oracle_scores
+        return build_fulltrade_oracle_scores(**kwargs)
     if recipe == "daily_trade_path_true_net_pnl":
         from services.audit.true_daily_mintrade_oracle import build_true_daily_universal_oracle_scores
         return build_true_daily_universal_oracle_scores(output_subdir=output_subdir, **{
@@ -184,6 +196,9 @@ def _build_daily_truth(recipe: str, *, output_subdir: str, **kwargs):
 
 
 def _load_positive_truth_for_recipe(recipe: str, *, execution, cache_root, **kwargs):
+    if recipe == "daily_trade_path_full_net_pnl":
+        from services.audit.oracle_truth_references import load_or_build_positive_truth
+        return load_or_build_positive_truth(execution=execution, cache_root=cache_root, **kwargs)
     if recipe == "daily_trade_path_true_net_pnl":
         from services.audit.true_daily_mintrade_oracle import load_positive_truth
         return load_positive_truth(execution=execution, cache_root=cache_root, **{
@@ -204,6 +219,21 @@ _PROVIDER_COHORT_IDS = {
 # by _price_score_algorithm_sha256(). Never add target execution/admission or
 # reporting logic here. Execution-only policies belong to the separate
 # services.audit.oracle_execution_policy owner, which receives this plan.
+
+def _oracle_daily_schedule(records, *, seed: int, param_sha256: str, recipe: str):
+    """Use the same formal schedule mapper; retain genuine Full/P17 source identity.
+
+    This never re-labels Full parameters as Min, and the old Min signed source
+    modules stay unchanged. Receipt periods/signatures are preserved.
+    """
+    from filters.breakout_quality.daily_trade40_target import build_formal_min_execution_schedule
+    periods, evidence = build_formal_min_execution_schedule(
+        records, seed=seed, param_sha256=param_sha256,
+    )
+    if recipe == "daily_trade_path_full_net_pnl":
+        periods = tuple(replace(period, source_id="formal_full_roos_seed") for period in periods)
+    return periods, evidence
+
 
 def _oracle_comparison_plan(definition) -> dict[str, Any]:
     """Canonical compare inventory -> score requirements -> provider graph."""
@@ -446,6 +476,45 @@ def _unqualified_selector_options(options: Mapping[str, Any] | None) -> dict[str
             if not str(key).startswith("positive_")}
 
 
+def _reference_selector_for_treatment_family(definition, settings, treatment, selector, exact, direct):
+    """Resolve an immutable control/selector for each economic family.
+
+    The combined source-inventory audit may contain several parameter families;
+    the production Replay already scopes them separately. Read-only score
+    contract inspection must not compare a Full/P17 treatment with the Min/P16
+    selector merely because the source inventory has a Min default baseline.
+    """
+    current_base = str(definition.source["baseline_arm_id"])
+    baselines = oracle_baseline_arm_ids(definition.source)
+    family = oracle_parameter_family(treatment)
+    selected_base = str(baselines.get(family) or "")
+    if not selected_base or selected_base not in settings.arms:
+        raise OracleBlockedError(f"Oracle parameter-family control is unavailable: {family}")
+    if selected_base == current_base:
+        return direct if selector == "direct" else exact
+    control = settings.arms[selected_base]
+    if control.dl_enabled or control.entry_strategy != str(treatment.get("strategy", "Breakout")):
+        raise OracleBlockedError(f"Oracle parameter-family control differs: {family}")
+    from core.positive_score_admission import requires_positive_score
+    mode = ("resource-aware-continuous-score-no-k-no-r0" if selector == "direct"
+            else "resource-aware-continuous-score-constrained-optimal")
+    eligible = [arm for arm in settings.enabled_arms
+                if arm.dl_enabled and not requires_positive_score(arm.dl_runtime_options)
+                and arm.dl_runtime_mode == mode
+                and (arm.param_source, arm.param_policy, arm.rule_policy, arm.entry_strategy) ==
+                    (control.param_source, control.param_policy, control.rule_policy, control.entry_strategy)]
+    if not eligible:
+        raise OracleBlockedError(f"Oracle {family} {selector} has no independent formal selector")
+    independent = eligible[0]
+    reference = (independent.param_source, independent.param_policy, independent.rule_policy,
+                 independent.dl_runtime_mode, _unqualified_selector_options(independent.dl_runtime_options))
+    if any((arm.param_source, arm.param_policy, arm.rule_policy,
+            arm.dl_runtime_mode, _unqualified_selector_options(arm.dl_runtime_options)) != reference
+           for arm in eligible[1:]):
+        raise OracleBlockedError(f"Oracle {family} {selector} formal selectors differ")
+    return independent
+
+
 def _target_reference_arm(definition, settings, plan, target, exact, direct):
     """Resolve the declared entry/selector arm and its single-source score capability."""
     selected = next((item for item in definition.source["oracle_comparisons"]
@@ -477,7 +546,9 @@ def _target_reference_arm(definition, settings, plan, target, exact, direct):
                 or arm.entry_strategy != baseline.entry_strategy):
             raise OracleBlockedError(f"Oracle Default Positive-only reference arm mismatch: {target}/{arm_id}")
         return arm
-    base = direct if selector == "direct" else exact
+    base = _reference_selector_for_treatment_family(
+        definition, settings, selected, selector, exact, direct,
+    )
     if base is None or not arm.dl_enabled or arm.dl_runtime_mode != base.dl_runtime_mode:
         raise OracleBlockedError(f"Oracle matching selector unavailable: {target}/{arm_id}")
     if (arm.param_source, arm.param_policy, arm.rule_policy,
@@ -2347,7 +2418,9 @@ def _certified_saved_oracle_identity(
             raise ValueError("historical daily-truth lineage missing")
         from services.audit.mintrade_truth_source_attestation import mintrade_sources_equivalent
         current_producer = _daily_truth_fingerprint(recipe)
-        if not mintrade_sources_equivalent(recorded.get("truth_source_sha256"), current_producer):
+        if not (recorded.get("truth_source_sha256") == current_producer
+                if recipe == "daily_trade_path_full_net_pnl" else
+                mintrade_sources_equivalent(recorded.get("truth_source_sha256"), current_producer)):
             raise ValueError("historical Target outcome producer semantics not certified")
         if ("dataset_summary_sha256" not in recorded or
                 recorded["dataset_summary_sha256"] != oracle_dataset_summary_sha256(
@@ -2557,12 +2630,15 @@ def _execute_single_stage_missing(
                     source_name = plan["daily_sources"][target]
                     source_key = (seed, source_name)
                     if source_key not in truth_cache:
-                        if schedule is None:
-                            schedule, _ = build_formal_min_execution_schedule(
-                                resolve_formal_min_param_records(kind, base_params),
-                                seed=seed, param_sha256=param_sha,
-                            )
                         _recipe, provider, horizon = plan["daily_recipes"][source_name]
+                        if schedule is None:
+                            schedule, _ = _oracle_daily_schedule(
+                                resolve_formal_min_param_records(kind, base_params),
+                                seed=seed, param_sha256=param_sha, recipe=_recipe,
+                            )
+                        elif (_recipe == "daily_trade_path_full_net_pnl") != all(
+                                period.source_id == "formal_full_roos_seed" for period in schedule):
+                            raise OracleBlockedError("Full/Min daily truth schedules cannot share a source")
                         try:
                             def produce_truth():
                                 return _build_daily_truth(
@@ -2679,10 +2755,11 @@ def _execute_single_stage_missing(
                 if target in plan["daily_sources"]:
                     positive_key = (seed, plan["daily_sources"][target])
                     if positive_key not in positive_raw_cache:
+                        recipe_for_positive = plan["daily_recipes"][positive_key[1]][0]
                         if schedule is None:
-                            schedule, _ = build_formal_min_execution_schedule(
+                            schedule, _ = _oracle_daily_schedule(
                                 resolve_formal_min_param_records(kind, base_params),
-                                seed=seed, param_sha256=param_sha,
+                                seed=seed, param_sha256=param_sha, recipe=recipe_for_positive,
                             )
                         positive_raw_cache[positive_key], _ = _load_positive_truth_for_recipe(
                             plan["daily_recipes"][positive_key[1]][0],
@@ -3803,9 +3880,14 @@ def _oracle_strategy_scopes(definition) -> tuple[tuple[str, Any], ...]:
                 if (arm.param_source, arm.param_policy, arm.rule_policy, arm.entry_strategy) != (
                         control.param_source, control.param_policy, control.rule_policy, strategy):
                     raise OracleBlockedError(f"Oracle {family} reference/parameter contract mismatch: {arm_id}")
-                if selector in references and references[selector] != arm_id:
-                    raise OracleBlockedError(f"Oracle {family} selector is ambiguous")
-                references[selector] = arm_id
+                if selector in references:
+                    incumbent = settings.arms[references[selector]]
+                    if (incumbent.dl_runtime_mode != arm.dl_runtime_mode
+                            or _unqualified_selector_options(incumbent.dl_runtime_options) !=
+                               _unqualified_selector_options(arm.dl_runtime_options)):
+                        raise OracleBlockedError(f"Oracle {family} selector execution contracts differ")
+                else:
+                    references[selector] = arm_id
             if not {"exact", "direct"}.issubset(references):
                 raise OracleBlockedError(f"Oracle {family} requires both exact/direct reference contracts")
             source.update({"baseline_arm_id": control_id,
