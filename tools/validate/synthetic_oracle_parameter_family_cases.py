@@ -14,6 +14,7 @@ from unittest.mock import patch
 from core.audit_policy import get_reusable_audit_definitions
 from core.audit_registry import (
     oracle_baseline_arm_ids, oracle_comparison_key, oracle_parameter_family,
+    oracle_display_strategy, oracle_target_semantics,
     resolve_current_oracle_comparisons, validate_oracle_compare_family_coverage,
 )
 from core.strategy_compare_registry import STRATEGY_COMPARE_ARMS
@@ -27,6 +28,103 @@ def definition():
 
 
 class OracleParameterFamilyCases(TestCase):
+    def test_parameter_family_is_a_strategy_display_qualifier_not_a_target(self):
+        d = definition()
+        comparisons = resolve_current_oracle_comparisons(d.source)
+        min_row = next(r for r in comparisons if r["target"] == "T40"
+                       and oracle_parameter_family(r) == "min"
+                       and r.get("strategy", "Breakout") == "Breakout")
+        full_row = next(r for r in comparisons if r["target"] == "T40"
+                        and oracle_parameter_family(r) == "full")
+        self.assertEqual(oracle_target_semantics(min_row)[0], "T40")
+        self.assertEqual(oracle_target_semantics(full_row)[0], "T40")
+        self.assertEqual(oracle_display_strategy(strategy="Breakout", parameter_family="min"),
+                         "Breakout")
+        self.assertEqual(oracle_display_strategy(strategy="Breakout", parameter_family="full"),
+                         "Breakout (Full)")
+        # Neither historical key may be renamed by a presentation change.
+        self.assertEqual(oracle_comparison_key(min_row), "T40")
+        self.assertEqual(oracle_comparison_key(full_row), "T40::Full")
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ledger = root / "doc/scientific_contracts/REPORT_CONTRACT_VERSIONS.json"
+            ledger.parent.mkdir(parents=True)
+            ledger.write_bytes((Path(__file__).resolve().parents[2] /
+                                "doc/scientific_contracts/REPORT_CONTRACT_VERSIONS.json").read_bytes())
+            rows = collect_target_dl_overview(root)["rows"]
+        by_arm = {r["strategy"]: r for r in rows}
+        for arm in ("C153", "C154"):
+            self.assertEqual(by_arm[arm]["target"], "T40")
+            self.assertEqual(by_arm[arm]["entry_strategy"], "Breakout (Full)")
+        self.assertEqual(by_arm["C97"]["target"], "C97")
+        self.assertEqual(by_arm["C97"]["entry_strategy"], "Breakout (Full)")
+        self.assertEqual(by_arm["C107"]["entry_strategy"], "Breakout")
+        self.assertEqual(by_arm["C109"]["entry_strategy"], "Breakout")
+        self.assertFalse(any("(Full)" in r["target"] for r in rows))
+
+    def test_formal_four_seed_plan_shows_full_in_strategy_only(self):
+        import re
+        d = definition()
+        seeds = (11, 22, 33, 44)
+
+        def prepared(scope, **_kwargs):
+            base = scope.source["baseline_arm_id"]
+            targets = (base, *(row["target"] for row in scope.source["oracle_comparisons"]))
+            return {
+                "seed_set": seeds, "targets": targets,
+                "benchmark_id": "end_to_end_v1",
+                "start_date": "2021-01-01", "end_date": "2026-03-02",
+                "missing_p16": (), "producer_kwargs": {"baseline": base},
+                "parameter_scientific_sha256_by_seed": {},
+                "preflight": {(seed, target): "REUSE" for seed in seeds for target in targets},
+                "completed_observations": {}, "completed_identities": {},
+            }
+
+        with TemporaryDirectory() as tmp, patch.object(
+                oracle, "_run_single_stage_oracle", side_effect=prepared):
+            result, _scopes = oracle._oracle_combined_preview(d, project_root=Path(tmp))
+        visible = result["text"]
+        self.assertNotIn("T40 (Full)", visible)
+        self.assertGreaterEqual(len(re.findall(r"T40\s+Breakout \(Full\)\s+(Exact|Direct)", visible)), 2)
+        self.assertRegex(visible, r"C97\s+Breakout \(Full\)\s+-")
+        self.assertRegex(visible, r"T40\s+Breakout\s+Exact")
+        self.assertEqual(len(result["seed_set"]), 4)
+
+    def test_oracle_human_report_shows_target_not_family_suffix(self):
+        import re
+        seeds = (11, 22, 33, 44)
+        def perf(target, strategy="Breakout", family="min", romd=10.0):
+            return {
+                "target": target, "strategy": strategy, "parameter_family": family,
+                "total_return_pct": 12.0, "annualized_return_pct": 8.0,
+                "mdd_pct": 10.0, "romd": romd, "romd_std": 0.0,
+                "win_rate_pct": 60.0, "ev_a_r": 0.5,
+                "seeds": len(seeds), "positive_seed_count": 2,
+                "yearly": [], "seed_observations": [{"seed": seed, "romd": romd} for seed in seeds],
+            }
+        report = {
+            "baseline": perf("C96"),
+            "control_baselines": [perf("C97", family="full")],
+            "oracles": [perf("T40", romd=21.0), perf("T40", family="full", romd=44.0)],
+            "definitions": {"T40": "Canonical target"},
+            "start_date": "2021-01-01", "end_date": "2026-03-02",
+            "common_cohort": {"cohort_rows": 123},
+            "benchmark_id": "end_to_end_v1", "seeds": seeds,
+            "schema_version": 8, "limitations": [],
+        }
+        for kind in ("console", "markdown"):
+            with self.subTest(kind=kind):
+                visible = oracle.render_result(report, target=kind)
+                self.assertNotIn("T40 (Full)", visible)
+                self.assertIn("Breakout (Full)", visible)
+                self.assertIn("T40", visible)
+                if kind == "markdown":
+                    self.assertIn("| T40 | Breakout (Full) | Exact |", visible)
+                    self.assertIn("| T40 | Breakout | Exact |", visible)
+                    self.assertIn("### T40 (Breakout (Full) / Exact)", visible)
+                else:
+                    self.assertRegex(visible, r"T40\s+Breakout \(Full\)\s+Exact")
+
     def test_one_registry_drives_both_menu_inventories(self):
         d = definition()
         comparisons = resolve_current_oracle_comparisons(d.source)

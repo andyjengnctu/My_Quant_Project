@@ -310,6 +310,19 @@ def oracle_parameter_family(row: Mapping[str, Any]) -> str:
     return family
 
 
+def oracle_display_strategy(*, strategy: str, parameter_family: str) -> str:
+    """Presentation-only entry label: family belongs to Strategy, never Target.
+
+    This must not be used to construct canonical Oracle keys, FIT/Replay
+    identities, Score sources or saved receipt payloads.
+    """
+    name = str(strategy)
+    if name not in {"Breakout", "Daily"}:
+        raise ValueError(f"Invalid Oracle display entry strategy: {name}")
+    family = oracle_parameter_family({"parameter_family": parameter_family})
+    return name if family == "min" else f"{name} ({family.capitalize()})"
+
+
 def oracle_comparison_key(row: Mapping[str, Any]) -> str:
     """Stable Target x Entry x parameter-family Replay key, not a new Target.
 
@@ -455,6 +468,7 @@ __all__ = [
     "oracle_parameter_family",
     "oracle_baseline_arm_ids",
     "oracle_baseline_display_name",
+    "oracle_display_strategy",
     "validate_oracle_compare_family_coverage",
     "oracle_target_semantics",
     "oracle_scientific_target_name",

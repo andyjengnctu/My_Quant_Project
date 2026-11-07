@@ -164,7 +164,8 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     from services.research import target_oracle_application as oracle_application
     from core.audit_registry import (
         oracle_baseline_arm_ids, oracle_comparison_key, oracle_parameter_family,
-        oracle_target_semantics, resolve_current_oracle_comparisons,
+        oracle_target_semantics, oracle_display_strategy,
+        resolve_current_oracle_comparisons,
     )
     from core.training_policy import get_robustness_benchmark_policy_snapshot
     registered_oracle = oracle_application.get_formal_oracle_definition("breakout_quality")
@@ -216,15 +217,18 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         "parameter_plans": parameter_plans,
         "targets": existing_targets, "preflight": old_decisions,
     }
-    names = {base: base if family == "min" else f"{base} (Full)"
-             for family, base in baselines.items() if family in sampled_rows}
-    strategies = {base: "Breakout" for base in names}
+    names = {base: base for family, base in baselines.items() if family in sampled_rows}
+    strategies = {
+        base: oracle_display_strategy(strategy="Breakout", parameter_family=family)
+        for family, base in baselines.items() if family in sampled_rows
+    }
     selectors = {base: "-" for base in names}
     for family, row in sampled_rows.items():
         key = oracle_comparison_key(row)
-        names[key], selectors[key], strategies[key] = oracle_target_semantics(row)
-        if family != "min":
-            names[key] += f" ({family.capitalize()})"
+        names[key], selectors[key], entry = oracle_target_semantics(row)
+        strategies[key] = oracle_display_strategy(
+            strategy=entry, parameter_family=family,
+        )
     preview = render_replay_preflight(
         label="Fixed", seeds=list(benchmark_seeds),
         targets=list(existing_targets), decisions=old_decisions,

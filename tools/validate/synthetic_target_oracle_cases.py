@@ -2071,14 +2071,15 @@ class OracleAuditContractCases(TestCase):
             shutil.copy2(ROOT / "doc/scientific_contracts/REPORT_CONTRACT_VERSIONS.json", ledger_path)
             ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
             entry = next(x for x in ledger["reports"] if x["report_id"] == "audit.target_oracle_romd")
-            self.assertEqual(entry["versions"][-1]["version"], 13)
+            current_version = entry["versions"][-1]["version"]
+            next_version = current_version + 1
             entry["versions"].append({
-                "contract_id": "audit.target_oracle_romd@v14",
-                "version": 14,
+                "contract_id": f"audit.target_oracle_romd@v{next_version}",
+                "version": next_version,
                 "fingerprint": "1" * 16,
             })
             ledger_path.write_text(json.dumps(ledger, ensure_ascii=False), encoding="utf-8")
-            self.assertEqual(load_report_contract_versions(project)["audit.target_oracle_romd"][-1]["version"], 14)
+            self.assertEqual(load_report_contract_versions(project)["audit.target_oracle_romd"][-1]["version"], next_version)
             self.assertEqual(report_contract_version_history_violations(project, approved), [])
             entry["versions"][7]["fingerprint"] = "0" * 16
             ledger_path.write_text(json.dumps(ledger, ensure_ascii=False), encoding="utf-8")
@@ -2108,7 +2109,8 @@ class OracleAuditContractCases(TestCase):
             with patch.object(oracle, "build_report", return_value=result):
                 published = oracle.run_formal_audit(self.definition, project_root=base, quiet=True)
             self.assertEqual(published["schema_version"], 8)
-            self.assertEqual(published["report_contract_id"], "audit.target_oracle_romd@v13")
+            self.assertEqual(published["report_contract_id"],
+                             f"audit.target_oracle_romd@v{oracle.report_contract('audit.target_oracle_romd').version}")
             latest = base / "outputs/audit" / self.definition.output_subdir / "latest"
             body = (latest / "audit.md").read_text(encoding="utf-8")
             for name in oracle._oracle_comparison_plan(self.definition)["aliases"]:
@@ -2141,7 +2143,8 @@ class OracleAuditContractCases(TestCase):
             self.assertIn("### DailyUniversal_MinTrade_NetPnL_Positive", daily_body)
             self.assertNotIn("### TrueDailyUniversal_MinTrade_NetPnL_Positive", daily_body)
             self.assertIn("**DailyUniversal_MinTrade_NetPnL_Positive**", daily_body)
-            self.assertEqual(published["report_contract_id"], "audit.target_oracle_romd@v13")
+            self.assertEqual(published["report_contract_id"],
+                             f"audit.target_oracle_romd@v{oracle.report_contract('audit.target_oracle_romd').version}")
             json_data = json.loads((latest / "audit.json").read_text(encoding="utf-8"))
             self.assertEqual(len(json_data["oracles"]), len(LEGACY_ORACLE_TARGETS))
             self.assertIn("**MFE40**", body)

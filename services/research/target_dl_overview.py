@@ -18,6 +18,7 @@ from typing import Any, Mapping
 from core.audit_policy import get_active_audit_module_id
 from core.audit_registry import (resolve_current_oracle_comparisons, oracle_comparison_key,
                                  oracle_parameter_family, oracle_baseline_arm_ids, oracle_baseline_display_name,
+                                 oracle_display_strategy,
                                  validate_oracle_compare_family_coverage,
                                  oracle_supervised_target_id, oracle_target_semantics)
 from core.breakout_quality_registry import (
@@ -966,12 +967,22 @@ def collect_target_dl_overview(project_root: Path) -> dict[str, Any]:
                 "robustness_rho": robust_rho,
                 "rho_seeds": robust_seeds,
             })
-    entry_strategies = {oracle_comparison_key(item): str(item.get("strategy", "Breakout"))
-                        for item in comparisons}
+    # Presentation projection only; signed comparison IDs and supervised
+    # Target semantics remain unchanged across Min/P16 and Full/P17.
+    entry_strategies = {
+        oracle_comparison_key(item): oracle_display_strategy(
+            strategy=oracle_target_semantics(item)[2],
+            parameter_family=oracle_parameter_family(item),
+        ) for item in comparisons
+    }
+    entry_strategies.update({
+        arm_id: oracle_display_strategy(
+            strategy=str(STRATEGY_COMPARE_ARMS[arm_id].get("entry_strategy", "Breakout")),
+            parameter_family=family,
+        ) for family, arm_id in oracle_baseline_arm_ids(definition.source).items()
+    })
     display_targets = {
-        oracle_comparison_key(item): oracle_target_semantics(item)[0] + (
-            f" ({oracle_parameter_family(item).capitalize()})"
-            if oracle_parameter_family(item) != "min" else "")
+        oracle_comparison_key(item): oracle_target_semantics(item)[0]
         for item in comparisons
     }
     # Same label source as [1][1]; unscored controls are Strategy arms,

@@ -127,6 +127,7 @@ from core.audit_registry import (
     AUDIT_REUSABLE_REPORTS, resolve_current_oracle_comparisons, oracle_comparison_key,
     oracle_target_semantics, oracle_scientific_target_name,
     oracle_parameter_family, oracle_baseline_arm_ids, oracle_baseline_display_name,
+    oracle_display_strategy,
     oracle_positive_output_for_recipe,
 )
 
@@ -3853,7 +3854,14 @@ def _oracle_combined_preview(definition, *, project_root: Path) -> tuple[dict[st
     baseline_param_scientific: dict[str, dict[int, str]] = {}
     registered = resolve_current_oracle_comparisons(definition.source)
     registry_rows = {oracle_comparison_key(row): row for row in registered}
-    strategies = {arm_id: "Breakout" for arm_id in baselines.values()}
+    control_arms = get_strategy_comparison_settings(
+        str(definition.source["strategy_profile_id"])
+    ).arms
+    strategies = {
+        arm_id: oracle_display_strategy(
+            strategy=control_arms[arm_id].entry_strategy, parameter_family=family,
+        ) for family, arm_id in baselines.items()
+    }
     display_targets = {
         arm_id: oracle_baseline_display_name(definition.source, arm_id)
         for arm_id in baselines.values()
@@ -3896,10 +3904,10 @@ def _oracle_combined_preview(definition, *, project_root: Path) -> tuple[dict[st
                 continue
             key = _oracle_scoped_key(target, scope)
             row = registry_rows[key]
-            display_targets[key], selectors[key], strategies[key] = oracle_target_semantics(row)
-            # oracle_target_semantics returns (target, selector, strategy).
-            if oracle_parameter_family(row) != "min":
-                display_targets[key] += f" ({oracle_parameter_family(row).capitalize()})"
+            display_targets[key], selectors[key], entry_strategy = oracle_target_semantics(row)
+            strategies[key] = oracle_display_strategy(
+                strategy=entry_strategy, parameter_family=oracle_parameter_family(row),
+            )
     # Preserve all original Min ordering, append only newly declared families.
     registry_keys = tuple((baselines[family] for family in baselines if family == "min")) + tuple(
         oracle_comparison_key(row) for row in registered if oracle_parameter_family(row) == "min"
@@ -4141,9 +4149,10 @@ def render_result(report: Mapping[str, Any], *, target: str) -> str:
              "parameter_family": item.get("parameter_family", "min")}))
         scientific = approved_rows.get(key)
         if scientific is not None:
-            name, selector, _ = oracle_target_semantics(scientific)
-            if oracle_parameter_family(scientific) != "min":
-                name += f" ({oracle_parameter_family(scientific).capitalize()})"
+            name, selector, entry_strategy = oracle_target_semantics(scientific)
+            strategy = oracle_display_strategy(
+                strategy=entry_strategy, parameter_family=oracle_parameter_family(scientific),
+            )
         else:
             # Historical-only receipts still render, but never gain a new
             # active science or Selector identity merely from their label.
@@ -4152,7 +4161,10 @@ def render_result(report: Mapping[str, Any], *, target: str) -> str:
                     wins=f'{item["positive_seed_count"]}/{item["seeds"]}')
     items = [dict(baseline, target="C96 Same-Window", strategy="Breakout",
                   selector="-", wins="-"),
-             *(dict(row, target=f"{row['target']} Same-Window", strategy="Breakout",
+             *(dict(row, target=f"{row['target']} Same-Window",
+                     strategy=oracle_display_strategy(
+                         strategy=str(row.get("strategy", "Breakout")),
+                         parameter_family=str(row.get("parameter_family", "min"))),
                      selector="-", wins="-") for row in report.get("control_baselines", ())),
              *[_present(item) for item in report["oracles"]]]
     # Presentation-only sort; preserve the canonical comparison/Replay order.

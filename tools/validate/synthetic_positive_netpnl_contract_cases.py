@@ -488,8 +488,14 @@ class PositiveNetPnlContractCases(TestCase):
             self.assertTrue(daily_overview_rows)
             self.assertTrue(all(row["oracle_romd"] is None for row in daily_overview_rows))
             self.assertEqual(overview["rows"][0]["entry_strategy"], "Breakout")
+            from core.audit_registry import oracle_display_strategy
+            expected_entries = {
+                oracle_display_strategy(strategy=oracle_target_semantics(row)[2],
+                                        parameter_family=oracle_parameter_family(row))
+                for row in comparisons if oracle_target_semantics(row)[0] in scientific_daily
+            }
             self.assertEqual({row["entry_strategy"] for row in overview["rows"]
-                              if row["target"] in scientific_daily}, {"Breakout", "Daily"})
+                              if row["target"] in scientific_daily}, expected_entries)
             self.assertEqual(
                 table_contract("research.target_dl_validation_overview", "comparison", "target_dl").headers[:3],
                 ("Target", "Strategy", "Selector"),
