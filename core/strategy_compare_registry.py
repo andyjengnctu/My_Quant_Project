@@ -142,7 +142,7 @@ STRATEGY_COMPARE_SUITES = {
         "arm_ids": (
             "C96", "C97", "C98", "C99", "C100", "C101", "C102", "C103",
             "C105", "C106", "C107", "C108", "C109", "C110",
-            "C111", "C112", "C115", "C116", "C117", "C118", "C119", "C120", "C121", "C122", "C123", "C124", "C125", "C126", "C133", "C134", "C135", "C136", "C137", "C138",
+            "C111", "C112", "C115", "C116", "C117", "C118", "C119", "C120", "C121", "C122", "C123", "C124", "C125", "C126", "C133", "C134", "C135", "C136", "C137", "C138", "C145", "C146",
         ),
         # A compact connected contrast graph supports each selected model
         # versus C96 plus the matched CK/CJ label contrast. Historical AO/CH
@@ -158,6 +158,7 @@ STRATEGY_COMPARE_SUITES = {
             "C109-C107", "C110-C108", "C111-C112", "C115-C116", "C105-C117", "C106-C118", "C119-C120", "C121-C122", "C123-C124", "C125-C126", "C123-C125", "C124-C126", "C121-C123", "C122-C124", "C133-C134", "C135-C136", "C133-C135", "C134-C136",
             "C110-C109", "C111-C115", "C112-C116",
             "C137-C96", "C138-C96", "C137-C138", "C137-C133", "C138-C134",
+            "C145-C96", "C146-C96", "C145-C146", "C145-C107", "C146-C109",
         ),
         "display_name_bases": {
             "C96": "Min Base-Finalist-Best / Broker-Cash",
@@ -194,6 +195,8 @@ STRATEGY_COMPARE_SUITES = {
             "C136": "Min MR-13CU Rank + MR-13CT Positive Direct No-K No-R0 / Broker-Cash",
             "C137": "Daily Min MR-13CU NetPnL Rank Exact K/R0 / Broker-Cash",
             "C138": "Daily Min MR-13CU NetPnL Rank Direct No-K No-R0 / Broker-Cash",
+            "C145": "Daily Min MR-13CJ T40 Rank Exact K/R0 / Broker-Cash",
+            "C146": "Daily Min MR-13CJ T40 Rank Direct No-K No-R0 / Broker-Cash",
         },
     },
     "non_dl_c85_same_signal_revalidation_v1": {
@@ -2851,6 +2854,33 @@ STRATEGY_COMPARE_ARMS = {
         },
         "robustness_role": "off",
     },
+    "C145": {
+        "replay_contract_version": 1,
+        "name": "Daily Min MR-13CJ T40 Rank Exact K/R0 / Broker-Cash",
+        "description": "C107 canonical CJ PIT T40 score and P16 selector, but stock-day Daily next-session close-limit entry; no Positive gate.",
+        "param_source": "min_best_broker_cash_rolling_experiment",
+        "param_policy": "base-finalist-best", "rule_policy": "all_off",
+        "dl_enabled": True, "dl_id": "CONT13CJ_ROLL",
+        "dl_runtime_mode": "resource-aware-continuous-score-constrained-optimal",
+        "dl_runtime_options": {
+            "preserve_k_r0": True, "constrained_solver": "exact_branch_and_bound_v1", "selection_only": True,
+        },
+        "robustness_role": "off", "entry_strategy": "Daily",
+    },
+    "C146": {
+        "replay_contract_version": 1,
+        "name": "Daily Min MR-13CJ T40 Rank Direct No-K No-R0 / Broker-Cash",
+        "description": "C109 canonical CJ PIT T40 score and P16 Direct selector, but stock-day Daily next-session close-limit entry; no Positive gate.",
+        "param_source": "min_best_broker_cash_rolling_experiment",
+        "param_policy": "base-finalist-best", "rule_policy": "all_off",
+        "dl_enabled": True, "dl_id": "CONT13CJ_ROLL",
+        "dl_runtime_mode": "resource-aware-continuous-score-no-k-no-r0",
+        "dl_runtime_options": {
+            "preserve_k": False, "preserve_r0": False,
+            "selection_order": "model_score_desc_then_canonical_tie_v1", "selection_only": True,
+        },
+        "robustness_role": "off", "entry_strategy": "Daily",
+    },
     "C95": {
         "name": "Full Adjusted Price Corrected Same-Signal Agree 4x300",
         "description": (
@@ -3282,6 +3312,11 @@ STRATEGY_COMPARE_CONTRASTS = {
     "C137-C138": {"left": "C137", "right": "C138", "description": "Same CU PIT score and Daily entry: Exact K/R0 versus Direct No-K/No-R0"},
     "C137-C133": {"left": "C137", "right": "C133", "description": "TrueDaily CU rank without/with independent CT classifier: Daily Exact"},
     "C138-C134": {"left": "C138", "right": "C134", "description": "TrueDaily CU rank without/with independent CT classifier: Daily Direct"},
+    "C145-C96": {"left": "C145", "right": "C96", "description": "CJ T40 Daily Exact versus C96 Breakout P16 baseline"},
+    "C146-C96": {"left": "C146", "right": "C96", "description": "CJ T40 Daily Direct versus C96 Breakout P16 baseline"},
+    "C145-C146": {"left": "C145", "right": "C146", "description": "Same CJ PIT T40 score and Daily entry: Exact K/R0 versus Direct No-K/No-R0"},
+    "C145-C107": {"left": "C145", "right": "C107", "description": "Same CJ T40 PIT score, P16 and Exact selector: Daily versus Breakout entry"},
+    "C146-C109": {"left": "C146", "right": "C109", "description": "Same CJ T40 PIT score, P16 and Direct selector: Daily versus Breakout entry"},
     "C142-C96": {"left": "C142", "right": "C96", "description": "CJ T40 rank plus CW binary positive gate Exact versus baseline"},
     "C143-C96": {"left": "C143", "right": "C96", "description": "CJ T40 rank plus CW binary positive gate Direct versus baseline"},
     "C142-C143": {"left": "C142", "right": "C143", "description": "Same CJ rank and CW classifier; Exact versus Direct"},

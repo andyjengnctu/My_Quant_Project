@@ -403,13 +403,16 @@ def _oracle_target_strategy(definition, target: str) -> str:
     if strategy not in {"Breakout", "Daily"}:
         raise OracleBlockedError(f"Unsupported Oracle portfolio strategy: {strategy}")
     if strategy == "Daily":
-        # AI註: Only the approved actual TrueDaily source can authorize this entry
-        # counterfactual. Positive admission is an independent selector output
-        # contract, validated against the reference arm, not an entry policy.
+        # AI: Daily must be explicitly approved with a formal matching arm and a
+        # registered stock-day truth producer. This permits both price (T40)
+        # and trade-path truth without a model-specific exception or new formula.
+        from core.audit_registry import oracle_supervised_target_id
         definition_map = {row["target"]: row for row in definition.source["oracle_comparisons"]}
         producer = definition_map.get(entry.get("score_source") or target)
-        if not producer or producer.get("score") != "daily_trade_path_true_net_pnl":
-            raise OracleBlockedError("Daily strategy requires signed TrueDaily NetPnL source")
+        if (not entry.get("strategy_arm_id") or not producer
+                or not producer.get("score") or not producer.get("provider")
+                or oracle_supervised_target_id(producer) is None):
+            raise OracleBlockedError("Daily strategy requires a registered daily stock-day Target and formal arm")
     return strategy
 
 

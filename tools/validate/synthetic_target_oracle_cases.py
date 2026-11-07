@@ -90,7 +90,8 @@ def _forty_only(definition):
         "oracle_evaluation_end_date": "2025-12-22"},
         source={**definition.source, "oracle_comparisons": tuple(
         item for item in definition.source["oracle_comparisons"]
-        if not item.get("positive_output") and item["target"] not in {
+        if item.get("strategy", "Breakout") == "Breakout"
+        and not item.get("positive_output") and item["target"] not in {
             "DailyUniversal_MinTrade60_NetR",
             "DailyUniversal_MinTrade60_NetR_Direct",
             "DailyUniversal_MinTrade60_NetPnL",
@@ -844,7 +845,11 @@ class OracleScoreParityContractCases(TestCase):
              patch.object(oracle, "_run_scenario", side_effect=AssertionError("replay reached")) as replay:
             with self.assertRaisesRegex(oracle.OracleBlockedError, "different certified stock-day populations"):
                 oracle.build_report(definition, project_root=Path(tmp), quiet=True)
-        inventory.assert_called_once()
+        # Preview checks the immutable price inventory read-only; the
+        # execution gate verifies the same inventory again before any replay.
+        self.assertEqual(inventory.call_count, 2)
+        self.assertEqual(inventory.call_args_list[0].kwargs, {"certify_missing": False})
+        self.assertEqual(inventory.call_args_list[1].kwargs, {})
         replay.assert_not_called()
 
     def test_inventory_is_not_blocked_by_untrained_target_but_remains_read_only(self):
@@ -3809,7 +3814,8 @@ class OracleOnePlanRealCacheCases(TestCase):
             "oracle_evaluation_end_date": "2025-12-22"},
             source={**original.source, "oracle_comparisons": tuple(
             row for row in original.source["oracle_comparisons"]
-            if row["target"] in {"R40", "T40"})})
+            if row.get("strategy", "Breakout") == "Breakout"
+            and row["target"] in {"R40", "T40"})})
         settings, base, exact = oracle._contract(definition)
         plan = oracle._oracle_comparison_plan(definition)
         contracts = oracle._resolve_oracle_target_score_contracts(definition, settings, plan)
@@ -6898,7 +6904,8 @@ class OracleMinTradePreflightArtifactReuseCases(TestCase):
         active = _ACTIVE_ORACLE_DEFINITION
         definition = replace(active, source={**active.source, "oracle_comparisons": tuple(
             row for row in active.source["oracle_comparisons"]
-            if not str(row["target"]).startswith("TrueDailyUniversal_")
+            if row.get("strategy", "Breakout") == "Breakout"
+            and not str(row["target"]).startswith("TrueDailyUniversal_")
         )})
         settings, base, exact = oracle._contract(definition)
         direct = oracle._direct_arm(definition, settings, base, exact)

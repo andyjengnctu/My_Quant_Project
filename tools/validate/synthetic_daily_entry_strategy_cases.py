@@ -26,6 +26,7 @@ class DailyEntryStrategyCases(TestCase):
                           if d.audit_type == oracle.SUPPORTED_AUDIT_TYPE)
         rows = tuple(definition.source["oracle_comparisons"])
         from core.positive_netpnl_contract import requires_positive_score
+        from core.audit_registry import oracle_supervised_target_id
         from core.breakout_quality_registry import get_breakout_quality_experiment_profile
         from core.breakout_quality_runtime import get_continuous_ranker_score_output_columns
         # AI註: Validate each declaration without freezing current roster membership.
@@ -60,9 +61,19 @@ class DailyEntryStrategyCases(TestCase):
                     self.assertEqual(classifier.continuous_target_id,profile.continuous_target_id)
                 else:
                     self.assertNotIn('positive_p_positive',outputs.values())
-                self.assertEqual(profile.continuous_target_id, contracts[row["target"]]["target_id"])
-                self.assertEqual(contracts[row["target"]]["target_id"],
-                                 "true_daily_universal_mintrade_fulltrade_netpnl_v1")
+                # Trade-path recipes sign the raw producer identity; a scalar
+                # price recipe preserves its established Oracle target name.
+                # The model must still supervise the registered raw Target.
+                source = row
+                if row.get("score_source"):
+                    source = next(item for item in scope.source["oracle_comparisons"]
+                                  if item["target"] == row["score_source"])
+                self.assertEqual(profile.continuous_target_id,
+                                 oracle_supervised_target_id(source))
+                expected_oracle_target = (profile.continuous_target_id
+                                          if source.get("score", "").startswith("daily_trade_path_")
+                                          else source["target"])
+                self.assertEqual(contracts[row["target"]]["target_id"], expected_oracle_target)
         self.assertTrue(all(oracle._oracle_target_strategy(d, r["target"]) == strategy
                             for strategy, d in scoped
                             for r in d.source["oracle_comparisons"]))
@@ -408,7 +419,7 @@ class DailyEntryStrategyCases(TestCase):
             benchmark_ticker="2330", benchmark_data=market["2330"],
             is_training=False, verbose=False, profile_stats={},
         )
-        arms = [arm for arm in settings.arms.values()
+        arms = [arm for arm in settings.enabled_arms
                 if arm.dl_enabled and (arm.entry_strategy == "Daily"
                                        or requires_positive_score(arm.dl_runtime_options))]
         self.assertTrue(arms)
@@ -518,16 +529,17 @@ class DailyEntryStrategyCases(TestCase):
     def test_declared_strategy_rejects_wrong_scientific_target(self):
         definition = next(d for d in get_reusable_audit_definitions("breakout_quality")
                           if d.audit_type == oracle.SUPPORTED_AUDIT_TYPE)
-        # Fail-closed: a new unrelated Daily target must not inherit this policy.
+        # Fail closed: changing an unbound Breakout treatment to Daily cannot
+        # inherit a price or trade-path entry policy without a formal arm.
         from dataclasses import replace
         source = dict(definition.source)
         source["oracle_comparisons"] = tuple(
-            dict(row, strategy="Daily") if row["target"] == "T40" else row
-            for row in definition.source["oracle_comparisons"]
+            {**row, "strategy": "Daily"} for row in definition.source["oracle_comparisons"]
+            if row["target"] == "R40" and row.get("strategy", "Breakout") == "Breakout"
         )
         corrupted = replace(definition, source=source)
-        with self.assertRaisesRegex(oracle.OracleBlockedError, "signed TrueDaily"):
-            oracle._oracle_target_strategy(corrupted, "T40")
+        with self.assertRaisesRegex(oracle.OracleBlockedError, "registered daily stock-day Target and formal arm"):
+            oracle._oracle_target_strategy(corrupted, "R40")
 
 
 if __name__ == "__main__":

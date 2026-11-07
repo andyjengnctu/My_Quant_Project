@@ -68,6 +68,10 @@ class PositiveNetPnlContractCases(TestCase):
         cases = (
             ("MFE40_Control", "MFE40", "Exact", "Breakout"),
             ("MFE40_Direct", "MFE40", "Direct", "Breakout"),
+            ("T40", "T40", "Exact", "Breakout"),
+            ("T40::Daily", "T40", "Exact", "Daily"),
+            ("T40_Direct", "T40", "Direct", "Breakout"),
+            ("T40_Direct::Daily", "T40", "Direct", "Daily"),
             ("DailyUniversal_MinTrade_NetPnL", "MinTrade_NetPnL", "Exact", "Breakout"),
             ("DailyUniversal_MinTrade_NetPnL_Direct", "MinTrade_NetPnL", "Direct", "Breakout"),
             ("DailyUniversal_MinTrade_NetPnL_Positive", "MinTrade_NetPnL_Positive", "Exact", "Breakout"),
@@ -440,7 +444,9 @@ class PositiveNetPnlContractCases(TestCase):
                           if row.get("strategy") == "Daily"}
             self.assertTrue(true_daily)
             self.assertTrue({name + "::Daily" for name in true_daily}.isdisjoint(values))
-            self.assertTrue(true_daily.isdisjoint(values))  # Old unverified binding is not re-certified.
+            # A Target may already have a certified Breakout receipt (e.g. T40)
+            # even when the newly authorized Daily receipt is not certified.
+            self.assertTrue((true_daily - legacy_keys).isdisjoint(values))
             scientific_daily = {oracle_target_semantics(row)[0] for row in comparisons
                                 if row.get("strategy") == "Daily"}
             ledger = Path(temp) / "doc/scientific_contracts/REPORT_CONTRACT_VERSIONS.json"
@@ -457,10 +463,16 @@ class PositiveNetPnlContractCases(TestCase):
                                 if row["target"] == "MinTrade_NetPnL_Positive"))
             self.assertTrue(all(row["oracle_romd"] is None for row in overview["rows"]
                                 if row["target"] in scientific_daily and row["entry_strategy"] == "Daily"))
+            historical_breakout_labels = {oracle_target_semantics(row)[0] for row in published
+                                          if oracle_comparison_key(row) in legacy_keys}
             self.assertTrue(all(row["oracle_romd"] is None for row in overview["rows"]
-                                if row["target"] in scientific_daily and row["entry_strategy"] == "Breakout"))
+                                if row["target"] in scientific_daily
+                                and row["entry_strategy"] == "Breakout"
+                                and row["target"] not in historical_breakout_labels))
             daily_overview_rows = [row for row in overview["rows"]
-                                   if row["target"] in scientific_daily]
+                                   if row["target"] in scientific_daily
+                                   and (row["entry_strategy"] == "Daily"
+                                        or row["target"] not in historical_breakout_labels)]
             self.assertTrue(daily_overview_rows)
             self.assertTrue(all(row["oracle_romd"] is None for row in daily_overview_rows))
             self.assertEqual(overview["rows"][0]["entry_strategy"], "Breakout")

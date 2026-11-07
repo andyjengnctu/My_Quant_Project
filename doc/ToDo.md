@@ -5,7 +5,6 @@
     - 0050 cannot be selected by any DL
 
 - imrove DL learnability
-    - target 考慮實際報酬而非只是R
     - input with 漲/跌家數
     - input with 還原/非還原價
     - input with 三大法人籌碼資訊
