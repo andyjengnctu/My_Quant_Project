@@ -851,3 +851,9 @@ Decision：`EIGHT_SEED_ONLY_CURRENT / ONE_CANONICAL_TARGET_PIPELINE / PER_SEED_S
 
 Decision：`CURRENT_EIGHT_SEED_REPORT_USER_REPORTED_AVAILABLE / AGGREGATE_ARITHMETIC_VERIFIED / FULL_E13_MARKET_PARITY_PENDING / NON_PIT / NO_PROMOTION`。
 
+
+### 2026-11-07 — C96／C97 無 DL 對照基準的八 Seed Robustness 證據重用
+
+- **界線**：C96（Min／P16）與 C97（Full／P17）是 Default Selector、無 DL／Target 的同 Seed 對照，並非 Perfect-score Oracle。`[1][1]` 為配對驗證保留其基準 Replay 收據；`[1][2]` 的兩個無 DL 列不填 `Oracle RoMD`／Oracle 勝率，名稱與 `[1][1]` 均從 `core/audit_registry.py` 派生為 `C96`／`C97`。
+- **可共用證據**：`[1][2]` 只在既有 `[4]` 四 Seed Robustness 的已簽章觀測、參數科學 SHA、Benchmark Seed 前綴、交易／期間契約，及 S1～S4 報酬、MDD、RoMD 與 `[1][1]` 已簽章的八 Seed 無分數基準逐項一致時，讀取後者八筆 RoMD 計算 8S Mean 並明確標記 `(8S)`；缺少／不相容則保持既有 `(4S)` 結果，不能假 REUSE。
+- **不擴大研究**：其他 DL 策略、Model ρ 及 `[4]` 正式 Robustness 仍維持現有四 Seed 科學身分及原報表；CJ 的 PIT Robustness 不得借用 T40 完美分數 Oracle。此調整不執行 Replay／Optimizer，不回填／覆寫 `[4]` 或既有收據、不更改交易／費稅／FIT／Target／Trading。C97 S5～S8 的 P17 參數及完整基準 Replay 若未具備合法證據，不能標示 8S；由原本正式流程獨立建立後才可重新核對。

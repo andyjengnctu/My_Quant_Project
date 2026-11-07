@@ -88,6 +88,7 @@ from services.audit.oracle_replay_artifacts import (
 from services.optimizer.strategy_param_service import (
     resolve_fixed_multiseed_robustness_strategy_parameter_artifact,
 )
+from core.strategy_param_artifacts import compute_strategy_param_scientific_sha256
 from config.execution_policy import (
     DEFAULT_FIXED_RISK, DEFAULT_MAX_POSITION_CAP_PCT, EXECUTION_POLICY_PARAM_SPECS,
 )
@@ -125,7 +126,7 @@ PERIOD_STATS_IMPLEMENTATION = "full_year_calendar_verified_20261026"
 from core.audit_registry import (
     AUDIT_REUSABLE_REPORTS, resolve_current_oracle_comparisons, oracle_comparison_key,
     oracle_target_semantics, oracle_scientific_target_name,
-    oracle_parameter_family, oracle_baseline_arm_ids,
+    oracle_parameter_family, oracle_baseline_arm_ids, oracle_baseline_display_name,
     oracle_positive_output_for_recipe,
 )
 
@@ -3632,6 +3633,11 @@ def _run_single_stage_oracle(
             "targets": tuple(targets),
             "producer_kwargs": dict(parameter_plan["producer_kwargs"]),
             "completed_observations": dict(cached),
+            "completed_identities": {key: dict(identities[key]) for key in cached},
+            "parameter_scientific_sha256_by_seed": {
+                int(row["seed"]): compute_strategy_param_scientific_sha256(row["path"])
+                for row in parameter_plan["rows"] if row["ready"]
+            },
             "benchmark_id": str(robustness.benchmark_id),
             "start_date": start, "end_date": end,
         }
@@ -3843,11 +3849,15 @@ def _oracle_combined_preview(definition, *, project_root: Path) -> tuple[dict[st
     param_plans: dict[str, dict[str, Any]] = {}
     decisions: dict[tuple[int, str], str] = {}
     completed: dict[tuple[int, str], dict[str, Any]] = {}
+    completed_identities: dict[tuple[int, str], dict[str, Any]] = {}
+    baseline_param_scientific: dict[str, dict[int, str]] = {}
     registered = resolve_current_oracle_comparisons(definition.source)
     registry_rows = {oracle_comparison_key(row): row for row in registered}
     strategies = {arm_id: "Breakout" for arm_id in baselines.values()}
-    display_targets = {arm_id: (arm_id if family == "min" else f"{arm_id} (Full)")
-                       for family, arm_id in baselines.items()}
+    display_targets = {
+        arm_id: oracle_baseline_display_name(definition.source, arm_id)
+        for arm_id in baselines.values()
+    }
     selectors = {arm_id: "-" for arm_id in baselines.values()}
     for scope, scoped, preview in previews:
         control_id = _baseline_target(scoped)
@@ -3860,6 +3870,13 @@ def _oracle_combined_preview(definition, *, project_root: Path) -> tuple[dict[st
         if control_id in param_plans and param_plans[control_id] != param_plan:
             raise OracleBlockedError(f"Oracle {control_id} parameter REUSE/RUN plan diverged")
         param_plans[control_id] = param_plan
+        scientific_source = dict(preview.get("parameter_scientific_sha256_by_seed") or {})
+        if (control_id in baseline_param_scientific
+                and baseline_param_scientific[control_id] != scientific_source):
+            raise OracleBlockedError(
+                f"Oracle shared baseline {control_id} has inconsistent parameter scientific identities"
+            )
+        baseline_param_scientific[control_id] = scientific_source
         for (seed, target), action in preview["preflight"].items():
             key = (int(seed), _oracle_scoped_key(target, scope))
             if key in decisions and decisions[key] != action:
@@ -3870,6 +3887,10 @@ def _oracle_combined_preview(definition, *, project_root: Path) -> tuple[dict[st
             if key in completed and completed[key] != observation:
                 raise OracleBlockedError(f"Oracle shared baseline {control_id} has inconsistent receipts")
             completed[key] = observation
+            identity = dict((preview.get("completed_identities") or {}).get((seed, target)) or {})
+            if key in completed_identities and completed_identities[key] != identity:
+                raise OracleBlockedError(f"Oracle shared baseline {control_id} has inconsistent identities")
+            completed_identities[key] = identity
         for target in preview["targets"]:
             if target == control_id:
                 continue
@@ -3898,6 +3919,8 @@ def _oracle_combined_preview(definition, *, project_root: Path) -> tuple[dict[st
             "parameter_plans": param_plans,
             "seed_set": seeds, "targets": registry_keys,
             "completed_observations": completed,
+            "completed_identities": completed_identities,
+            "baseline_parameter_scientific": baseline_param_scientific,
             **{field: master[field] for field in benchmark_fields}}, scopes
 
 
@@ -4002,8 +4025,41 @@ def collect_completed_oracle_results(definition, *, project_root: Path) -> dict[
                                period_start=preview["start_date"], period_end=preview["end_date"])
         metrics[key] = {"oracle_romd": aggregate["romd"],
                         "win_rate_pct": aggregate["win_rate_pct"]}
+    # The baseline control is not a hindsight Oracle. These observations are
+    # strictly read-only evidence for an optional same-contract strategy
+    # Robustness projection; scored Oracle metrics retain their own meanings.
+    baseline_evidence = {}
+    for control in baselines.values():
+        if any(preview["preflight"].get((seed, control)) != "REUSE" for seed in seeds):
+            continue
+        scientific = dict(preview.get("baseline_parameter_scientific", {}).get(control) or {})
+        if set(scientific) != set(seeds):
+            continue
+        witnesses = []
+        for seed in seeds:
+            row = observations[(seed, control)]
+            identity = dict(preview.get("completed_identities", {}).get((seed, control)) or {})
+            if (identity.get("seed") != seed or identity.get("target") != control
+                    or identity.get("benchmark") != preview["benchmark_id"]
+                    or identity.get("start_date") != preview["start_date"]
+                    or identity.get("end_date") != preview["end_date"]):
+                break
+            witnesses.append({
+                "seed": seed,
+                "romd": float(row["romd"]),
+                "total_return_pct": float(row["total_return_pct"]),
+                "mdd_pct": float(row["mdd_pct"]),
+                "param_sha256": str(identity["param_sha256"]),
+                "param_scientific_sha256": scientific[seed],
+                "dataset": str(identity.get("dataset") or ""),
+                "max_positions": identity.get("max_positions"),
+                "rotation": identity.get("rotation"),
+            })
+        if len(witnesses) == len(seeds):
+            baseline_evidence[control] = tuple(witnesses)
     return {"metrics": metrics, "benchmark": preview["benchmark_id"],
-            "seeds": tuple(seeds),
+            "seeds": tuple(seeds), "start_date": preview["start_date"],
+            "end_date": preview["end_date"], "baseline_evidence": baseline_evidence,
             "period": f'{preview["start_date"]} ~ {preview["end_date"]}'}
 
 

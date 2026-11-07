@@ -331,6 +331,182 @@ class OracleParameterFamilyCases(TestCase):
                                oracle_parameter_family(row) == "full"), ("T40", "T40_Direct"))
 
 
+class BaselineRobustnessReuseCases(TestCase):
+    """Projection is optional, read-only, and never promotes model scores."""
+
+    @staticmethod
+    def _fixture(root: Path, arm_id: str):
+        import csv
+        import hashlib
+        from core.strategy_compare_policy import get_strategy_comparison_settings
+        from core.training_policy import get_robustness_benchmark_policy_snapshot
+        from services.research.strategy_multi_seed_robustness import (
+            SEED_RESULTS_FILENAME, SEED_YEARLY_RESULTS_FILENAME,
+        )
+
+        settings = get_strategy_comparison_settings("broker_cash_dl_conversion_rolling")
+        arm = settings.arms[arm_id]
+        four_seeds = tuple(get_robustness_benchmark_policy_snapshot(
+            benchmark_id="end_to_end_v1")["resolved_seeds"])
+        all_seeds = tuple(get_robustness_benchmark_policy_snapshot(
+            benchmark_id="end_to_end_v2")["resolved_seeds"])
+        assert len(four_seeds) == 4 and all_seeds[:4] == four_seeds
+        sha = "a" * 64
+        observations = []
+        rows = []
+        for number, seed in enumerate(all_seeds, start=1):
+            observations.append({
+                "seed": seed, "romd": float(number + 5),
+                "total_return_pct": float(number + 50),
+                "mdd_pct": float(number + 10),
+                "param_scientific_sha256": sha, "param_sha256": "b" * 64,
+                "dataset": settings.dataset,
+                "max_positions": settings.max_positions, "rotation": settings.rotation,
+            })
+            if seed in four_seeds:
+                rows.append({
+                    "arm_id": arm_id, "seed": str(seed),
+                    "return_over_max_drawdown": str(float(number + 5)),
+                    "total_return_pct": str(float(number + 50)),
+                    "max_drawdown_pct": str(float(number + 10)),
+                    "strategy_param_sha256": sha,
+                })
+        with (root / SEED_RESULTS_FILENAME).open("w", encoding="utf-8", newline="") as stream:
+            writer = csv.DictWriter(stream, fieldnames=rows[0])
+            writer.writeheader()
+            writer.writerows(rows)
+        (root / SEED_YEARLY_RESULTS_FILENAME).write_text("seed,year\n", encoding="utf-8")
+        artifacts = {}
+        for key, filename in (("seed_results", SEED_RESULTS_FILENAME),
+                              ("seed_yearly_results", SEED_YEARLY_RESULTS_FILENAME)):
+            path = root / filename
+            artifacts[key] = {
+                "filename": filename, "size_bytes": path.stat().st_size,
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            }
+        contract = {
+            "benchmark_id": "end_to_end_v1",
+            "comparison_period": {"start": "2021-01-01", "end": "2026-03-02"},
+            "dataset": settings.dataset, "max_positions": settings.max_positions,
+            "rotation": settings.rotation,
+            "stochastic_arms": [{
+                "arm_id": arm_id, "param_source": arm.param_source,
+                "param_policy": arm.param_policy, "rule_policy": arm.rule_policy,
+                "entry_strategy": arm.entry_strategy,
+                "replay_contract_version": arm.replay_contract_version,
+                "model_seed_sensitive": False,
+            }],
+            "benchmark_parameter_artifact_identities": {
+                f"{arm_id}:seed={seed}": {"sha256": sha} for seed in four_seeds
+            },
+        }
+        oracle_info = {
+            "benchmark": "end_to_end_v2", "seeds": all_seeds,
+            "start_date": "2021-01-01", "end_date": "2026-03-02",
+            "baseline_evidence": {arm_id: tuple(observations)},
+        }
+        mean = sum(float(row["return_over_max_drawdown"]) for row in rows) / 4
+        return settings, four_seeds, all_seeds, contract, oracle_info, {"durable_artifacts": artifacts}, mean
+
+    def test_no_dl_signed_8s_reuses_only_matching_first_four(self):
+        from statistics import fmean
+        from services.research.target_dl_overview import _certified_no_dl_oracle_8s
+        for arm_id in ("C96", "C97"):
+            with self.subTest(arm=arm_id), TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                settings, four, eight, contract, oracle_info, manifest, mean = self._fixture(root, arm_id)
+                kwargs = dict(root=root, run=root, manifest=manifest, contract=contract,
+                              oracle_info=oracle_info, arm_id=arm_id, settings=settings,
+                              four_seeds=four, published_four_mean=mean)
+                self.assertEqual(_certified_no_dl_oracle_8s(**kwargs),
+                                 (fmean(float(x["romd"]) for x in oracle_info["baseline_evidence"][arm_id]),
+                                  eight, "end_to_end_v2"))
+                incomplete = {**oracle_info, "baseline_evidence": {
+                    arm_id: oracle_info["baseline_evidence"][arm_id][:-1]}}
+                self.assertIsNone(_certified_no_dl_oracle_8s(**{**kwargs, "oracle_info": incomplete}))
+                mismatch = {**oracle_info, "baseline_evidence": {
+                    arm_id: [{**item, **({"romd": 999.0} if i == 0 else {})}
+                             for i, item in enumerate(oracle_info["baseline_evidence"][arm_id])]}}
+                self.assertIsNone(_certified_no_dl_oracle_8s(**{**kwargs, "oracle_info": mismatch}))
+                self.assertIsNone(_certified_no_dl_oracle_8s(**{**kwargs, "published_four_mean": mean + 1}))
+                self.assertIsNone(_certified_no_dl_oracle_8s(**{**kwargs, "contract": {
+                    **contract, "comparison_period": {"start": "2022-01-01", "end": "2026-03-02"}}}))
+                self.assertIsNone(_certified_no_dl_oracle_8s(**{**kwargs, "contract": {
+                    **contract, "benchmark_parameter_artifact_identities": {}}}))
+                self.assertIsNone(_certified_no_dl_oracle_8s(**{**kwargs, "manifest": {
+                    "durable_artifacts": {}}}))
+                self.assertIsNone(_certified_no_dl_oracle_8s(**{**kwargs, "oracle_info": {
+                    **oracle_info, "benchmark": "unknown"}}))
+
+    def test_overview_upgrades_only_certified_no_dl_arm_and_leaves_dl_four_seed(self):
+        import json
+        from config.strategy_compare import STRATEGY_COMPARE_CURRENT_ROLLING_ROBUSTNESS
+        from core.report_contract_versions import load_report_contract_versions
+        from core.strategy_compare_policy import get_strategy_multi_seed_robustness_settings
+        from services.research import target_dl_overview as overview
+
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            settings, four, eight, contract, oracle_info, manifest, mean = self._fixture(root, "C96")
+            cfg = get_strategy_multi_seed_robustness_settings(STRATEGY_COMPARE_CURRENT_ROLLING_ROBUSTNESS)
+            folder = root / cfg.output_root / "fake-four-seed-fingerprint"
+            folder.mkdir(parents=True)
+            for name in ("seed_results.csv", "seed_yearly_returns.csv"):
+                (folder / name).write_bytes((root / name).read_bytes())
+            contract.update({"fingerprint": folder.name,
+                             "profile_id": cfg.profile_id,
+                             "resolved_seeds": list(four), "seed_count": len(four),
+                             "stochastic_arms": [contract["stochastic_arms"][0],
+                                                 {"arm_id": "C97"}, {"arm_id": "C107"}]})
+            versions = load_report_contract_versions(Path(__file__).resolve().parents[2])
+            approved = versions["strategy.standard_sop"][-1]
+            summary = {
+                "status": "RESULT_AVAILABLE", "contract": contract,
+                "report_contract_id": approved["contract_id"],
+                "report_contract_fingerprint": approved["fingerprint"],
+                "romd_statistics": [
+                    {"arm_id": "C96", "mean": mean, "n": len(four)},
+                    {"arm_id": "C97", "mean": 6.44, "n": len(four)},
+                    {"arm_id": "C107", "mean": 10.45, "n": len(four)},
+                ],
+            }
+            manifest.update({"status": "COMPLETED", "contract": contract})
+            (folder / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+            (folder / "robustness_summary.json").write_text(json.dumps(summary), encoding="utf-8")
+            (folder / "robustness_report.md").write_text("Approved synthetic 4S", encoding="utf-8")
+            # Only the verified baseline may use the Oracle 8S evidence;
+            # the extra DL arm's published four-seed number stays untouched.
+            with patch.object(overview, "_robust_arm_fit_lineage_current", return_value=True):
+                result = overview._strategy_robustness_metrics(
+                    root, versions, oracle_info=oracle_info,
+                    oracle_source=definition().source,
+                )
+            self.assertEqual(result["C96"][1], eight)
+            self.assertAlmostEqual(result["C96"][0], 9.5)
+            self.assertEqual(result["C97"], (6.44, four, "end_to_end_v1"))
+            self.assertEqual(result["C107"], (10.45, four, "end_to_end_v1"))
+
+    def test_controls_display_same_names_and_no_oracle_metrics(self):
+        from core.audit_registry import oracle_baseline_display_name
+        d = definition()
+        for arm_id in ("C96", "C97"):
+            self.assertEqual(oracle_baseline_display_name(d.source, arm_id), arm_id)
+        with self.assertRaisesRegex(ValueError, "Unknown Oracle no-DL control"):
+            oracle_baseline_display_name(d.source, "C153")
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ledger = root / "doc/scientific_contracts/REPORT_CONTRACT_VERSIONS.json"
+            ledger.parent.mkdir(parents=True)
+            ledger.write_bytes((Path(__file__).resolve().parents[2] /
+                                "doc/scientific_contracts/REPORT_CONTRACT_VERSIONS.json").read_bytes())
+            result = collect_target_dl_overview(root)
+            rows = {row["strategy"]: row for row in result["rows"]}
+            for arm_id in ("C96", "C97"):
+                self.assertEqual(rows[arm_id]["target"], arm_id)
+                self.assertIsNone(rows[arm_id]["oracle_romd"])
+                self.assertIsNone(rows[arm_id]["win_rate_pct"])
+
+
 if __name__ == "__main__":
     from unittest import main
     main()

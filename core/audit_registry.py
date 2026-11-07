@@ -346,6 +346,18 @@ def oracle_baseline_arm_ids(source: Mapping[str, Any]) -> dict[str, str]:
     return result
 
 
+def oracle_baseline_display_name(source: Mapping[str, Any], arm_id: str) -> str:
+    """One unscored-control label for the Oracle plan and overview.
+
+    Baselines are registered Strategy arm IDs, not hindsight Targets.  The
+    identity is displayed without a family-specific presentation alias.
+    """
+    arm = str(arm_id)
+    if arm not in oracle_baseline_arm_ids(source).values():
+        raise ValueError(f"Unknown Oracle no-DL control: {arm}")
+    return arm
+
+
 def validate_oracle_compare_family_coverage(
     source: Mapping[str, Any], *, active_arm_ids, arm_registry: Mapping[str, Any],
 ) -> None:
@@ -442,6 +454,7 @@ __all__ = [
     "oracle_comparison_key",
     "oracle_parameter_family",
     "oracle_baseline_arm_ids",
+    "oracle_baseline_display_name",
     "validate_oracle_compare_family_coverage",
     "oracle_target_semantics",
     "oracle_scientific_target_name",

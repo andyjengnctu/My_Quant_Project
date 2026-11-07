@@ -7,14 +7,17 @@ model/strategy reports supply metrics through their canonical result owners.
 
 from __future__ import annotations
 
+import csv
 import hashlib
 import json
+import math
+from statistics import fmean
 from pathlib import Path
 from typing import Any, Mapping
 
 from core.audit_policy import get_active_audit_module_id
 from core.audit_registry import (resolve_current_oracle_comparisons, oracle_comparison_key,
-                                 oracle_parameter_family, oracle_baseline_arm_ids,
+                                 oracle_parameter_family, oracle_baseline_arm_ids, oracle_baseline_display_name,
                                  validate_oracle_compare_family_coverage,
                                  oracle_supervised_target_id, oracle_target_semantics)
 from core.breakout_quality_registry import (
@@ -681,7 +684,137 @@ def _robust_arm_fit_lineage_current(settings: Any, arm_id: str, pinned: Mapping[
     return True
 
 
-def _strategy_robustness_metrics(root: Path, versions: Mapping[str, tuple]):
+def _certified_no_dl_oracle_8s(
+    *, root: Path, run: Path, manifest: Mapping[str, Any], contract: Mapping[str, Any],
+    oracle_info: Mapping[str, Any], arm_id: str, settings: Any,
+    four_seeds: tuple[int, ...], published_four_mean: float,
+) -> tuple[float, tuple[int, ...], str] | None:
+    """Read-only 8S reuse only after cross-workflow, per-Seed economic parity.
+
+    Oracle control receipts contain no hindsight scores, but are NOT granted
+    automatic robustness authority. The certified first-four Strategy results,
+    physical parameter SHA, return/MDD/RoMD, benchmark, period and replay arm
+    must match before the additional four Oracle control seeds are consumed.
+    No simulation, training, artifact copying or 4S report mutation is allowed.
+    """
+    from core.training_policy import benchmark_seed_execution_equivalent
+    from services.research.strategy_multi_seed_robustness import (
+        _validate_durable_result_artifacts,
+    )
+
+    oracle_seeds = tuple(oracle_info.get("seeds") or ())
+    observations = tuple((oracle_info.get("baseline_evidence") or {}).get(arm_id) or ())
+    old_benchmark = str(contract.get("benchmark_id") or "")
+    new_benchmark = str(oracle_info.get("benchmark") or "")
+    if (len(four_seeds) < 2 or len(oracle_seeds) <= len(four_seeds)
+            or oracle_seeds[:len(four_seeds)] != four_seeds
+            or len(set(oracle_seeds)) != len(oracle_seeds)
+            or len(observations) != len(oracle_seeds)):
+        return None
+    try:
+        benchmark_compatible = all(benchmark_seed_execution_equivalent(
+            recorded_benchmark=old_benchmark, active_benchmark=new_benchmark,
+            seed=int(seed),
+        ) for seed in four_seeds)
+    except ValueError:  # An unregistered historical benchmark is not reuseable.
+        return None
+    if not benchmark_compatible:
+        return None
+    period = dict(contract.get("comparison_period") or {})
+    if (str(period.get("start") or "") != str(oracle_info.get("start_date") or "")
+            or str(period.get("end") or "") != str(oracle_info.get("end_date") or "")
+            or str(contract.get("dataset") or "") != str(settings.dataset)
+            or int(contract.get("max_positions") or 0) != int(settings.max_positions)
+            or str(contract.get("rotation") or "") != str(settings.rotation)):
+        return None
+
+    arm = settings.arms.get(arm_id)
+    pinned_arms = [dict(item) for item in contract.get("stochastic_arms") or ()
+                   if isinstance(item, Mapping) and item.get("arm_id") == arm_id]
+    if arm is None or arm.dl_enabled or len(pinned_arms) != 1:
+        return None
+    pinned = pinned_arms[0]
+    if (pinned.get("param_source") != arm.param_source
+            or pinned.get("param_policy") != arm.param_policy
+            or pinned.get("rule_policy") != arm.rule_policy
+            or str(pinned.get("entry_strategy") or "Breakout") != str(arm.entry_strategy)
+            or int(pinned.get("replay_contract_version") or 1) != int(arm.replay_contract_version)
+            or bool(pinned.get("model_seed_sensitive"))):
+        return None
+    if any(
+        (int(obs.get("seed") or -1) != int(seed)
+         or str(obs.get("dataset") or "") != str(settings.dataset)
+         or obs.get("max_positions") != settings.max_positions
+         or str(obs.get("rotation") or "") != str(settings.rotation))
+        for seed, obs in zip(oracle_seeds, observations)
+    ):
+        return None
+
+    scientific = dict(manifest.get("durable_artifacts") or {})
+    if not _validate_durable_result_artifacts(
+        run, scientific, keys=("seed_results", "seed_yearly_results")
+    ):
+        return None
+    with (run / "seed_results.csv").open("r", encoding="utf-8-sig", newline="") as stream:
+        rows = [row for row in csv.DictReader(stream) if row.get("arm_id") == arm_id]
+    if len(rows) != len(four_seeds):
+        return None
+    by_seed: dict[int, dict[str, str]] = {}
+    for row in rows:
+        try:
+            seed = int(row["seed"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        if seed in by_seed or seed not in four_seeds:
+            return None
+        by_seed[seed] = row
+    if set(by_seed) != set(four_seeds):
+        return None
+    param_identities = dict(contract.get("benchmark_parameter_artifact_identities") or {})
+    for obs in observations:
+        values = (obs.get("romd"), obs.get("total_return_pct"), obs.get("mdd_pct"))
+        try:
+            if not all(math.isfinite(float(value)) for value in values):
+                return None
+        except (TypeError, ValueError, OverflowError):
+            return None
+    for seed, obs in zip(four_seeds, observations):
+        row = by_seed[seed]
+        registered = dict(param_identities.get(f"{arm_id}:seed={seed}") or {})
+        if (not registered.get("sha256")
+                or str(row.get("strategy_param_sha256") or "").lower() !=
+                    str(registered["sha256"]).lower()
+                or str(obs.get("param_scientific_sha256") or "").lower() !=
+                    str(registered["sha256"]).lower()
+                or not str(obs.get("param_sha256") or "")):
+            return None
+        for oracle_key, strategy_key in (
+            ("romd", "return_over_max_drawdown"),
+            ("total_return_pct", "total_return_pct"),
+            ("mdd_pct", "max_drawdown_pct"),
+        ):
+            try:
+                actual = float(row[strategy_key])
+                expected = float(obs[oracle_key])
+            except (KeyError, TypeError, ValueError, OverflowError):
+                return None
+            if (not math.isfinite(actual)
+                    or not math.isclose(actual, expected, rel_tol=0.0, abs_tol=1e-6)):
+                return None
+    if not math.isclose(
+        fmean(float(by_seed[seed]["return_over_max_drawdown"]) for seed in four_seeds),
+        published_four_mean, rel_tol=0.0, abs_tol=1e-6,
+    ):
+        return None
+    return (fmean(float(obs["romd"]) for obs in observations),
+            oracle_seeds, new_benchmark)
+
+
+def _strategy_robustness_metrics(
+    root: Path, versions: Mapping[str, tuple], *,
+    oracle_info: Mapping[str, Any] | None = None,
+    oracle_source: Mapping[str, Any] | None = None,
+):
     from config.strategy_compare import STRATEGY_COMPARE_CURRENT_ROLLING_ROBUSTNESS
     cfg = get_strategy_multi_seed_robustness_settings(STRATEGY_COMPARE_CURRENT_ROLLING_ROBUSTNESS)
     current_settings = get_strategy_comparison_settings(cfg.profile_id)
@@ -732,7 +865,21 @@ def _strategy_robustness_metrics(root: Path, versions: Mapping[str, tuple]):
                 continue
             value = _number(item.get("mean"))
             if value is not None and _count(item.get("n")) == len(seeds):
-                results[arm_id] = value, seeds, str(contract.get("benchmark_id") or "")
+                resolved = (value, seeds, str(contract.get("benchmark_id") or ""))
+                # Only Oracle's unscored controls can feed an 8S robustness
+                # view, and only after first-four seed scientific parity.
+                baselines = (oracle_baseline_arm_ids(oracle_source)
+                             if oracle_source is not None else {})
+                if arm_id in baselines.values() and oracle_info:
+                    promoted = _certified_no_dl_oracle_8s(
+                        root=root, run=run, manifest=manifest, contract=contract,
+                        oracle_info=oracle_info, arm_id=arm_id,
+                        settings=current_settings, four_seeds=seeds,
+                        published_four_mean=value,
+                    )
+                    if promoted is not None:
+                        resolved = promoted
+                results[arm_id] = resolved
     return results
 
 
@@ -772,7 +919,9 @@ def collect_target_dl_overview(project_root: Path) -> dict[str, Any]:
         oracle_comparison_key(item) for item in comparisons if item.get("positive_output")
     }
     rolling_romd = _strategy_rolling_metrics(root, versions)
-    robust_romd = _strategy_robustness_metrics(root, versions)
+    robust_romd = _strategy_robustness_metrics(
+        root, versions, oracle_info=oracle_info, oracle_source=definition.source,
+    )
     model_map: dict[str, list[dict[str, Any]]] = {}
     for profile in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES:
         possible_targets = [name for name, label_id in score_targets.items()
@@ -819,9 +968,10 @@ def collect_target_dl_overview(project_root: Path) -> dict[str, Any]:
             if oracle_parameter_family(item) != "min" else "")
         for item in comparisons
     }
-    for family, control_id in oracle_baseline_arm_ids(definition.source).items():
-        if family != "min":
-            display_targets[control_id] = f"{family.capitalize()} No DL"
+    # Same label source as [1][1]; unscored controls are Strategy arms,
+    # not a differently named family of hypothetical Oracle Targets.
+    for control_id in oracle_baseline_arm_ids(definition.source).values():
+        display_targets[control_id] = oracle_baseline_display_name(definition.source, control_id)
     display_selectors = {oracle_comparison_key(item): oracle_target_semantics(item)[1]
                          for item in comparisons}
     rows = []
@@ -844,7 +994,10 @@ def collect_target_dl_overview(project_root: Path) -> dict[str, Any]:
                 _positive_classifier_for_arm(STRATEGY_COMPARE_ARMS[arm], str(score_targets[target]))
                 if arm and target in positive_targets else None
             )
-            metrics = oracle.get(target) or {}
+            # C96/C97 are genuine no-DL controls; their signed 8-seed baseline
+            # observations are not a Perfect-score Oracle treatment.
+            is_baseline = target in oracle_baseline_arm_ids(definition.source).values()
+            metrics = {} if is_baseline else (oracle.get(target) or {})
             robust = robust_romd.get(arm) if arm else None
             rows.append({
                 "target": display_targets.get(target, target),
