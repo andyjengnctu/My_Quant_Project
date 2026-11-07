@@ -142,6 +142,87 @@ class OracleParameterFamilyCases(TestCase):
                              oracle.OPTIONAL_ENTRY_FILTER_POLICY_CURRENT)
             self.assertIsNone(observed[1]["shared_param_overrides"])
 
+    def test_unscored_control_native_reuse_matches_run_identity_for_each_parameter_family(self):
+        """C96/C97 skip only perfect-score parity, not an effective execution change."""
+        from services.audit.oracle_replay_artifacts import OracleReplayStore, replay_identity
+        from services.research.oracle_artifact_contract import (
+            OracleExecutionIndex, execution_context,
+        )
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            for _scope_name, scoped in oracle._oracle_strategy_scopes(definition()):
+                baseline = scoped.source["baseline_arm_id"]
+                settings, base_arm, exact_arm = oracle._contract(scoped)
+                arm = exact_arm or settings.arms[str(scoped.source["exact_arm_id"])]
+                policy = oracle._canonical_oracle_replay_policy(
+                    scoped, base_arm=base_arm, exact_arm=arm,
+                )
+                context = execution_context(
+                    dataset=settings.dataset, price_sha256="a" * 64,
+                    param_sha256="b" * 64, seed=693545351, target=baseline,
+                    start=str(settings.start_date),
+                    end=str(scoped.dimensions["oracle_evaluation_end_date"]),
+                    cutoff=str(settings.end_date), max_positions=settings.max_positions,
+                    evaluation_mode=str(scoped.dimensions["evaluation_mode"]),
+                    ranking_policy=str(arm.dl_runtime_mode),
+                    ranking_options=dict(arm.dl_runtime_options),
+                    replay_policy={**policy,
+                        "oracle_parity_implementation": oracle.ORACLE_PARITY_IMPLEMENTATION,
+                        "period_stats_implementation": oracle.PERIOD_STATS_IMPLEMENTATION},
+                    score_contract=None, source_contract=None,
+                    dataset_inputs=None, execution_gate=None,
+                )
+                physical_policy = oracle._arm_replay_policy(
+                    scoped, plan={"selectors": {}, "daily_sources": {}}, target=baseline,
+                    replay_policy=policy, effective_context=context,
+                )
+                self.assertNotIn("oracle_parity_implementation", physical_policy)
+                cohort = {"cohort_rows": 2, "first_common_day": "2021-01-04",
+                          "last_common_day": str(scoped.dimensions["oracle_evaluation_end_date"]),
+                          "research_cutoff": str(settings.end_date)}
+                identity = replay_identity(
+                    dataset=settings.dataset, dataset_sha256="a" * 64,
+                    target=baseline, definition={baseline: baseline},
+                    start=str(settings.start_date),
+                    end=str(scoped.dimensions["oracle_evaluation_end_date"]),
+                    benchmark="end_to_end_v1", param_sha256="b" * 64,
+                    seed=693545351, cohort=cohort,
+                    ranking_policy=str(arm.dl_runtime_mode),
+                    ranking_options=dict(arm.dl_runtime_options),
+                    evaluation_mode=str(scoped.dimensions["evaluation_mode"]),
+                    max_positions=settings.max_positions, replay_policy=physical_policy,
+                )
+                observation = {
+                    "target": baseline, "seed": 693545351,
+                    "total_return_pct": 100.0, "annualized_return_pct": 20.0,
+                    "mdd_pct": 10.0, "romd": 10.0, "ev_a_r": 1.0,
+                    "trades": 10, "exposure_pct": 40.0, "win_rate_pct": 50.0,
+                    "yearly": [{"year": 2021, "strategy_return_pct": 10.0,
+                                "is_full_year": True}],
+                }
+                store = OracleReplayStore(root, scoped.output_subdir)
+                store.write(identity, observation, origin="unscored_control_test")
+                index = OracleExecutionIndex(store)
+                with self.subTest(baseline=baseline, output=scoped.output_subdir):
+                    native = index.native_completed(context)
+                    self.assertIsNotNone(native)
+                    self.assertEqual(native[0], identity)
+                    self.assertEqual(native[1], observation)
+                    self.assertEqual(store.plan_execution({(693545351, baseline): identity}).action(
+                        693545351, baseline), "REUSE")
+                    index.publish(context, identity, observation)
+                    self.assertEqual(index.read(context), (identity, observation))
+                    # A score-bearing recipient never inherits the control exemption.
+                    scored = {**context, "target": "T40", "score_contract": {"scope": "score"},
+                              "source_contract": {"recipe": "terminal_mae_gate"}}
+                    self.assertIn("oracle_parity_implementation",
+                        index._economic_policy_differences(scored, identity))
+                    # Changing an actual economic input still fails closed.
+                    altered = {**context, "replay_policy": {
+                        **context["replay_policy"], "score_threshold": 0.12345}}
+                    self.assertIn("score_threshold",
+                        index._economic_policy_differences(altered, identity))
+
     def test_full_replay_store_requires_its_own_c97_contrast(self):
         """Exercise actual signed read/write, not only a mocked Full report."""
         from services.audit.oracle_replay_artifacts import OracleReplayStore, replay_identity

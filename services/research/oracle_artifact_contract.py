@@ -693,13 +693,21 @@ class OracleExecutionIndex:
     def _economic_policy_differences(context, identity) -> tuple[str, ...]:
         """Verify signed economics independently of the claimed context SHA.
 
-        Earlier C96 control receipts did not carry the parity marker; every
-        other executable policy field still has to agree.
+        Oracle parity describes the perfect-score intervention, not the
+        unscored canonical No-DL control. Both Min and Full controls omit it
+        from their signed Replay policy; their remaining economic inputs and
+        effective execution context must still match in full.
         """
         signed = oracle_replay_policy(identity.get("replay_policy") or {})
         required = oracle_replay_policy(context["replay_policy"])
+        unscored_control = (
+            context.get("score_contract") is None
+            and context.get("source_contract") is None
+            and required.get("baseline_arm") == context.get("target")
+            and signed.get("baseline_arm") == context.get("target")
+        )
         return tuple(key for key, value in required.items()
-                     if not (key == "oracle_parity_implementation" and context["target"] == "C96")
+                     if not (key == "oracle_parity_implementation" and unscored_control)
                      and signed.get(key) != value)
 
     @staticmethod
