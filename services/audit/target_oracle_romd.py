@@ -67,6 +67,7 @@ from filters.breakout_quality.strategy_compare_contracts import COMPARISON_MODE_
 from filters.breakout_quality.strategy_compare_reporting import _scenario_summary, _yearly_frame, _to_json_native
 from filters.breakout_quality.strategy_compare_sources import (
     OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF,
+    OPTIONAL_ENTRY_FILTER_POLICY_CURRENT,
     _build_controlled_param_source_pair,
     _validate_requested_param_policy,
     load_strategy_param_evaluation_view,
@@ -124,6 +125,7 @@ PERIOD_STATS_IMPLEMENTATION = "full_year_calendar_verified_20261026"
 from core.audit_registry import (
     AUDIT_REUSABLE_REPORTS, resolve_current_oracle_comparisons, oracle_comparison_key,
     oracle_target_semantics, oracle_scientific_target_name,
+    oracle_parameter_family, oracle_baseline_arm_ids,
     oracle_positive_output_for_recipe,
 )
 
@@ -241,8 +243,8 @@ def _oracle_comparison_plan(definition) -> dict[str, Any]:
             # identical Target/score/selector semantics; Portfolio comparisons
             # are planned separately from this source-only projection.
             earlier = next(row for row in selected if row["target"] == name)
-            if {k: v for k, v in earlier.items() if k not in {"strategy", "strategy_arm_id"}} != {
-                    k: v for k, v in entry.items() if k not in {"strategy", "strategy_arm_id"}}:
+            if {k: v for k, v in earlier.items() if k not in {"strategy", "strategy_arm_id", "parameter_family"}} != {
+                    k: v for k, v in entry.items() if k not in {"strategy", "strategy_arm_id", "parameter_family"}}:
                 raise OracleBlockedError(f"Oracle Target reused for different score semantics: {name}")
             continue
         if not name or not desc or name == str(definition.source["baseline_arm_id"]):
@@ -381,6 +383,11 @@ def _canonical_score_map_sha256(scores: Mapping[tuple[str, str], float]) -> str:
     return digest.hexdigest()
 
 
+def _baseline_target(definition) -> str:
+    """Baseline for this canonical parameter-family Oracle execution scope."""
+    return str(definition.source["baseline_arm_id"])
+
+
 def _oracle_requires_direct(definition) -> bool:
     """Resolve selector dependencies from the current canonical comparison list."""
     return "direct" in _oracle_comparison_plan(definition)["selectors"].values()
@@ -512,14 +519,14 @@ def _contract(definition, *, settings=None) -> tuple[Any, Any, Any]:
     exact_candidates = [arm for arm in settings.enabled_arms if (
         arm.dl_enabled and arm.param_source == base.param_source
         and arm.param_policy == base.param_policy
-        and arm.rule_policy == "all_off"
+        and arm.rule_policy == base.rule_policy
         and arm.dl_runtime_mode == "resource-aware-continuous-score-constrained-optimal"
         and (arm.dl_runtime_options or {}).get("preserve_k_r0") is True
         and (arm.dl_runtime_options or {}).get("constrained_solver") == "exact_branch_and_bound_v1"
         and (arm.dl_runtime_options or {}).get("selection_only") is True
     )]
     if (base.dl_enabled or base.param_policy != "base-finalist-best"
-            or base.rule_policy != "all_off"
+            or base.rule_policy not in {"all_off", "formal"}
             or not settings.start_date or not settings.end_date
             or settings.dataset != "full" or settings.rotation != "off"):
         raise OracleBlockedError("CONTRACT_UNRESOLVED: Research Min P16 baseline contract mismatch")
@@ -543,7 +550,7 @@ def _direct_arm(definition, settings, base, exact):
     """Read a registered DL Direct arm; never synthesize a new selector."""
     compatible = [arm for arm in settings.enabled_arms if (
         arm.dl_enabled and arm.param_source == base.param_source
-        and arm.param_policy == base.param_policy and arm.rule_policy == "all_off"
+        and arm.param_policy == base.param_policy and arm.rule_policy == base.rule_policy
         and arm.dl_runtime_mode == "resource-aware-continuous-score-no-k-no-r0"
         and (arm.dl_runtime_options or {}).get("preserve_k") is False
         and (arm.dl_runtime_options or {}).get("preserve_r0") is False
@@ -557,7 +564,7 @@ def _direct_arm(definition, settings, base, exact):
     direct = settings.arms[str(definition.source["direct_arm_id"])]
     options = dict(direct.dl_runtime_options or {})
     if (not direct.dl_enabled or direct.param_source != base.param_source
-            or direct.param_policy != base.param_policy or direct.rule_policy != "all_off"
+            or direct.param_policy != base.param_policy or direct.rule_policy != base.rule_policy
             or direct.dl_runtime_mode != "resource-aware-continuous-score-no-k-no-r0"
             or options.get("preserve_k") is not False
             or options.get("preserve_r0") is not False
@@ -1785,12 +1792,14 @@ def _prepare_oracle_parameters(
             raise OracleBlockedError(
                 f"Oracle P16日程未完整覆蓋成熟期間: {schedule_start}~{schedule_end}"
             )
+        is_min = str(base_arm.rule_policy) == "all_off"
         kind, base_params, oracle_params, *_ = _build_controlled_param_source_pair(
             source, filter_id=str(definition.source["filter_id"]),
             threshold=float(BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD), fixed_risk=None,
             comparison_mode=COMPARISON_MODE_SCORE_RANKING,
-            optional_entry_filter_policy=OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF,
-            shared_param_overrides=ALL_RULE_FILTERS_OFF_OVERRIDES,
+            optional_entry_filter_policy=(OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF if is_min
+                                          else OPTIONAL_ENTRY_FILTER_POLICY_CURRENT),
+            shared_param_overrides=(ALL_RULE_FILTERS_OFF_OVERRIDES if is_min else None),
         )
         prepared.append((seed, param_sha, kind, base_params, oracle_params))
         param_evidence.append({
@@ -1809,8 +1818,11 @@ def _canonical_oracle_replay_policy(definition, *, base_arm, exact_arm=None) -> 
         "filter_id": str(definition.source["filter_id"]),
         "param_policy": str(base_arm.param_policy),
         "comparison_mode": COMPARISON_MODE_SCORE_RANKING,
-        "optional_entry_filter_policy": OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF,
-        "all_rule_filters_off": dict(ALL_RULE_FILTERS_OFF_OVERRIDES),
+        "optional_entry_filter_policy": (
+            OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF if base_arm.rule_policy == "all_off"
+            else OPTIONAL_ENTRY_FILTER_POLICY_CURRENT),
+        "all_rule_filters_off": (dict(ALL_RULE_FILTERS_OFF_OVERRIDES)
+                                 if base_arm.rule_policy == "all_off" else {}),
         "score_threshold": float(BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD),
         "fixed_risk": float(DEFAULT_FIXED_RISK),
         "max_position_cap_pct": float(DEFAULT_MAX_POSITION_CAP_PCT),
@@ -2024,7 +2036,10 @@ def _certify_unscored_baseline_before_truth(
                         continue
                 identity = replay_identity(
                     dataset=settings.dataset, dataset_sha256=price_sha,
-                    target=baseline, definition={baseline: "Canonical same-window Min P16 Base-Finalist-Best"},
+                    target=baseline, definition={baseline: (
+                        "Canonical same-window Min P16 Base-Finalist-Best"
+                        if baseline == "C96" else
+                        f"Canonical same-window {base_arm.rule_policy} {baseline} Base-Finalist-Best")},
                     start=str(settings.start_date), end=evaluation_end,
                     benchmark=str(robustness.benchmark_id), param_sha256=param_sha,
                     seed=int(seed), cohort=cohort,
@@ -2056,16 +2071,18 @@ def _certify_unscored_baseline_before_truth(
 
 
 
-def _oracle_limitations(*, seed_count: int) -> list[str]:
+def _oracle_limitations(*, seed_count: int, baseline_arm: str = "C96") -> list[str]:
     """One science statement across canonical RUN and certified REUSE reports."""
     return [
             "Ex-post future targets are NOT predictions, not PIT-legal, and never a deployable strategy.",
             "CG EqualRank is a fixed 50/50 geometry proxy, not a learned model-head fusion.",
             "Exact and Direct pairs share identical future truth; only canonical K/R0 allocation changes.",
             "Direct means canonical No-K/No-R0, NOT direct raw-R regression or executable prediction.",
-            "C96 is the same-seed Min/Broker-Cash control for both selectors; paired deltas use that baseline.",
+            ("C96 is the same-seed Min/Broker-Cash control for both selectors; paired deltas use that baseline."
+             if baseline_arm == "C96" else
+             f"{baseline_arm} is the same-seed Full/Broker-Cash control for both selectors; paired deltas use that baseline."),
             f"N={seed_count} paired end-to-end parameter seeds; Oracle scores have no trainable seed.",
-            "Win Rate Mean is the arithmetic mean of canonical per-seed completed Round-Trip win rates; Win/Seed instead counts RoMD wins vs C96.",
+            f"Win Rate Mean is the arithmetic mean of canonical per-seed completed Round-Trip win rates; Win/Seed instead counts RoMD wins vs {baseline_arm}.",
             "No best-target fitting from iterative OOS; multi-target search is exploratory.",
             "R40 is the future 40th session Close return, not Portfolio Replay exit return.",
             "T40 uses full-path nonnegative MAE and clamps to -1R at 1R adverse movement.",
@@ -2082,7 +2099,8 @@ def _oracle_report_envelope(*, settings, robustness, seeds, base: dict[str, Any]
         "strategy_profile_id": settings.profile_id,
         "benchmark_id": robustness.benchmark_id,
         "seeds": list(seeds), "dataset": settings.dataset,
-        **base, "limitations": _oracle_limitations(seed_count=len(seeds)),
+        **base, "limitations": _oracle_limitations(
+            seed_count=len(seeds), baseline_arm=str(base.get("baseline", {}).get("target", "C96"))),
     }
 
 
@@ -2486,7 +2504,7 @@ def _execute_single_stage_missing(
     # Source truth is independent of the recipient selector. Build only
     # necessary price recipes; do not materialize unused price providers.
     required_price = {target for (_seed, target) in required
-                      if target != "C96" and target not in plan["daily_sources"]}
+                      if target != _baseline_target(definition) and target not in plan["daily_sources"]}
     # All parallel seed workers load one previously built price-source cache
     # identity. A seed with only daily RUN targets never loads price scores.
     if required_price and price_targets_for_run is not None:
@@ -2517,7 +2535,7 @@ def _execute_single_stage_missing(
     _validated_execution_gates(definition, plan)  # E13: fail closed on raw-future candidate gates
     data_dir = Path(get_dataset_dir(str(project_root), settings.dataset)).resolve()
     for seed, param_sha, kind, base_params, oracle_params in prepared:
-        seed_run = [target for target in ("C96", *(name for name, _ in plan["targets"]))
+        seed_run = [target for target in (_baseline_target(definition), *(name for name, _ in plan["targets"]))
                     if (seed, target) in required]
         if not seed_run:
             continue
@@ -2525,12 +2543,12 @@ def _execute_single_stage_missing(
         preparation = {}
         for target in seed_run:
             key = (seed, target)
-            if target == "C96":
+            if target == _baseline_target(definition):
                 arm = exact_arm or settings.arms[str(definition.source["exact_arm_id"])]
                 score_map = None
                 evidence = None
                 policy = _arm_replay_policy(
-                    definition, plan=plan, target="C96", replay_policy=base_policy,
+                    definition, plan=plan, target=_baseline_target(definition), replay_policy=base_policy,
                     effective_context=execution_contexts[key],
                 )
             else:
@@ -2623,7 +2641,7 @@ def _execute_single_stage_missing(
             is_metric_backfill = key in metric_backfill
             if is_metric_backfill:
                 original_identity, original_observation = metric_backfill[key]
-                if (target != "C96" and _canonical_score_map_sha256(score_map) !=
+                if (target != _baseline_target(definition) and _canonical_score_map_sha256(score_map) !=
                         original_identity["replay_policy"]["perfect_score_sha256"]):
                     raise OracleBlockedError("Oracle metric supplement score changed after preflight")
                 OracleExecutionIndex(cache)._validate_binding(
@@ -2702,9 +2720,9 @@ def _execute_single_stage_missing(
                 quiet=quiet, replay_preparation_cache=preparation,
             )
             def produce():
-                if target == "C96":
+                if target == _baseline_target(definition):
                     played = _run_scenario(
-                        name=f"C96 Fixed seed={seed} same-window",
+                        name=f"{_baseline_target(definition)} Fixed seed={seed} same-window",
                         params=base_params, param_source_kind=kind, **replay_kwargs,
                     )
                 else:
@@ -2728,11 +2746,12 @@ def _execute_single_stage_missing(
                         )
                 result = _metrics(played, target=target)
                 result["seed"] = seed
-                if target != "C96":
-                    baseline = out.get((seed, "C96")) or preflight_cached.get((seed, "C96"))
+                if target != _baseline_target(definition):
+                    baseline = out.get((seed, _baseline_target(definition))) or preflight_cached.get((seed, _baseline_target(definition)))
                     if baseline is None:
-                        raise OracleBlockedError("Oracle RUN missing paired C96 benchmark")
-                    result["delta_romd_vs_c96"] = result["romd"] - baseline["romd"]
+                        raise OracleBlockedError(f"Oracle RUN missing paired {_baseline_target(definition)} benchmark")
+                    contrast = f"delta_romd_vs_{_baseline_target(definition).lower()}"
+                    result[contrast] = result["romd"] - baseline["romd"]
                 return result
             if is_metric_backfill:
                 result = cache.write_win_rate_evidence(
@@ -2921,7 +2940,7 @@ def _execute_oracle_missing_parallel(
 
     price_targets = frozenset(
         target for (seed, target) in required
-        if target != "C96" and target not in plan["daily_sources"]
+        if target != _baseline_target(definition) and target not in plan["daily_sources"]
     )
     if price_targets:
         # Avoid concurrent BUILD/write of the common seed-independent price
@@ -3112,11 +3131,11 @@ def _run_single_stage_oracle(
     execution_contexts = {}
     indexed = {}
     unpublished_native = set()
-    target_names = ("C96", *(name for name, _ in plan["targets"]))
+    target_names = (_baseline_target(definition), *(name for name, _ in plan["targets"]))
     gates = _validated_execution_gates(definition, plan)
     for seed, param_sha, *_ in prepared:
         for target in target_names:
-            arm = (baseline_arm if target == "C96" else
+            arm = (baseline_arm if target == _baseline_target(definition) else
                    _target_reference_arm(definition, settings, plan, target, exact_arm, direct_arm))
             source_spec = None
             if target in plan["daily_sources"]:
@@ -3124,7 +3143,7 @@ def _run_single_stage_oracle(
                 source_spec = source_calculation_contract(
                     recipe=recipe, profile_id=str(definition.source[provider]), horizon=horizon,
                     model_architecture=str(definition.source["model_architecture"]))
-            elif target != "C96":
+            elif target != _baseline_target(definition):
                 recipe, provider = plan["recipes"][plan["aliases"].get(target, target)]
                 source_spec = source_calculation_contract(
                     recipe=recipe, profile_id=str(definition.source[provider]),
@@ -3173,7 +3192,7 @@ def _run_single_stage_oracle(
     # unverified source revision, corrupt NPZ, changed price/feature/label
     # contract, or different actual score SHA can never authorize REUSE.
     verified_price_witnesses: dict[str, tuple[dict[str, Any], ...]] = {}
-    if any(target != "C96" and target not in plan["daily_sources"] for target in legacy_targets):
+    if any(target != _baseline_target(definition) and target not in plan["daily_sources"] for target in legacy_targets):
         from services.audit.oracle_score_artifacts import (
             price_score_source_identity, verified_existing_price_score_witnesses,
         )
@@ -3225,7 +3244,7 @@ def _run_single_stage_oracle(
         definition=definition, store=cache, contracts=contracts, plan=plan, prepared=prepared,
         price_sha=price_sha, settings=settings, robustness=robustness,
         evaluation_end=end,
-    ) if legacy_targets - {"C96"} else {}
+    ) if legacy_targets - {_baseline_target(definition)} else {}
     for (seed, target), (identity, _record) in indexed.items():
         proof = execution_index.keys(identity)
         if proof is not None:
@@ -3245,7 +3264,7 @@ def _run_single_stage_oracle(
             keys[target] = proof
     seed_set = ([int(row["seed"]) for row in parameter_plan["rows"]]
                 if preview_only else [seed for seed, _ in paths])
-    targets = ("C96", *(name for name, _ in plan["targets"]))
+    targets = (_baseline_target(definition), *(name for name, _ in plan["targets"]))
     decisions: dict[tuple[int, str], str] = {}
     cached: dict[tuple[int, str], dict[str, Any]] = {}
     identities: dict[tuple[int, str], dict[str, Any]] = {}
@@ -3271,7 +3290,7 @@ def _run_single_stage_oracle(
     if len(set(keys.values())) > 1:
         raise OracleBlockedError("Oracle signed Replay witnesses disagree on common score cohort")
     signed_cohort = next(iter(keys.values())) if keys else None
-    baseline_pending = [row for row in prepared if (row[0], "C96") not in indexed]
+    baseline_pending = [row for row in prepared if (row[0], _baseline_target(definition)) not in indexed]
     baseline_status = _certify_unscored_baseline_before_truth(
         definition, project_root=root, settings=settings, base_arm=base_arm,
         exact_arm=baseline_arm, robustness=robustness,
@@ -3288,7 +3307,7 @@ def _run_single_stage_oracle(
         for recipe, _provider, _horizon in plan["daily_recipes"].values()
     } if any(target in plan["daily_sources"] for target in legacy_targets) else {}
     current_price_producer_lineage = (_price_score_replay_lineage(definition, root)
-                                      if any(target != "C96" and target not in plan["daily_sources"]
+                                      if any(target != _baseline_target(definition) and target not in plan["daily_sources"]
                                              for target in legacy_targets) else None)
     current_dataset_summary_sha = (oracle_dataset_summary_sha256(
         root=root, filter_id=str(definition.source["filter_id"]))
@@ -3310,7 +3329,7 @@ def _run_single_stage_oracle(
                 identity, complete = indexed[key]
                 decisions[key], cached[key], identities[key] = "REUSE", complete, identity
                 continue
-            if target != "C96" and key not in legacy_keys:
+            if target != _baseline_target(definition) and key not in legacy_keys:
                 decisions[key] = "RUN"
                 run_causes[key] = ("有效計算契約或輸入已改變，無同契約完成工件"
                                    if key in execution_contexts and execution_index.has_history(execution_contexts[key])
@@ -3320,7 +3339,7 @@ def _run_single_stage_oracle(
                 decisions[key] = "RUN"
                 run_causes[key] = "有效計算契約已改變，無同契約完成工件"
                 continue
-            if target == "C96":
+            if target == _baseline_target(definition):
                 c96 = baseline_certified.get(seed)
                 if c96 is not None:
                     identity = c96
@@ -3698,14 +3717,16 @@ def _run_single_stage_oracle(
                 raise OracleBlockedError(f"Oracle planned {target} seed={seed} has no completed observation")
             observations[target].append(dict(cached[(seed, target)]))
     baseline_by_seed = {int(row["seed"]): float(row["romd"])
-                        for row in observations["C96"]}
+                        for row in observations[_baseline_target(definition)]}
+    contrast = f"delta_romd_vs_{_baseline_target(definition).lower()}"
     for name in targets[1:]:
         for row in observations[name]:
             seed = int(row["seed"])
-            if not math.isclose(float(row["delta_romd_vs_c96"]),
+            if not math.isclose(float(row[contrast]),
                                 float(row["romd"]) - baseline_by_seed[seed],
                                 rel_tol=1e-9, abs_tol=1e-9):
-                raise OracleBlockedError(f"Oracle {name} seed={seed} C96 mismatch")
+                raise OracleBlockedError(
+                    f"Oracle {name} seed={seed} paired {_baseline_target(definition)} mismatch")
     ref: dict[str, Any] = {}
     cohort = {
             "cohort_rows": common_key[1], "first_common_day": common_key[2],
@@ -3718,16 +3739,16 @@ def _run_single_stage_oracle(
             "evaluation_window_policy": "full_research_oos_to_research_cutoff",
             "target_truth_closeout_policy": "min_natural_exit_horizon_research_cutoff",
         }
-    baseline = _aggregate(observations["C96"], target="C96", period_start=start, period_end=end)
+    baseline = _aggregate(observations[_baseline_target(definition)], target=_baseline_target(definition), period_start=start, period_end=end)
     baseline["strategy"] = "Breakout"
     oracles = []
     for name in targets[1:]:
         item = _aggregate(observations[name], target=name, period_start=start, period_end=end)
         item["strategy"] = _oracle_target_strategy(definition, name)
-        diffs = np.array([row["delta_romd_vs_c96"] for row in observations[name]], dtype=float)
-        item.update(delta_romd_vs_c96=float(np.mean(diffs)),
-                    delta_romd_std=float(np.std(diffs, ddof=1)) if len(diffs) > 1 else 0.0,
-                    positive_seed_count=int((diffs > 0).sum()))
+        diffs = np.array([row[contrast] for row in observations[name]], dtype=float)
+        item.update({contrast: float(np.mean(diffs)),
+                     "delta_romd_std": float(np.std(diffs, ddof=1)) if len(diffs) > 1 else 0.0,
+                     "positive_seed_count": int((diffs > 0).sum())})
         oracles.append(item)
     result = {**ref, "start_date": start, "end_date": end,
               "common_cohort": cohort, "baseline": baseline, "oracles": oracles,
@@ -3738,110 +3759,180 @@ def _run_single_stage_oracle(
 
 
 def _oracle_strategy_scopes(definition) -> tuple[tuple[str, Any], ...]:
-    """Derive execution scopes from ONE canonical Target x Strategy Registry.
+    """One execution scope per entry policy AND economic parameter family.
 
-    Per-scope Target names remain the original immutable Replay keys.  This
-    preserves all 18 historical Breakout treatment receipts.  Daily uses the
-    same target scientific identity but different signed economic policy;
-    execution-index identities distinguish the strategies.
+    Both formal [1] consumers use the Audit comparison inventory.  Distinct
+    parameter families never share portfolio Replay receipts.  Original Min
+    scopes retain the exact previous output and source identities.
     """
     comparisons = resolve_current_oracle_comparisons(definition.source)
-    ordered_strategies = tuple(dict.fromkeys(
-        str(row.get("strategy", "Breakout")) for row in comparisons
+    baselines = oracle_baseline_arm_ids(definition.source)
+    settings = get_strategy_comparison_settings(str(definition.source["strategy_profile_id"]))
+    groups = tuple(dict.fromkeys(
+        (oracle_parameter_family(row), str(row.get("strategy", "Breakout")))
+        for row in comparisons
     ))
     definitions = []
-    for strategy in ordered_strategies:
-        subset = tuple(row for row in comparisons
-                       if str(row.get("strategy", "Breakout")) == strategy)
-        definitions.append((strategy, replace(definition, source={
-            **definition.source, "oracle_comparisons": subset,
-        })))
+    for family, strategy in groups:
+        subset = tuple(row for row in comparisons if (
+            oracle_parameter_family(row) == family and
+            str(row.get("strategy", "Breakout")) == strategy
+        ))
+        source = {**definition.source, "oracle_comparisons": subset}
+        output_subdir = definition.output_subdir
+        if family != "min":
+            control_id = baselines[family]
+            if control_id not in settings.arms:
+                raise OracleBlockedError(f"Oracle {family} has no formal baseline arm: {control_id}")
+            control = settings.arms[control_id]
+            if control.dl_enabled or control.entry_strategy != strategy:
+                raise OracleBlockedError(f"Oracle {family} baseline must be a matching No-DL control")
+            references = {}
+            for row in subset:
+                selector = str(row["selector"])
+                if selector not in {"exact", "direct"}:
+                    raise OracleBlockedError(f"Oracle {family} requires an explicit formal selector")
+                arm_id = str(row.get("strategy_arm_id") or "")
+                if arm_id not in settings.arms:
+                    raise OracleBlockedError(f"Oracle {family} missing formal selector arm: {arm_id}")
+                arm = settings.arms[arm_id]
+                if (arm.param_source, arm.param_policy, arm.rule_policy, arm.entry_strategy) != (
+                        control.param_source, control.param_policy, control.rule_policy, strategy):
+                    raise OracleBlockedError(f"Oracle {family} reference/parameter contract mismatch: {arm_id}")
+                if selector in references and references[selector] != arm_id:
+                    raise OracleBlockedError(f"Oracle {family} selector is ambiguous")
+                references[selector] = arm_id
+            if not {"exact", "direct"}.issubset(references):
+                raise OracleBlockedError(f"Oracle {family} requires both exact/direct reference contracts")
+            source.update({"baseline_arm_id": control_id,
+                           "exact_arm_id": references["exact"],
+                           "direct_arm_id": references["direct"]})
+            output_subdir = f"{definition.output_subdir}/parameter_family_{family}"
+        scope_name = strategy if family == "min" else f"{strategy}::{family.capitalize()}"
+        definitions.append((scope_name, replace(definition, source=source,
+                                                 output_subdir=output_subdir)))
     return tuple(definitions)
 
 
-def _oracle_scoped_key(target: str, strategy: str) -> str:
-    return "C96" if target == "C96" else oracle_comparison_key({
-        "target": target, "strategy": strategy,
+def _oracle_scoped_key(target: str, scope: str) -> str:
+    """Map a scope-local signed receipt to the one shared display/plan key."""
+    if target in oracle_baseline_arm_ids(_ORACLE_CATALOG_SOURCE).values():
+        return target
+    if "::" in scope:
+        strategy, family = scope.split("::", 1)
+    else:
+        strategy, family = scope, "min"
+    return oracle_comparison_key({
+        "target": target, "strategy": strategy, "parameter_family": family,
     })
 
 
 def _oracle_combined_preview(definition, *, project_root: Path) -> tuple[dict[str, Any], tuple]:
-    """One approval matrix for ALL scopes; zero P16/Target/Replay creation."""
+    """One canonical [1][1]/[1][2] preview; no Producer or Portfolio work."""
     scopes = _oracle_strategy_scopes(definition)
-    previews = tuple((strategy, _run_single_stage_oracle(
+    previews = tuple((scope, scoped, _run_single_stage_oracle(
         scoped, project_root=project_root, quiet=True,
         preflight_approval=None, preview_only=True,
         allow_historical_execution_input_drift=True,
-    )) for strategy, scoped in scopes)
-    seeds = tuple(previews[0][1]["seed_set"])
-    pending = tuple(previews[0][1]["missing_p16"])
-    producer_kwargs = previews[0][1]["producer_kwargs"]
+    )) for scope, scoped in scopes)
+    seeds = tuple(previews[0][2]["seed_set"])
+    benchmark_fields = ("benchmark_id", "start_date", "end_date")
+    master = previews[0][2]
+    declared_baselines = oracle_baseline_arm_ids(definition.source)
+    active_families = {oracle_parameter_family(row) for row in
+                       resolve_current_oracle_comparisons(definition.source)}
+    baselines = {family: arm for family, arm in declared_baselines.items()
+                 if family in active_families}
+    param_plans: dict[str, dict[str, Any]] = {}
     decisions: dict[tuple[int, str], str] = {}
-    completed = {}
-    ordered_keys = ["C96"]
-    strategies = {"C96": "Breakout"}
-    display_targets = {"C96": "C96"}
-    selectors = {"C96": "-"}
-    registry_rows = {oracle_comparison_key(row): row for row in
-                     resolve_current_oracle_comparisons(definition.source)}
-    for strategy, preview in previews:
+    completed: dict[tuple[int, str], dict[str, Any]] = {}
+    registered = resolve_current_oracle_comparisons(definition.source)
+    registry_rows = {oracle_comparison_key(row): row for row in registered}
+    strategies = {arm_id: "Breakout" for arm_id in baselines.values()}
+    display_targets = {arm_id: (arm_id if family == "min" else f"{arm_id} (Full)")
+                       for family, arm_id in baselines.items()}
+    selectors = {arm_id: "-" for arm_id in baselines.values()}
+    for scope, scoped, preview in previews:
+        control_id = _baseline_target(scoped)
         if (tuple(preview["seed_set"]) != seeds or
-                tuple(preview["missing_p16"]) != pending or
-                preview["producer_kwargs"] != producer_kwargs or
-                any(preview[field] != previews[0][1][field]
-                    for field in ("benchmark_id", "start_date", "end_date"))):
-            raise OracleBlockedError("Target x Strategy scopes have different canonical P16/Seed plans")
-        for seed, target in preview["preflight"]:
-            key = _oracle_scoped_key(target, strategy)
-            value = preview["preflight"][(seed, target)]
-            if (seed, key) in decisions and decisions[(seed, key)] != value:
-                raise OracleBlockedError("Common C96 Replay identity differs across strategies")
-            decisions[(seed, key)] = value
+                any(preview[field] != master[field] for field in benchmark_fields)):
+            raise OracleBlockedError("Oracle family scopes disagree on fixed Seed/window/benchmark")
+        param_plan = {"missing": tuple(preview["missing_p16"]),
+                      "producer_kwargs": dict(preview["producer_kwargs"]),
+                      "seed_set": tuple(preview["seed_set"])}
+        if control_id in param_plans and param_plans[control_id] != param_plan:
+            raise OracleBlockedError(f"Oracle {control_id} parameter REUSE/RUN plan diverged")
+        param_plans[control_id] = param_plan
+        for (seed, target), action in preview["preflight"].items():
+            key = (int(seed), _oracle_scoped_key(target, scope))
+            if key in decisions and decisions[key] != action:
+                raise OracleBlockedError(f"Oracle shared baseline {control_id} has inconsistent authorization")
+            decisions[key] = action
         for (seed, target), observation in preview["completed_observations"].items():
-            key = (seed, _oracle_scoped_key(target, strategy))
+            key = (int(seed), _oracle_scoped_key(target, scope))
             if key in completed and completed[key] != observation:
-                raise OracleBlockedError("Common C96 completed observations differ across strategies")
+                raise OracleBlockedError(f"Oracle shared baseline {control_id} has inconsistent receipts")
             completed[key] = observation
         for target in preview["targets"]:
-            key = _oracle_scoped_key(target, strategy)
-            if key not in strategies:
-                ordered_keys.append(key)
-                strategies[key] = strategy
-                row = registry_rows[key]
-                display_targets[key], selectors[key], _ = oracle_target_semantics(row)
-    # The visible rows follow canonical Registry order, not internal scope order.
-    registry_keys = ("C96", *(oracle_comparison_key(r) for r in
-                              resolve_current_oracle_comparisons(definition.source)))
-    if set(registry_keys) != set(ordered_keys) or len(registry_keys) != len(ordered_keys):
-        raise OracleBlockedError("Oracle Target x Strategy preview/inventory mismatch")
+            if target == control_id:
+                continue
+            key = _oracle_scoped_key(target, scope)
+            row = registry_rows[key]
+            display_targets[key], selectors[key], strategies[key] = oracle_target_semantics(row)
+            # oracle_target_semantics returns (target, selector, strategy).
+            if oracle_parameter_family(row) != "min":
+                display_targets[key] += f" ({oracle_parameter_family(row).capitalize()})"
+    # Preserve all original Min ordering, append only newly declared families.
+    registry_keys = tuple((baselines[family] for family in baselines if family == "min")) + tuple(
+        oracle_comparison_key(row) for row in registered if oracle_parameter_family(row) == "min"
+    ) + tuple(baselines[family] for family in baselines if family != "min") + tuple(
+        oracle_comparison_key(row) for row in registered if oracle_parameter_family(row) != "min"
+    )
+    if set(registry_keys) != {key for _, key in decisions} or len(registry_keys) != len(set(registry_keys)):
+        raise OracleBlockedError("Oracle Target x Strategy x family preview/inventory mismatch")
     text = render_replay_preflight(
         label="Fixed", seeds=list(seeds), targets=list(registry_keys),
         decisions=decisions, strategies=strategies, display_targets=display_targets,
         selectors=selectors,
     )
     return {"status": "PREVIEW", "preflight": decisions, "text": text,
-            "missing_p16": pending, "seed_set": seeds,
-            "targets": registry_keys, "producer_kwargs": producer_kwargs,
+            "missing_p16": param_plans[baselines["min"]]["missing"],
+            "producer_kwargs": param_plans[baselines["min"]]["producer_kwargs"],
+            "parameter_plans": param_plans,
+            "seed_set": seeds, "targets": registry_keys,
             "completed_observations": completed,
-            **{field: previews[0][1][field] for field in
-               ("benchmark_id", "start_date", "end_date")}}, scopes
+            **{field: master[field] for field in benchmark_fields}}, scopes
 
 
 def _oracle_merge_scoped_reports(definition, reports: list[tuple[str, Mapping[str, Any]]]) -> dict[str, Any]:
-    """Publish one report; validate identical C96 and Target lineage."""
+    """Merge only explicitly certified scopes, retaining per-family baselines."""
     if not reports:
         raise OracleBlockedError("Oracle strategy inventory empty")
     base = dict(reports[0][1])
-    baseline = base["baseline"]
-    benchmark_fields = ("seeds", "benchmark_id", "dataset", "start_date", "end_date",
-                        "common_cohort", "param_artifacts", "strategy_profile_id")
-    by_key: dict[str, dict[str, Any]] = {}
-    descriptions: dict[str, str] = {}
-    for strategy, report in reports:
-        if any(report.get(field) != base.get(field) for field in benchmark_fields):
-            raise OracleBlockedError("Breakout/Daily Oracle cohorts or P16 evidence disagree")
-        if report["baseline"] != baseline:
-            raise OracleBlockedError("Breakout/Daily paired C96 baseline differs")
+    registered = resolve_current_oracle_comparisons(definition.source)
+    baselines = oracle_baseline_arm_ids(definition.source)
+    global_fields = ("seeds", "benchmark_id", "dataset", "start_date", "end_date", "strategy_profile_id")
+    by_key = {}
+    descriptions = {}
+    family_baselines = {}
+    family_cohorts = {}
+    param_evidence = {}
+    for scope, report in reports:
+        family = (scope.split("::", 1)[1].lower() if "::" in scope else "min")
+        strategy = scope.split("::", 1)[0]
+        baseline_arm = baselines[family]
+        if any(report.get(field) != base.get(field) for field in global_fields):
+            raise OracleBlockedError("Oracle families have differing evaluation windows or benchmark seeds")
+        for field, group, value in (
+            ("baseline", family_baselines, report["baseline"]),
+            ("common_cohort", family_cohorts, report["common_cohort"]),
+            ("param_artifacts", param_evidence, report["param_artifacts"]),
+        ):
+            if family in group and group[family] != value:
+                raise OracleBlockedError(f"Oracle {family} {field} differs between scopes")
+            group[family] = value
+        if str(report["baseline"]["target"]) != baseline_arm:
+            raise OracleBlockedError(f"Oracle {family} result has wrong baseline: {baseline_arm}")
         for target, description in report["definitions"].items():
             if target in descriptions and descriptions[target] != description:
                 raise OracleBlockedError("Same Target has two scientific definitions")
@@ -3849,24 +3940,28 @@ def _oracle_merge_scoped_reports(definition, reports: list[tuple[str, Mapping[st
         for original in report["oracles"]:
             item = dict(original)
             if item.get("strategy") != strategy:
-                raise OracleBlockedError("Replay result assigned to the wrong Entry Strategy")
-            key = _oracle_scoped_key(str(item["target"]), strategy)
+                raise OracleBlockedError("Oracle result has wrong entry strategy")
+            key = _oracle_scoped_key(str(item["target"]), scope)
             if key in by_key:
-                raise OracleBlockedError("Duplicate Target x Strategy result")
+                raise OracleBlockedError("Duplicate Target x Strategy x family result")
+            item.update(comparison_key=key, parameter_family=family,
+                        paired_baseline_arm=baseline_arm)
             by_key[key] = item
-    registered = resolve_current_oracle_comparisons(definition.source)
     if set(by_key) != {oracle_comparison_key(row) for row in registered}:
-        raise OracleBlockedError("Oracle completed Target x Strategy set differs from Registry")
+        raise OracleBlockedError("Completed Oracle and registered inventory differ")
     base["oracles"] = [by_key[oracle_comparison_key(row)] for row in registered]
-    base["definitions"] = {str(row["target"]): descriptions[str(row["target"])]
-                            for row in registered}
-    # Explicit inventory detects an incomplete *new* mixed-strategy report.
-    # Old reports without it remain readable as historical Breakout evidence.
-    base["comparison_inventory"] = ["C96", *(oracle_comparison_key(row) for row in registered)]
-    # Keep the inspected arm as provenance and bind the effective consumer
-    # separately; equivalent fitted-model references share perfect outputs.
+    base["definitions"] = {str(row["target"]): descriptions[str(row["target"])] for row in registered}
+    base["comparison_inventory"] = [
+        *baselines.values(), *(oracle_comparison_key(row) for row in registered)]
+    base["control_baselines"] = [dict(family_baselines[family], parameter_family=family)
+                                 for family in baselines if family != "min"]
+    if base["control_baselines"]:
+        base["limitations"] = [*base.get("limitations", ()),
+            "Full/P17 Oracle Win/Seed uses its own C97 same-seed control; "
+            "the unchanged C96 Seed RoMD report column remains the historical Min reference."]
+    base["parameter_family_artifacts"] = param_evidence
     from services.research.oracle_artifact_contract import reference_arm_execution_binding
-    settings, _baseline, _exact = _contract(definition)
+    settings = get_strategy_comparison_settings(str(definition.source["strategy_profile_id"]))
     base["comparison_reference_arms"] = {
         oracle_comparison_key(row): reference_arm_execution_binding(row, settings)
         for row in registered if row.get("strategy_arm_id")
@@ -3874,49 +3969,44 @@ def _oracle_merge_scoped_reports(definition, reports: list[tuple[str, Mapping[st
     return base
 
 
-def preview_oracle_replay_plan(
-    definition, *, project_root: Path,
-) -> dict[str, Any]:
-    """One read-only Target x Seed plan; pending P16 never hides the Targets.
-
-    A missing P16 is only a provisional RUN. All available P16 and Replay
-    receipts are checked by the same canonical code as the execution plan.
-    No Target truth, Optimizer or Portfolio Replay may execute here.
-    """
-    preview, _scopes = _oracle_combined_preview(
-        definition, project_root=Path(project_root),
-    )
+def preview_oracle_replay_plan(definition, *, project_root: Path) -> dict[str, Any]:
+    """Read-only [1][1] plan from the same canonical list consumed by [1][2]."""
+    preview, _scopes = _oracle_combined_preview(definition, project_root=Path(project_root))
     return preview
 
 
 def collect_completed_oracle_results(definition, *, project_root: Path) -> dict[str, Any]:
-    """Read certified results from the SAME plan as [1], with zero production.
-
-    Publication files and reference-model bindings may lag completed receipts.
-    A row is available only when every configured seed is certified REUSE;
-    no historical partial-seed average or report number can substitute for it.
-    """
+    """Read only signed fully-REUSE results from the exact [1][1] plan."""
     preview = preview_oracle_replay_plan(definition, project_root=project_root)
-    rows = {}
     observations = preview["completed_observations"]
     seeds = preview["seed_set"]
+    baselines = oracle_baseline_arm_ids(definition.source)
+    comparisons = {oracle_comparison_key(row): row for row in
+                   resolve_current_oracle_comparisons(definition.source)}
+    metrics = {}
     for key in preview["targets"]:
         if any(preview["preflight"][(seed, key)] != "REUSE" for seed in seeds):
             continue
         records = [observations[(seed, key)] for seed in seeds]
-        if key != "C96":
-            if any((int(row["seed"]), "C96") not in observations for row in records):
+        family = (oracle_parameter_family(comparisons[key]) if key in comparisons
+                  else next(f for f, arm in baselines.items() if arm == key))
+        control = baselines[family]
+        if key != control:
+            if any((int(row["seed"]), control) not in observations for row in records):
                 continue
             for row in records:
-                baseline = observations[(int(row["seed"]), "C96")]
-                if not math.isclose(float(row["delta_romd_vs_c96"]),
+                baseline = observations[(int(row["seed"]), control)]
+                contrast = f"delta_romd_vs_{control.lower()}"
+                if not math.isclose(float(row[contrast]),
                                     float(row["romd"]) - float(baseline["romd"]),
                                     rel_tol=1e-9, abs_tol=1e-9):
-                    raise OracleBlockedError("Oracle completed observation has inconsistent paired C96")
-        result = _aggregate(records, target=str(records[0]["target"]),
-                            period_start=preview["start_date"], period_end=preview["end_date"])
-        rows[key] = {"oracle_romd": result["romd"], "win_rate_pct": result["win_rate_pct"]}
-    return {"metrics": rows, "benchmark": preview["benchmark_id"], "seeds": tuple(seeds),
+                    raise OracleBlockedError(f"Oracle {key} has inconsistent paired {control}")
+        aggregate = _aggregate(records, target=str(records[0]["target"]),
+                               period_start=preview["start_date"], period_end=preview["end_date"])
+        metrics[key] = {"oracle_romd": aggregate["romd"],
+                        "win_rate_pct": aggregate["win_rate_pct"]}
+    return {"metrics": metrics, "benchmark": preview["benchmark_id"],
+            "seeds": tuple(seeds),
             "period": f'{preview["start_date"]} ~ {preview["end_date"]}'}
 
 
@@ -3926,17 +4016,11 @@ def build_report(
     preflight_approval: Callable[[str], bool] | None = None,
     approved_replay_decisions: Mapping[tuple[int, str], str] | None = None,
 ) -> dict[str, Any]:
-    """One Research [1] work plan, one approval, zero science before approval.
-
-    UI and explicit noninteractive run commands share this execution owner.
-    Only the UI approval grants the existing historical-input rebuild policy;
-    noninteractive execution retains the cache owner's strict input checks.
-    """
+    """One approval, then run ONLY authorized missing Replay cells by scope."""
     if preflight_display not in {"full", "summary"}:
         raise ValueError("未知 Target Replay preflight 顯示方式")
     scopes = _oracle_strategy_scopes(definition)
     if len(scopes) == 1:
-        # Preserve the original single-strategy behavior for scoped fixtures.
         return _run_single_stage_oracle(
             scopes[0][1], project_root=Path(project_root), quiet=quiet,
             preflight_approval=preflight_approval,
@@ -3946,52 +4030,42 @@ def build_report(
         )
     if approved_replay_decisions is not None:
         if preflight_approval is None:
-            raise OracleBlockedError("Target x Strategy approval requires a canonical user confirmation")
-        keys = {oracle_comparison_key(row) for row in
-                resolve_current_oracle_comparisons(definition.source)} | {"C96"}
+            raise OracleBlockedError("Oracle approval requires canonical user confirmation")
+        registered = resolve_current_oracle_comparisons(definition.source)
+        expected = (set(oracle_baseline_arm_ids(definition.source).values()) |
+                    {oracle_comparison_key(row) for row in registered})
         seeds = {seed for seed, _key in approved_replay_decisions}
-        if (not seeds or set(approved_replay_decisions) !=
-                {(seed, key) for seed in seeds for key in keys}):
-            raise OracleBlockedError("Target x Strategy authorized inventory changed")
-        # Every scope independently rechecks signed REUSE/RUN status before
-        # any work.  Do not repeat the two expensive preview passes here.
+        if not seeds or set(approved_replay_decisions) != {(seed, key) for seed in seeds for key in expected}:
+            raise OracleBlockedError("Oracle authorized inventory changed")
     elif preflight_approval is not None:
-        approved, scopes = _oracle_combined_preview(
-            definition, project_root=Path(project_root),
-        )
+        approved, scopes = _oracle_combined_preview(definition, project_root=Path(project_root))
         if not preflight_approval(approved["text"]):
             return {"status": "CANCELLED", "read_only": True,
                     "preflight": approved["preflight"]}
         approved_replay_decisions = approved["preflight"]
-    outputs: list[tuple[str, Mapping[str, Any]]] = []
-    for strategy, scoped in scopes:
-        scope_decisions = (None if approved_replay_decisions is None else {
-            (seed, target): value
-            for (seed, composite), value in approved_replay_decisions.items()
-            for target in (composite if composite == "C96" else next(
-                (str(row["target"]) for row in scoped.source["oracle_comparisons"]
-                 if _oracle_scoped_key(str(row["target"]), strategy) == composite), ""),)
-            if target
-        })
-        if scope_decisions is not None:
-            expected_keys = {(seed, target)
-                             for seed in {key[0] for key in approved_replay_decisions}
-                             for target in ("C96", *(str(row["target"])
-                                 for row in scoped.source["oracle_comparisons"]))}
-            if set(scope_decisions) != expected_keys:
-                raise OracleBlockedError("Authorized scope does not match Target x Strategy Registry")
-        report = _run_single_stage_oracle(
+    outputs = []
+    for scope, scoped in scopes:
+        scope_decisions = None
+        if approved_replay_decisions is not None:
+            receipt_keys = (_baseline_target(scoped),
+                            *(str(row["target"]) for row in scoped.source["oracle_comparisons"]))
+            scope_decisions = {
+                (seed, receipt): approved_replay_decisions[(seed, _oracle_scoped_key(receipt, scope))]
+                for seed in {pair[0] for pair in approved_replay_decisions}
+                for receipt in receipt_keys
+            }
+        result = _run_single_stage_oracle(
             scoped, project_root=Path(project_root),
             quiet=quiet or (scope_decisions is not None and
-                            all(v == "REUSE" for v in scope_decisions.values())),
+                            all(value == "REUSE" for value in scope_decisions.values())),
             preflight_approval=(lambda _view: True) if preflight_approval is not None else None,
             preflight_display="summary" if preflight_approval is not None else preflight_display,
             allow_historical_execution_input_drift=preflight_approval is not None,
             approved_replay_decisions=scope_decisions,
         )
-        if report.get("status") == "CANCELLED":
-            return dict(report)
-        outputs.append((strategy, report))
+        if result.get("status") == "CANCELLED":
+            return dict(result)
+        outputs.append((scope, result))
     return _oracle_merge_scoped_reports(definition, outputs)
 
 
@@ -4009,10 +4083,14 @@ def render_result(report: Mapping[str, Any], *, target: str) -> str:
     def _present(item):
         strategy = str(item.get("strategy", "Breakout"))
         legacy = str(item["target"])
-        key = oracle_comparison_key({"target": legacy, "strategy": strategy})
+        key = str(item.get("comparison_key") or oracle_comparison_key(
+            {"target": legacy, "strategy": strategy,
+             "parameter_family": item.get("parameter_family", "min")}))
         scientific = approved_rows.get(key)
         if scientific is not None:
             name, selector, _ = oracle_target_semantics(scientific)
+            if oracle_parameter_family(scientific) != "min":
+                name += f" ({oracle_parameter_family(scientific).capitalize()})"
         else:
             # Historical-only receipts still render, but never gain a new
             # active science or Selector identity merely from their label.
@@ -4020,7 +4098,10 @@ def render_result(report: Mapping[str, Any], *, target: str) -> str:
         return dict(item, strategy=strategy, target=name, selector=selector,
                     wins=f'{item["positive_seed_count"]}/{item["seeds"]}')
     items = [dict(baseline, target="C96 Same-Window", strategy="Breakout",
-                  selector="-", wins="-"), *[_present(item) for item in report["oracles"]]]
+                  selector="-", wins="-"),
+             *(dict(row, target=f"{row['target']} Same-Window", strategy="Breakout",
+                     selector="-", wins="-") for row in report.get("control_baselines", ())),
+             *[_present(item) for item in report["oracles"]]]
     # Presentation-only sort; preserve the canonical comparison/Replay order.
     items.sort(key=lambda row: (float(row["romd"]), str(row["target"]),
                                 str(row.get("strategy", "Breakout"))))
@@ -4033,7 +4114,7 @@ def render_result(report: Mapping[str, Any], *, target: str) -> str:
         f'Benchmark: {report["benchmark_id"]}, same-seed pairs N={len(report["seeds"])}',
         f'Report schema: {report["schema_version"]}, Oracle treatments: '
         f'{len(report["oracles"])} (Exact + Direct); not Standard SOP',
-        'Ranking: Exact K/R0 or Direct No-K/No-R0; same Broker-Cash, seed/P16 and future scores.',
+        'Ranking: Exact K/R0 or Direct No-K/No-R0; each control uses its own canonical Min/P16 or Full/P17 parameters; future scores are hindsight.',
         'Presentation: ascending RoMD Mean (lowest to highest; Target name breaks ties).',
         'T40: (1 - min(MAE40, 1R)) * R40 - min(MAE40, 1R); MAE40 >= 1R -> T40 = -1R.',
         'T40-MFE: (1 - min(MAE40, 1R)) * MFE40_R - min(MAE40, 1R); MAE40 >= 1R -> -1R.',

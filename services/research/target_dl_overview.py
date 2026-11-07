@@ -14,6 +14,8 @@ from typing import Any, Mapping
 
 from core.audit_policy import get_active_audit_module_id
 from core.audit_registry import (resolve_current_oracle_comparisons, oracle_comparison_key,
+                                 oracle_parameter_family, oracle_baseline_arm_ids,
+                                 validate_oracle_compare_family_coverage,
                                  oracle_supervised_target_id, oracle_target_semantics)
 from core.breakout_quality_registry import (
     SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES,
@@ -119,7 +121,12 @@ def _oracle_rows(root: Path, definition, versions: Mapping[str, tuple]):
     # Comparison identity is Target x Entry Strategy; the scientific Target
     # remains unchanged and is displayed separately.  Old Breakout report
     # rows retain their original Target key, preserving historical REUSE.
-    targets = (baseline, *(oracle_comparison_key(item) for item in comparisons))
+    baselines = oracle_baseline_arm_ids(definition.source)
+    targets = (baseline, *(oracle_comparison_key(item) for item in comparisons
+                           if oracle_parameter_family(item) == "min"),
+               *(arm_id for family, arm_id in baselines.items() if family != "min"),
+               *(oracle_comparison_key(item) for item in comparisons
+                 if oracle_parameter_family(item) != "min"))
     if len(set(targets)) != len(targets):
         raise ValueError("Oracle Target x Strategy identities are not unique")
     by_comparison = {oracle_comparison_key(item): item for item in comparisons}
@@ -153,13 +160,19 @@ def _oracle_rows(root: Path, definition, versions: Mapping[str, tuple]):
     # Signed per-seed results are the canonical truth shared with [1][1].
     # Rebuilding a human-read publication or changing its model references
     # must not make certified Oracle metrics disappear from [1][2].
-    receipt_root = data_path.parent.parent / "replay_cache"
-    if any(receipt_root.glob("*/*.json")):
+    # Each parameter family has its own certified replay cache. A new Full
+    # family must not suppress certified Min receipts or vice versa.
+    receipt_roots = tuple(
+        root / "outputs" / "audit" / Path(definition.output_subdir) /
+        ("replay_cache" if family == "min" else f"parameter_family_{family}/replay_cache")
+        for family in baselines
+    )
+    if any(any(folder.glob("*/*.json")) for folder in receipt_roots):
         from services.audit.target_oracle_romd import collect_completed_oracle_results
         completed = collect_completed_oracle_results(definition, project_root=root)
         metrics = completed.pop("metrics")
         return targets, comparisons, score_targets, metrics, {
-            "path": receipt_root.relative_to(root).as_posix(), **completed,
+            "path": receipt_roots[0].relative_to(root).as_posix(), **completed,
         }
     if (payload and doc_path.is_file() and payload.get("status") == "COMPLETED"
             and payload.get("read_only") is True and payload.get("hindsight_non_pit") is True
@@ -179,18 +192,28 @@ def _oracle_rows(root: Path, definition, versions: Mapping[str, tuple]):
         # Reference labels are provenance. The shared Oracle contract owner
         # verifies the actual score consumer, including historical receipts.
         settings = get_strategy_comparison_settings(str(definition.source["strategy_profile_id"]))
-        original = [dict(payload.get("baseline") or {}), *payload["oracles"]]
+        original = [dict(payload.get("baseline") or {}),
+                    *(dict(item) for item in payload.get("control_baselines", ())
+                      if isinstance(item, dict)), *payload["oracles"]]
+        control_arm_ids = set(baselines.values())
         for item in original:
             if not isinstance(item, dict):
                 metrics.clear()
                 break
             target = str(item.get("target") or "")
             strategy = str(item.get("strategy", "Breakout"))
-            if target == baseline:
-                key = baseline if strategy == "Breakout" else ""
+            if target in control_arm_ids:
+                key = target if strategy == "Breakout" else ""
+                expected_family = next(f for f, arm_id in baselines.items() if arm_id == target)
+                if item.get("parameter_family") not in (None, expected_family):
+                    metrics.clear()
+                    break
             else:
                 try:
-                    key = oracle_comparison_key({"target": target, "strategy": strategy})
+                    key = oracle_comparison_key({
+                        "target": target, "strategy": strategy,
+                        "parameter_family": item.get("parameter_family", "min"),
+                    })
                 except ValueError:
                     metrics.clear()
                     break
@@ -200,7 +223,7 @@ def _oracle_rows(root: Path, definition, versions: Mapping[str, tuple]):
                 metrics.clear()
                 break
             seen.add(key)
-            if target != baseline:
+            if target not in control_arm_ids:
                 seen_scientific_targets.add(target)
             romd, winrate = _number(item.get("romd")), _number(item.get("win_rate_pct"))
             if romd is None or winrate is None or not 0.0 <= winrate <= 100.0:
@@ -217,7 +240,7 @@ def _oracle_rows(root: Path, definition, versions: Mapping[str, tuple]):
                 else:
                     consumer_matches = reference_arm_execution_matches(
                         published_references.get(key), current_comparison, settings)
-            if (consumer_matches and (key == baseline or
+            if (consumer_matches and (key in control_arm_ids or
                     (key in current_definitions
                      and isinstance(published_definitions, dict)
                      and published_definitions.get(target) == current_definitions[key]
@@ -231,8 +254,9 @@ def _oracle_rows(root: Path, definition, versions: Mapping[str, tuple]):
                 and all(isinstance(desc, str) and desc for desc in published_definitions.values())
                 and (payload.get("comparison_inventory") is None or (
                     isinstance(payload["comparison_inventory"], list)
-                    and payload["comparison_inventory"] == list(targets)
-                    and seen == set(targets)))
+                    and len(payload["comparison_inventory"]) == len(set(payload["comparison_inventory"]))
+                    and set(payload["comparison_inventory"]) == seen
+                    and all(key in targets for key in payload["comparison_inventory"])))
                 and metrics):
             oracle_info = {
                 "path": str(data_path.relative_to(root).as_posix()),
@@ -474,7 +498,8 @@ def _strategy_bindings(*, target_names: tuple[str, ...],
                        score_targets: Mapping[str, str | None], definition) -> dict[tuple[str, str], str]:
     baseline = str(definition.source["baseline_arm_id"])
     base_arm = STRATEGY_COMPARE_ARMS[baseline]
-    bindings = {(baseline, ""): baseline}
+    baselines = oracle_baseline_arm_ids(definition.source)
+    bindings = {(control_id, ""): control_id for control_id in baselines.values()}
     comparisons = {oracle_comparison_key(item): item
                    for item in resolve_current_oracle_comparisons(definition.source)}
     positive_targets = {key for key, item in comparisons.items()
@@ -496,6 +521,8 @@ def _strategy_bindings(*, target_names: tuple[str, ...],
             "positive-only-default" if selector == "default"
             else _DIRECT_MODE if selector == "direct" else _EXACT_MODE
         )
+        family = oracle_parameter_family(comparison)
+        reference_baseline = STRATEGY_COMPARE_ARMS[baselines[family]]
         declared_arm_id = str(comparison.get("strategy_arm_id") or "")
         # A specified Oracle arm anchors perfect-score replay, not a monopoly
         # on which DLs may learn the SAME Target. Iterate all compatible arms
@@ -506,9 +533,9 @@ def _strategy_bindings(*, target_names: tuple[str, ...],
         for arm_id, arm in arm_choices:
             if (not arm.get("dl_enabled") or arm.get("dl_runtime_mode") != desired_mode
                     or str(arm.get("entry_strategy", "Breakout")) != entry_strategy
-                    or arm.get("param_source") != base_arm["param_source"]
-                    or arm.get("param_policy") != base_arm["param_policy"]
-                    or arm.get("rule_policy") != base_arm["rule_policy"]):
+                    or arm.get("param_source") != reference_baseline["param_source"]
+                    or arm.get("param_policy") != reference_baseline["param_policy"]
+                    or arm.get("rule_policy") != reference_baseline["rule_policy"]):
                 continue
             options = dict(arm.get("dl_runtime_options") or {})
             if requires_positive_score(options) != (target in positive_targets):
@@ -543,104 +570,6 @@ def _strategy_bindings(*, target_names: tuple[str, ...],
     bindings.update({key: next(iter(arm_ids)) for key, arm_ids in candidates.items()
                      if len(arm_ids) == 1})
     return bindings
-
-
-def _other_param_family_rows(
-    *, definition, comparisons, score_targets, model_map, bindings,
-    rolling_romd, robust_romd,
-) -> list[dict[str, Any]]:
-    """Show active non-Min controls and same-score DL treatments read-only.
-
-    An Oracle receipt computed using Min/P16 is NOT an Oracle result for Full/P17.
-    Until that different parameter-family Replay has been E13-certified, the
-    corresponding Oracle cells intentionally remain empty. No synthetic
-    Target/receipt, report schema, or FIT identity is created by this view.
-    """
-    baseline = STRATEGY_COMPARE_ARMS[str(definition.source["baseline_arm_id"])]
-    suite_id = STRATEGY_COMPARE_PROFILES[STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE]["suite_id"]
-    active = set(get_strategy_compare_suite(suite_id)["arm_ids"])
-    controls = {
-        (raw["param_source"], raw["param_policy"], raw["rule_policy"],
-         str(raw.get("entry_strategy", "Breakout"))): arm_id
-        for arm_id, raw in STRATEGY_COMPARE_ARMS.items()
-        if arm_id in active and not raw.get("dl_enabled")
-        and raw["param_policy"] == "base-finalist-best"
-    }
-    extra: list[dict[str, Any]] = []
-    used_controls: set[str] = set()
-    for key, comparison in comparisons.items():
-        label = score_targets.get(key)
-        if not label or comparison.get("positive_output") or comparison.get("positive_gate"):
-            continue
-        selector = str(comparison["selector"])
-        if selector not in {"exact", "direct"}:
-            continue
-        mode = _EXACT_MODE if selector == "exact" else _DIRECT_MODE
-        entry = str(comparison.get("strategy", "Breakout"))
-        for model in model_map.get(key, ()):
-            profile = str(model.get("profile") or "")
-            if not profile:
-                continue
-            main_arm_id = bindings.get((key, profile))
-            if not main_arm_id:
-                continue
-            main_arm = STRATEGY_COMPARE_ARMS[main_arm_id]
-            if main_arm["dl_runtime_mode"] != mode:
-                continue
-            candidates = []
-            for arm_id in active:
-                arm = STRATEGY_COMPARE_ARMS[arm_id]
-                if (not arm.get("dl_enabled") or arm["param_source"] == baseline["param_source"]
-                        or arm.get("dl_id") != main_arm.get("dl_id")
-                        or arm.get("dl_runtime_mode") != mode
-                        or dict(arm.get("dl_runtime_options") or {}) !=
-                           dict(main_arm.get("dl_runtime_options") or {})
-                        or str(arm.get("entry_strategy", "Breakout")) != entry):
-                    continue
-                control_id = controls.get((
-                    arm["param_source"], arm["param_policy"], arm["rule_policy"], entry,
-                ))
-                if control_id:
-                    candidates.append((arm_id, control_id))
-            if len(candidates) > 1:
-                raise ValueError(f"Ambiguous additional parameter-family binding: {key}/{profile}")
-            if not candidates:
-                continue
-            arm_id, control_id = candidates[0]
-            used_controls.add(control_id)
-            control = STRATEGY_COMPARE_ARMS[control_id]
-            family = str(control["name"]).split(" ", 1)[0]
-            robust = robust_romd.get(arm_id)
-            extra.append({
-                "target": f"{oracle_target_semantics(comparison)[0]} ({family})",
-                "entry_strategy": entry,
-                "selector": selector.capitalize(),
-                "oracle_romd": None, "win_rate_pct": None,
-                "model": model.get("model") or "", "positive_model": "",
-                "rolling_rho": model.get("rolling_rho"),
-                "robustness_rho": model.get("robustness_rho"),
-                "rho_seeds": model.get("rho_seeds") or (),
-                "strategy": arm_id,
-                "rolling_romd": rolling_romd.get(arm_id),
-                "robustness_romd": robust[0] if robust else None,
-                "romd_seeds": robust[1] if robust else (),
-                "romd_benchmark": robust[2] if robust else "",
-            })
-    for control_id in sorted(used_controls):
-        control = STRATEGY_COMPARE_ARMS[control_id]
-        family = str(control["name"]).split(" ", 1)[0]
-        robust = robust_romd.get(control_id)
-        extra.append({
-            "target": f"{family} No DL", "entry_strategy": "Breakout",
-            "selector": "-", "oracle_romd": None, "win_rate_pct": None,
-            "model": "", "positive_model": "", "rolling_rho": None,
-            "robustness_rho": None, "rho_seeds": (), "strategy": control_id,
-            "rolling_romd": rolling_romd.get(control_id),
-            "robustness_romd": robust[0] if robust else None,
-            "romd_seeds": robust[1] if robust else (),
-            "romd_benchmark": robust[2] if robust else "",
-        })
-    return extra
 
 
 def _arm_fit_lineage_current(
@@ -812,6 +741,11 @@ def collect_target_dl_overview(project_root: Path) -> dict[str, Any]:
     require_approved_report_contract(REPORT_ID)
     versions = load_report_contract_versions(root)
     definition = get_formal_oracle_definition(get_active_audit_module_id())
+    suite_id = STRATEGY_COMPARE_PROFILES[STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE]["suite_id"]
+    validate_oracle_compare_family_coverage(
+        definition.source, active_arm_ids=get_strategy_compare_suite(suite_id)["arm_ids"],
+        arm_registry=STRATEGY_COMPARE_ARMS,
+    )
     targets, comparisons, score_targets, oracle, oracle_info = _oracle_rows(root, definition, versions)
     filter_id = str(definition.source["filter_id"])
     active = {profile for _model_id, profile in get_breakout_quality_model_test_settings().model_profiles}
@@ -879,8 +813,15 @@ def collect_target_dl_overview(project_root: Path) -> dict[str, Any]:
             })
     entry_strategies = {oracle_comparison_key(item): str(item.get("strategy", "Breakout"))
                         for item in comparisons}
-    display_targets = {oracle_comparison_key(item): oracle_target_semantics(item)[0]
-                       for item in comparisons}
+    display_targets = {
+        oracle_comparison_key(item): oracle_target_semantics(item)[0] + (
+            f" ({oracle_parameter_family(item).capitalize()})"
+            if oracle_parameter_family(item) != "min" else "")
+        for item in comparisons
+    }
+    for family, control_id in oracle_baseline_arm_ids(definition.source).items():
+        if family != "min":
+            display_targets[control_id] = f"{family.capitalize()} No DL"
     display_selectors = {oracle_comparison_key(item): oracle_target_semantics(item)[1]
                          for item in comparisons}
     rows = []
@@ -923,12 +864,6 @@ def collect_target_dl_overview(project_root: Path) -> dict[str, Any]:
                 "romd_seeds": robust[1] if robust else (),
                 "romd_benchmark": robust[2] if robust else "",
             })
-    rows.extend(_other_param_family_rows(
-        definition=definition,
-        comparisons={oracle_comparison_key(item): item for item in comparisons},
-        score_targets=score_targets, model_map=model_map, bindings=bindings,
-        rolling_romd=rolling_romd, robust_romd=robust_romd,
-    ))
     rows.sort(key=lambda row: (
         row["oracle_romd"] is None,
         -(row["oracle_romd"] or 0.0),

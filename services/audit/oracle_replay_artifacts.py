@@ -417,6 +417,21 @@ def replay_identity(*, dataset: str, dataset_sha256: str, target: str,
     }
 
 
+def _observation_baseline(identity: Mapping[str, Any]) -> str:
+    """Infer the signed contrast control from Replay economic identity.
+
+    Old Min receipts are C96 by definition. A Full treatment never borrows
+    that contrast field or supplies a synthetic Min receipt.
+    """
+    replay_policy = identity.get("replay_policy") or {}
+    if not isinstance(replay_policy, Mapping):
+        raise ValueError("Oracle replay baseline policy is malformed")
+    baseline = replay_policy.get("baseline_arm", "C96")
+    if not isinstance(baseline, str) or not baseline or not baseline.isalnum():
+        raise ValueError("Oracle replay baseline arm is malformed")
+    return baseline
+
+
 def _validate_observation(observation: Mapping[str, Any], *, target: str, seed: int,
                           baseline_target: str = "C96") -> dict[str, Any]:
     row = dict(observation)
@@ -592,7 +607,8 @@ class OracleReplayStore:
 
         Missing evidence is not a zero win rate and is never reported as REUSE.
         """
-        row = _validate_observation(observation, target=identity["target"], seed=identity["seed"])
+        row = _validate_observation(observation, target=identity["target"], seed=identity["seed"],
+                                    baseline_target=_observation_baseline(identity))
         if "win_rate_pct" in row:
             return row
         path = self._win_rate_path(identity)
@@ -608,7 +624,8 @@ class OracleReplayStore:
                     or payload.get("evidence_sha256") != canonical_json_sha256(data)):
                 raise ValueError("metric evidence provenance differs from canonical Replay")
             augmented = {**row, "win_rate_pct": data["win_rate_pct"]}
-            return _validate_observation(augmented, target=identity["target"], seed=identity["seed"])
+            return _validate_observation(augmented, target=identity["target"], seed=identity["seed"],
+                                         baseline_target=_observation_baseline(identity))
         except (OSError, ValueError, KeyError, TypeError, OverflowError) as exc:
             raise ValueError("Oracle win-rate evidence is corrupt or inconsistent; fail closed") from exc
 
@@ -621,8 +638,10 @@ class OracleReplayStore:
         Never rewrite an earlier signed observation or let a changed result
         silently masquerade as a presentation-only field addition.
         """
-        old = _validate_observation(previous, target=identity["target"], seed=identity["seed"])
-        new = _validate_observation(replayed, target=identity["target"], seed=identity["seed"])
+        old = _validate_observation(previous, target=identity["target"], seed=identity["seed"],
+                                    baseline_target=_observation_baseline(identity))
+        new = _validate_observation(replayed, target=identity["target"], seed=identity["seed"],
+                                    baseline_target=_observation_baseline(identity))
         if "win_rate_pct" in old or "win_rate_pct" not in new:
             raise ValueError("Oracle win-rate supplement requires a missing original metric")
         expected = dict(new)
@@ -1214,7 +1233,8 @@ class OracleReplayStore:
                     or payload.get("identity") != dict(identity)
                     or payload.get("identity_sha256") != identity_sha):
                 raise ValueError("Oracle cache identity mismatch")
-            observation = _validate_observation(payload["observation"], target=identity["target"], seed=identity["seed"])
+            observation = _validate_observation(payload["observation"], target=identity["target"], seed=identity["seed"],
+                                                baseline_target=_observation_baseline(identity))
             if payload.get("observation_sha256") != canonical_json_sha256(observation):
                 raise ValueError("Oracle cached observation SHA256 mismatch")
             if payload.get("origin") == "certified_identical_signed_daily_truth_replay":
@@ -1254,7 +1274,8 @@ class OracleReplayStore:
               origin: str) -> None:
         if identity.get("cache_schema") != _CACHE_SCHEMA:
             raise ValueError("Oracle historical replay cache is read-only")
-        record = _validate_observation(observation, target=identity["target"], seed=identity["seed"])
+        record = _validate_observation(observation, target=identity["target"], seed=identity["seed"],
+                                    baseline_target=_observation_baseline(identity))
         if origin == "certified_identical_signed_daily_truth_replay":
             raise ValueError("Oracle historical source-revision receipts are read-only; publish an execution reference")
         path = self._path(identity)

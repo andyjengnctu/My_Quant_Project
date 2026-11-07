@@ -26,17 +26,21 @@ class DailyEntryStrategyCases(TestCase):
                           if d.audit_type == oracle.SUPPORTED_AUDIT_TYPE)
         rows = tuple(definition.source["oracle_comparisons"])
         from core.positive_netpnl_contract import requires_positive_score
-        from core.audit_registry import oracle_supervised_target_id
+        from core.audit_registry import oracle_supervised_target_id, oracle_parameter_family
         from core.breakout_quality_registry import get_breakout_quality_experiment_profile
         from core.breakout_quality_runtime import get_continuous_ranker_score_output_columns
         # AI註: Validate each declaration without freezing current roster membership.
-        settings, base, exact = oracle._contract(definition)
         scoped = oracle._oracle_strategy_scopes(definition)
-        self.assertEqual([(s, len(d.source["oracle_comparisons"])) for s,d in scoped],
-                         [(strategy, sum(r.get("strategy", "Breakout") == strategy for r in rows))
-                          for strategy in ("Breakout", "Daily")
-                          if any(r.get("strategy", "Breakout") == strategy for r in rows)])
+        expected = {}
+        for row in rows:
+            family = oracle_parameter_family(row)
+            strategy = str(row.get("strategy", "Breakout"))
+            scope_name = strategy if family == "min" else f"{strategy}::{family.capitalize()}"
+            expected[scope_name] = expected.get(scope_name, 0) + 1
+        self.assertEqual([(s, len(d.source["oracle_comparisons"])) for s, d in scoped],
+                         list(expected.items()))
         for strategy, scope in scoped:
+            settings, base, exact = oracle._contract(scope)
             plan = oracle._oracle_comparison_plan(scope)
             direct = oracle._direct_arm(scope, settings, base, exact)
             contracts = oracle._resolve_oracle_target_score_contracts(scope, settings, plan)
@@ -74,7 +78,7 @@ class DailyEntryStrategyCases(TestCase):
                                           if source.get("score", "").startswith("daily_trade_path_")
                                           else source["target"])
                 self.assertEqual(contracts[row["target"]]["target_id"], expected_oracle_target)
-        self.assertTrue(all(oracle._oracle_target_strategy(d, r["target"]) == strategy
+        self.assertTrue(all(oracle._oracle_target_strategy(d, r["target"]) == strategy.split("::", 1)[0]
                             for strategy, d in scoped
                             for r in d.source["oracle_comparisons"]))
         self.assertEqual(oracle._oracle_target_strategy(definition, "C96"), "Breakout")
@@ -155,35 +159,36 @@ class DailyEntryStrategyCases(TestCase):
         self.assertIn("TrueDailyUniversal_MinTrade_NetPnL_Positive", keys)
 
     def test_one_approval_matrix_and_same_engine_for_declared_treatments(self):
-        from core.audit_registry import oracle_comparison_key
+        from core.audit_registry import oracle_baseline_arm_ids, oracle_comparison_key
         definition = next(d for d in get_reusable_audit_definitions("breakout_quality")
                           if d.audit_type == oracle.SUPPORTED_AUDIT_TYPE)
         seeds = tuple(range(1, 9))
         comparisons = tuple(definition.source["oracle_comparisons"])
         scope_counts = [(strategy, len(scope.source["oracle_comparisons"]))
                         for strategy, scope in oracle._oracle_strategy_scopes(definition)]
-        reuse_count = len(seeds) * (1 + sum(row.get("strategy", "Breakout") != "Daily"
-                                          for row in comparisons))
-        run_count = len(seeds) * sum(row.get("strategy") == "Daily" for row in comparisons)
+        baselines = oracle_baseline_arm_ids(definition.source)
+        reuse_count = len(seeds) * (1 + next(n for name, n in scope_counts if name == "Breakout"))
+        run_count = len(seeds) * (len(comparisons) + len(baselines) - reuse_count // len(seeds))
         calls = []
-        common_baseline = {"target":"C96", "strategy":"Breakout",
-                           "seed_observations": [], "romd": 9.0}
 
         def fake_run(scoped, *, preview_only=False, **kwargs):
             strategy = scoped.source["oracle_comparisons"][0].get("strategy", "Breakout")
+            family_baseline = str(scoped.source["baseline_arm_id"])
+            scope_name = strategy if family_baseline == baselines["min"] else "Breakout::Full"
             targets = tuple(row["target"] for row in scoped.source["oracle_comparisons"])
-            calls.append((strategy, preview_only, kwargs.get("approved_replay_decisions")))
-            decisions = {(seed, name): "REUSE" if strategy == "Breakout" else "RUN"
-                         for seed in seeds for name in ("C96", *targets)}
+            calls.append((scope_name, preview_only, kwargs.get("approved_replay_decisions")))
+            decisions = {(seed, name): "REUSE" if scope_name == "Breakout" else "RUN"
+                         for seed in seeds for name in (family_baseline, *targets)}
             for seed in seeds:
-                decisions[(seed,"C96")] = "REUSE"
+                if family_baseline == baselines["min"]:
+                    decisions[(seed, family_baseline)] = "REUSE"
             if preview_only:
                 return {"status":"PREVIEW", "preflight": decisions,
                         "benchmark_id":"end_to_end_v2", "completed_observations":{},
                         "start_date":"2021-01-01", "end_date":"2026-03-02",
                         "seed_set":seeds,"missing_p16":(),
-                        "producer_kwargs":{"method":"canonical"},
-                        "targets": ("C96",*targets)}
+                        "producer_kwargs":{"method":"canonical", "baseline":family_baseline},
+                        "targets": (family_baseline,*targets)}
             self.assertTrue(kwargs["preflight_approval"]("single scope recheck"))
             self.assertEqual(kwargs["approved_replay_decisions"], decisions)
             return {"status":"COMPLETED", "seeds":list(seeds),
@@ -191,7 +196,8 @@ class DailyEntryStrategyCases(TestCase):
                     "start_date":"2021-01-01", "end_date":"2026-03-02",
                     "strategy_profile_id": "test", "param_artifacts":{},
                     "common_cohort":{"cohort_rows":630589},
-                    "baseline":common_baseline,
+                    "baseline":{"target":family_baseline, "strategy":"Breakout",
+                                "seed_observations": [], "romd": 9.0},
                     "oracles":[{"target": target, "strategy":strategy,
                                 "romd":25.0 if strategy == "Breakout" else 40.0}
                                for target in targets],
@@ -199,7 +205,7 @@ class DailyEntryStrategyCases(TestCase):
                                    for row in scoped.source["oracle_comparisons"]}}
         with patch.object(oracle,"_run_single_stage_oracle",side_effect=fake_run):
             preview = oracle.preview_oracle_replay_plan(definition,project_root="/tmp")
-            self.assertEqual(len(preview["targets"]), 1 + len(comparisons))
+            self.assertEqual(len(preview["targets"]), len(baselines) + len(comparisons))
             self.assertIn(f"Portfolio REUSE {reuse_count} / RUN（需回放）{run_count} / BLOCKED 0", preview["text"])
             self.assertIn("DailyUniversal_MinTrade_NetPnL_Positive", preview["text"])
             self.assertIn("Direct", preview["text"])
@@ -211,13 +217,13 @@ class DailyEntryStrategyCases(TestCase):
             )
         self.assertEqual(len(result["oracles"]), len(comparisons))
         self.assertEqual(len(result["definitions"]), len({row["target"] for row in comparisons}))
-        self.assertEqual(len(result["comparison_inventory"]), 1 + len(comparisons))
+        self.assertEqual(len(result["comparison_inventory"]), len(baselines) + len(comparisons))
         target = "TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct"
         values = {(row["target"],row["strategy"]):row["romd"] for row in result["oracles"]}
         self.assertEqual(values[(target,"Breakout")],25.0)
         self.assertEqual(values[(target,"Daily")],40.0)
-        self.assertEqual([c[1] for c in calls], [True,True,False,False])
-        self.assertEqual([(c[0],len(c[2])) for c in calls[-2:]],
+        self.assertEqual([c[1] for c in calls], [True] * len(scope_counts) + [False] * len(scope_counts))
+        self.assertEqual([(c[0],len(c[2])) for c in calls[-len(scope_counts):]],
                          [(strategy, len(seeds) * (1 + count)) for strategy, count in scope_counts])
 
     def test_scoped_daily_scores_do_not_leak_or_read_positive_truth(self):

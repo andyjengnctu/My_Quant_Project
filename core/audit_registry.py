@@ -7,7 +7,7 @@ live in ``core.audit_policy``.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Mapping
 
 from config.market_data import RESEARCH_REQUIRED_CUTOFF
 
@@ -134,6 +134,9 @@ AUDIT_REUSABLE_REPORTS: dict[str, dict[str, Any]] = {
                     "DailyUniversal_MinTrade60_NetPnL": "LABEL-daily_universal_formal_min_roos_trade60_netpnl_v1",
                     "DailyUniversal_MinTrade60_NetPnL_Direct": "LABEL-daily_universal_formal_min_roos_trade60_netpnl_v1",
                 },
+                # Additional parameter baselines are defined once here.  [1][1]
+                # and [1][2] both consume this same Oracle comparison inventory.
+                "additional_parameter_baselines": {"full": "C97"},
                 "oracle_comparisons": (
                     {"target": "MFE40_Control", "description": "40D MFE only (control, not target recommendation)", "score": "mfe", "provider": "pure_mfe40_provider", "selector": "exact"},
                     {"target": "R40", "description": "40D close-to-close terminal return divided by canonical risk budget R", "score": "terminal_r", "provider": "pure_mfe40_provider", "selector": "exact"},
@@ -144,6 +147,8 @@ AUDIT_REUSABLE_REPORTS: dict[str, dict[str, Any]] = {
                     {"target": "R40_Direct", "description": "Same R40 score; canonical No-K/No-R0 direct allocation", "score_source": "R40", "selector": "direct"},
                     {"target": "T40_Direct", "description": "Same T40 score; canonical No-K/No-R0 direct allocation", "score_source": "T40", "selector": "direct"},
                     {"target": "T40_Direct", "description": "Same T40 score; canonical No-K/No-R0 direct allocation", "score_source": "T40", "selector": "direct", "strategy_arm_id": "C146", "strategy": "Daily"},
+                    {"target": "T40", "description": "(1 - min(MAE40, 1R)) * R40 - min(MAE40, 1R); MAE40 is nonnegative in R", "score": "terminal_mae_gate", "provider": "pure_mfe40_provider", "selector": "exact", "strategy_arm_id": "C153", "parameter_family": "full"},
+                    {"target": "T40_Direct", "description": "Same T40 score; canonical No-K/No-R0 direct allocation", "score_source": "T40", "selector": "direct", "strategy_arm_id": "C154", "parameter_family": "full"},
                     {"target": "T40-MFE_Direct", "description": "Same T40-MFE score; canonical No-K/No-R0 direct allocation", "score_source": "T40-MFE", "selector": "direct"},
                     {"target": "DailyUniversal_MinTrade40_NetR", "description": "Formal Min ROOS Net-R, natural exit / 40 sessions / Research cutoff (earliest), hindsight ranking", "score": "daily_trade_path_net_r", "provider": "daily_trade40_profile", "selector": "exact"},
                     {"target": "DailyUniversal_MinTrade40_NetR_Direct", "description": "Same formal per-seed Min ROOS daily truth and ranks; canonical No-K/No-R0 selector", "score_source": "DailyUniversal_MinTrade40_NetR", "selector": "direct"},
@@ -297,18 +302,97 @@ def oracle_target_semantics(row: Mapping[str, Any]) -> tuple[str, str, str]:
     return name, selector.capitalize(), strategy
 
 
-def oracle_comparison_key(row: Mapping[str, Any]) -> str:
-    """Stable Target x Strategy comparison key, not a new Target identity.
+def oracle_parameter_family(row: Mapping[str, Any]) -> str:
+    """Economic parameter family of an Oracle treatment (default: legacy Min)."""
+    family = str(row.get("parameter_family") or "min").strip().lower()
+    if not family or "::" in family or any(c not in "abcdefghijklmnopqrstuvwxyz0123456789_-" for c in family):
+        raise ValueError(f"Invalid Oracle parameter family: {family!r}")
+    return family
 
-    Legacy Breakout receipts retain their *exact* old Target key; Daily uses a
-    separate execution key, so neither strategy can consume the other receipt.
-    The original scientific Target remains row['target'] in both cases.
+
+def oracle_comparison_key(row: Mapping[str, Any]) -> str:
+    """Stable Target x Entry x parameter-family Replay key, not a new Target.
+
+    Historic Breakout/Min receipts remain unchanged.  Daily uses ::Daily;
+    an independent parameter family uses ::Family.  No old keys migrate.
     """
     target = str(row.get("target") or "")
     strategy = str(row.get("strategy", "Breakout"))
+    family = oracle_parameter_family(row)
     if not target or "::" in target or strategy not in {"Breakout", "Daily"}:
         raise ValueError(f"Invalid Oracle Target x Strategy: {target} / {strategy}")
-    return target if strategy == "Breakout" else f"{target}::Daily"
+    qualifiers = ([strategy] if strategy != "Breakout" else [])
+    if family != "min":
+        qualifiers.append(family.capitalize())
+    return "::".join((target, *qualifiers))
+
+
+def oracle_baseline_arm_ids(source: Mapping[str, Any]) -> dict[str, str]:
+    """One baseline per declared economic parameter family.
+
+    The control arm is NOT a duplicate Oracle target.  Both [1] consumers
+    obtain its identity here, so adding a family cannot be display-only.
+    """
+    base = str(source["baseline_arm_id"])
+    additional = source.get("additional_parameter_baselines") or {}
+    if not isinstance(additional, Mapping):
+        raise ValueError("Oracle parameter baselines must be a mapping")
+    result = {"min": base}
+    for family, arm_id in additional.items():
+        normalized = oracle_parameter_family({"parameter_family": family})
+        if normalized in result or not isinstance(arm_id, str) or not arm_id:
+            raise ValueError(f"Duplicate or invalid Oracle baseline family: {family}")
+        result[normalized] = arm_id
+    return result
+
+
+def validate_oracle_compare_family_coverage(
+    source: Mapping[str, Any], *, active_arm_ids, arm_registry: Mapping[str, Any],
+) -> None:
+    """Fail fast if an active additional-family DL lacks [1] Oracle registration.
+
+    [4] remains an independent comparison suite.  Only DL arms in economic
+    families intentionally declared for Oracle are required to have a matching
+    [1] treatment.  Multiple DL models may share a single Min Target Oracle,
+    so the existing Min family retains its original shared-score semantics.
+    """
+    baselines = oracle_baseline_arm_ids(source)
+    registered = resolve_current_oracle_comparisons(dict(source))
+    claimed_arms = {}
+    for row in registered:
+        family = oracle_parameter_family(row)
+        arm_id = str(row.get("strategy_arm_id") or "")
+        if family == "min" or not arm_id:
+            continue
+        if arm_id in claimed_arms:
+            raise ValueError(f"Strategy has duplicate Oracle comparisons: {arm_id}")
+        claimed_arms[arm_id] = row
+    for family, control_id in baselines.items():
+        if family == "min":
+            continue
+        if control_id not in arm_registry:
+            raise ValueError(f"Oracle family baseline not registered: {control_id}")
+        baseline = arm_registry[control_id]
+        signature = tuple(baseline[key] for key in ("param_source", "param_policy", "rule_policy"))
+        for arm_id in active_arm_ids:
+            arm = arm_registry[arm_id]
+            if not arm.get("dl_enabled") or tuple(arm[key] for key in (
+                    "param_source", "param_policy", "rule_policy")) != signature:
+                continue
+            row = claimed_arms.get(arm_id)
+            if row is None or oracle_parameter_family(row) != family:
+                raise ValueError(
+                    f"[4] arm {arm_id} belongs to Oracle {family} family but [1] "
+                    "has no executable matching comparison"
+                )
+            if str(row.get("strategy", "Breakout")) != str(arm.get("entry_strategy", "Breakout")):
+                raise ValueError(f"[1]/[4] entry policy differs for {arm_id}")
+            selector = str(row["selector"])
+            expected_mode = ("resource-aware-continuous-score-no-k-no-r0"
+                             if selector == "direct" else
+                             "resource-aware-continuous-score-constrained-optimal")
+            if arm.get("dl_runtime_mode") != expected_mode:
+                raise ValueError(f"[1]/[4] selector differs for {arm_id}")
 
 
 def resolve_current_oracle_comparisons(source: dict[str, Any]) -> tuple[dict[str, Any], ...]:
@@ -327,7 +411,7 @@ def resolve_current_oracle_comparisons(source: dict[str, Any]) -> tuple[dict[str
         | set(source.get("historical_only_oracle_targets") or ())
     )
     keys: set[str] = set()
-    scientific_keys: set[tuple[str, str, str]] = set()
+    scientific_keys: set[tuple[str, str, str, str]] = set()
     active: list[dict[str, Any]] = []
     for row in registered:
         if not isinstance(row, Mapping):
@@ -340,7 +424,10 @@ def resolve_current_oracle_comparisons(source: dict[str, Any]) -> tuple[dict[str
             raise ValueError(f"Historical-only Oracle target cannot be executable: {name}")
         keys.add(key)
         if row.get("enabled", True):
-            scientific_key = oracle_target_semantics(row)
+            family = oracle_parameter_family(row)
+            if family not in oracle_baseline_arm_ids(source):
+                raise ValueError(f"Oracle parameter family has no baseline: {family}")
+            scientific_key = (*oracle_target_semantics(row), family)
             if scientific_key in scientific_keys:
                 raise ValueError(f"Duplicate Target / Selector / Strategy: {scientific_key}")
             scientific_keys.add(scientific_key)
@@ -353,6 +440,9 @@ __all__ = [
     "AUDIT_SCHEMA_VERSION",
     "resolve_current_oracle_comparisons",
     "oracle_comparison_key",
+    "oracle_parameter_family",
+    "oracle_baseline_arm_ids",
+    "validate_oracle_compare_family_coverage",
     "oracle_target_semantics",
     "oracle_scientific_target_name",
     "oracle_positive_output_for_recipe",

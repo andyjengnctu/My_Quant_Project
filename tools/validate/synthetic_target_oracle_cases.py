@@ -91,6 +91,7 @@ def _forty_only(definition):
         source={**definition.source, "oracle_comparisons": tuple(
         item for item in definition.source["oracle_comparisons"]
         if item.get("strategy", "Breakout") == "Breakout"
+        and str(item.get("parameter_family") or "min") == "min"
         and not item.get("positive_output") and item["target"] not in {
             "DailyUniversal_MinTrade60_NetR",
             "DailyUniversal_MinTrade60_NetR_Direct",
@@ -113,7 +114,9 @@ def _legacy_definition():
         "oracle_evaluation_end_date": "2025-12-22"},
         source={**active.source, "oracle_comparisons": tuple(
         item for item in active.source["oracle_comparisons"]
-        if item["target"] in _LEGACY_PRICE_ONLY_NAMES)})
+        if item["target"] in _LEGACY_PRICE_ONLY_NAMES
+        and item.get("strategy", "Breakout") == "Breakout"
+        and str(item.get("parameter_family") or "min") == "min")})
 
 
 def _historical_cg_price_definition():
@@ -2036,7 +2039,8 @@ class OracleAuditContractCases(TestCase):
             # All past report IDs/fingerprints needed for completed Oracle
             # payload compatibility remain available in one small ledger.
             oracle_history = registry["audit.target_oracle_romd"]
-            self.assertEqual(tuple(row["version"] for row in oracle_history), tuple(range(1, 13)))
+            self.assertEqual(tuple(row["version"] for row in oracle_history),
+                             tuple(range(1, len(oracle_history) + 1)))
             self.assertEqual(oracle_history[-1]["fingerprint"], current["audit.target_oracle_romd"])
             self.assertTrue(all(set(row) == {"contract_id", "version", "fingerprint"}
                                 for rows in registry.values() for row in rows))
@@ -2216,7 +2220,9 @@ class OracleAuditContractCases(TestCase):
         self.assertIn("Oracle Performance", oracle.render_result(report, target="markdown"))
         self.assertIn("**R40**", oracle.render_result(report, target="markdown"))
         self.assertIn("**T40**", oracle.render_result(report, target="markdown"))
-        self.assertIn("**T40_Direct**", oracle.render_result(report, target="markdown"))
+        # Direct shares the same scientific T40 definition; its receipt ID
+        # must not appear as a distinct Target in the human-readable schema.
+        self.assertIn("| T40 | Breakout | Direct |", oracle.render_result(report, target="markdown"))
         self.assertNotIn("MFE40/D40 zero denominator", oracle.render_result(report, target="console"))
         self.assertIn("RoMD Mean", oracle.render_result(report, target="console"))
         json.dumps(report, ensure_ascii=False)
@@ -3623,10 +3629,20 @@ class OracleUnifiedReuseArchitectureCases(TestCase):
             calls.append(kwargs)
             self.assertTrue(kwargs["preflight_approval"]("FORMAL REUSE/RUN/BLOCKED"))
             return {"status": "COMPLETED"}
+        # This historic test exercises the single-scope dispatcher.  The
+        # canonical multi-family dispatcher is tested separately with all
+        # current [1] scopes; do not make this fixture implicitly three-stage.
+        source = _ACTIVE_ORACLE_DEFINITION.source
+        min_only = replace(_ACTIVE_ORACLE_DEFINITION, source={**source,
+            "additional_parameter_baselines": {},
+            "oracle_comparisons": tuple(row for row in source["oracle_comparisons"]
+                if row.get("parameter_family", "min") == "min"
+                and row.get("strategy", "Breakout") == "Breakout"),
+        })
         with patch.object(oracle, "_run_single_stage_oracle", side_effect=planned):
             displays = []
             result = oracle.build_report(
-                _ACTIVE_ORACLE_DEFINITION, project_root=Path("/tmp"), quiet=True,
+                min_only, project_root=Path("/tmp"), quiet=True,
                 preflight_approval=lambda view: displays.append(view) or True,
             )
         self.assertEqual(result["status"], "COMPLETED")
@@ -3815,7 +3831,8 @@ class OracleOnePlanRealCacheCases(TestCase):
             source={**original.source, "oracle_comparisons": tuple(
             row for row in original.source["oracle_comparisons"]
             if row.get("strategy", "Breakout") == "Breakout"
-            and row["target"] in {"R40", "T40"})})
+            and row["target"] in {"R40", "T40"}
+            and row.get("parameter_family", "min") == "min")})
         settings, base, exact = oracle._contract(definition)
         plan = oracle._oracle_comparison_plan(definition)
         contracts = oracle._resolve_oracle_target_score_contracts(definition, settings, plan)
@@ -4052,7 +4069,9 @@ class OracleOnePlanRealCacheCases(TestCase):
         definition = replace(_ACTIVE_ORACLE_DEFINITION, source={
             **_ACTIVE_ORACLE_DEFINITION.source,
             "oracle_comparisons": tuple(item for item in _ACTIVE_ORACLE_DEFINITION.source["oracle_comparisons"]
-                                        if item["target"] in {"R40", "T40"}),
+                                        if item["target"] in {"R40", "T40"}
+                                        and item.get("parameter_family", "min") == "min"
+                                        and item.get("strategy", "Breakout") == "Breakout"),
         })
         settings, _base, _exact = oracle._contract(definition)
         bench = SimpleNamespace(benchmark_id="end_to_end_v1")
@@ -4087,7 +4106,9 @@ class OracleOnePlanRealCacheCases(TestCase):
         definition = replace(_ACTIVE_ORACLE_DEFINITION, source={
             **_ACTIVE_ORACLE_DEFINITION.source,
             "oracle_comparisons": tuple(entry for entry in _ACTIVE_ORACLE_DEFINITION.source["oracle_comparisons"]
-                                        if entry["target"] in {"R40", "T40"}),
+                                        if entry["target"] in {"R40", "T40"}
+                                        and entry.get("parameter_family", "min") == "min"
+                                        and entry.get("strategy", "Breakout") == "Breakout"),
         })
         settings, baseline, exact = oracle._contract(definition)
         plan = oracle._oracle_comparison_plan(definition)
@@ -5877,13 +5898,33 @@ class OracleEightSeedParameterDependencyRegressionCases(TestCase):
         self.assertIn("只讀Audit", status["reason"])
 
     @staticmethod
+    def _min_only_definition():
+        """Test legacy Min authorization independently of new Full/P17 controls.
+
+        The full multi-family authorization contract is exercised by the
+        registry-driven parameter-family tests, never implicitly permitted here.
+        """
+        source = _ACTIVE_ORACLE_DEFINITION.source
+        return replace(_ACTIVE_ORACLE_DEFINITION, source={
+            **source, "additional_parameter_baselines": {},
+            "oracle_comparisons": tuple(row for row in source["oracle_comparisons"]
+                                        if row.get("parameter_family", "min") == "min"),
+        })
+
+    @staticmethod
     def _approved_preview(fixture):
         rows = tuple(fixture["rows"])
         seeds = tuple(row["seed"] for row in rows)
+        missing = tuple(row["seed"] for row in rows if not row["ready"])
         return {
             "seed_set": seeds,
             "producer_kwargs": fixture["producer_kwargs"],
-            "missing_p16": tuple(row["seed"] for row in rows if not row["ready"]),
+            "missing_p16": missing,
+            "parameter_plans": {"C96": {
+                "seed_set": seeds,
+                "producer_kwargs": fixture["producer_kwargs"],
+                "missing": missing,
+            }},
             "preflight": {(row["seed"], "C96"): "REUSE" if row["ready"] else "RUN"
                           for row in rows},
             "text": "[Target 驗證 Fixed | Portfolio Replay 正式計畫]\n"
@@ -5914,7 +5955,7 @@ class OracleEightSeedParameterDependencyRegressionCases(TestCase):
              patch.object(application, "ensure_fixed_multiseed_robustness_strategy_parameter_artifact", side_effect=build), \
              redirect_stdout(io.StringIO()):
             application.ensure_authorized_oracle_parameters(
-                project_root=Path("/mock"), definition=_ACTIVE_ORACLE_DEFINITION,
+                project_root=Path("/mock"), definition=self._min_only_definition(),
                 approved_plan=preview,
             )
         self.assertEqual(built, seeds[4:])
@@ -5930,7 +5971,7 @@ class OracleEightSeedParameterDependencyRegressionCases(TestCase):
              patch.object(application, "ensure_fixed_multiseed_robustness_strategy_parameter_artifact") as produce, \
              redirect_stdout(io.StringIO()):
             application.ensure_authorized_oracle_parameters(
-                project_root=Path("/mock"), definition=_ACTIVE_ORACLE_DEFINITION,
+                project_root=Path("/mock"), definition=self._min_only_definition(),
                 approved_plan=self._approved_preview(fixture),
             )
         probe.assert_not_called()
@@ -5947,7 +5988,7 @@ class OracleEightSeedParameterDependencyRegressionCases(TestCase):
              redirect_stdout(io.StringIO()):
             with self.assertRaisesRegex(RuntimeError, "身分衝突"):
                 application.ensure_authorized_oracle_parameters(
-                    project_root=Path("/mock"), definition=_ACTIVE_ORACLE_DEFINITION,
+                    project_root=Path("/mock"), definition=self._min_only_definition(),
                     approved_plan=authorized,
                 )
             producer.assert_not_called()
@@ -5956,7 +5997,7 @@ class OracleEightSeedParameterDependencyRegressionCases(TestCase):
              patch.object(application, "ensure_fixed_multiseed_robustness_strategy_parameter_artifact") as producer, \
              self.assertRaisesRegex(RuntimeError, "原為 REUSE"):
             application.ensure_authorized_oracle_parameters(
-                project_root=Path("/mock"), definition=_ACTIVE_ORACLE_DEFINITION,
+                project_root=Path("/mock"), definition=self._min_only_definition(),
                 approved_plan=authorized,
             )
         producer.assert_not_called()

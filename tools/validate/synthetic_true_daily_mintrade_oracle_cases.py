@@ -290,6 +290,10 @@ class OraclePerfectOutputReuseCases(TestCase):
         index = OracleExecutionIndex(store)
         contexts = {}
         for strategy, scoped in oracle._oracle_strategy_scopes(definition):
+            # Historical fixture certifies only Min/P16. Newly registered
+            # Full/P17 must remain RUN until its own receipts are produced.
+            if scoped.source["baseline_arm_id"] != "C96":
+                continue
             # Recover current certified receipts without scientific recomputation.
             # Retired dual-source evidence is exercised separately below.
             plan = oracle._oracle_comparison_plan(scoped)
@@ -407,12 +411,16 @@ class OraclePerfectOutputReuseCases(TestCase):
             before = {p: p.read_bytes() for p in root.rglob("*") if p.is_file()}
             with self._environment(root, fixture):
                 preview = oracle.preview_oracle_replay_plan(fixture[0], project_root=root)
-                comparison_count = 1 + len(fixture[0].source["oracle_comparisons"])
+                comparison_count = len(preview["targets"])
                 self.assertEqual(len(preview["preflight"]), len(fixture[1]) * comparison_count)
-                self.assertEqual(set(preview["preflight"].values()), {"REUSE"})
+                self.assertEqual({preview["preflight"][(seed, key)]
+                                  for seed in fixture[1] for key in preview["targets"][:25]}, {"REUSE"})
+                self.assertEqual({preview["preflight"][(seed, key)]
+                                  for seed in fixture[1] for key in preview["targets"][25:]}, {"RUN"})
                 _, _, _, values, info = _oracle_rows(root, fixture[0], {})
             target = "TrueDailyUniversal_MinTrade_NetPnL_Positive"
-            self.assertEqual(len(values), comparison_count)
+            self.assertEqual(len(values), comparison_count - 3)  # Full has no signed receipts.
+            self.assertTrue({"C97", "T40::Full", "T40_Direct::Full"}.isdisjoint(values))
             self.assertEqual(values[target]["oracle_romd"], 11.)
             self.assertEqual(values[target + "::Daily"]["oracle_romd"], 31.)
             self.assertEqual(values[target + "_Direct::Daily"]["oracle_romd"], 32.)
@@ -427,7 +435,10 @@ class OraclePerfectOutputReuseCases(TestCase):
             before = {p: p.read_bytes() for p in root.rglob("*") if p.is_file()}
             with self._environment(root, fixture):
                 preview = oracle.preview_oracle_replay_plan(fixture[0], project_root=root)
-            self.assertEqual(set(preview["preflight"].values()), {"REUSE"})
+            self.assertEqual({action for (_seed, key), action in preview["preflight"].items()
+                              if key not in {"C97", "T40::Full", "T40_Direct::Full"}}, {"REUSE"})
+            self.assertEqual({action for (_seed, key), action in preview["preflight"].items()
+                              if key in {"C97", "T40::Full", "T40_Direct::Full"}}, {"RUN"})
             self.assertEqual(before, {p: p.read_bytes() for p in root.rglob("*") if p.is_file()})
 
     def test_legacy_oracle_positive_receipts_reuse_two_model_oracle_without_replay(self):
@@ -508,13 +519,19 @@ class OraclePerfectOutputReuseCases(TestCase):
             before = {p: p.read_bytes() for p in root.rglob("*") if p.is_file()}
             with self._environment(root, fixture):
                 preview = oracle.preview_oracle_replay_plan(fixture[0], project_root=root)
-            self.assertEqual(set(preview["preflight"].values()), {"REUSE"})
+            self.assertEqual({status for (_seed, key), status in preview["preflight"].items()
+                              if key not in {"C97", "T40::Full", "T40_Direct::Full"}}, {"REUSE"})
+            self.assertEqual({status for (_seed, key), status in preview["preflight"].items()
+                              if key in {"C97", "T40::Full", "T40_Direct::Full"}}, {"RUN"})
             self.assertEqual(before, {p: p.read_bytes() for p in root.rglob("*") if p.is_file()})
             shutil.rmtree(store.cache_root.parent / "execution_index")
             before = {p: p.read_bytes() for p in root.rglob("*") if p.is_file()}
             with self._environment(root, fixture):
                 preview = oracle.preview_oracle_replay_plan(fixture[0], project_root=root)
-            self.assertEqual(set(preview["preflight"].values()), {"REUSE"})
+            self.assertEqual({status for (_seed, key), status in preview["preflight"].items()
+                              if key not in {"C97", "T40::Full", "T40_Direct::Full"}}, {"REUSE"})
+            self.assertEqual({status for (_seed, key), status in preview["preflight"].items()
+                              if key in {"C97", "T40::Full", "T40_Direct::Full"}}, {"RUN"})
             self.assertEqual(before, {p: p.read_bytes() for p in root.rglob("*") if p.is_file()})
 
     def test_one_missing_daily_seed_hides_only_its_aggregate_without_replay(self):
@@ -533,9 +550,10 @@ class OraclePerfectOutputReuseCases(TestCase):
             with self._environment(root, fixture):
                 preview = oracle.preview_oracle_replay_plan(fixture[0], project_root=root)
                 _, _, _, values, _ = _oracle_rows(root, fixture[0], {})
-            self.assertEqual(list(preview["preflight"].values()).count("RUN"), 1)
+            self.assertEqual(list(preview["preflight"].values()).count("RUN"),
+                             3 * len(fixture[1]) + 1)
             self.assertEqual(preview["preflight"][(fixture[1][-1], key)], "RUN")
-            self.assertEqual(len(values), len(fixture[0].source["oracle_comparisons"]))
+            self.assertEqual(len(values), len(preview["targets"]) - 4)  # Missing Min seed + three Full RUN rows.
             self.assertNotIn(key, values)
             self.assertIn(key.replace("::Daily", ""), values)
             self.assertIn(key.replace("::Daily", "_Direct::Daily"), values)

@@ -60,10 +60,11 @@ class PositiveNetPnlContractCases(TestCase):
 
     def test_scientific_target_and_selector_names_do_not_mutate_signed_receipt_ids(self):
         from core.audit_registry import (oracle_scientific_target_name,
-                                         oracle_target_semantics)
+                                         oracle_target_semantics, oracle_parameter_family)
         d = get_formal_oracle_definition(get_active_audit_module_id())
         rows = resolve_current_oracle_comparisons(d.source)
-        self.assertEqual(len(rows), len({oracle_target_semantics(x) for x in rows}))
+        self.assertEqual(len(rows), len({(*oracle_target_semantics(x), oracle_parameter_family(x))
+                                        for x in rows}))
         by_legacy = {oracle_comparison_key(x): x for x in rows}
         cases = (
             ("MFE40_Control", "MFE40", "Exact", "Breakout"),
@@ -395,8 +396,10 @@ class PositiveNetPnlContractCases(TestCase):
                  9734312, 1020806211, 116293459, 1234683984]
         positive_exact = "DailyUniversal_MinTrade_NetPnL_Positive"
         positive_direct = positive_exact + "_Direct"
+        from core.audit_registry import oracle_parameter_family
         published = [row for row in comparisons if row["target"] != positive_exact
-                     and row.get("strategy", "Breakout") == "Breakout"]
+                     and row.get("strategy", "Breakout") == "Breakout"
+                     and oracle_parameter_family(row) == "min"]
         legacy_keys = {"C96", *(oracle_comparison_key(row) for row in published
                                  if not row.get("strategy_arm_id"))}
         old_definitions = {row["target"]: row["description"] for row in published}
@@ -502,7 +505,10 @@ class PositiveNetPnlContractCases(TestCase):
                     "target": target, "strategy": "Daily", "seeds": len(seeds),
                     "romd": 41.0, "win_rate_pct": 96.0,
                 })
-            payload["comparison_inventory"] = list(targets)
+            # A historical signed report cannot claim newly registered Full/P17
+            # Oracle items. It retains only its own completed Min inventory.
+            payload["comparison_inventory"] = [key for key in targets
+                                                if key not in {"C97", "T40::Full", "T40_Direct::Full"}]
             # Legacy aggregate reports have no per-row source-arm receipt.
             # Old Breakout remains readable, but previous C131/C132 Daily
             # results must not be re-labelled as C133/C134 evidence.
@@ -516,7 +522,9 @@ class PositiveNetPnlContractCases(TestCase):
                 for row in comparisons if row.get("strategy_arm_id")
             }
             _, _, _, values, info = read_rows()
-            self.assertEqual(len(values), len(targets))
+            self.assertEqual(set(values), set(payload["comparison_inventory"]))
+            self.assertEqual(len(values), len(targets) - 3)  # No Full/P17 receipts in the old report.
+            self.assertTrue({"C97", "T40::Full", "T40_Direct::Full"}.isdisjoint(values))
             self.assertEqual(values[positive_direct]["oracle_romd"], 204.88)
             self.assertEqual(values["TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct"]["oracle_romd"], 24.62)
             self.assertEqual(values["TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct::Daily"]["oracle_romd"], 41.0)
@@ -553,12 +561,17 @@ class PositiveNetPnlContractCases(TestCase):
     def test_scoped_publisher_signs_actual_reference_arm_for_each_strategy(self):
         definition = get_formal_oracle_definition(get_active_audit_module_id())
         comparisons = resolve_current_oracle_comparisons(definition.source)
-        baseline = {"target": "C96", "seeds": 8, "romd": 9.17}
+        from core.audit_registry import oracle_baseline_arm_ids
+        baselines = oracle_baseline_arm_ids(definition.source)
         reports = []
-        for strategy in ("Breakout", "Daily"):
-            subset = [row for row in comparisons if row.get("strategy", "Breakout") == strategy]
+        from services.audit import target_oracle_romd as oracle
+        for scope, scoped in oracle._oracle_strategy_scopes(definition):
+            strategy = scope.split("::", 1)[0]
+            subset = scoped.source["oracle_comparisons"]
+            baseline_arm = scoped.source["baseline_arm_id"]
             report = {
-                "baseline": baseline,
+                "baseline": {"target": baseline_arm, "seeds": 8,
+                             "romd": 9.17 if baseline_arm == baselines["min"] else 15.5},
                 "seeds": list(range(8)), "benchmark_id": "end_to_end_v2",
                 "dataset": "full", "start_date": "2021-01-01", "end_date": "2026-03-02",
                 "common_cohort": {"cohort_rows": 630589}, "param_artifacts": {},
@@ -566,7 +579,7 @@ class PositiveNetPnlContractCases(TestCase):
                 "definitions": {row["target"]: row["description"] for row in subset},
                 "oracles": [{"target": row["target"], "strategy": strategy} for row in subset],
             }
-            reports.append((strategy, report))
+            reports.append((scope, report))
         merged = _oracle_merge_scoped_reports(definition, reports)
         settings = get_strategy_comparison_settings(STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE)
         references = merged["comparison_reference_arms"]
