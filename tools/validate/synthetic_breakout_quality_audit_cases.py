@@ -158,44 +158,80 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         and oracle_method_id not in audit_method_ids,
     )
     # Research [1] -> Target Validation [1] shows the Target x Seed matrix
-    # BEFORE the one execution approval, even if canonical P16 inputs are missing.
+    # BEFORE the one execution approval, even if Min/Full inputs are missing.
     from services.audit import target_oracle_romd as oracle_handler
     from services.audit.target_oracle_romd import render_replay_preflight
     from services.research import target_oracle_application as oracle_application
     from core.audit_registry import (
-        oracle_comparison_key, oracle_target_semantics,
-        resolve_current_oracle_comparisons,
+        oracle_baseline_arm_ids, oracle_comparison_key, oracle_parameter_family,
+        oracle_target_semantics, resolve_current_oracle_comparisons,
     )
     from core.training_policy import get_robustness_benchmark_policy_snapshot
     registered_oracle = oracle_application.get_formal_oracle_definition("breakout_quality")
     benchmark_seeds = tuple(get_robustness_benchmark_policy_snapshot()["resolved_seeds"])
 
-    # The live Research [1] route owns the P16 Oracle matrix and one approval.
-    # The fixture is independent of local signed receipts and market data.
+    # The Research [1] route owns one Min/Full Oracle matrix and one approval.
+    # Model both parameter families in this isolated fixture, independently of
+    # local signed receipts or market data.  Use the formal registry to derive
+    # arm IDs and keys rather than maintaining a second synthetic inventory.
     current_rows = resolve_current_oracle_comparisons(registered_oracle.source)
-    original_key = oracle_comparison_key(current_rows[0])
-    existing_targets = ("C96", original_key)
+    baselines = oracle_baseline_arm_ids(registered_oracle.source)
+    sampled_rows = {
+        family: next(row for row in current_rows
+                     if oracle_parameter_family(row) == family)
+        for family in ("min", "full")
+    }
+    parameter_plans = {
+        baselines[family]: {
+            "seed_set": benchmark_seeds,
+            "missing": benchmark_seeds[4:] if family == "min" else benchmark_seeds,
+            "producer_kwargs": {"benchmark_id": "end_to_end_v2",
+                                "training_profile_id": f"synthetic_{family}"},
+        }
+        for family in sampled_rows
+    }
+    existing_targets = tuple(
+        target for family, row in sampled_rows.items()
+        for target in (baselines[family], oracle_comparison_key(row))
+    )
+    target_baselines = {
+        target: baselines[family]
+        for family, row in sampled_rows.items()
+        for target in (baselines[family], oracle_comparison_key(row))
+    }
     old_decisions = {
-        (seed, target): ("REUSE" if seed in benchmark_seeds[:4] else "RUN")
+        (seed, target): (
+            "RUN" if seed in parameter_plans[target_baselines[target]]["missing"]
+            else "REUSE"
+        )
         for seed in benchmark_seeds for target in existing_targets
     }
+    min_plan = parameter_plans[baselines["min"]]
     preview_plan = {
-        "status": "PREVIEW", "text": "synthetic certified Oracle preview",
-        "seed_set": benchmark_seeds, "missing_p16": benchmark_seeds[4:],
-        "producer_kwargs": {"benchmark_id": "end_to_end_v2"},
+        "status": "PREVIEW",
+        "seed_set": benchmark_seeds,
+        "missing_p16": min_plan["missing"],
+        "producer_kwargs": min_plan["producer_kwargs"],
+        "parameter_plans": parameter_plans,
         "targets": existing_targets, "preflight": old_decisions,
     }
-    names = {"C96": "C96"}
-    strategies = {"C96": "Breakout"}
-    selectors = {"C96": "-"}
-    for row in current_rows:
+    names = {base: base if family == "min" else f"{base} (Full)"
+             for family, base in baselines.items() if family in sampled_rows}
+    strategies = {base: "Breakout" for base in names}
+    selectors = {base: "-" for base in names}
+    for family, row in sampled_rows.items():
         key = oracle_comparison_key(row)
         names[key], selectors[key], strategies[key] = oracle_target_semantics(row)
+        if family != "min":
+            names[key] += f" ({family.capitalize()})"
     preview = render_replay_preflight(
         label="Fixed", seeds=list(benchmark_seeds),
         targets=list(existing_targets), decisions=old_decisions,
         strategies=strategies, display_targets=names, selectors=selectors,
     )
+    # The approved preview must be exactly the matrix printed by [1][1],
+    # not an unrelated placeholder string that defeats menu/approval assertions.
+    preview_plan["text"] = preview
     route_console = io.StringIO()
     prompts = []
     executions = []
@@ -242,6 +278,15 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         and "[9]" in root_text and "策略升格" in root_text,
     )
     check_true(
+        "target_validation_delegates_both_parameter_family_plans_as_authorized",
+        ensure.call_count == 1
+        and ensure.call_args.kwargs.get("approved_plan") is preview_plan
+        and set(preview_plan["parameter_plans"]) == set(baselines.values())
+        and all(f"前置 {base}：" in root_text for base in baselines.values())
+        and preview_plan["parameter_plans"][baselines["min"]]["producer_kwargs"]
+            != preview_plan["parameter_plans"][baselines["full"]]["producer_kwargs"],
+    )
+    check_true(
         "target_validation_only_one_confirm_even_if_verified_run_count_changes",
         len(prompts) == 5
         and not prompts[0][1] and not prompts[1][1] and prompts[2][1]
@@ -279,7 +324,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     )
 
     # Cancel leaves both Optimizer and Replay untouched. The visible matrix is
-    # a scientific read-only plan, not a P16 file-existence inventory.
+    # a scientific read-only plan, not a parameter file-existence inventory.
     cancellation = io.StringIO()
     with patch("builtins.input", return_value="0") as cancel_input, \
          patch.object(oracle_handler, "preview_oracle_replay_plan", return_value=preview_plan), \
