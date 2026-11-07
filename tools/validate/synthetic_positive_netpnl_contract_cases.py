@@ -1,4 +1,4 @@
-"""Positive admission topology and selector regressions (dual and primary-only).
+"""Positive admission topology and selector regressions for current dual-DL arms.
 
 Only isolated synthetic data and a one-epoch CPU model roundtrip are used.
 No real market files, strategy optimizer or formal test runner is used.
@@ -120,50 +120,45 @@ class PositiveNetPnlContractCases(TestCase):
                                  POSITIVE_P_CLASS_COLUMN)
                 self.assertIsNone(positive_profile.score_calibration)
 
-    def test_t40_positive_uses_raw_t40_truth_and_one_primary_classifier_source(self):
-        from core.breakout_quality_registry import (
-            get_breakout_quality_experiment_profile,
-            DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_PAIRWISE_PROFILE,
-            DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_POSITIVE_PROFILE,
+    def test_retired_t40_positive_is_not_in_any_current_research_inventory(self):
+        from config.breakout_quality import (
+            BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE,
+            BREAKOUT_QUALITY_MODEL_TEST_PROFILES,
         )
-        from core.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
-        from config.breakout_quality import BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE
-        from filters.breakout_quality.strategy_compare_dl_artifacts import resolve_arm_runtime_dl_source_ids
-        cj = get_breakout_quality_experiment_profile(
-            DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_PAIRWISE_PROFILE)
-        cw = get_breakout_quality_experiment_profile(
-            DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_POSITIVE_PROFILE)
-        self.assertEqual(cj.continuous_target_id, cw.continuous_target_id)
-        self.assertEqual(cj.continuous_target_id, 'daily_terminal_mae_gated_t40_v1')
-        self.assertTrue(get_continuous_ranker_execution_recipe(cj.name).training_policy.uses_pairwise_loss)
-        classifier = get_continuous_ranker_execution_recipe(cw.name).training_policy
-        self.assertFalse(classifier.uses_pairwise_loss)
-        self.assertEqual(classifier.categorical_class_count, 2)
-        self.assertEqual(classifier.categorical_primary_class, 1)
-        self.assertEqual(classifier.categorical_score_columns[1], POSITIVE_P_CLASS_COLUMN)
-        self.assertIsNone(cw.score_calibration)
-        self.assertEqual(BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE[1], cw.name)
-        # AI: Raw supervised T40=0 belongs to the nonpositive class; unobservable T40
-        #     stays NULL and must never contaminate either cross-entropy class.
-        result = positive_labels([float('nan'), -1.0, 0.0, 1e-4])
-        self.assertTrue(np.isnan(result[0]))
-        np.testing.assert_array_equal(result[1:], np.array([0., 0., 1.]))
+        from core.breakout_quality_registry import (
+            DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_POSITIVE_PROFILE,
+            get_continuous_ranker_research_spec,
+        )
+        from core.strategy_compare_registry import STRATEGY_DL_SOURCES
+        from core.audit_registry import resolve_current_oracle_comparisons
+        self.assertNotEqual(BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE[0], 'MR-13CW')
+        self.assertIn(BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE, BREAKOUT_QUALITY_MODEL_TEST_PROFILES)
+        self.assertNotIn('MR-13CW', {model for model, _ in BREAKOUT_QUALITY_MODEL_TEST_PROFILES})
         settings = get_strategy_comparison_settings(STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE)
-        self.assertIn('C144', {arm.arm_id for arm in settings.enabled_arms})
-        self.assertNotIn('C142', {arm.arm_id for arm in settings.enabled_arms})
-        self.assertNotIn('C143', {arm.arm_id for arm in settings.enabled_arms})
-        arm = settings.arms['C144']
-        reference = settings.arms['C96']
-        self.assertEqual((arm.param_source, arm.param_policy, arm.rule_policy, arm.entry_strategy),
-                         (reference.param_source, reference.param_policy, reference.rule_policy,
-                          reference.entry_strategy))
-        self.assertEqual(arm.dl_runtime_mode, 'positive-only-default')
-        self.assertEqual(resolve_arm_runtime_dl_source_ids(settings, arm), ('CONT13CW_ROLL',))
-        self.assertEqual(arm.dl_runtime_options['positive_probability_threshold'], 0.5)
-        self.assertEqual(arm.dl_runtime_options['primary_score_column'], POSITIVE_P_CLASS_COLUMN)
-        self.assertTrue(uses_primary_positive_classifier(arm.dl_runtime_options))
-        self.assertNotIn('positive_dl_id', arm.dl_runtime_options)
-        self.assertEqual(settings.dl_sources[arm.dl_id].experiment_profile, cw.name)
+        active = {arm.arm_id for arm in settings.enabled_arms}
+        self.assertTrue({'C96', 'C107', 'C109', 'C125', 'C126', 'C133', 'C134', 'C135', 'C136'}.issubset(active))
+        self.assertTrue({'C142', 'C143', 'C144'}.isdisjoint(active))
+        self.assertIn('C144', settings.arms)  # Immutable historical strategy ID.
+        self.assertIn('CONT13CW_ROLL', STRATEGY_DL_SOURCES)  # Historical PIT source ID.
+        self.assertEqual(get_continuous_ranker_research_spec(
+            DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_POSITIVE_PROFILE).model_research_id, 'MR-13CW')
+        definition = get_formal_oracle_definition(get_active_audit_module_id())
+        historical = definition.source['historical_only_oracle_targets']
+        self.assertIn('T40_Positive', historical)
+        self.assertIn('T40_Positive_Direct', historical)
+        current = resolve_current_oracle_comparisons(definition.source)
+        self.assertTrue(all(row['target'] != 'T40_Positive' for row in current))
+        self.assertTrue({'T40', 'T40_Direct'}.issubset({row['target'] for row in current}))
+        # Historical name cannot be silently reactivated through an added list row.
+        retired_row = {'target': 'T40_Positive', 'selector': 'default',
+                       'score_source': 'T40', 'positive_output': 't40_positive_probability_v1',
+                       'strategy_arm_id': 'C144'}
+        with self.assertRaisesRegex(ValueError, 'Historical-only Oracle target'):
+            resolve_current_oracle_comparisons({**definition.source,
+                'oracle_comparisons': (*definition.source['oracle_comparisons'], retired_row)})
+        overview = collect_target_dl_overview(ROOT)
+        self.assertTrue(all(row['target'] != 'T40_Positive' and row['strategy'] != 'C144'
+                            for row in overview['rows']))
 
     def test_target_overview_joins_ranker_and_classifier_by_runtime_roles(self):
         # Truth identity is intentionally shared by NetPnL rank and P(NetPnL>0)
@@ -176,7 +171,6 @@ class PositiveNetPnlContractCases(TestCase):
         from filters.breakout_quality.strategy_compare_dl_artifacts import resolve_arm_runtime_dl_source_ids
         settings = get_strategy_comparison_settings(STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE)
         cases = (
-            ("T40_Positive", "Breakout", "Default", "C144", "", "MR-13CW"),
             ("MinTrade_NetPnL", "Breakout", "Exact", "C123", "MR-13CO", ""),
             ("MinTrade_NetPnL", "Breakout", "Direct", "C124", "MR-13CO", ""),
             ("MinTrade_NetPnL_Positive", "Breakout", "Exact", "C125", "MR-13CO", "MR-13CP"),
@@ -349,58 +343,6 @@ class PositiveNetPnlContractCases(TestCase):
                     'breakout_quality_ranking_options':arm.dl_runtime_options,
                 }))
 
-    def test_primary_positive_only_default_admission_is_strict_and_fail_closed(self):
-        from core.buy_sort import sort_candidate_rows, BUY_LIMIT_OVERAGE_SORT_METHOD, ENTRY_TYPE_THEN_PROJ_COST_SORT_METHOD
-        from core.positive_score_admission import requires_positive_score
-        settings = get_strategy_comparison_settings(STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE)
-        arm = settings.arms['C144']
-        options = dict(arm.dl_runtime_options)
-        self.assertTrue(requires_positive_score(options))
-        for k,v in [('positive_dl_id','CONT13CJ_ROLL'), ('primary_score_column','breakout_quality_score'),
-                    ('positive_probability_threshold',.25), ('positive_score_column','other')]:
-            with self.subTest(option=k), self.assertRaises(ValueError):
-                requires_positive_score({**options,k:v})
-        def candidate(ticker,score,order):
-            return {'ticker': ticker, 'sort_value':order,'proj_cost':100.0,
-                    'breakout_quality_rank':{'available':True,'score':score,'score_date':'2024-10-01'},
-                    'breakout_quality_ranking_options': options,
-                    'breakout_quality_ranking_policy': 'positive-only-default'}
-        a=candidate('2330',.99,2)
-        b=candidate('2317',.51,1)
-        c=candidate('1101',.50,0)
-        self.assertEqual([row['ticker'] for row in admit_positive_score_rows([a,b,c])],['2330','2317'])
-        baseline=[{k:v for k,v in item.items() if not k.startswith('breakout_quality_')} for item in (a,b)]
-        for method in [BUY_LIMIT_OVERAGE_SORT_METHOD, ENTRY_TYPE_THEN_PROJ_COST_SORT_METHOD]:
-            with self.subTest(method=method):
-                filtered=admit_positive_score_rows([a.copy(),b.copy(),c.copy()])
-                expected=sort_candidate_rows(baseline.copy(),method=method)
-                actual=sort_candidate_rows(filtered,method=method)
-                self.assertEqual([x['ticker'] for x in actual],[x['ticker'] for x in expected])
-        for state in [{'available':False}, {'available':True,'score':float('nan'),'score_date':'2024-10-01'},
-                      {'available':True,'score':.8}, {'available':True,'score':1.1,'score_date':'2024-10-01'}]:
-            self.assertFalse(positive_score_admitted({'breakout_quality_rank':state,
-                                                       'breakout_quality_ranking_options':options}))
-
-    def test_oracle_primary_positive_only_replaces_primary_probability_not_percentile_rank(self):
-        settings = get_strategy_comparison_settings(STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE)
-        arm=settings.arms['C144']
-        with audit_oracle_truth_score_context(
-            {('2330','2024-10-01'):.01,('2317','2024-10-01'):.99},
-            ranking_policy=arm.dl_runtime_mode, ranking_options=arm.dl_runtime_options,
-            positive_scores={('2330','2024-10-01'):1.0,('2317','2024-10-01'):0.0},
-            score_start='2024-01-01', key_mode='information_date',
-            missing_key_policy='unavailable_outside_mature_feature_universe',
-        ):
-            good=resolve_breakout_quality_candidate_rank(ticker='2330',
-                 signal_date='2024-10-01',information_date='2024-10-01',high_len=40)
-            bad=resolve_breakout_quality_candidate_rank(ticker='2317',
-                 signal_date='2024-10-01',information_date='2024-10-01',high_len=40)
-            self.assertEqual((good['score'],bad['score']),(1.0,0.0))
-            self.assertTrue(positive_score_admitted({'breakout_quality_rank':good,
-                            'breakout_quality_ranking_options':arm.dl_runtime_options}))
-            self.assertFalse(positive_score_admitted({'breakout_quality_rank':bad,
-                            'breakout_quality_ranking_options':arm.dl_runtime_options}))
-
     def test_oracle_uses_identical_score_boundary_and_selector(self):
         definition = get_formal_oracle_definition(get_active_audit_module_id())
         plan=_oracle_comparison_plan(definition)
@@ -439,28 +381,6 @@ class PositiveNetPnlContractCases(TestCase):
                     ranking_options=arm.dl_runtime_options,
                 ):
                     pass
-
-    def test_primary_positive_only_reference_arm_is_not_mislabeled_as_ranker(self):
-        from core.strategy_compare_policy import get_strategy_comparison_settings as load_settings
-        from config.strategy_compare import STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE
-        settings = load_settings(STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE)
-        comparison = next(
-            c for c in resolve_current_oracle_comparisons(
-                get_formal_oracle_definition(get_active_audit_module_id()).source)
-            if c["target"] == "T40_Positive"
-        )
-        binding = reference_arm_execution_binding(comparison, settings)
-        self.assertEqual(binding["arm_id"], "C144")
-        self.assertEqual(set(binding["execution_contract"]["sources"]), {"positive"})
-        self.assertNotIn("rank", binding["execution_contract"]["sources"])
-        prior = next(
-            c for c in resolve_current_oracle_comparisons(
-                get_formal_oracle_definition(get_active_audit_module_id()).source)
-            if c["target"] == "DailyUniversal_MinTrade_NetPnL_Positive"
-            and c.get("selector") == "exact"
-        )
-        old = reference_arm_execution_binding(prior, settings)
-        self.assertEqual(set(old["execution_contract"]["sources"]), {"rank"})
 
     def test_existing_completed_oracle_rows_survive_new_positive_target(self):
         definition = get_formal_oracle_definition(get_active_audit_module_id())
@@ -701,8 +621,7 @@ class IndependentPositiveClassifierCases(TestCase):
         from io import StringIO
         from core.breakout_quality_registry import (get_breakout_quality_experiment_profile,
                                                      DAILY_UNIVERSAL_NETPNL_POSITIVE_BINARY_PROFILE,
-                                                     TRUE_DAILY_MINTRADE_NETPNL_POSITIVE_PROFILE,
-                                                     DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_POSITIVE_PROFILE)
+                                                     TRUE_DAILY_MINTRADE_NETPNL_POSITIVE_PROFILE)
         from filters.breakout_quality.models.spec import get_model_spec
         from services.breakout_quality import train_continuous_ranker as trainer
         from services.breakout_quality import continuous_ranker_pipeline as pipeline
@@ -723,8 +642,7 @@ class IndependentPositiveClassifierCases(TestCase):
                               'label': (raw > 0).astype(int)})
         percentiles = trainer.build_same_date_percentile_targets(raw, np.ones(24,dtype=bool), groups['date'])
         for name in (DAILY_UNIVERSAL_NETPNL_POSITIVE_BINARY_PROFILE,
-                     TRUE_DAILY_MINTRADE_NETPNL_POSITIVE_PROFILE,
-                     DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_POSITIVE_PROFILE):
+                     TRUE_DAILY_MINTRADE_NETPNL_POSITIVE_PROFILE):
             with self.subTest(profile=name), redirect_stdout(StringIO()):
                 recipe = get_breakout_quality_experiment_profile(name)
                 self.assertEqual(get_continuous_ranker_training_policy(recipe.training_objective).categorical_class_count, 2)
@@ -863,107 +781,6 @@ class ScoreOutputCompletenessCases(TestCase):
                 replay_policy={}, score_contract=None, source_contract=None, dataset_inputs=None,
                 execution_gate="fullcycle_reference_net_pnl_strictly_positive_v1")
 
-
-
-class PriceRawPositiveOracleCases(TestCase):
-    def test_price_classification_is_from_raw_scalar_not_daily_percentile(self):
-        from services.audit.oracle_price_positive_truth import load_or_build_price_positive_scores
-        from core.audit_registry import oracle_positive_output_for_recipe
-        self.assertEqual(oracle_positive_output_for_recipe("terminal_mae_gate"),
-                         "t40_positive_probability_v1")
-        self.assertEqual(oracle_positive_output_for_recipe("daily_trade_path_net_pnl"),
-                         "netpnl_positive_probability_v1")
-        day = "2021-01-05"
-        keys = [("1101", day), ("1102", day), ("1103", day)]
-        # The second rank is above 0.5, although the raw T40 is zero.
-        rank = dict(zip(keys, (0.6, 0.8, 0.2)))
-        raw = dict(zip(keys, (-0.25, 0.0, 0.0002)))
-        identity = {"source": "canonical_t40", "price_sha256": "a" * 64,
-                    "rank_sha256": "b" * 64}
-        with TemporaryDirectory() as temp:
-            root = Path(temp)
-            first = load_or_build_price_positive_scores(
-                cache_root=root, identity=identity, canonical_scores=rank,
-                build_raw=lambda: raw, allow_build=True,
-            )
-            self.assertEqual([first[k] for k in keys], [0.0, 0.0, 1.0])
-            second = load_or_build_price_positive_scores(
-                cache_root=root, identity=identity, canonical_scores=rank,
-                build_raw=lambda: self.fail("cached truth MUST NOT rebuild"), allow_build=False,
-            )
-            self.assertEqual(second, first)
-            file = next((root / "price_positive_truth").glob("*.npz"))
-            file.write_bytes(b"tampered")
-            with self.assertRaisesRegex(ValueError, "corrupt"):
-                load_or_build_price_positive_scores(
-                    cache_root=root, identity=identity, canonical_scores=rank,
-                    build_raw=lambda: raw, allow_build=True,
-                )
-
-    def test_missing_positive_truth_is_never_inferred_from_ranks(self):
-        from services.audit.oracle_price_positive_truth import load_or_build_price_positive_scores
-        rank = {("1101", "2021-01-05"): 0.9, ("1102", "2021-01-05"): 0.2}
-        with TemporaryDirectory() as temp:
-            base = dict(cache_root=Path(temp), identity={"source": "raw-positive"},
-                        canonical_scores=rank)
-            with self.assertRaisesRegex(ValueError, "missing signed"):
-                load_or_build_price_positive_scores(**base, build_raw=lambda: {}, allow_build=False)
-            with self.assertRaisesRegex(ValueError, "missing/extra"):
-                load_or_build_price_positive_scores(
-                    **base, build_raw=lambda: {next(iter(rank)): 1.0}, allow_build=True)
-            with self.assertRaisesRegex(ValueError, "non-finite"):
-                load_or_build_price_positive_scores(
-                    **base, build_raw=lambda: {**dict.fromkeys(rank, 0.0),
-                                                next(iter(rank)): float("nan")}, allow_build=True)
-            self.assertEqual(list((Path(temp) / "price_positive_truth").glob("*.npz")), [])
-
-    def test_positive_only_comparison_uses_unselected_immutable_t40_recipe(self):
-        from dataclasses import replace
-        from services.audit import target_oracle_romd as oracle
-        active = get_formal_oracle_definition(get_active_audit_module_id())
-        scoped = replace(active, source={**active.source, "oracle_comparisons": tuple(
-            row for row in active.source["oracle_comparisons"]
-            if row.get("positive_output") == "t40_positive_probability_v1"
-        )})
-        plan = oracle._oracle_comparison_plan(scoped)
-        settings, _base, _exact = oracle._contract(scoped)
-        self.assertEqual(tuple(plan["recipes"]), ("T40",))
-        self.assertEqual(oracle._price_positive_source_recipe(scoped, "T40")["score"],
-                         "terminal_mae_gate")
-        for name, _description in plan["targets"]:
-            self.assertEqual(plan["aliases"][name], "T40")
-            self.assertEqual(scoped.source['oracle_comparisons'][0]['positive_output'],
-                             "t40_positive_probability_v1")
-
-    def test_oracle_two_views_use_one_registry_and_declared_model_roles(self):
-        definition = get_formal_oracle_definition(get_active_audit_module_id())
-        comparisons = resolve_current_oracle_comparisons(definition.source)
-        plan = _oracle_comparison_plan(definition)
-        settings, _, _ = _contract(definition)
-        contracts = _resolve_oracle_target_score_contracts(definition, settings, plan)
-        selected = [row for row in comparisons if row.get("positive_output") ==
-                    "t40_positive_probability_v1"]
-        self.assertEqual({row["target"] for row in selected}, {"T40_Positive"})
-        self.assertEqual(selected[0]['selector'], 'default')
-        score_targets = {oracle_comparison_key(row): __import__(
-            'core.audit_registry', fromlist=['oracle_supervised_target_id']).oracle_supervised_target_id(
-                next(other for other in comparisons
-                     if other['target'] == row.get('score_source', row['target'])))
-            for row in comparisons}
-        bindings = _strategy_bindings(
-            target_names=tuple(score_targets), score_targets=score_targets, definition=definition)
-        for row in selected:
-            with self.subTest(arm=row['strategy_arm_id']):
-                name = oracle_comparison_key(row)
-                profile = settings.dl_sources[settings.arms[row['strategy_arm_id']].dl_id].experiment_profile
-                expected_binding_profile = ("" if uses_primary_positive_classifier(
-                    settings.arms[row['strategy_arm_id']].dl_runtime_options) else profile)
-                self.assertEqual(bindings[(name, expected_binding_profile)], row['strategy_arm_id'])
-                self.assertEqual(contracts[name]['reference_arm_id'], row['strategy_arm_id'])
-                self.assertEqual(contracts[name]['perfect_positive_output'],
-                                 't40_positive_probability_v1')
-                self.assertEqual(plan['aliases'][name], 'T40')
-        self.assertEqual(plan['recipes']['T40'], ('terminal_mae_gate', 'pure_mfe40_provider'))
 
 
 if __name__ == '__main__':

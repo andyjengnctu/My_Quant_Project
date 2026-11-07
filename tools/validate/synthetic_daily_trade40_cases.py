@@ -3163,6 +3163,48 @@ class RealPathDiagnosticCacheCases(unittest.TestCase):
 
 
 class ExecutionAccelerationCases(unittest.TestCase):
+    def test_research_model_selection_equivalence_is_ast_pinned_and_fail_closed(self):
+        import ast
+        from hashlib import sha256
+        from core import research_execution_equivalence as proof
+        from core.file_integrity import compute_file_sha256
+        relative = "config/breakout_quality.py"
+        original = (Path(__file__).resolve().parents[2] / relative).read_text(encoding="utf-8")
+        with TemporaryDirectory() as directory:
+            source = Path(directory) / relative
+            source.parent.mkdir(parents=True)
+            synthetic_module = str(Path(directory) / "core/research_execution_equivalence.py")
+            with patch.object(proof, "__file__", synthetic_module):
+                for replacement in ("MR-REFERENCE-1", "MR-REFERENCE-2"):
+                    tree = ast.parse(original)
+                    node = next(item for item in tree.body if isinstance(item, ast.Assign)
+                                and len(item.targets) == 1 and isinstance(item.targets[0], ast.Name)
+                                and item.targets[0].id == "BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE")
+                    node.value.elts[0].value = replacement
+                    source.write_text(ast.unparse(tree), encoding="utf-8")
+                    self.assertEqual(proof.reviewed_execution_source_sha256(relative,
+                                         compute_file_sha256(source)),
+                                     proof._RESEARCH_SELECTION_ONLY_CONFIG_BASELINE_SHA256)
+                # Changing any price-affecting setting cannot receive equivalence.
+                tree = ast.parse(original)
+                node = next(item for item in tree.body if isinstance(item, ast.Assign)
+                            and isinstance(item.targets[0], ast.Name)
+                            and item.targets[0].id == "BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD")
+                node.value = ast.Constant(value=0.314159)
+                source.write_text(ast.unparse(tree), encoding="utf-8")
+                changed = compute_file_sha256(source)
+                self.assertEqual(proof.reviewed_execution_source_sha256(relative, changed), changed)
+                # Arbitrary executable expressions in the exempt field are unsafe.
+                tree = ast.parse(original)
+                node = next(item for item in tree.body if isinstance(item, ast.Assign)
+                            and isinstance(item.targets[0], ast.Name)
+                            and item.targets[0].id == "BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE")
+                node.value.elts[0] = ast.Call(func=ast.Name(id="unsafe", ctx=ast.Load()),
+                                              args=[], keywords=[])
+                source.write_text(ast.unparse(ast.fix_missing_locations(tree)), encoding="utf-8")
+                changed = compute_file_sha256(source)
+                self.assertEqual(proof.reviewed_execution_source_sha256(relative, changed), changed)
+
     def test_reviewed_execution_proof_never_accepts_unknown_source_or_calculation(self):
         from core.research_execution_equivalence import (
             _REVIEWED, reviewed_execution_source_sha256, reviewed_calculation_sha256,

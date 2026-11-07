@@ -533,8 +533,8 @@ class StrategyRobustnessUnitCases(unittest.TestCase):
         primary_arms = [arm for arm in positive_arms
                         if uses_primary_positive_classifier(arm.dl_runtime_options)]
         self.assertGreaterEqual(len(dual_by_mode), 2)
-        self.assertTrue(primary_arms)
-        # Exercise each registered dual selector mode plus classifier-only Default.
+        # Exercise every currently registered Positive selector topology.
+        # Retiring the last primary-only arm must not bypass dual-DL broker replay.
         fixture = build_synthetic_competing_candidates_case(V16StrategyParams())
         dates = sorted({str(day)[:10] for frame in fixture["frames"].values() for day in frame["Date"]})
         start, end = dates[0], dates[-1]
@@ -547,7 +547,7 @@ class StrategyRobustnessUnitCases(unittest.TestCase):
             params_path.write_text("{}")
             score_file = root / "scores.csv"
             score_file.write_text("fixture")
-            for arm in (*dual_by_mode.values(), primary_arms[-1]):
+            for arm in (*dual_by_mode.values(), *primary_arms):
                 source = settings.dl_sources[arm.dl_id]
                 options = dict(arm.dl_runtime_options or {})
                 if uses_primary_positive_classifier(options):

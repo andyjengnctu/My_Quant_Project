@@ -57,7 +57,65 @@ RESOURCE_ONLY_DEPENDENCIES = frozenset({
 })
 
 
+# A research-menu model switch is not a price/feature/Target change.
+# Proof anchor: test-branch-1_20261107_072649_85be9915.zip
+# (SHA256 d36e32296daed6bee8f4a0b0893fd00de2a3c1c4fd3e4316ecfbc73ab999e6e7).
+# The AST of that source and this retirement is identical after replacing ONLY
+# the literal (model ID, executable profile ID) research selection tuple.
+# Any other executable config edit falls through to its real physical SHA.
+_RESEARCH_SELECTION_ONLY_CONFIG_AST_SHA256 = (
+    "c3c118fe43687589e554a52bc5eed404ca93c7750abe48787b013e889a0b5105"
+)
+_RESEARCH_SELECTION_ONLY_CONFIG_BASELINE_SHA256 = (
+    "a5368e77feca79108465c8a25131f3c030433ed3fcf40a82c7c481c792f33380"
+)
+
+
+def _certified_model_selection_only_config_sha256(relative: str, actual: str) -> str:
+    """Preserve the price source identity for an AST-proven model-menu choice.
+
+    No arbitrary model-selection expressions can receive this equivalence:
+    the sole exempt assignment must be a side-effect-free literal string pair.
+    The whole remaining module AST, including price-related settings, is pinned.
+    """
+    if relative != "config/breakout_quality.py":
+        return actual
+    import ast
+    from hashlib import sha256
+    from pathlib import Path
+    source = Path(__file__).resolve().parents[1] / relative
+    if not source.is_file() or sha256(source.read_bytes()).hexdigest() != actual:
+        return actual
+    tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
+    count = 0
+    for statement in tree.body:
+        if (not isinstance(statement, ast.Assign) or len(statement.targets) != 1
+                or not isinstance(statement.targets[0], ast.Name)
+                or statement.targets[0].id != "BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE"):
+            continue
+        value = statement.value
+        if (not isinstance(value, ast.Tuple) or len(value.elts) != 2
+                or not all(isinstance(item, ast.Constant) and isinstance(item.value, str)
+                           and item.value for item in value.elts)):
+            return actual
+        statement.value = ast.Tuple(
+            elts=[ast.Constant(value="__SELECTED_MODEL_ID__"),
+                  ast.Constant(value="__SELECTED_PROFILE_ID__")],
+            ctx=ast.Load(),
+        )
+        count += 1
+    if count != 1:
+        return actual
+    selection_free_ast = ast.dump(tree, annotate_fields=True, include_attributes=False)
+    if sha256(selection_free_ast.encode("utf-8")).hexdigest() == _RESEARCH_SELECTION_ONLY_CONFIG_AST_SHA256:
+        return _RESEARCH_SELECTION_ONLY_CONFIG_BASELINE_SHA256
+    return actual
+
+
 def reviewed_execution_source_sha256(relative: str, actual: str) -> str:
+    normalized = _certified_model_selection_only_config_sha256(relative, actual)
+    if normalized != actual:
+        return normalized
     proof = _REVIEWED.get(relative)
     if proof is not None and actual == proof["file_sha256"]:
         return proof["original_file_sha256"]
