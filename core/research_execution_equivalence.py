@@ -60,11 +60,14 @@ RESOURCE_ONLY_DEPENDENCIES = frozenset({
 # A research-menu model switch is not a price/feature/Target change.
 # Proof anchor: test-branch-1_20261107_072649_85be9915.zip
 # (SHA256 d36e32296daed6bee8f4a0b0893fd00de2a3c1c4fd3e4316ecfbc73ab999e6e7).
-# The AST of that source and this retirement is identical after replacing ONLY
-# the literal (model ID, executable profile ID) research selection tuple.
-# Any other executable config edit falls through to its real physical SHA.
+# This reviewed configuration additionally registers MR-13CX as a model-test
+# reference beside the active MR-13CY selection; neither changes price inputs.
+# The entire remaining configuration AST is pinned as-is. Only the literal
+# (model ID, executable profile ID) selection tuple may vary. Any subsequent
+# change to reference membership, price settings or executable code fails closed
+# to the actual physical SHA rather than receiving the price-only equivalence.
 _RESEARCH_SELECTION_ONLY_CONFIG_AST_SHA256 = (
-    "c3c118fe43687589e554a52bc5eed404ca93c7750abe48787b013e889a0b5105"
+    "7ab1d4e0b6a06053b596dfa4c970b0866464499586e66ab5994551fc8fa97b46"
 )
 _RESEARCH_SELECTION_ONLY_CONFIG_BASELINE_SHA256 = (
     "a5368e77feca79108465c8a25131f3c030433ed3fcf40a82c7c481c792f33380"

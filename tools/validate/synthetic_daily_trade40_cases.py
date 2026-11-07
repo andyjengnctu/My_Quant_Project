@@ -3185,6 +3185,17 @@ class ExecutionAccelerationCases(unittest.TestCase):
                     self.assertEqual(proof.reviewed_execution_source_sha256(relative,
                                          compute_file_sha256(source)),
                                      proof._RESEARCH_SELECTION_ONLY_CONFIG_BASELINE_SHA256)
+                # Reference-model membership is NOT covered by the exemption;
+                # only the active model-selection tuple may change.
+                tree = ast.parse(original)
+                node = next(item for item in tree.body if isinstance(item, ast.Assign)
+                            and len(item.targets) == 1
+                            and isinstance(item.targets[0], ast.Name)
+                            and item.targets[0].id == "BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES")
+                node.value.elts[0].elts[0].value = "MR-UNREVIEWED-REFERENCE"
+                source.write_text(ast.unparse(tree), encoding="utf-8")
+                changed = compute_file_sha256(source)
+                self.assertEqual(proof.reviewed_execution_source_sha256(relative, changed), changed)
                 # Changing any price-affecting setting cannot receive equivalence.
                 tree = ast.parse(original)
                 node = next(item for item in tree.body if isinstance(item, ast.Assign)
