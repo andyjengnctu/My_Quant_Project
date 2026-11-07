@@ -29,6 +29,7 @@ from core.breakout_quality_runtime import (
     TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION,
     TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION,
     TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
+    TRAINING_OBJECTIVE_DAILY_PAIRWISE_PROBABILITY,
     TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING,
@@ -398,6 +399,7 @@ DAILY_UNIVERSAL_SHARED_FULL_D20_SAFETY_HS_CONDITIONAL_MFE_PROFILE = (
 DAILY_UNIVERSAL_TERMINAL_R40_PAIRWISE_PROFILE = "daily_universal_terminal_r40_full_list_ndcg_pairwise"
 DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_PAIRWISE_PROFILE = "daily_universal_terminal_mae_gated_t40_full_list_ndcg_pairwise"
 DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_POSITIVE_PROFILE = "daily_universal_terminal_mae_gated_t40_positive_binary"
+DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_PROBABILISTIC_PROFILE = "daily_universal_terminal_mae_gated_t40_probabilistic_pairwise"
 DAILY_UNIVERSAL_FULL_HORIZON_MAE_GATED_MFE_T40_PAIRWISE_PROFILE = "daily_universal_full_horizon_mae_gated_mfe_t40_full_list_ndcg_pairwise"
 DAILY_UNIVERSAL_COUNTERFACTUAL_MINTRADE40_NETR_PAIRWISE_PROFILE = "daily_universal_counterfactual_mintrade40_netr_full_list_ndcg_pairwise"
 DAILY_UNIVERSAL_FORMAL_MINTRADE40_NETR_PAIRWISE_PROFILE = "daily_universal_formal_mintrade40_netr_per_seed_full_list_ndcg_pairwise"
@@ -1680,6 +1682,18 @@ _EXPERIMENT_PROFILES = {
         training_objective=TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
         continuous_target_id="daily_terminal_mae_gated_t40_v1",
         loss_name="pairwise_logistic",
+        epoch_selection_metric="mean_daily_spearman",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+        model_architecture="inception_time_v1",
+    ),
+    DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_PROBABILISTIC_PROFILE: BreakoutQualityExperimentProfile(
+        name=DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_PROBABILISTIC_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_PAIRWISE_PROBABILITY,
+        continuous_target_id="daily_terminal_mae_gated_t40_v1",
+        loss_name="pairwise_bernoulli_probability",
         epoch_selection_metric="mean_daily_spearman",
         training_label_scope=TRAINING_LABEL_SCOPE_ALL,
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
@@ -3366,6 +3380,31 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         metric_scope="all_stock_days_terminal_mae_gated_t40",
         score_semantic_id="daily_terminal_mae_gated_t40_rank",
         pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        selection_pit_authorized=True,
+        current_time_validation_authorized=True,
+    ),
+    DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_PROBABILISTIC_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_PROBABILISTIC_PROFILE,
+        model_research_id="MR-13CX",
+        experiment_name="MR-13CX T40 Pairwise Rank Confidence",
+        phase="13CX",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description=(
+            "Same mature daily-universal terminal MAE-gated T40 as MR-13CJ; "
+            "supervision is strict within-date T40 pair preference, never the sign of T40"
+        ),
+        objective_description=(
+            "Single independently fitted 300x10 InceptionTime two-coordinate output. "
+            "Proper Bernoulli loss of antisymmetric context-interaction comparison "
+            "P(T40_i>T40_j); self-comparisons and equal/missing T40 pairs excluded. "
+            "Daily score is the expected fraction of opponents beaten across the "
+            "PIT score-eligible date universe. No T40 absolute-R regression, Positive "
+            "head, probability gate, hand-tuned rank blend, Top-N or OOS fitting. "
+            "One FIT serves Breakout/Daily Exact/Direct. CJ identity is unchanged."
+        ),
+        metric_scope="all_stock_days_terminal_mae_gated_t40_probabilistic_rank",
+        score_semantic_id="daily_terminal_mae_gated_t40_expected_pairwise_win_fraction",
+        pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
         selection_pit_authorized=True,
         current_time_validation_authorized=True,
     ),

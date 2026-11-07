@@ -490,10 +490,12 @@ def _strategy_bindings(*, target_names: tuple[str, ...],
             else _DIRECT_MODE if selector == "direct" else _EXACT_MODE
         )
         declared_arm_id = str(comparison.get("strategy_arm_id") or "")
-        arm_choices = (
-            ((declared_arm_id, STRATEGY_COMPARE_ARMS[declared_arm_id]),)
-            if declared_arm_id else STRATEGY_COMPARE_ARMS.items()
-        )
+        # A specified Oracle arm anchors perfect-score replay, not a monopoly
+        # on which DLs may learn the SAME Target. Iterate all compatible arms
+        # for read-only Target x DL display, with strict downstream binding.
+        if declared_arm_id and declared_arm_id not in STRATEGY_COMPARE_ARMS:
+            raise ValueError(f"Oracle reference arm not registered: {declared_arm_id}")
+        arm_choices = STRATEGY_COMPARE_ARMS.items()
         for arm_id, arm in arm_choices:
             if (not arm.get("dl_enabled") or arm.get("dl_runtime_mode") != desired_mode
                     or str(arm.get("entry_strategy", "Breakout")) != entry_strategy

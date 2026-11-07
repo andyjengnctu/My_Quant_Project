@@ -54,8 +54,10 @@ from core.breakout_quality_runtime import (
     CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_TOP_HS_SAFETY_SCOPED_MFE_DUO_PAIRWISE,
     CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_STRATIFIED_MFE_DUO_PAIRWISE,
     CONTINUOUS_RANKER_LOSS_HANDLER_SINGLE_PAIRWISE,
+    CONTINUOUS_RANKER_LOSS_HANDLER_PAIRWISE_PROBABILITY,
     CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
     CONTINUOUS_RANKER_SCORE_TRANSFORM_MARGIN_R,
+    CONTINUOUS_RANKER_SCORE_TRANSFORM_PAIRWISE_WIN,
     CONTINUOUS_RANKER_TARGET_BUILDER_CONDITIONAL_MFE_SAFETY,
     CONTINUOUS_RANKER_TARGET_BUILDER_CONDITIONAL_MFE_SINGLE,
     CONTINUOUS_RANKER_TARGET_BUILDER_DIRECT_HMHS,
@@ -148,6 +150,9 @@ from filters.breakout_quality.adaptive_horizon_safety import (
     AdaptiveHorizonSafetyTargetProvider,
 )
 from filters.breakout_quality.continuous_ranker_data import build_same_date_percentile_targets, source_data_end
+from filters.breakout_quality.pairwise_confidence_ranking import (
+    expected_pairwise_win_fraction, probabilistic_pairwise_loss,
+)
 from filters.breakout_quality.conditional_mfe_safety import (
     ConditionalMfeSafetyTargets,
     build_conditional_mfe_safety_targets,
@@ -2444,6 +2449,14 @@ def _train_epoch(
                     # LABEL_REJECT -> adverse-to-peak R, LABEL_PASS -> favorable MFE R.
                     loss = F.mse_loss(logits.float(), target, reduction="mean")
                     loss_weight = int(len(ids))
+                elif loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_PAIRWISE_PROBABILITY:
+                    loss, supervision_count = probabilistic_pairwise_loss(
+                        torch, logits.float(), target,
+                        group_dates_series.iloc[ids].to_numpy(),
+                    )
+                    if loss is None:
+                        continue
+                    loss_weight = int(supervision_count)
                 elif loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_SINGLE_PAIRWISE:
                     margins = logits.float()[:, LABEL_PASS] - logits.float()[:, LABEL_REJECT]
                     loss, supervision_count = _pairwise_logistic_loss(
@@ -2747,11 +2760,37 @@ def predict_scores(
     training_objective: str,
     group_dates: pd.Series | np.ndarray | None = None,
 ) -> np.ndarray:
+    training_policy = get_continuous_ranker_training_policy(training_objective)
+    # Pairwise expected-win probability depends on who else could be scored that
+    # day. Never build a different ranking because one consumer requested only
+    # mature validation, Breakout, or a subset of PIT stock-days. Expand strictly
+    # by information date and decision-time feature-eligible source membership;
+    # no future Target mask, portfolio candidate, or hindsight admission.
+    if training_policy.score_transform == CONTINUOUS_RANKER_SCORE_TRANSFORM_PAIRWISE_WIN:
+        if group_dates is None:
+            raise ValueError("same-date probabilistic pairwise ranking requires full group dates")
+        requested = np.asarray(group_ids, dtype=np.int64)
+        if requested.ndim != 1 or np.any(requested < 0):
+            raise ValueError("pairwise probability group IDs must be nonnegative 1D indices")
+        if requested.size == 0:
+            return np.empty(0, dtype=np.float32)
+        day_values = pd.to_datetime(pd.Series(group_dates), errors="raise").dt.normalize().to_numpy()
+        if len(day_values) != int(feature_bank.shape[0]) or requested.max() >= len(day_values):
+            raise ValueError("pairwise probability group dates/feature bank/indices mismatch")
+        complete_ids = np.flatnonzero(np.isin(day_values, np.unique(day_values[requested])))
+        logits = _predict_logits(
+            torch, model, feature_bank, group_context, complete_ids,
+            batch_size=int(batch_size), plan=plan, group_dates=group_dates, relational=True,
+        )
+        complete_scores = expected_pairwise_win_fraction(logits, day_values[complete_ids])
+        positions = np.searchsorted(complete_ids, requested)
+        if np.any(positions >= len(complete_ids)) or np.any(complete_ids[positions] != requested):
+            raise ValueError("pairwise score input was not in the complete decision-time day universe")
+        return complete_scores[positions]
     logits = _predict_logits(
         torch, model, feature_bank, group_context, group_ids,
         batch_size=int(batch_size), plan=plan, group_dates=group_dates, relational=True,
     )
-    training_policy = get_continuous_ranker_training_policy(training_objective)
     if training_policy.categorical_class_count is not None:
         if logits.ndim != 2 or int(logits.shape[1]) != int(training_policy.categorical_class_count):
             raise ValueError("categorical inference logits width differs from training contract")
@@ -4035,6 +4074,8 @@ def _evaluate_epoch_split(
         "selection_only": False,
     }
     predict_common = dict(batch_size=int(args.evaluation_batch_size), plan=plan)
+    if get_continuous_ranker_training_policy(profile.training_objective).score_transform == CONTINUOUS_RANKER_SCORE_TRANSFORM_PAIRWISE_WIN:
+        predict_common["group_dates"] = group_table["date"]
     metric_family = None
     family_keys = None
 
@@ -5410,7 +5451,11 @@ def run(args) -> int:
             "model_score": (
                 "predicted_r_two_logit_margin"
                 if training_policy.score_transform == CONTINUOUS_RANKER_SCORE_TRANSFORM_MARGIN_R
-                else "softmax_pass_probability"
+                else (
+                    "same_date_expected_pairwise_win_fraction"
+                    if training_policy.score_transform == CONTINUOUS_RANKER_SCORE_TRANSFORM_PAIRWISE_WIN
+                    else "softmax_pass_probability"
+                )
             ),
             **canonical_training_semantics,
             "target": contract["target_description"],

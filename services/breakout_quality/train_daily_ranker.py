@@ -23,6 +23,7 @@ from core.breakout_quality_runtime import (
     CONTINUOUS_RANKER_PRIMARY_SUPERVISION_BINARY_HS,
     CONTINUOUS_RANKER_PRIMARY_SUPERVISION_TOP_HS,
     CONTINUOUS_RANKER_SCORE_TRANSFORM_MARGIN_R,
+    CONTINUOUS_RANKER_SCORE_TRANSFORM_PAIRWISE_WIN,
     CONTINUOUS_RANKER_TARGET_BUILDER_CONDITIONAL_MFE_SAFETY,
     CONTINUOUS_RANKER_TARGET_BUILDER_CONDITIONAL_MFE_SINGLE,
     CONTINUOUS_RANKER_TARGET_BUILDER_DIRECT_HMHS,
@@ -2161,6 +2162,8 @@ def run(args) -> int:
                 if hs_priority_mfe_duo
                 else "conditional_mfe_softmax_pass_probability"
                 if conditional_mfe_single or safety_conditional_mfe_duo
+                else "same_date_expected_pairwise_win_fraction"
+                if training_policy.score_transform == CONTINUOUS_RANKER_SCORE_TRANSFORM_PAIRWISE_WIN
                 else "softmax_pass_probability_monotonic_to_two_logit_margin"
             ),
             **canonical_training_semantics,

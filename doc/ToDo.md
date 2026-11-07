@@ -5,6 +5,7 @@
     - 0050 cannot be selected by any DL
 
 - imrove DL learnability
+    - 動態學習長度，不是固定在300
     - input with 漲/跌家數
     - input with 還原/非還原價
     - input with 三大法人籌碼資訊

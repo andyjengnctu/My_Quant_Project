@@ -55,6 +55,7 @@ TRAINING_OBJECTIVE_DAILY_PERCENTILE_REGRESSION = "daily_percentile_regression"
 TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION = "daily_raw_r_regression"
 TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION = "daily_dual_component_r_regression"
 TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING = "daily_pairwise_ranking"
+TRAINING_OBJECTIVE_DAILY_PAIRWISE_PROBABILITY = "daily_pairwise_probability_ranking"
 TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING = "daily_pareto_pairwise_ranking"
 TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING = (
     "daily_conditional_mfe_safety_pairwise_ranking"
@@ -424,6 +425,7 @@ CONTINUOUS_RANKER_LOSS_HANDLER_PERCENTILE_MSE = "percentile_mse"
 CONTINUOUS_RANKER_LOSS_HANDLER_RAW_R = "raw_r_regression"
 CONTINUOUS_RANKER_LOSS_HANDLER_DUAL_COMPONENT_R = "dual_component_r_regression"
 CONTINUOUS_RANKER_LOSS_HANDLER_SINGLE_PAIRWISE = "single_pairwise"
+CONTINUOUS_RANKER_LOSS_HANDLER_PAIRWISE_PROBABILITY = "pairwise_bernoulli_probability"
 CONTINUOUS_RANKER_LOSS_HANDLER_CONDITIONAL_DUO_PAIRWISE = "conditional_duo_pairwise"
 CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_DUO_PAIRWISE = "safety_mfe_duo_pairwise"
 CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_WEIGHTED_MFE_DUO_PAIRWISE = (
@@ -486,6 +488,7 @@ CONTINUOUS_RANKER_SEMANTICS_SAFETY_RAW_MFE_JOINT_MIN = "safety_raw_mfe_joint_min
 CONTINUOUS_RANKER_SEMANTICS_DIRECT_HMHS = "direct_hmhs"
 CONTINUOUS_RANKER_SCORE_TRANSFORM_PROBABILITY = "pass_probability"
 CONTINUOUS_RANKER_SCORE_TRANSFORM_MARGIN_R = "pass_minus_reject_margin"
+CONTINUOUS_RANKER_SCORE_TRANSFORM_PAIRWISE_WIN = "same_date_expected_pairwise_win_fraction"
 CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH = "mean_batch"
 CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_WEIGHTED = "weighted_supervision"
 CONTINUOUS_RANKER_PAIRWISE_KIND_NONE = "none"
@@ -752,6 +755,7 @@ class ContinuousRankerTrainingPolicy:
         if self.score_transform not in {
             CONTINUOUS_RANKER_SCORE_TRANSFORM_PROBABILITY,
             CONTINUOUS_RANKER_SCORE_TRANSFORM_MARGIN_R,
+            CONTINUOUS_RANKER_SCORE_TRANSFORM_PAIRWISE_WIN,
         }:
             raise ValueError(f"不支援的continuous-ranker score transform: {self.score_transform!r}")
         if self.epoch_loss_aggregation not in {
@@ -1392,6 +1396,16 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_PAIRWISE,
             uses_pairwise_loss=True,
         ),
+        TRAINING_OBJECTIVE_DAILY_PAIRWISE_PROBABILITY: ContinuousRankerTrainingPolicy(
+            batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
+            target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_SCALAR_PAIRWISE,
+            loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_PAIRWISE_PROBABILITY,
+            profile_loss_metrics=(("pairwise_bernoulli_probability", "mean_daily_spearman"),),
+            pairwise_kind=CONTINUOUS_RANKER_PAIRWISE_KIND_SCALAR,
+            semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_PAIRWISE,
+            score_transform=CONTINUOUS_RANKER_SCORE_TRANSFORM_PAIRWISE_WIN,
+            uses_pairwise_loss=True,
+        ),
         TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING: ContinuousRankerTrainingPolicy(
             batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
             target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_PARETO_COMPONENTS,
@@ -1966,6 +1980,9 @@ def build_continuous_ranker_execution_recipe(
 
 
 __all__ = (
+    "CONTINUOUS_RANKER_SCORE_TRANSFORM_PAIRWISE_WIN",
+    "CONTINUOUS_RANKER_LOSS_HANDLER_PAIRWISE_PROBABILITY",
+    "TRAINING_OBJECTIVE_DAILY_PAIRWISE_PROBABILITY",
     "CONTINUOUS_RANKER_TRAINER_EVENT",
     "CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL",
     "CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR",

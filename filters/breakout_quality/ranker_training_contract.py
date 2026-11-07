@@ -17,6 +17,7 @@ from core.breakout_quality_runtime import (
     CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_SAFETY,
     CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_UPSIDE,
     CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_PARETO_COMPONENTS,
+    CONTINUOUS_RANKER_LOSS_HANDLER_PAIRWISE_PROBABILITY,
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
     CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_NONE,
     CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_BINARY_BOUNDARY_PROXIMITY,
@@ -453,6 +454,17 @@ def _pairwise_contract_for_recipe(recipe) -> dict[str, Any]:
             "tradeoff_pair_handling": "excluded_no_gradient",
             "tie_handling": "excluded_no_gradient",
             "epoch_selection": "mean_daily_pareto_pair_concordance",
+        })
+    if recipe.training_policy.loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_PAIRWISE_PROBABILITY:
+        contract.update({
+            "pair_scope": "all_strict_same_date_T40_pairs_untied_mature_only",
+            "model_margin": "antisymmetric_two_coordinate_pair_logit_not_scalar_pass_minus_reject",
+            "pair_probability": "sigmoid((u_i-u_j)+(u_i*v_j-v_i*u_j))",
+            "pair_loss": "unweighted_bernoulli_log_loss_proper_probability",
+            "output_coordinates": "two_learned_comparison_coordinates_not_heads",
+            "runtime_score": "expected_fraction_of_same_date_PIT_eligible_opponents_beaten",
+            "score_input_scope": "complete_decision_time_PIT_score_eligible_date_universe",
+            "no_threshold_or_pair_subsampling": True,
         })
     return contract
 
