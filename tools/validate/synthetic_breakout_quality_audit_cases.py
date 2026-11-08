@@ -570,25 +570,60 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
                    and all(row["oracle_romd"] is None and row["rolling_romd"] is None
                            for row in snapshot["rows"])
                    and before == sorted(path.relative_to(root).as_posix() for path in root.rglob("*")))
-        # One canonical display projection owns independent scientific Target,
-        # entry Strategy, selector, DL and arm ID. Adding a parameter family
-        # must never concatenate these dimensions into the Target column.
-        by_arm = {row["strategy"]: row for row in snapshot["rows"] if row["strategy"]}
-        check(
-            "summary_daily_fitted_parameter_target_strategy_selector_separated",
-            (("T40", "Daily (Min/P18)", "Direct", "MR-13CJ"),
-             ("", "Daily (Min/P18)", "Default", ""),
-             ("MinTrade_NetPnL", "Daily (Min/P18)", "Direct", "MR-13CO"),
-             ("DailyUniversal_MinTrade_NetPnL_Positive", "Daily (Min/P18)", "Direct", "MR-13CU"),
-             ("DailyUniversal_MinTrade_NetPnL", "Daily (Min/P18)", "Direct", "MR-13CU")),
-            tuple((by_arm[arm]["target"], by_arm[arm]["entry_strategy"],
-                   by_arm[arm]["selector"], by_arm[arm]["model"])
-                  for arm in ("C160", "C161", "C163", "C164", "C165")),
+        # A single display projection owns independent scientific Target,
+        # Daily entry policy, selector, and model. Derive the expected current
+        # Daily treatments from the active roster and the independent registry
+        # owners; retired arms must never be required by this synthetic.
+        from core.strategy_compare_registry import (
+            STRATEGY_COMPARE_ARMS, STRATEGY_EXPERIMENTAL_PARAM_SOURCES,
         )
+        from config.strategy_params import STRATEGY_PARAM_PROFILES
+        from core.research_summary import get_research_summary_baseline_arm_ids
+        from core.audit_registry import oracle_target_semantics
+
+        by_arm = {row["strategy"]: row for row in snapshot["rows"] if row["strategy"]}
+        expected_daily = {}
+        for group in original_rows:
+            bindings = tuple(group.get("bindings", ()))
+            members = (({"arm_id": group["arm_id"]},) if "arm_id" in group else bindings)
+            for binding in members:
+                arm_id = binding["arm_id"]
+                arm = STRATEGY_COMPARE_ARMS[arm_id]
+                if arm.get("entry_strategy") != "Daily":
+                    continue
+                source = STRATEGY_EXPERIMENTAL_PARAM_SOURCES[arm["param_source"]]
+                profile_id = source["builder"]["options"]["training_profile_id"]
+                profile = STRATEGY_PARAM_PROFILES[profile_id]
+                param_set = profile["parameter_set_identity"]
+                expected_daily[arm_id] = (
+                    oracle_target_semantics(group["oracle"])[0] if "oracle" in group else "",
+                    f"Daily ({profile['filter_profile'].capitalize()}/{param_set.removeprefix('PARAM-')})",
+                    ("Default" if not arm.get("dl_enabled") else
+                     "Direct" if arm.get("dl_runtime_mode") ==
+                         "resource-aware-continuous-score-no-k-no-r0" else "Exact"),
+                    binding.get("rank_model", ("",))[0],
+                    binding.get("positive_model", ("",))[0],
+                )
+        actual_daily = {
+            arm_id: tuple(by_arm[arm_id][key] for key in (
+                "target", "entry_strategy", "selector", "model", "positive_model",
+            )) if arm_id in by_arm else None
+            for arm_id in expected_daily
+        }
+        check_true(
+            "summary_daily_fitted_parameter_target_strategy_selector_separated",
+            bool(expected_daily)
+            and set(expected_daily) == {
+                arm_id for arm_id in arms
+                if STRATEGY_COMPARE_ARMS[arm_id].get("entry_strategy") == "Daily"
+            }
+            and actual_daily == expected_daily,
+        )
+        control_arms = tuple(get_research_summary_baseline_arm_ids().values())
         check_true("summary_no_dl_controls_have_no_target_and_other_targets_preserved",
                    all(by_arm[arm]["target"] == ""
                            and by_arm[arm]["selector"] == "Default"
-                           for arm in ("C96", "C97", "C98", "C161"))
+                           for arm in control_arms)
                    and by_arm["C98"]["entry_strategy"] == "Breakout (Full)"
                    and by_arm["C103"]["target"] == "D40 Safety + Conditional MFE")
         corrupted = tuple({**group, "display_target": "T40 × Daily (Min/P18)"}
@@ -611,17 +646,23 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         with patch.object(summary_cfg, "RESEARCH_SUMMARY_ROWS", invalid_no_dl_target):
             check_true("summary_no_dl_arm_must_not_fabricate_target",
                        raises_expected(ValueError, lambda: target_dl_overview.collect_target_dl_overview(root)))
-        from core.strategy_compare_registry import (STRATEGY_COMPARE_ARMS,
-            STRATEGY_EXPERIMENTAL_PARAM_SOURCES)
-        from config.strategy_params import STRATEGY_PARAM_PROFILES
         from services.research.target_dl_overview import _summary_entry_label
         daily_arm = STRATEGY_COMPARE_ARMS["C160"]
         param_source_id = daily_arm["param_source"]
         param_source = STRATEGY_EXPERIMENTAL_PARAM_SOURCES[param_source_id]
         profile_id = param_source["builder"]["options"]["training_profile_id"]
         original_profile = STRATEGY_PARAM_PROFILES[profile_id]
+        # Use a currently registered, different Daily parameter set rather
+        # than assuming that P19 is a future, unused scientific identity.
+        alternative_parameter_set = next(
+            profile["parameter_set_identity"]
+            for key, profile in STRATEGY_PARAM_PROFILES.items()
+            if key != profile_id and profile.get("strategy_id") == "daily"
+            and profile.get("filter_profile") == original_profile["filter_profile"]
+            and profile.get("parameter_set_identity") != original_profile["parameter_set_identity"]
+        )
         with patch.dict(STRATEGY_PARAM_PROFILES, {profile_id: {
-                **original_profile, "parameter_set_identity": "PARAM-P19",
+                **original_profile, "parameter_set_identity": alternative_parameter_set,
         }}):
             check_true("summary_daily_parameter_profile_source_mismatch_fails_closed",
                        raises_expected(ValueError, lambda: _summary_entry_label(daily_arm, family="min")))
@@ -629,14 +670,14 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         # it is not hardwired to P18 or inferred from an arm's descriptive name.
         from copy import deepcopy
         upgraded_source = deepcopy(param_source)
-        upgraded_source["artifact_contract"]["breakout_quality_param_adaptation"]["parameter_set"] = "PARAM-P19"
+        upgraded_source["artifact_contract"]["breakout_quality_param_adaptation"]["parameter_set"] = alternative_parameter_set
         with patch.dict(STRATEGY_EXPERIMENTAL_PARAM_SOURCES,
                         {param_source_id: upgraded_source}), patch.dict(
                             STRATEGY_PARAM_PROFILES, {profile_id: {
-                                **original_profile, "parameter_set_identity": "PARAM-P19",
+                                **original_profile, "parameter_set_identity": alternative_parameter_set,
                             }}):
             check("summary_new_registered_daily_parameter_id_auto_labels_strategy",
-                  ("Daily (Min/P19)", True),
+                  (f"Daily ({original_profile['filter_profile'].capitalize()}/{alternative_parameter_set.removeprefix('PARAM-')})", True),
                   _summary_entry_label(daily_arm, family="min"))
         # A model-only addition belongs in Summary and all model comparisons;
         # it does not invent an Oracle, strategy arm, or execution permission.
