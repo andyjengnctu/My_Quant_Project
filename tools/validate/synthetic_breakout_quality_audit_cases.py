@@ -576,12 +576,13 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         by_arm = {row["strategy"]: row for row in snapshot["rows"] if row["strategy"]}
         check(
             "summary_daily_fitted_parameter_target_strategy_selector_separated",
-            (("T40", "Daily (Min/P18)", "Exact", "MR-13CJ"),
-             ("T40", "Daily (Min/P18)", "Direct", "MR-13CJ"),
-             ("", "Daily (Min/P18)", "Default", "")),
+            (("T40", "Daily (Min/P18)", "Direct", "MR-13CJ"),
+             ("", "Daily (Min/P18)", "Default", ""),
+             ("MinTrade_NetPnL", "Daily (Min/P18)", "Direct", "MR-13CO"),
+             ("DailyUniversal_MinTrade_NetPnL_Positive", "Daily (Min/P18)", "Direct", "MR-13CU")),
             tuple((by_arm[arm]["target"], by_arm[arm]["entry_strategy"],
                    by_arm[arm]["selector"], by_arm[arm]["model"])
-                  for arm in ("C159", "C160", "C161")),
+                  for arm in ("C160", "C161", "C163", "C164")),
         )
         check_true("summary_no_dl_controls_have_no_target_and_other_targets_preserved",
                    all(by_arm[arm]["target"] == ""
@@ -590,14 +591,14 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
                    and by_arm["C98"]["entry_strategy"] == "Breakout (Full)"
                    and by_arm["C103"]["target"] == "D40 Safety + Conditional MFE")
         corrupted = tuple({**group, "display_target": "T40 × Daily (Min/P18)"}
-                          if any(binding.get("arm_id") == "C159"
+                          if any(binding.get("arm_id") == "C160"
                                  for binding in group.get("bindings", ())) else group
                           for group in registered_rows)
         with patch.object(summary_cfg, "RESEARCH_SUMMARY_ROWS", corrupted):
             check_true("summary_composite_target_override_rejected_on_roster_load",
                        raises_expected(ValueError, get_research_summary_rows))
         wrong_target = tuple({**group, "display_target": "R40"}
-                             if any(binding.get("arm_id") == "C159"
+                             if any(binding.get("arm_id") == "C160"
                                     for binding in group.get("bindings", ())) else group
                              for group in registered_rows)
         with patch.object(summary_cfg, "RESEARCH_SUMMARY_ROWS", wrong_target):
@@ -613,7 +614,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
             STRATEGY_EXPERIMENTAL_PARAM_SOURCES)
         from config.strategy_params import STRATEGY_PARAM_PROFILES
         from services.research.target_dl_overview import _summary_entry_label
-        daily_arm = STRATEGY_COMPARE_ARMS["C159"]
+        daily_arm = STRATEGY_COMPARE_ARMS["C160"]
         param_source_id = daily_arm["param_source"]
         param_source = STRATEGY_EXPERIMENTAL_PARAM_SOURCES[param_source_id]
         profile_id = param_source["builder"]["options"]["training_profile_id"]
@@ -663,7 +664,13 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         removed = [group for group in original_rows if any(
             binding.get("rank_model", (None, None))[1] == removable
             for binding in group.get("bindings", ()))]
-        remaining = tuple(group for group in registered_rows if group not in removed)
+        # Expand active template bindings only for the expected ID set; mutate the
+        # canonical raw roster by its model binding, not by expanded dict
+        # equality (template normalization injects oracle metadata).
+        remaining = tuple(group for group in registered_rows if not any(
+            binding.get("rank_model", (None, None))[1] == removable
+            for binding in group.get("bindings", ())
+        ))
         removed_arms = {binding["arm_id"] for group in removed for binding in group.get("bindings", ())}
         with patch.object(summary_cfg, "RESEARCH_SUMMARY_ROWS", remaining):
             current_definition = oracle_application.get_formal_oracle_definition("breakout_quality")

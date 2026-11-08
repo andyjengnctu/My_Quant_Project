@@ -149,7 +149,7 @@ class PositiveNetPnlContractCases(TestCase):
         self.assertNotIn('MR-13CW', {model for model, _ in BREAKOUT_QUALITY_MODEL_TEST_PROFILES})
         settings = get_strategy_comparison_settings(STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE)
         active = {arm.arm_id for arm in settings.enabled_arms}
-        self.assertTrue({'C96', 'C107', 'C109', 'C125', 'C126', 'C133', 'C134', 'C135', 'C136'}.issubset(active))
+        self.assertTrue({'C96', 'C107', 'C109', 'C125', 'C126', 'C134', 'C135', 'C136', 'C164'}.issubset(active))
         self.assertTrue({'C142', 'C143', 'C144'}.isdisjoint(active))
         self.assertIn('C144', settings.arms)  # Immutable historical strategy ID.
         self.assertIn('CONT13CW_ROLL', STRATEGY_DL_SOURCES)  # Historical PIT source ID.
@@ -186,10 +186,9 @@ class PositiveNetPnlContractCases(TestCase):
         cases = (
             ("MinTrade_NetPnL_Positive", "Breakout", "Exact", "C125", "MR-13CO", "MR-13CP"),
             ("MinTrade_NetPnL_Positive", "Breakout", "Direct", "C126", "MR-13CO", "MR-13CP"),
-            ("DailyUniversal_MinTrade_NetPnL", "Daily", "Exact", "C137", "MR-13CU", ""),
             ("DailyUniversal_MinTrade_NetPnL", "Daily", "Direct", "C138", "MR-13CU", ""),
-            ("DailyUniversal_MinTrade_NetPnL_Positive", "Daily", "Exact", "C133", "MR-13CU", "MR-13CT"),
             ("DailyUniversal_MinTrade_NetPnL_Positive", "Daily", "Direct", "C134", "MR-13CU", "MR-13CT"),
+            ("DailyUniversal_MinTrade_NetPnL_Positive", "Daily (Min/P18)", "Direct", "C164", "MR-13CU", "MR-13CT"),
             ("DailyUniversal_MinTrade_NetPnL_Positive", "Breakout", "Exact", "C135", "MR-13CU", "MR-13CT"),
             ("DailyUniversal_MinTrade_NetPnL_Positive", "Breakout", "Direct", "C136", "MR-13CU", "MR-13CT"),
         )
@@ -628,9 +627,10 @@ class PositiveNetPnlContractCases(TestCase):
             self.assertEqual(references[key], reference_arm_execution_binding(row, settings))
         true_daily = "TrueDailyUniversal_MinTrade_NetPnL_Positive"
         self.assertEqual(references[true_daily]["arm_id"], "C135")
-        self.assertEqual(references[true_daily + "::Daily"]["arm_id"], "C133")
-        self.assertNotEqual(references[true_daily]["execution_sha256"],
-                            references[true_daily + "::Daily"]["execution_sha256"])
+        self.assertEqual(references[true_daily + "_Direct::Daily"]["arm_id"], "C134")
+        self.assertEqual(references[true_daily + "_Direct::Daily::Daily_min"]["arm_id"], "C164")
+        self.assertNotEqual(references[true_daily + "_Direct::Daily"]["execution_sha256"],
+                            references[true_daily + "_Direct::Daily::Daily_min"]["execution_sha256"])
 
     def test_report_resolves_positive_exact_and_direct_without_ambiguity(self):
         definition = get_formal_oracle_definition(get_active_audit_module_id())
@@ -651,12 +651,14 @@ class PositiveNetPnlContractCases(TestCase):
                 [("true_daily_universal_mintrade_fullcycle_netpnl_full_list_ndcg_pairwise",
                   "C136" if suffix else "C135")])
             daily_key = name + "::Daily"
-            expected_arm = "C134" if suffix else "C133"
+            expected_arms = ["C134"] if suffix else []
             self.assertEqual(
-                [(profile, arm) for (target, profile), arm in bindings.items()
-                 if target == daily_key],
-                [("true_daily_universal_mintrade_fullcycle_netpnl_full_list_ndcg_pairwise", expected_arm)],
+                [arm for (target, _profile), arm in bindings.items() if target == daily_key],
+                expected_arms,
             )
+        self.assertEqual(bindings.get((
+            "TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct::Daily::Daily_min",
+            "true_daily_universal_mintrade_fullcycle_netpnl_full_list_ndcg_pairwise")), "C164")
 
 
 class IndependentPositiveClassifierCases(TestCase):

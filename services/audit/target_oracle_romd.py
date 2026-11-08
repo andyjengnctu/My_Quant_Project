@@ -460,8 +460,11 @@ def _oracle_target_strategy(definition, target: str) -> str:
         # registered stock-day truth producer. This permits both price (T40)
         # and trade-path truth without a model-specific exception or new formula.
         from core.audit_registry import oracle_supervised_target_id
-        definition_map = {row["target"]: row for row in definition.source["oracle_comparisons"]}
-        producer = definition_map.get(entry.get("score_source") or target)
+        # A Direct-only active family can consume an immutable Exact score
+        # producer from the registry without activating its historic Replay.
+        source_name = entry.get("score_source") or target
+        producer = next((row for row in definition.source["oracle_source_catalog"]
+                         if row["target"] == source_name), None)
         if (not entry.get("strategy_arm_id") or not producer
                 or not producer.get("score") or not producer.get("provider")
                 or oracle_supervised_target_id(producer) is None):
@@ -3756,6 +3759,7 @@ def _oracle_strategy_scopes(definition) -> tuple[tuple[str, Any], ...]:
     parameter families never share portfolio Replay receipts.  Original Min
     scopes retain the exact previous output and source identities.
     """
+    from core.positive_score_admission import requires_positive_score
     comparisons = resolve_current_oracle_comparisons(definition.source)
     baselines = oracle_baseline_arm_ids(definition.source)
     settings = get_strategy_comparison_settings(str(definition.source["strategy_profile_id"]))
@@ -3804,8 +3808,55 @@ def _oracle_strategy_scopes(definition) -> tuple[tuple[str, Any], ...]:
                         raise OracleBlockedError(f"Oracle {family} selector execution contracts differ")
                 else:
                     references[selector] = arm_id
-            if not {"exact", "direct"}.issubset(references):
-                raise OracleBlockedError(f"Oracle {family} requires both exact/direct reference contracts")
+            # Active Oracle membership may deliberately select only Direct.
+            # The signed No-DL baseline policy still needs its historical
+            # Exact selector witness; selecting a dormant *registered* arm
+            # for this identity check does NOT schedule its Target or Replay.
+            if not references:
+                raise OracleBlockedError(f"Oracle {family} has no formal selector reference")
+            if "exact" not in references:
+                dormant = sorted((arm for arm in settings.arms.values() if (
+                    not arm.arm_id in {a.arm_id for a in settings.enabled_arms}
+                    and arm.dl_enabled
+                    and (arm.param_source, arm.param_policy, arm.rule_policy, arm.entry_strategy) ==
+                        (control.param_source, control.param_policy, control.rule_policy, strategy)
+                    and arm.dl_runtime_mode == "resource-aware-continuous-score-constrained-optimal"
+                    and (arm.dl_runtime_options or {}).get("preserve_k_r0") is True
+                    and (arm.dl_runtime_options or {}).get("constrained_solver") == "exact_branch_and_bound_v1"
+                    and (arm.dl_runtime_options or {}).get("selection_only") is True
+                    and not requires_positive_score(arm.dl_runtime_options)
+                )), key=lambda arm: arm.arm_id)
+                if not dormant or any(
+                    _unqualified_selector_options(arm.dl_runtime_options) !=
+                    _unqualified_selector_options(dormant[0].dl_runtime_options)
+                    for arm in dormant[1:]
+                ):
+                    raise OracleBlockedError(
+                        f"Oracle {family} has no unique registered Exact baseline witness")
+                references["exact"] = dormant[0].arm_id
+            if "direct" not in references:
+                # Exact-only families still require a registered Direct
+                # selector witness for the immutable legacy policy fields.
+                # No additional Direct treatment is thereby authorized.
+                dormant_direct = sorted((arm for arm in settings.arms.values() if (
+                    arm.dl_enabled
+                    and (arm.param_source, arm.param_policy, arm.rule_policy, arm.entry_strategy) ==
+                        (control.param_source, control.param_policy, control.rule_policy, strategy)
+                    and arm.dl_runtime_mode == "resource-aware-continuous-score-no-k-no-r0"
+                    and (arm.dl_runtime_options or {}).get("preserve_k") is False
+                    and (arm.dl_runtime_options or {}).get("preserve_r0") is False
+                    and (arm.dl_runtime_options or {}).get("selection_order") == "model_score_desc_then_canonical_tie_v1"
+                    and (arm.dl_runtime_options or {}).get("selection_only") is True
+                    and not requires_positive_score(arm.dl_runtime_options)
+                )), key=lambda arm: arm.arm_id)
+                if not dormant_direct or any(
+                    _unqualified_selector_options(arm.dl_runtime_options) !=
+                    _unqualified_selector_options(dormant_direct[0].dl_runtime_options)
+                    for arm in dormant_direct[1:]
+                ):
+                    raise OracleBlockedError(
+                        f"Oracle {family} has no unique registered Direct selector witness")
+                references["direct"] = dormant_direct[0].arm_id
             source.update({"baseline_arm_id": control_id,
                            "exact_arm_id": references["exact"],
                            "direct_arm_id": references["direct"]})

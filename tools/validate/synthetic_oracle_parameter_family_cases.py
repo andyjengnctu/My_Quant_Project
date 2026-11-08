@@ -49,14 +49,16 @@ class OracleParameterFamilyCases(TestCase):
         d = definition()
         current = {r.get("strategy_arm_id"): r
                    for r in resolve_current_oracle_comparisons(d.source)}
-        self.assertTrue({"C162", "C163"}.issubset(current))
+        self.assertTrue({"C163", "C164"}.issubset(current))
+        self.assertTrue({"C162", "C159"}.isdisjoint(current))
+        self.assertIn("C162", archived)
         self.assertTrue({"C123", "C124"}.isdisjoint(get_research_summary_strategy_arm_ids()))
         settings = get_strategy_comparison_settings("broker_cash_dl_conversion_rolling")
         active = {arm.arm_id for arm in settings.enabled_arms}
-        self.assertTrue({"C162", "C163"}.issubset(active))
+        self.assertTrue({"C163", "C164"}.issubset(active))
+        self.assertTrue({"C162", "C159"}.isdisjoint(active))
         self.assertTrue({"C123", "C124"}.isdisjoint(active))
-        for arm_id, historical, selector in (("C162", "C123", "exact"),
-                                             ("C163", "C124", "direct")):
+        for arm_id, historical, selector in (("C163", "C124", "direct"),):
             with self.subTest(arm=arm_id):
                 new = by_arm[arm_id]["oracle"]
                 frozen = archived[historical]["oracle"]
@@ -84,7 +86,7 @@ class OracleParameterFamilyCases(TestCase):
                          ("daily_trade_path_net_pnl", "daily_trade40_profile", None))
         self.assertEqual(plan["aliases"]["DailyUniversal_MinTrade_NetPnL_Direct"],
                          "DailyUniversal_MinTrade_NetPnL")
-        self.assertTrue({"C162-C161", "C163-C161", "C162-C163"}.issubset(
+        self.assertTrue({"C163-C161", "C164-C161", "C164-C134"}.issubset(
             {contrast.contrast_id for contrast in settings.enabled_contrasts}))
         # Same old Breakout/min receipt key can never become current again.
         with self.assertRaisesRegex(ValueError, "Historical-only Oracle target"):
@@ -131,7 +133,7 @@ class OracleParameterFamilyCases(TestCase):
         self.assertEqual(by_arm["C97"]["entry_strategy"], "Breakout (Full)")
         self.assertEqual(by_arm["C107"]["entry_strategy"], "Breakout")
         self.assertEqual(by_arm["C109"]["entry_strategy"], "Breakout")
-        for arm, selector in (("C159", "Exact"), ("C160", "Direct")):
+        for arm, selector in (("C160", "Direct"),):
             self.assertEqual((by_arm[arm]["target"], by_arm[arm]["entry_strategy"],
                               by_arm[arm]["selector"]), ("T40", "Daily (Min/P18)", selector))
         self.assertEqual((by_arm["C161"]["target"], by_arm["C161"]["entry_strategy"],
@@ -218,7 +220,7 @@ class OracleParameterFamilyCases(TestCase):
         self.assertEqual(tuple(result["control_dependencies"]),
                          oracle_control_dependency_inventory(d.source))
         self.assertRegex(visible, r"T40\s+Breakout\s+Exact")
-        self.assertRegex(visible, r"T40\s+Daily \(Min/P18\)\s+Exact")
+        self.assertRegex(visible, r"T40\s+Daily \(Min/P18\)\s+Direct")
         self.assertRegex(visible, r"T40\s+Daily \(Min/P18\)\s+Direct")
         self.assertIn("Daily (Min/P18)", visible)
         self.assertNotIn("T40 × Daily", visible)
@@ -251,9 +253,9 @@ class OracleParameterFamilyCases(TestCase):
                 control_dependencies=controls, decisions=decisions,
             )
         row = next(r for r in resolve_current_oracle_comparisons(d.source)
-                   if r.get("strategy_arm_id") == "C159")
+                   if r.get("strategy_arm_id") == "C160")
         altered = {**d.source, "oracle_comparisons": tuple(
-            ({**item, "strategy_arm_id": "C161"} if item.get("strategy_arm_id") == "C159" else item)
+            ({**item, "strategy_arm_id": "C161"} if item.get("strategy_arm_id") == "C160" else item)
             for item in resolve_current_oracle_comparisons(d.source)
         )}
         with self.assertRaisesRegex(ValueError, "must be a scored strategy"):
@@ -347,9 +349,10 @@ class OracleParameterFamilyCases(TestCase):
         self.assertEqual(set(full_arms), {"C97", "C153", "C154"})
         self.assertTrue(all(metric is None for _target, metric in full_arms.values()))
         p18 = {row["strategy"]: row for row in overview["rows"]
-               if row["strategy"] in {"C159", "C160", "C161"}}
-        self.assertEqual(set(p18), {"C159", "C160", "C161"})
-        self.assertEqual({p18[arm]["target"] for arm in ("C159", "C160")}, {"T40"})
+               if row["strategy"] in {"C160", "C161", "C163", "C164"}}
+        self.assertEqual(set(p18), {"C160", "C161", "C163", "C164"})
+        self.assertEqual(p18["C160"]["target"], "T40")
+        self.assertEqual(p18["C164"]["target"], "DailyUniversal_MinTrade_NetPnL_Positive")
         self.assertEqual({p18[arm]["entry_strategy"] for arm in p18}, {"Daily (Min/P18)"})
         self.assertEqual(p18["C161"]["target"], "")
         self.assertEqual(p18["C161"]["selector"], "Default")
@@ -379,8 +382,9 @@ class OracleParameterFamilyCases(TestCase):
         self.assertNotEqual(full_scoped.output_subdir, min_scoped.output_subdir)
         _settings, p18_base, p18_exact = oracle._contract(p18_scoped)
         p18_direct = oracle._direct_arm(p18_scoped, settings, p18_base, p18_exact)
-        self.assertEqual((p18_base.arm_id, p18_exact.arm_id, p18_direct.arm_id),
-                         ("C161", "C159", "C160"))
+        self.assertIsNone(p18_exact)  # No active P18 Exact; historic C159 is signature-only.
+        self.assertEqual((p18_base.arm_id, p18_direct.arm_id, p18_scoped.source["exact_arm_id"]),
+                         ("C161", "C160", "C159"))
         self.assertNotEqual(p18_base.param_source, min_base.param_source)
         self.assertNotEqual(p18_base.param_source, full_base.param_source)
         self.assertEqual(oracle._oracle_comparison_plan(p18_scoped)["recipes"]["T40"],
@@ -672,7 +676,7 @@ class OracleParameterFamilyCases(TestCase):
         original = cfg.RESEARCH_SUMMARY_ROWS
         broken = tuple({key: value for key, value in row.items()
                         if key != "oracle_template_arm_id"}
-                       if row.get("oracle_template_arm_id") == "C145" else row
+                       if row.get("oracle_template_arm_id") == "C146" else row
                        for row in original)
         with patch.object(cfg, "RESEARCH_SUMMARY_ROWS", broken):
             with self.assertRaisesRegex(ValueError, "no executable matching comparison"):
@@ -762,7 +766,8 @@ class OracleParameterFamilyCases(TestCase):
                          (len(keys) + len(preview["control_dependencies"])) * len(seeds))
         min_keys = {oracle_comparison_key(row) for row in comparisons
                     if oracle_parameter_family(row) == "min"}
-        new_keys = {"T40::Daily::Daily_min", "T40_Direct::Daily::Daily_min"}
+        new_keys = {"T40_Direct::Daily::Daily_min",
+                    "TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct::Daily::Daily_min"}
         self.assertTrue(all(preview["preflight"][(seed, key)] == "REUSE"
                             for seed in seeds for key in min_keys))
         self.assertTrue(all(preview["preflight"][(seed, key)] == "RUN"

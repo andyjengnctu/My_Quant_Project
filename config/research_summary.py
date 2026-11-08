@@ -18,7 +18,7 @@ RESEARCH_SUMMARY_ROWS = (
     {'arm_id': 'C161', 'oracle_parameter_family': 'daily_min'},
     # Reuse the existing approved T40 Daily Oracle truth/score recipes; only
     # the formal execution arm and parameter lineage change (P16 -> P18).
-    {'oracle_template_arm_id': 'C145', 'parameter_family': 'daily_min',
+    {'enabled': False, 'oracle_template_arm_id': 'C145', 'parameter_family': 'daily_min',
      'bindings': ({'arm_id': 'C159',
                    'rank_model': ('MR-13CJ', 'daily_universal_terminal_mae_gated_t40_full_list_ndcg_pairwise')},)},
     {'oracle_template_arm_id': 'C146', 'parameter_family': 'daily_min',
@@ -26,7 +26,7 @@ RESEARCH_SUMMARY_ROWS = (
                    'rank_model': ('MR-13CJ', 'daily_universal_terminal_mae_gated_t40_full_list_ndcg_pairwise')},)},
     # Keep C123/C124 retired in Breakout/P16.  Only reuse their immutable
     # event-driven full-cycle NetPnL score recipes for new Daily/P18 arms.
-    {'oracle_template_arm_id': 'C123', 'parameter_family': 'daily_min',
+    {'enabled': False, 'oracle_template_arm_id': 'C123', 'parameter_family': 'daily_min',
      'strategy': 'Daily',
      'bindings': ({'arm_id': 'C162',
                    'rank_model': ('MR-13CO',
@@ -36,6 +36,15 @@ RESEARCH_SUMMARY_ROWS = (
      'bindings': ({'arm_id': 'C163',
                    'rank_model': ('MR-13CO',
                                   'daily_universal_formal_mintrade_fullcycle_netpnl_per_seed_full_list_ndcg_pairwise')},)},
+    # Existing independent CU/CT PIT scores transfer to P18; C134 is the
+    # approved TrueDaily Positive Direct score recipe, not the Replay source.
+    {'oracle_template_arm_id': 'C134', 'parameter_family': 'daily_min',
+     'strategy': 'Daily',
+     'bindings': ({'arm_id': 'C164',
+                   'rank_model': ('MR-13CU',
+                                  'true_daily_universal_mintrade_fullcycle_netpnl_full_list_ndcg_pairwise'),
+                   'positive_model': ('MR-13CT',
+                                      'true_daily_universal_mintrade_fullcycle_netpnl_positive_binary')},)},
     {'oracle': {'target': 'MFE40_Control',
                 'description': '40D MFE only (control, not target recommendation)',
                 'score': 'mfe',
@@ -59,7 +68,7 @@ RESEARCH_SUMMARY_ROWS = (
                    'rank_model': ('MR-13CJ', 'daily_universal_terminal_mae_gated_t40_full_list_ndcg_pairwise')},
                   {'arm_id': 'C147',
                    'rank_model': ('MR-13CX', 'daily_universal_terminal_mae_gated_t40_probabilistic_pairwise')})},
-    {'oracle': {'target': 'T40',
+    {'enabled': False, 'oracle': {'target': 'T40',
                 'description': '(1 - min(MAE40, 1R)) * R40 - min(MAE40, 1R); MAE40 is nonnegative in R',
                 'score': 'terminal_mae_gate',
                 'provider': 'pure_mfe40_provider',
@@ -236,7 +245,7 @@ RESEARCH_SUMMARY_ROWS = (
      'bindings': ({'arm_id': 'C135',
                    'rank_model': ('MR-13CU', 'true_daily_universal_mintrade_fullcycle_netpnl_full_list_ndcg_pairwise'),
                    'positive_model': ('MR-13CT', 'true_daily_universal_mintrade_fullcycle_netpnl_positive_binary')},)},
-    {'oracle': {'target': 'TrueDailyUniversal_MinTrade_NetPnL_Positive',
+    {'enabled': False, 'oracle': {'target': 'TrueDailyUniversal_MinTrade_NetPnL_Positive',
                 'description': 'Every feature-eligible stock-day has an independent next-session prior-close limit '
                                'buy attempt; canonical full-cycle Min broker NetPnL, perfect rank plus Positive '
                                'output, Exact K/R0',
@@ -271,7 +280,7 @@ RESEARCH_SUMMARY_ROWS = (
      'bindings': ({'arm_id': 'C134',
                    'rank_model': ('MR-13CU', 'true_daily_universal_mintrade_fullcycle_netpnl_full_list_ndcg_pairwise'),
                    'positive_model': ('MR-13CT', 'true_daily_universal_mintrade_fullcycle_netpnl_positive_binary')},)},
-    {'oracle': {'target': 'TrueDailyUniversal_MinTrade_NetPnL',
+    {'enabled': False, 'oracle': {'target': 'TrueDailyUniversal_MinTrade_NetPnL',
                 'description': 'Same TrueDaily full-cycle Min broker NetPnL truth; continuous perfect rank without '
                                'Positive admission, Daily Exact K/R0',
                 'score_source': 'TrueDailyUniversal_MinTrade_NetPnL_Positive',

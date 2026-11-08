@@ -155,7 +155,7 @@ class DailyEntryStrategyCases(TestCase):
                 # The model must still supervise the registered raw Target.
                 source = row
                 if row.get("score_source"):
-                    source = next(item for item in scope.source["oracle_comparisons"]
+                    source = next(item for item in scope.source["oracle_source_catalog"]
                                   if item["target"] == row["score_source"])
                 self.assertEqual(profile.continuous_target_id,
                                  oracle_supervised_target_id(source))
@@ -237,17 +237,20 @@ class DailyEntryStrategyCases(TestCase):
         for name in ("TrueDailyUniversal_MinTrade_NetPnL_Positive",
                      "TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct"):
             pair = [row for row in rows if row["target"] == name]
-            self.assertEqual({p.get("strategy", "Breakout") for p in pair},
-                             {"Breakout", "Daily"})
+            present_strategies = {p.get("strategy", "Breakout") for p in pair}
+            self.assertIn("Breakout", present_strategies)
+            if name.endswith("_Direct"):
+                self.assertIn("Daily", present_strategies)
             self.assertEqual({tuple(sorted((k, repr(v)) for k,v in p.items()
-                                           if k not in {"strategy", "strategy_arm_id"})) for p in pair}.__len__(), 1)
+                                           if k not in {"strategy", "strategy_arm_id", "parameter_family"})) for p in pair}.__len__(), 1)
         with self.assertRaisesRegex(ValueError, "duplicate Target x Strategy"):
             resolve_current_oracle_comparisons({
                 **definition.source, "oracle_comparisons": (*rows, dict(rows[-1])),
             })
         # The inventory's second dimension is not a new scientific Target ID.
-        self.assertIn("TrueDailyUniversal_MinTrade_NetPnL_Positive::Daily", keys)
+        self.assertNotIn("TrueDailyUniversal_MinTrade_NetPnL_Positive::Daily", keys)
         self.assertIn("TrueDailyUniversal_MinTrade_NetPnL_Positive", keys)
+        self.assertIn("TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct::Daily::Daily_min", keys)
 
     def test_one_approval_matrix_and_same_engine_for_declared_treatments(self):
         from core.audit_registry import oracle_baseline_arm_ids, oracle_comparison_key
@@ -620,10 +623,14 @@ class DailyEntryStrategyCases(TestCase):
                 if target not in plan["selectors"]:
                     continue
                 arm = oracle._target_reference_arm(scoped, resolved, plan, target, exact, direct)
-                self.assertEqual(arm.entry_strategy, strategy)
-                expected = ("C133" if strategy == "Daily" else "C135") if (
-                    plan["selectors"][target] == "exact") else (
-                    "C134" if strategy == "Daily" else "C136")
+                family_scope = strategy.split("::", 1)[0]
+                self.assertEqual(arm.entry_strategy, family_scope)
+                if strategy == "Daily::Daily_min":
+                    expected = "C164"
+                else:
+                    expected = ("C133" if strategy == "Daily" else "C135") if (
+                        plan["selectors"][target] == "exact") else (
+                        "C134" if strategy == "Daily" else "C136")
                 self.assertEqual(arm.arm_id, expected)
 
     def test_declared_strategy_rejects_wrong_scientific_target(self):
