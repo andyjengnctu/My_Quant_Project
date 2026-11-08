@@ -603,9 +603,14 @@ def get_strategy_compare_suite(suite_id: str) -> dict[str, object]:
             get_research_summary_strategy_arm_ids,
             validate_research_summary_strategy_bindings,
         )
+        from core.breakout_quality_registry import get_continuous_ranker_research_spec
 
         selected_ids = get_research_summary_strategy_arm_ids()
-        validate_research_summary_strategy_bindings()
+        validate_research_summary_strategy_bindings(
+            arm_registry=STRATEGY_COMPARE_ARMS,
+            dl_sources=STRATEGY_DL_SOURCES,
+            model_spec_resolver=get_continuous_ranker_research_spec,
+        )
         arm_ids = tuple(dict.fromkeys((
             *(arm_id for arm_id in arm_ids if arm_id in selected_ids),
             *selected_ids,
