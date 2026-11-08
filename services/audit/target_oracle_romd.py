@@ -127,7 +127,8 @@ from core.audit_registry import (
     AUDIT_REUSABLE_REPORTS, resolve_current_oracle_comparisons, oracle_comparison_key,
     oracle_target_semantics, oracle_scientific_target_name,
     oracle_parameter_family, oracle_baseline_arm_ids, oracle_baseline_display_name,
-    oracle_work_inventory, oracle_work_display_dimensions,
+    oracle_work_inventory, oracle_target_work_inventory,
+    oracle_control_dependency_inventory, oracle_work_display_dimensions,
     oracle_display_strategy,
     oracle_positive_output_for_recipe,
 )
@@ -1677,13 +1678,22 @@ def render_replay_preflight(
     strategies: Mapping[str, str] | None = None,
     display_targets: Mapping[str, str] | None = None,
     selectors: Mapping[str, str] | None = None,
+    control_dependencies: list[str] | tuple[str, ...] = (),
 ) -> str:
-    """Render the one complete identity-backed Replay authorization plan.
+    """Render authorized Target work, separating non-Target control dependencies.
 
     Display is bounded by target count, not seeds x targets. Source data,
     training and result identities are never inferred from color/status.
     """
-    counts = {action: sum(action == value for value in decisions.values())
+    if len(set(targets)) != len(targets):
+        raise ValueError("Duplicated scientific Target work rows")
+    controls = tuple(control_dependencies)
+    if (len(set(controls)) != len(controls)
+            or set(controls).intersection(targets)):
+        raise ValueError("Oracle control dependency mixed into Target inventory")
+    target_cells = ((seed, name) for seed in seeds for name in targets)
+    target_decisions = [decisions[key] for key in target_cells]
+    counts = {action: target_decisions.count(action)
               for action in ("REUSE", "RUN", "BLOCKED")}
     headers = ("Target", "Strategy", "Selector", *(f"S{i + 1}" for i in range(len(seeds))))
     rows = [
@@ -1693,15 +1703,32 @@ def render_replay_preflight(
          *(styled_workflow_status(decisions[(seed, target)]) for seed in seeds))
         for target in targets
     ]
+    dependency_rows = []
+    for control in controls:
+        states = [decisions[(seed, control)] for seed in seeds]
+        dependency_rows.append(
+            f"{control} ({(strategies or {}).get(control, control)}): "
+            + " / ".join(f"{action} {states.count(action)}"
+                         for action in ("REUSE", "RUN", "BLOCKED"))
+        )
+    # These baselines are not scientific Targets. They are explicit, authorized
+    # work only where the approved paired-RoMD report still needs them.
+    dependency_text = (
+        "[\u7b56\u7565\u914d\u5c0d\u57fa\u6e96\u4f9d\u8cf4\uff5c\u975e Target\u9a57\u8b49\u9805\u76ee] "
+        + "\uff1b".join(dependency_rows)
+        + "\uff1bRUN \u6703\u57f7\u884c No-DL Portfolio \u56de\u653e\uff0c\u50c5\u4f9b\u65e2\u6709\u540c Seed \u914d\u5c0d RoMD \u5dee\u503c\u8b49\u64da\uff0c\u4e0d\u662f Target\u3002"
+        if controls else None
+    )
     return "\n".join((
-        f"[Target 驗證 {label} | Portfolio Replay 正式計畫]",
-        "Seed：" + "  ".join(f"S{i + 1}={seed}" for i, seed in enumerate(seeds)),
+        f"[Target \u9a57\u8b49 {label} | Portfolio Replay \u6b63\u5f0f\u8a08\u756b]",
+        "Seed\uff1a" + "  ".join(f"S{i + 1}={seed}" for i, seed in enumerate(seeds)),
         render_table(headers, rows),
-        f"Portfolio REUSE {counts['REUSE']} / RUN（需回放）{counts['RUN']} / "
-        f"BLOCKED {counts['BLOCKED']}；REUSE=零Portfolio交易重算，"
-        "RUN=舊執行身分過時或合法結果缺件，由系統只計算該項；"
-        "BLOCKED=前置參數缺件、資料損毀或執行身分矛盾；須停止該次回放，尚未開始回放",
-        "註：本表只核對 Portfolio Replay；Target 真值及 Score 另依各自簽章 REUSE／RUN。",
+        f"Portfolio REUSE {counts['REUSE']} / RUN\uff08\u9700\u56de\u653e\uff09{counts['RUN']} / "
+        f"BLOCKED {counts['BLOCKED']}\uff1bREUSE=\u96f6Portfolio\u4ea4\u6613\u91cd\u7b97\uff0c"
+        "RUN=\u820a\u57f7\u884c\u8eab\u5206\u904e\u6642\u6216\u5408\u6cd5\u7d50\u679c\u7f3a\u4ef6\uff0c\u7531\u7cfb\u7d71\u53ea\u8a08\u7b97\u8a72\u9805\uff1b"
+        "BLOCKED=\u524d\u7f6e\u53c3\u6578\u7f3a\u4ef6\u3001\u8cc7\u6599\u640d\u6bc0\u6216\u57f7\u884c\u8eab\u5206\u77db\u76fe\uff1b\u9808\u505c\u6b62\u8a72\u6b21\u56de\u653e\uff0c\u5c1a\u672a\u958b\u59cb\u56de\u653e",
+        *((dependency_text,) if dependency_text else ()),
+        "\u8a3b\uff1a\u672c\u8868\u53ea\u6838\u5c0d Target Portfolio Replay\uff1bTarget \u771f\u503c\u53ca Score \u53e6\u4f9d\u5404\u81ea\u7c3d\u7ae0 REUSE\uff0fRUN\u3002",
         *((reuse_diagnostic,) if reuse_diagnostic else ()),
     ))
 
@@ -3528,21 +3555,26 @@ def _run_single_stage_oracle(
     scoped_rows = {str(row["target"]): row
                    for row in definition.source["oracle_comparisons"]}
     preflight = render_replay_preflight(
-        label="Fixed", seeds=seed_set, targets=list(targets), decisions=decisions,
+        label="Fixed", seeds=seed_set, targets=[name for name, _ in plan["targets"]],
+        control_dependencies=[_baseline_target(definition)], decisions=decisions,
         strategies={target: _oracle_target_strategy(definition, target) for target in targets},
-        display_targets={target: (oracle_target_semantics(scoped_rows[target])[0]
-                                  if target in scoped_rows else target) for target in targets},
-        selectors={target: (oracle_target_semantics(scoped_rows[target])[1]
-                            if target in scoped_rows else "-") for target in targets},
+        display_targets={target: oracle_target_semantics(scoped_rows[target])[0]
+                         for target, _ in plan["targets"]},
+        selectors={target: oracle_target_semantics(scoped_rows[target])[1]
+                   for target, _ in plan["targets"]},
         reuse_diagnostic=_render_reuse_run_reasons(
-            decisions=decisions, reasons=run_causes),
+            decisions={key: value for key, value in decisions.items()
+                       if key[1] != _baseline_target(definition)}, reasons=run_causes),
     )
     if not quiet:
         if blocked or preflight_display == "full":
             print("\n" + preflight, flush=True)
         else:
-            reuse_count = sum(value == "REUSE" for value in decisions.values())
-            run_count = sum(value == "RUN" for value in decisions.values())
+            scored_decisions = (value for (seed, name), value in decisions.items()
+                                if name != _baseline_target(definition))
+            scored_actions = tuple(scored_decisions)
+            reuse_count = scored_actions.count("REUSE")
+            run_count = scored_actions.count("RUN")
             print(f"[Target 驗證｜身分核對完成] REUSE {reuse_count} / "
                   f"RUN（需計算）{run_count} / BLOCKED 0 | "
                   f"本次共同回放期間 {start} ～ {end}; "
@@ -3857,10 +3889,15 @@ def _oracle_combined_preview(definition, *, project_root: Path) -> tuple[dict[st
                 raise OracleBlockedError(f"Oracle shared baseline {control_id} has inconsistent identities")
             completed_identities[key] = identity
     registry_keys = oracle_work_inventory(definition.source)
-    if set(registry_keys) != {key for _, key in decisions} or len(registry_keys) != len(set(registry_keys)):
-        raise OracleBlockedError("Oracle Target x Strategy x family preview/inventory mismatch")
+    target_keys = oracle_target_work_inventory(definition.source)
+    control_keys = oracle_control_dependency_inventory(definition.source)
+    if (set(registry_keys) != {key for _, key in decisions}
+            or len(registry_keys) != len(set(registry_keys))
+            or set(registry_keys) != set(target_keys).union(control_keys)):
+        raise OracleBlockedError("Oracle Target/strategy-dependency preview inventory mismatch")
     text = render_replay_preflight(
-        label="Fixed", seeds=list(seeds), targets=list(registry_keys),
+        label="Fixed", seeds=list(seeds), targets=list(target_keys),
+        control_dependencies=control_keys,
         decisions=decisions, strategies=strategies, display_targets=display_targets,
         selectors=selectors,
     )
@@ -3868,7 +3905,9 @@ def _oracle_combined_preview(definition, *, project_root: Path) -> tuple[dict[st
             "missing_p16": param_plans[baselines["min"]]["missing"],
             "producer_kwargs": param_plans[baselines["min"]]["producer_kwargs"],
             "parameter_plans": param_plans,
-            "seed_set": seeds, "targets": registry_keys,
+            "seed_set": seeds, "targets": target_keys,
+            "control_dependencies": control_keys,
+            "receipt_inventory": registry_keys,
             "completed_observations": completed,
             "completed_identities": completed_identities,
             "baseline_parameter_scientific": baseline_param_scientific,
@@ -4096,13 +4135,10 @@ def render_result(report: Mapping[str, Any], *, target: str) -> str:
             name, selector = _oracle_display_name(legacy), "-"
         return dict(item, strategy=strategy, target=name, selector=selector,
                     wins=f'{item["positive_seed_count"]}/{item["seeds"]}')
-    def _control_presentation(item):
-        target, strategy, selector = display[str(item["target"])]
-        return dict(item, target=target, strategy=strategy, selector=selector, wins="-")
-    reference_control_row = _control_presentation(baseline)
-    items = [reference_control_row,
-             *(_control_presentation(row) for row in report.get("control_baselines", ())),
-             *(_present(item) for item in report["oracles"])]
+    # No-DL controls are reference evidence for paired RoMD, not Targets.
+    # Keep signed baselines in the report payload; never render them as
+    # Target-performance, annual-Target, or paired-Target rows.
+    items = [_present(item) for item in report["oracles"]]
     # Presentation-only sort; preserve the canonical comparison/Replay order.
     items.sort(key=lambda row: (float(row["romd"]), str(row["target"]),
                                 str(row.get("strategy", "Breakout"))))
@@ -4172,9 +4208,8 @@ def render_result(report: Mapping[str, Any], *, target: str) -> str:
             f' ({item["strategy"]} / {item["selector"]})'
             if repeated_targets[str(item["target"])] > 1 else ''),
              c96_romd=baselines[int(obs["seed"])])
-        # Exclude the primary reference by its row identity, never by the
-        # presentation-only Target label (all No-DL Targets are blank).
-        for item in items if item is not reference_control_row
+        # The display inventory contains only actual scored Target treatments.
+        for item in items
         for obs in item["seed_observations"]
     ]
     for paired_cells in format_comparison_rows(

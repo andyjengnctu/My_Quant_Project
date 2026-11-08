@@ -5558,7 +5558,7 @@ class OracleWinRateReportCases(TestCase):
         table = md.split("## 1. Oracle Performance (8-seed mean)",1)[1].split("## 2.",1)[0]
         self.assertIn("Win Rate", table)
         self.assertNotIn("Delta RoMD", table)
-        self.assertLess(table.index("Breakout | Default"),table.index("R40"))
+        self.assertNotIn("Breakout | Default", table)
         self.assertLess(table.index("R40"),table.index("T40"))
         self.assertIn("50.00%", table)
         self.assertNotIn("Delta RoMD", md)

@@ -15,6 +15,7 @@ from core.audit_policy import get_reusable_audit_definitions
 from core.audit_registry import (
     oracle_baseline_arm_ids, oracle_comparison_key, oracle_parameter_family,
     oracle_display_strategy, oracle_target_semantics,
+    oracle_target_work_inventory, oracle_control_dependency_inventory,
     resolve_current_oracle_comparisons, validate_oracle_compare_family_coverage,
 )
 from core.strategy_compare_registry import STRATEGY_COMPARE_ARMS
@@ -137,13 +138,56 @@ class OracleParameterFamilyCases(TestCase):
         visible = result["text"]
         self.assertNotIn("T40 (Full)", visible)
         self.assertGreaterEqual(len(re.findall(r"T40\s+Breakout \(Full\)\s+(Exact|Direct)", visible)), 2)
-        self.assertRegex(visible, r"Breakout \(Full\)\s+Default")
+        target_table = visible.split("Portfolio REUSE", 1)[0]
+        self.assertNotIn("Default", target_table)
+        self.assertNotIn("C96", target_table)
+        self.assertNotIn("C97", target_table)
+        self.assertNotIn("C161", target_table)
+        self.assertIn("C161", visible.split("Portfolio REUSE", 1)[1])
+        self.assertEqual(tuple(result["targets"]), oracle_target_work_inventory(d.source))
+        self.assertEqual(tuple(result["control_dependencies"]),
+                         oracle_control_dependency_inventory(d.source))
         self.assertRegex(visible, r"T40\s+Breakout\s+Exact")
         self.assertRegex(visible, r"T40\s+Daily \(Min/P18\)\s+Exact")
         self.assertRegex(visible, r"T40\s+Daily \(Min/P18\)\s+Direct")
         self.assertIn("Daily (Min/P18)", visible)
         self.assertNotIn("T40 × Daily", visible)
         self.assertEqual(len(result["seed_set"]), 4)
+
+    def test_no_dl_is_never_an_oracle_target_or_counted_as_target_run(self):
+        d = definition()
+        targets = oracle_target_work_inventory(d.source)
+        controls = oracle_control_dependency_inventory(d.source)
+        self.assertEqual(len(targets), len(resolve_current_oracle_comparisons(d.source)))
+        self.assertEqual(set(controls), {"C96", "C97", "C161"})
+        self.assertFalse(set(controls).intersection(targets))
+        seed_set = (693545351, 2014432738, 104504529, 762252050)
+        decisions = {(seed, target): "REUSE" for seed in seed_set for target in targets}
+        decisions.update({(seed, control): "RUN" for seed in seed_set for control in controls})
+        out = oracle.render_replay_preflight(
+            label="Fixed", seeds=list(seed_set), targets=list(targets),
+            control_dependencies=controls, decisions=decisions,
+        )
+        shown_targets = out.split("Portfolio REUSE", 1)[0]
+        for control in controls:
+            self.assertNotIn(control, shown_targets)
+            self.assertIn(control, out.split("Portfolio REUSE", 1)[1])
+        self.assertIn("Portfolio REUSE 96 / RUN", out)
+        self.assertIn("RUN 4", out)
+        self.assertIn("No-DL Portfolio", out)
+        with self.assertRaisesRegex(ValueError, "mixed into Target"):
+            oracle.render_replay_preflight(
+                label="Fixed", seeds=list(seed_set), targets=[*targets, controls[0]],
+                control_dependencies=controls, decisions=decisions,
+            )
+        row = next(r for r in resolve_current_oracle_comparisons(d.source)
+                   if r.get("strategy_arm_id") == "C159")
+        altered = {**d.source, "oracle_comparisons": tuple(
+            ({**item, "strategy_arm_id": "C161"} if item.get("strategy_arm_id") == "C159" else item)
+            for item in resolve_current_oracle_comparisons(d.source)
+        )}
+        with self.assertRaisesRegex(ValueError, "must be a scored strategy"):
+            oracle_target_work_inventory(altered)
 
     def test_oracle_human_report_shows_target_not_family_suffix(self):
         import re
@@ -172,6 +216,8 @@ class OracleParameterFamilyCases(TestCase):
                 visible = oracle.render_result(report, target=kind)
                 self.assertNotIn("T40 (Full)", visible)
                 self.assertIn("Breakout (Full)", visible)
+                self.assertNotIn("|  | Breakout (Full) | Default |", visible)
+                self.assertNotIn("|  | Breakout | Default |", visible)
                 self.assertIn("T40", visible)
                 if kind == "markdown":
                     self.assertIn("| T40 | Breakout (Full) | Exact |", visible)
@@ -186,8 +232,7 @@ class OracleParameterFamilyCases(TestCase):
                     paired_data_lines = [line for line in paired_section.splitlines()
                                          if line.startswith("| ")]
                     self.assertEqual(len(paired_data_lines),
-                                     1 + (len(report["control_baselines"]) +
-                                          len(report["oracles"])) * len(seeds))
+                                     1 + len(report["oracles"]) * len(seeds))
                 else:
                     self.assertRegex(visible, r"T40\s+Breakout \(Full\)\s+Exact")
 
@@ -638,16 +683,21 @@ class OracleParameterFamilyCases(TestCase):
         with patch.object(oracle, "_run_single_stage_oracle", side_effect=fake_run):
             preview = oracle.preview_oracle_replay_plan(d, project_root=Path("/tmp"))
         keys = preview["targets"]
-        self.assertEqual(len(keys), len(comparisons) + len(oracle_baseline_arm_ids(d.source)))
-        self.assertEqual(len(preview["preflight"]), len(keys) * len(seeds))
-        min_keys = {"C96", *(oracle_comparison_key(row) for row in comparisons
-                              if oracle_parameter_family(row) == "min")}
-        new_keys = {"C161", "T40::Daily::Daily_min", "T40_Direct::Daily::Daily_min"}
+        self.assertEqual(tuple(keys), oracle_target_work_inventory(d.source))
+        self.assertEqual(tuple(preview["control_dependencies"]),
+                         oracle_control_dependency_inventory(d.source))
+        self.assertEqual(len(keys), len(comparisons))
+        self.assertEqual(len(preview["preflight"]),
+                         (len(keys) + len(preview["control_dependencies"])) * len(seeds))
+        min_keys = {oracle_comparison_key(row) for row in comparisons
+                    if oracle_parameter_family(row) == "min"}
+        new_keys = {"T40::Daily::Daily_min", "T40_Direct::Daily::Daily_min"}
         self.assertTrue(all(preview["preflight"][(seed, key)] == "REUSE"
                             for seed in seeds for key in min_keys))
         self.assertTrue(all(preview["preflight"][(seed, key)] == "RUN"
                             for seed in seeds for key in keys if key not in min_keys))
         self.assertTrue(new_keys.issubset(set(keys)))
+        self.assertFalse(set(preview["control_dependencies"]).intersection(keys))
         self.assertEqual(set(preview["parameter_plans"]), {"C96", "C97", "C161"})
         self.assertNotEqual(preview["parameter_plans"]["C161"]["producer_kwargs"],
                             preview["parameter_plans"]["C96"]["producer_kwargs"])

@@ -379,18 +379,53 @@ def oracle_baseline_display_name(source: Mapping[str, Any], arm_id: str) -> str:
 
 
 
-def oracle_work_inventory(source: Mapping[str, Any]) -> tuple[str, ...]:
-    """Single ordered inventory of economic controls and scored treatments.
+def oracle_target_work_inventory(source: Mapping[str, Any]) -> tuple[str, ...]:
+    """Executable hindsight Target treatments, excluding every No-DL strategy.
 
-    Presentation, read-only result projection and replay authorization consume
-    this same list. A new parameter family adds one control and its own
-    treatments without perturbing earlier families or their receipt keys.
+    Summary membership and Oracle treatments are resolved from the same
+    registry. The paired controls belong to replay dependencies, not this
+    scientific Target inventory or its user-facing RUN/REUSE counts.
+    """
+    rows = resolve_current_oracle_comparisons(dict(source))
+    keys = tuple(oracle_comparison_key(row) for row in rows)
+    if len(keys) != len(set(keys)) or not keys:
+        raise ValueError("Oracle Target treatment inventory is empty or duplicated")
+    controls = set(oracle_baseline_arm_ids(source).values())
+    if controls.intersection(keys):
+        raise ValueError("Oracle No-DL strategy must not be a scientific Target")
+    from core.strategy_compare_registry import STRATEGY_COMPARE_ARMS
+    for row in rows:
+        reference = row.get("strategy_arm_id")
+        if reference:
+            arm = STRATEGY_COMPARE_ARMS.get(str(reference))
+            if not arm or not arm.get("dl_enabled"):
+                raise ValueError(
+                    f"Oracle Target reference {reference} must be a scored strategy"
+                )
+    return keys
+
+
+def oracle_control_dependency_inventory(source: Mapping[str, Any]) -> tuple[str, ...]:
+    """Economic controls used only for optional paired-difference evidence."""
+    families = {oracle_parameter_family(row)
+                for row in resolve_current_oracle_comparisons(dict(source))}
+    return tuple(arm for family, arm in oracle_baseline_arm_ids(source).items()
+                 if family in families)
+
+
+def oracle_work_inventory(source: Mapping[str, Any]) -> tuple[str, ...]:
+    """Internal signed Replay receipt inventory, NOT Target work membership.
+
+    Controls remain paired-reference dependencies for historical delta RoMD
+    evidence. The Target menu uses oracle_target_work_inventory instead.
+    Both inventories are projected from the exact same registered treatments.
     """
     baselines = oracle_baseline_arm_ids(source)
     rows = resolve_current_oracle_comparisons(dict(source))
+    families = {oracle_parameter_family(row) for row in rows}
     keys = tuple(
         key
-        for family, control_id in baselines.items()
+        for family, control_id in baselines.items() if family in families
         for key in (control_id, *(
             oracle_comparison_key(row) for row in rows
             if oracle_parameter_family(row) == family
@@ -416,7 +451,10 @@ def oracle_work_display_dimensions(
     from core.strategy_compare_registry import STRATEGY_COMPARE_ARMS
 
     display: dict[str, tuple[str, str, str]] = {}
+    active_controls = set(oracle_control_dependency_inventory(source))
     for family, control_id in oracle_baseline_arm_ids(source).items():
+        if control_id not in active_controls:
+            continue
         arm = STRATEGY_COMPARE_ARMS.get(control_id)
         if arm is None or arm.get("dl_enabled"):
             raise ValueError(f"Oracle No-DL control is missing or scored: {control_id}")
@@ -539,6 +577,8 @@ __all__ = [
     "oracle_baseline_arm_ids",
     "oracle_baseline_display_name",
     "oracle_work_inventory",
+    "oracle_target_work_inventory",
+    "oracle_control_dependency_inventory",
     "oracle_work_display_dimensions",
     "oracle_display_strategy",
     "validate_oracle_compare_family_coverage",
