@@ -584,6 +584,7 @@ def run_comparison(
     progress_callback: Callable[[str, dict[str, Any]], None] | None = None,
     param_evaluation_mode="rolling",
     entry_strategy="Breakout",
+    baseline_entry_strategy="Breakout",
 ):
     root = Path(project_root).resolve()
     runtime = resolve_strategy_compare_runtime_contract(
@@ -729,6 +730,7 @@ def run_comparison(
                     expected_shared_param_overrides=dict(shared_param_overrides or {}),
                     expected_max_positions=max_positions,
                     expected_enable_rotation=enable_rotation,
+                    expected_entry_strategy=baseline_entry_strategy,
                     expected_start_date=start_date,
                     expected_end_date=end_date,
                 )
@@ -748,6 +750,7 @@ def run_comparison(
                 params=no_filter_params, start_date=start_date, end_date=end_date,
                 max_positions=max_positions, enable_rotation=enable_rotation, quiet=quiet,
                 replay_counts=baseline_replay_counts,
+                entry_strategy=baseline_entry_strategy,
             )
         baseline_elapsed_sec = time.perf_counter() - baseline_timing_started
         if progress_callback is not None:
@@ -1041,6 +1044,7 @@ def run_comparison(
 
     metadata = {
         "schema_version": SCHEMA_VERSION,
+        **({"baseline_entry_strategy": str(baseline_entry_strategy)} if baseline_entry_strategy != "Breakout" else {}),
         "execution_timing": {
             "baseline_action": "REUSE" if baseline_reuse_dir is not None else "RUN",
             "baseline_elapsed_sec": round(float(baseline_elapsed_sec), 6),

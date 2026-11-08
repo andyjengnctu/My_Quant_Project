@@ -203,6 +203,7 @@ def run_strategy_compare_baseline_arm(
         shared_param_overrides=(ALL_RULE_FILTERS_OFF_OVERRIDES if all_off else None),
         baseline_reuse_dir=baseline_reuse_dir,
         param_evaluation_mode=str(param_evaluation_mode),
+        entry_strategy=arm.entry_strategy,
         data_dir_override=resolve_strategy_compare_arm_data_dir(
             arm, project_root=Path(project_root).resolve()
         ),
@@ -323,8 +324,25 @@ def run_strategy_compare_active_arm(
     )
     ranking_options.update(dict(ranking_options_extra or {}))
 
+    # Each DL arm must use the one real, same-param-policy no-DL reference.
+    # This also selects the correct entry policy (Breakout vs unscored Daily)
+    # without changing existing historical arm implementations.
+    arm_param_policy = resolve_strategy_comparison_arm_param_policy(settings, arm)
+    baseline_arms = [
+        reference for reference in settings.enabled_arms
+        if not reference.dl_enabled
+        and reference.param_source == arm.param_source
+        and resolve_strategy_comparison_arm_param_policy(settings, reference) == arm_param_policy
+        and reference.rule_policy == arm.rule_policy
+    ]
+    if len(baseline_arms) != 1:
+        raise ValueError(
+            f"Strategy Compare expected one matching DL-off baseline for {arm.arm_id}; found={len(baseline_arms)}"
+        )
+
     return run_comparison(
         entry_strategy=arm.entry_strategy,
+        baseline_entry_strategy=baseline_arms[0].entry_strategy,
         project_root=root,
         dataset=settings.dataset,
         params_path=str(params_path),

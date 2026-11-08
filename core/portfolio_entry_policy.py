@@ -1,10 +1,10 @@
 """Canonical portfolio entry-source policy; never owns fills, Min exits or cash.
 
-Breakout remains the implicit/default strategy.  A Daily strategy consumes only
-verified (ticker, information-date) *score eligibility*; future Positive/NetPnL
-values are not read here.  The official score/Positive selector decides whether
-the resulting candidate is admissible.  The existing Portfolio Engine executes
-both modes through the same position and accounting path.
+Breakout remains the implicit/default strategy.  A scored Daily strategy
+consumes verified (ticker, information-date) score eligibility, while explicitly
+unscored Daily optimization and no-DL baselines use all eligible adjacent
+market stock-days.  Neither source reads future labels; the Portfolio Engine
+executes both using the same position and accounting path.
 """
 from __future__ import annotations
 
@@ -71,6 +71,43 @@ class DailyEntrySource:
         return {today: entries} if entries else {}
 
 
+class UnscoredDailyEntrySource(DailyEntrySource):
+    """DL-independent eligible market-day universe for Daily Min optimization/control.
+
+    Uses the same previous-exchange-session, adjacent-quote rule as scored Daily,
+    but never loads model PIT scores or requires a Breakout setup.  Entry
+    execution and broker fees remain owned by the ordinary Portfolio Engine.
+    """
+
+    def __init__(self):
+        self._previous_session = {}
+        self._calendar = None
+        self._market_ref = None
+        self._market_tickers = ()
+        self.excluded_missing_market_ticker = 0
+        self.excluded_missing_adjacent_quote = 0
+
+    def entries_for(self, today, all_dfs_fast):
+        if self._calendar is None:
+            raise RuntimeError("Daily Entry calendar has not been configured")
+        prior = self._previous_session.get(pd.Timestamp(today).normalize())
+        if prior is None:
+            return {}
+        if all_dfs_fast is not self._market_ref:
+            self._market_ref = all_dfs_fast
+            self._market_tickers = tuple(sorted(all_dfs_fast))
+        entries = []
+        for ticker in self._market_tickers:
+            stock = all_dfs_fast[ticker]
+            previous_pos = get_fast_pos(stock, prior)
+            today_pos = get_fast_pos(stock, today)
+            if previous_pos < 0 or today_pos != previous_pos + 1:
+                self.excluded_missing_adjacent_quote += 1
+                continue
+            entries.append((ticker, previous_pos, today_pos))
+        return {today: entries} if entries else {}
+
+
 _ACTIVE_ENTRY: ContextVar[DailyEntrySource | None] = ContextVar(
     "portfolio_scored_daily_entry_source", default=None,
 )
@@ -81,20 +118,38 @@ def current_daily_entry_source() -> DailyEntrySource | None:
 
 
 @contextmanager
-def portfolio_entry_policy_context(strategy: str, score_keys=None) -> Iterator[None]:
-    """Explicitly opt in for one authorized Daily replay; default is Breakout."""
+def portfolio_entry_policy_context(
+    strategy: str, score_keys=None, *, unscored: bool = False,
+) -> Iterator[None]:
+    """Select one mutually exclusive Daily scored/unscored or Breakout entry.
+
+    A caller must explicitly request the DL-independent market-day universe;
+    omitting verified score keys does NOT automatically change a scored arm.
+    """
     if strategy == "Breakout":
-        if score_keys is not None:
-            raise ValueError("Breakout Entry cannot receive Daily score candidate inputs")
+        if score_keys is not None or unscored:
+            raise ValueError("Breakout Entry cannot receive Daily candidate inputs")
         yield
         return
-    if strategy != "Daily" or score_keys is None:
-        raise ValueError("Only authorized Daily Entry with a score universe is supported")
+    if strategy != "Daily" or (score_keys is None) == (not unscored):
+        raise ValueError("Daily Entry requires exactly one verified score universe or unscored mode")
     if _ACTIVE_ENTRY.get() is not None:
         raise RuntimeError("Nested Daily Entry source is prohibited")
-    source = DailyEntrySource(score_keys)
+    source = UnscoredDailyEntrySource() if unscored else DailyEntrySource(score_keys)
     token = _ACTIVE_ENTRY.set(source)
     try:
         yield
     finally:
         _ACTIVE_ENTRY.reset(token)
+
+
+@contextmanager
+def optimizer_unscored_daily_entry_context() -> Iterator[None]:
+    """Bind the Daily market-day entries only under an explicit Daily Optimizer science."""
+    from core.scientific_runtime_context import get_active_scientific_section
+
+    strategy = get_active_scientific_section("strategy") or {}
+    if strategy.get("strategy_id") != ENTRY_DAILY:
+        raise ValueError("Unscored Daily Optimizer requires strategy_id=daily")
+    with portfolio_entry_policy_context("Daily", unscored=True):
+        yield

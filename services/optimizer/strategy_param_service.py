@@ -3171,6 +3171,7 @@ def ensure_fixed_multiseed_strategy_parameter_artifact(
         prepare_selection_historical_full_roos_params,
         prepare_selection_historical_p2_params,
     )
+    from core.strategy_param_policy import get_strategy_param_training_profile
 
     root = Path(project_root).resolve()
     compare_policy = str(policy).strip()
@@ -3240,6 +3241,7 @@ def ensure_fixed_multiseed_strategy_parameter_artifact(
             recover_completed_strategy_compare=False,
             parameter_set_identity=str(contract["parameter_set"]),
             seed_ensemble_policy_override=dict(contract["seed_ensemble_policy"]),
+            strategy_id=str(get_strategy_param_training_profile(training_profile_id).strategy_id),
         )
     else:
         result = prepare_selection_historical_full_roos_params(
@@ -3756,6 +3758,7 @@ def ensure_fixed_multiseed_robustness_strategy_parameter_artifact(
         prepare_selection_historical_full_roos_params,
         prepare_selection_historical_p2_params,
     )
+    from core.strategy_param_policy import get_strategy_param_training_profile
 
     root = Path(project_root).resolve()
     compare_policy = str(policy).strip()
@@ -3902,6 +3905,7 @@ def ensure_fixed_multiseed_robustness_strategy_parameter_artifact(
             recover_completed_strategy_compare=False,
             parameter_set_identity=str(contract["parameter_set"]),
             seed_ensemble_policy_override=dict(contract["seed_ensemble_policy"]),
+            strategy_id=str(get_strategy_param_training_profile(training_profile_id).strategy_id),
         )
     else:
         result = prepare_selection_historical_full_roos_params(

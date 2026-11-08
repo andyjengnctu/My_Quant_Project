@@ -75,6 +75,19 @@ def _build_parameter_generation_contract(strategy_id: str) -> dict[str, Any]:
     key = str(strategy_id or "").strip().lower()
     if key == "breakout":
         return _build_breakout_parameter_generation_contract()
+    if key == "daily":
+        from core.portfolio_entry_policy import DAILY_ENTRY_CONTRACT
+        # Search primitives and schema are shared with the canonical Optimizer;
+        # this new contract freezes all Breakout-only dimensions and declares
+        # an independent stock-day selection/replay objective.
+        return {
+            **_build_breakout_parameter_generation_contract(),
+            "strategy_id": "daily",
+            "entry_contract": DAILY_ENTRY_CONTRACT,
+            "entry_universe": "unscored_all_adjacent_quote_stockdays_v1",
+            "search_fields": ["atr_len", "atr_times_init", "atr_times_trail"],
+            "breakout_signals_required": False,
+        }
     raise ValueError(f"尚未登記strategy parameter scientific contract builder: {strategy_id!r}")
 
 

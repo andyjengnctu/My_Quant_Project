@@ -265,7 +265,7 @@ def run_portfolio_timeline(
         day_pit_stats_cursor = day_context.pit_stats_cursor
         if daily_source is not None:
             if use_param_ensemble:
-                raise ValueError("Daily Entry requires canonical single-member P16 replay")
+                raise ValueError("Daily Entry requires canonical single-member parameter replay")
             # Daily orders expire after the next exchange session.  Clear any
             # stale order state *before* the candidate/capacity/idle gates.
             active_extended_signals.clear()

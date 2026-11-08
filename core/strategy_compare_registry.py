@@ -144,7 +144,7 @@ STRATEGY_COMPARE_SUITES = {
         "arm_ids": (
             "C96", "C97", "C98", "C99", "C100", "C101", "C102", "C103",
             "C105", "C106", "C107", "C108", "C109", "C110",
-            "C111", "C112", "C115", "C116", "C117", "C118", "C119", "C120", "C121", "C122", "C123", "C124", "C125", "C126", "C133", "C134", "C135", "C136", "C137", "C138", "C145", "C146", "C147", "C148", "C153", "C154", "C155", "C156", "C157", "C158",
+            "C111", "C112", "C115", "C116", "C117", "C118", "C119", "C120", "C121", "C122", "C123", "C124", "C125", "C126", "C133", "C134", "C135", "C136", "C137", "C138", "C145", "C146", "C147", "C148", "C153", "C154", "C155", "C156", "C157", "C158", "C159", "C160", "C161",
         ),
         # A compact connected contrast graph supports each selected model
         # versus C96 plus the matched CK/CJ label contrast. Historical AO/CH
@@ -166,6 +166,7 @@ STRATEGY_COMPARE_SUITES = {
             "C153-C97", "C154-C97", "C153-C107", "C154-C109", "C154-C153",
             "C155-C97", "C156-C97", "C155-C156", "C155-C153", "C156-C154",
             "C157-C97", "C158-C97", "C157-C158", "C157-C153", "C158-C154",
+            "C159-C161", "C160-C161", "C159-C160", "C159-C145", "C160-C146",
         ),
         "display_name_bases": {
             "C96": "Min Base-Finalist-Best / Broker-Cash",
@@ -212,6 +213,9 @@ STRATEGY_COMPARE_SUITES = {
             "C156": "Full MR-13CZ Rank + MR-13DA Positive Direct No-K No-R0 / Broker-Cash",
             "C157": "Full MR-13CZ NetPnL Rank Exact K/R0 / Broker-Cash",
             "C158": "Full MR-13CZ NetPnL Rank Direct No-K No-R0 / Broker-Cash",
+            "C159": "T40 × Daily (Min/P18) Exact K/R0 / Broker-Cash",
+            "C160": "T40 × Daily (Min/P18) Direct No-K No-R0 / Broker-Cash",
+            "C161": "Daily (Min/P18) No DL / Default Selector / Broker-Cash",
         },
     },
     "non_dl_c85_same_signal_revalidation_v1": {
@@ -1517,6 +1521,32 @@ STRATEGY_EXPERIMENTAL_PARAM_SOURCES = {
         }},
         "builder": {"enabled": True, "builder_type": "optimizer_fixed_multiseed_strategy_params",
                     "options": {"training_profile_id": "broker_cash_min_best_seed42_current"}},
+    },
+    "daily_min_best_broker_cash_oos_experiment": {
+        "path_template": "models/research/breakout_quality/strategy_params/param_p18_daily_min_best_broker_cash/{param_filename}",
+        "identity_manifest_path": "models/research/breakout_quality/strategy_params/param_p18_daily_min_best_broker_cash/identity_manifest.json",
+        "description": "PARAM-P18 daily-entry re-fitted Min strategy parameter truth; OOS consumer.",
+        "trained_with_dl_id": None,
+        "consumption_evaluation_mode": "oos",
+        "artifact_contract": {"breakout_quality_param_adaptation": {
+            "parameter_set": "PARAM-P18", "training_dl_enabled": False,
+            "optimizer_search_protocol": "fixed_single_seed_v1",
+        }},
+        "builder": {"enabled": True, "builder_type": "optimizer_fixed_multiseed_strategy_params",
+                    "options": {"training_profile_id": "broker_cash_daily_min_best_seed42_current"}},
+    },
+    "daily_min_best_broker_cash_rolling_experiment": {
+        "path_template": "models/research/breakout_quality/strategy_params/param_p18_daily_min_best_broker_cash/{param_filename}",
+        "identity_manifest_path": "models/research/breakout_quality/strategy_params/param_p18_daily_min_best_broker_cash/identity_manifest.json",
+        "description": "PARAM-P18 daily-entry re-fitted Min strategy parameter truth; Rolling consumer.",
+        "trained_with_dl_id": None,
+        "consumption_evaluation_mode": "rolling",
+        "artifact_contract": {"breakout_quality_param_adaptation": {
+            "parameter_set": "PARAM-P18", "training_dl_enabled": False,
+            "optimizer_search_protocol": "fixed_single_seed_v1",
+        }},
+        "builder": {"enabled": True, "builder_type": "optimizer_fixed_multiseed_strategy_params",
+                    "options": {"training_profile_id": "broker_cash_daily_min_best_seed42_current"}},
     },
     "full_best_broker_cash_oos_experiment": {
         "path_template": "models/research/breakout_quality/strategy_params/param_p17_full_best_broker_cash/{param_filename}",
@@ -3042,6 +3072,42 @@ STRATEGY_COMPARE_ARMS = {
         },
         "robustness_role": "off",
     },
+    "C159": {
+        "replay_contract_version": 1,
+        "name": "T40 × Daily (Min/P18) Exact K/R0 / Broker-Cash",
+        "description": "CJ original T40 PIT ranks and Daily-only re-fitted P18 Min ATR exits; Exact selector against C161 no-DL.",
+        "param_source": "daily_min_best_broker_cash_rolling_experiment",
+        "param_policy": "base-finalist-best", "rule_policy": "all_off",
+        "dl_enabled": True, "dl_id": "CONT13CJ_ROLL",
+        "dl_runtime_mode": "resource-aware-continuous-score-constrained-optimal",
+        "dl_runtime_options": {
+            "preserve_k_r0": True, "constrained_solver": "exact_branch_and_bound_v1", "selection_only": True,
+        },
+        "robustness_role": "off", "entry_strategy": "Daily",
+    },
+    "C160": {
+        "replay_contract_version": 1,
+        "name": "T40 × Daily (Min/P18) Direct No-K No-R0 / Broker-Cash",
+        "description": "Same CJ T40 PIT ranks, Daily-entry re-fitted P18 Min ATR exits; Direct selector against C161.",
+        "param_source": "daily_min_best_broker_cash_rolling_experiment",
+        "param_policy": "base-finalist-best", "rule_policy": "all_off",
+        "dl_enabled": True, "dl_id": "CONT13CJ_ROLL",
+        "dl_runtime_mode": "resource-aware-continuous-score-no-k-no-r0",
+        "dl_runtime_options": {
+            "preserve_k": False, "preserve_r0": False,
+            "selection_order": "model_score_desc_then_canonical_tie_v1", "selection_only": True,
+        },
+        "robustness_role": "off", "entry_strategy": "Daily",
+    },
+    "C161": {
+        "replay_contract_version": 1,
+        "name": "Daily (Min/P18) No DL / Default Selector / Broker-Cash",
+        "description": "P18 independently daily-refitted Min policy and eligible stock-day universe, canonical default no-DL selector; no PIT model scores.",
+        "param_source": "daily_min_best_broker_cash_rolling_experiment",
+        "param_policy": "base-finalist-best", "rule_policy": "all_off",
+        "dl_enabled": False, "dl_id": None, "dl_runtime_mode": None,
+        "robustness_role": "off", "entry_strategy": "Daily",
+    },
     "C149": {
         "replay_contract_version": 1,
         "name": "Daily Min MR-13CX T40 Pairwise-Confidence Exact K/R0 / Broker-Cash",
@@ -3443,8 +3509,6 @@ for _mode in ("oos", "rolling"):
         f"broker_cash_dl_conversion_{_mode}"
     ]["arm_param_source_overrides"]
     for _arm_id in dict.fromkeys((*_BROKER_CASH_DL_ARM_IDS, *get_research_summary_strategy_arm_ids())):
-        if not STRATEGY_COMPARE_ARMS[_arm_id].get("dl_enabled"):
-            continue
         _registered_source = str(STRATEGY_COMPARE_ARMS[_arm_id]["param_source"])
         if not _registered_source.endswith("_rolling_experiment"):
             raise ValueError(f"Unrecognized rolling parameter source: {_arm_id}/{_registered_source}")
@@ -3469,6 +3533,11 @@ STRATEGY_COMPARE_CONTRASTS = {
     "C157-C158": {"left": "C157", "right": "C158", "description": "Same Full/P17 CZ NetPnL scores: Exact versus Direct selector"},
     "C157-C153": {"left": "C157", "right": "C153", "description": "Full/P17 Exact: NetPnL continuous ranking versus T40 ranking"},
     "C158-C154": {"left": "C158", "right": "C154", "description": "Full/P17 Direct: NetPnL continuous ranking versus T40 ranking"},
+    "C159-C161": {"left": "C159", "right": "C161", "description": "Same Daily/P18 market-day entry and ATR exits: CJ T40 Exact against no-DL default selector"},
+    "C160-C161": {"left": "C160", "right": "C161", "description": "Same Daily/P18 market-day entry and ATR exits: CJ T40 Direct against no-DL default selector"},
+    "C159-C160": {"left": "C159", "right": "C160", "description": "Same Daily/P18 CJ T40 PIT score: Exact versus Direct selector"},
+    "C159-C145": {"left": "C159", "right": "C145", "description": "Same CJ T40 PIT Daily Exact: independently Daily-optimized P18 versus Breakout-optimized P16"},
+    "C160-C146": {"left": "C160", "right": "C146", "description": "Same CJ T40 PIT Daily Direct: independently Daily-optimized P18 versus Breakout-optimized P16"},
     "C153-C97": {"left": "C153", "right": "C97", "description": "Full P17 CJ T40 Exact vs same-Full no-DL control"},
     "C154-C97": {"left": "C154", "right": "C97", "description": "Full P17 CJ T40 Direct vs same-Full no-DL control"},
     "C153-C107": {"left": "C153", "right": "C107", "description": "CJ T40 Exact: Full P17 vs Min P16"},

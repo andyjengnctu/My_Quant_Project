@@ -115,7 +115,10 @@ def _run_scenario(
                   else "建立市場與訊號快取")
         print(f"\n[{name}] {action}")
     with ExitStack() as stack:
-        stack.enter_context(portfolio_entry_policy_context(entry_strategy, score_keys=entry_score_keys))
+        stack.enter_context(portfolio_entry_policy_context(
+            entry_strategy, score_keys=entry_score_keys,
+            unscored=(entry_strategy == "Daily" and entry_score_keys is None),
+        ))
         if ranking_source:
             stack.enter_context(breakout_quality_ranking_source_context(**ranking_source))
         if filter_source:
@@ -201,6 +204,7 @@ def _load_reusable_no_filter_baseline(
     expected_shared_param_overrides: dict[str, Any],
     expected_max_positions: int,
     expected_enable_rotation: bool,
+    expected_entry_strategy: str = "Breakout",
     expected_start_date: str,
     expected_end_date: str,
 ) -> tuple[dict[str, Any], dict[str, Any], pd.DataFrame]:
@@ -255,6 +259,7 @@ def _load_reusable_no_filter_baseline(
         "shared_param_overrides": dict(expected_shared_param_overrides or {}),
         "max_positions": int(expected_max_positions),
         "enable_rotation": bool(expected_enable_rotation),
+        "baseline_entry_strategy": str(expected_entry_strategy),
         "comparison_period": {
             "start": str(expected_start_date),
             "end": str(expected_end_date),
@@ -271,6 +276,9 @@ def _load_reusable_no_filter_baseline(
         "shared_param_overrides": dict(metadata.get("shared_param_overrides") or {}),
         "max_positions": int(metadata.get("max_positions") or 0),
         "enable_rotation": bool(metadata.get("enable_rotation")),
+        "baseline_entry_strategy": str(
+            metadata.get("baseline_entry_strategy") or metadata.get("entry_strategy") or "Breakout"
+        ),
         "comparison_period": dict(metadata.get("comparison_period") or {}),
     }
     if actual_contract != expected_contract:
@@ -410,6 +418,7 @@ def run_standalone_baseline(
     baseline_reuse_dir=None,
     param_evaluation_mode="rolling",
     data_dir_override=None,
+    entry_strategy="Breakout",
 ):
     """Run or rehydrate one canonical DL-off strategy baseline.
 
@@ -508,6 +517,7 @@ def run_standalone_baseline(
                 expected_shared_param_overrides=dict(shared_param_overrides or {}),
                 expected_max_positions=max_positions,
                 expected_enable_rotation=enable_rotation,
+                expected_entry_strategy=entry_strategy,
                 expected_start_date=start_date,
                 expected_end_date=end_date,
             )
@@ -532,6 +542,7 @@ def run_standalone_baseline(
             enable_rotation=enable_rotation,
             quiet=quiet,
             replay_counts=replay_counts,
+            entry_strategy=entry_strategy,
         )
 
     baseline = (
@@ -583,6 +594,7 @@ def run_standalone_baseline(
         "schema_version": SCHEMA_VERSION,
         "comparison_mode": COMPARISON_MODE_SCORE_RANKING,
         "comparison_design": "standalone_dl_off_active_param_replay",
+        **({"entry_strategy": str(entry_strategy)} if entry_strategy != "Breakout" else {}),
         "score_source": "dl_off_baseline_only",
         "dataset": dataset,
         "data_dir": str(data_dir),

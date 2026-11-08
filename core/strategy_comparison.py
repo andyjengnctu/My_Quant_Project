@@ -1431,8 +1431,8 @@ def _validate_strategy_comparison_arms(settings: StrategyComparisonSettings) -> 
     for key, arm in settings.arms.items():
         if arm.entry_strategy not in {"Breakout", "Daily"}:
             raise ValueError(f"Unsupported strategy entry mode: {key}")
-        if arm.entry_strategy == "Daily" and (not arm.dl_enabled or not (arm.dl_runtime_options or {}).get("selection_only")):
-            raise ValueError(f"Daily entry requires the verified PIT selection-score contract: {key}")
+        if arm.entry_strategy == "Daily" and arm.dl_enabled and not (arm.dl_runtime_options or {}).get("selection_only"):
+            raise ValueError(f"Scored Daily entry requires the verified PIT selection-score contract: {key}")
         _validate_strategy_comparison_arm(settings, key, arm)
 
 
