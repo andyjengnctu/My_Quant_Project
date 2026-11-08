@@ -222,6 +222,8 @@ class FullTradePositiveContracts(TestCase):
             original = json.loads(path.read_text(encoding="utf-8"))
             cases = (
                 (lambda d: d["meta"].update(last_oos_date="2020-11-01"), "last_oos_date"),
+                (lambda d: d["meta"].update(last_oos_date="not-a-date"), "last_oos_date"),
+                (lambda d: d["meta"].update(first_oos_date="not-a-date"), "first_oos_date"),
                 (lambda d: d["meta"].update(trials_per_fold=301), "trial budget"),
                 (lambda d: d["folds"][-1].update(selection_end_date="2020-12-31"), "future/invalid window"),
                 (lambda d: d["params_ensemble_by_effective_date"]["2020-01-01"][0].update(seed=42), "seed differs"),
@@ -233,8 +235,10 @@ class FullTradePositiveContracts(TestCase):
                     change(value)
                     path.write_text(json.dumps(value), encoding="utf-8")
                     with self.subTest(message=message):
-                        with self.assertRaisesRegex(ValueError, message):
+                        with self.assertRaisesRegex(ValueError, message) as caught:
                             load_full_history(path, expected_seed=693545351)
+                        if "not-a-date" in value["meta"].values():
+                            self.assertIsNotNone(caught.exception.__cause__)
                 path.write_text(json.dumps(original), encoding="utf-8")
                 original_preflight = json.loads((path.parent.parent / "rolling_preflight.json").read_text(encoding="utf-8"))
                 original_preflight["dataset"] = "unverified_data"

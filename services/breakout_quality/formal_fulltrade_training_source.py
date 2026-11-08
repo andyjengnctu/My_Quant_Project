@@ -176,8 +176,10 @@ def load_full_history(path: Path, *, expected_seed: int,
             try:
                 if pd.Timestamp(str(actual)).to_period("M") == pd.Timestamp(str(wanted)).to_period("M"):
                     continue
-            except (TypeError, ValueError, OverflowError):
-                pass
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise FormalMinTrade40PITBlocked(
+                    f"Historical Full schedule field differs: {key}"
+                ) from exc
         elif str(actual) == str(wanted):
             continue
         raise FormalMinTrade40PITBlocked(f"Historical Full schedule field differs: {key}")
