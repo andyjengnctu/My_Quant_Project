@@ -316,8 +316,10 @@ class ScientificVersionCases(TestCase):
         with tempfile.TemporaryDirectory() as tmp, \
              patch.object(overview, "load_report_contract_versions", return_value={}), \
              patch.object(overview, "get_formal_oracle_definition",
-                          return_value=SimpleNamespace(source={"filter_id": "breakout_quality_v1"})), \
+                          return_value=SimpleNamespace(source={"filter_id": "breakout_quality_v1",
+                                                             "baseline_arm_id": "C96"})), \
              patch.object(overview, "get_active_audit_module_id", return_value="synthetic"), \
+             patch.object(overview, "validate_oracle_compare_family_coverage", return_value=None), \
              patch.object(overview, "_oracle_rows", return_value=evidence), \
              patch.object(overview, "_strategy_bindings", return_value={(target, rank_profile): "C125"}), \
              patch.object(overview, "_is_exact_supervision", side_effect=lambda profile, _label: profile == rank_profile), \

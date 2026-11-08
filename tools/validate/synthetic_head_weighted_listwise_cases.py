@@ -111,6 +111,98 @@ class HeadWeightedListwiseCases(unittest.TestCase):
         self.assertEqual(spec.pairwise_reduction, None)
         self.assertTrue(recipe.historical_pit_authorized)
 
+    # AI: Preserve an approved historical model's membership across Training Model switches.
+    def test_registered_model_and_rolling_strategy_arms_remain_in_compare_suite(self):
+        """Historical regression: switching Training Model must not hide CY/C151/C152."""
+        from config.breakout_quality import (
+            BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE,
+            BREAKOUT_QUALITY_MODEL_TEST_PROFILES,
+            BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES,
+        )
+        from core.breakout_quality_policy import get_breakout_quality_model_test_settings
+        from core.strategy_compare_policy import get_strategy_compare_suite
+        from config.strategy_compare import STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE
+        from core.strategy_compare_registry import STRATEGY_COMPARE_PROFILES
+        from core.strategy_compare_registry import STRATEGY_COMPARE_ARMS, STRATEGY_DL_SOURCES
+        from services.research.target_dl_overview import _strategy_bindings
+        from services.research.target_oracle_application import get_formal_oracle_definition
+        from core.audit_policy import get_active_audit_module_id
+        from core.audit_registry import (
+            resolve_current_oracle_comparisons,
+            oracle_comparison_key,
+            oracle_supervised_target_id,
+        )
+
+        profile_name = DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_HEAD_WEIGHTED_LISTWISE_PROFILE
+        model_id = get_continuous_ranker_research_spec(profile_name).model_research_id
+        model_pair = (model_id, profile_name)
+        self.assertIn(model_pair, BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES)
+        self.assertIn(model_pair, BREAKOUT_QUALITY_MODEL_TEST_PROFILES)
+        self.assertIn(model_pair, get_breakout_quality_model_test_settings().model_profiles)
+        self.assertIn(BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE, BREAKOUT_QUALITY_MODEL_TEST_PROFILES)
+
+        suite_name = STRATEGY_COMPARE_PROFILES[STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE]['suite_id']
+        active_arms = set(get_strategy_compare_suite(suite_name)['arm_ids'])
+        expected_arms = {'C151', 'C152'}
+        self.assertTrue(expected_arms.issubset(active_arms))
+        self.assertEqual({STRATEGY_DL_SOURCES[STRATEGY_COMPARE_ARMS[arm]['dl_id']]['experiment_profile']
+                          for arm in expected_arms}, {profile_name})
+
+        definition = get_formal_oracle_definition(get_active_audit_module_id())
+        comparisons = resolve_current_oracle_comparisons(definition.source)
+        targets = (str(definition.source['baseline_arm_id']),
+                   *(oracle_comparison_key(item) for item in comparisons))
+        score_targets = {}
+        for item in comparisons:
+            source = item
+            if item.get('score_source'):
+                source = next(other for other in comparisons
+                              if other['target'] == item['score_source'])
+            score_targets[oracle_comparison_key(item)] = (
+                None if item.get('positive_gate') else oracle_supervised_target_id(source)
+            )
+        bindings = _strategy_bindings(target_names=targets,
+                                      score_targets=score_targets, definition=definition)
+        for selector, arm_id in (('exact', 'C151'), ('direct', 'C152')):
+            matching = [oracle_comparison_key(item) for item in comparisons
+                        if item['target'] == ('T40' if selector == 'exact' else 'T40_Direct')
+                        and item.get('strategy', 'Breakout') == 'Breakout'
+                        and item.get('parameter_family', 'min') == 'min'
+                        and item['selector'] == selector]
+            self.assertEqual(len(matching), 1)
+            self.assertEqual(bindings[(matching[0], profile_name)], arm_id)
+
+    # AI: Regression fixture supplies values through normal readers, never runtime literals.
+    def test_cy_published_metrics_reappear_on_overview_without_cross_arm_inheritance(self):
+        """The overview joins existing canonical evidence; it never invents Robustness."""
+        from pathlib import Path
+        from unittest.mock import patch
+        from services.research.target_dl_overview import collect_target_dl_overview
+
+        profile_name = DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_HEAD_WEIGHTED_LISTWISE_PROFILE
+        def published_rho(_path, _markdown, **kwargs):
+            return 0.1234 if kwargs['profile'] == profile_name else None
+
+        with patch('services.research.target_dl_overview._single_model_rho',
+                   side_effect=published_rho), \
+             patch('services.research.target_dl_overview._rolling_fit_version_current',
+                   return_value=True), \
+             patch('services.research.target_dl_overview._strategy_rolling_metrics',
+                   return_value={'C151': 9.68, 'C152': 7.00}), \
+             patch('services.research.target_dl_overview._strategy_robustness_metrics',
+                   return_value={}):
+            report = collect_target_dl_overview(Path(__file__).resolve().parents[2])
+
+        selected = {row['strategy']: row for row in report['rows']
+                    if row['model'] == 'MR-13CY'}
+        self.assertEqual(set(selected), {'C151', 'C152'})
+        self.assertEqual(selected['C151']['rolling_romd'], 9.68)
+        self.assertEqual(selected['C152']['rolling_romd'], 7.00)
+        for row in selected.values():
+            self.assertEqual(row['rolling_rho'], 0.1234)
+            self.assertIsNone(row['robustness_romd'])
+            self.assertIsNone(row['robustness_rho'])
+
     def test_generic_one_epoch_backpropagates_across_whole_dates(self):
         torch.manual_seed(101)
         n = 24
