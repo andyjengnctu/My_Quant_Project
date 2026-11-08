@@ -220,7 +220,7 @@ class PositiveNetPnlContractCases(TestCase):
         self.assertTrue({'C123', 'C124'}.isdisjoint(
             {row['strategy'] for row in report['rows']}))
         self.assertEqual(table_contract('research.target_dl_validation_overview',
-                                       'comparison', 'target_dl').headers[5:7],
+                                       'comparison', 'target_dl').headers[4:6],
                          ('Rank DL', 'Positive DL'))
         rendered = render_target_dl_overview(report)
         self.assertIn('Positive DL', rendered)
@@ -510,8 +510,8 @@ class PositiveNetPnlContractCases(TestCase):
             self.assertEqual({row["entry_strategy"] for row in overview["rows"]
                               if row["target"] in scientific_daily}, expected_entries)
             self.assertEqual(
-                table_contract("research.target_dl_validation_overview", "comparison", "target_dl").headers[:3],
-                ("Target", "Strategy", "Selector"),
+                table_contract("research.target_dl_validation_overview", "comparison", "target_dl").headers[:4],
+                ("策略編號", "Strategy", "Selector", "DL Target"),
             )
 
             # A newly completed, matching report may publish both Positive rows.

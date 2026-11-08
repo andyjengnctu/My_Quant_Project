@@ -67,12 +67,16 @@ def _registered_fixture():
 class StrategyRobustnessUnitCases(unittest.TestCase):
     def test_membership_order_display_and_seed_extensions_preserve_old_units(self):
         _, _, arms, seeds, contract = _registered_fixture()
+        new_scored_ids = set(tuple(a.arm_id for a in arms if a.dl_enabled)[-2:])
         old = deepcopy(contract)
-        old["stochastic_arms"] = old["stochastic_arms"][:-2]
+        old["stochastic_arms"] = [row for row in old["stochastic_arms"]
+                                  if row["arm_id"] not in new_scored_ids]
         expanded = deepcopy(contract)
         expanded.update(fingerprint="other_view", robustness_id="other_title", resolved_seeds=[*seeds, 17])
         expanded["stochastic_arms"].reverse()
-        for arm in arms[:-2]:
+        for arm in arms:
+            if arm.arm_id in new_scored_ids:
+                continue
             for seed in seeds:
                 with self.subTest(arm=arm.arm_id, seed=seed):
                     self.assertEqual(
@@ -83,13 +87,17 @@ class StrategyRobustnessUnitCases(unittest.TestCase):
     def test_rule_and_parameter_changes_only_invalidate_own_arm(self):
         _, _, arms, seeds, contract = _registered_fixture()
         changed = deepcopy(contract)
-        changed["stochastic_arms"][-1]["dl_runtime_options"]["fixture_threshold"] = 0.6
+        scored_arm = next(arm for arm in reversed(arms) if arm.dl_enabled)
+        changed_arm = next(row for row in changed["stochastic_arms"]
+                           if row["arm_id"] == scored_arm.arm_id)
+        changed_arm["dl_runtime_options"]["fixture_threshold"] = 0.6
         seed = seeds[0]
         changed["benchmark_parameter_artifact_identities"][f"{arms[0].arm_id}:seed={seed}"]["sha256"] = "new"
         differences = {(a.arm_id, s) for a in arms for s in seeds
                        if scientific_unit_signature(contract=contract, arm_id=a.arm_id, seed=s)
                        != scientific_unit_signature(contract=changed, arm_id=a.arm_id, seed=s)}
-        self.assertEqual(differences, {(arms[-1].arm_id, s) for s in seeds} | {(arms[0].arm_id, seed)})
+        self.assertEqual(differences,
+                         {(scored_arm.arm_id, s) for s in seeds} | {(arms[0].arm_id, seed)})
 
     def test_true_input_changes_cannot_reuse_completed_model_units(self):
         _, _, arms, seeds, contract = _registered_fixture()
@@ -116,11 +124,13 @@ class StrategyRobustnessUnitCases(unittest.TestCase):
     def test_delta_closure_authorizes_only_new_arms_and_missing_sources(self):
         settings, _, arms, seeds, _ = _registered_fixture()
         units = {(a.arm_id, s) for a in arms for s in seeds}
-        old = {(a.arm_id, s) for a in arms[:-2] for s in seeds}
+        new_scored_arms = tuple(a for a in arms if a.dl_enabled)[-2:]
+        new_arm_ids = {a.arm_id for a in new_scored_arms}
+        old = {(a.arm_id, s) for a in arms if a.arm_id not in new_arm_ids for s in seeds}
         deps = {a.arm_id: resolve_arm_runtime_dl_source_ids(settings, a) if a.dl_enabled else () for a in arms}
         plan = RobustnessWorkPlan.build(fingerprint="view", units=units, reuse_units=old, dependencies=deps)
-        self.assertEqual(plan.replay_units, {(a.arm_id, s) for a in arms[-2:] for s in seeds})
-        self.assertEqual(plan.source_units, {(dl, s) for a in arms[-2:] for dl in deps[a.arm_id] for s in seeds})
+        self.assertEqual(plan.replay_units, {(a.arm_id, s) for a in new_scored_arms for s in seeds})
+        self.assertEqual(plan.source_units, {(dl, s) for a in new_scored_arms for dl in deps[a.arm_id] for s in seeds})
         for unit in old:
             with self.assertRaises(RuntimeError):
                 plan.require_replay(unit)
@@ -281,7 +291,9 @@ class StrategyRobustnessUnitCases(unittest.TestCase):
         from services.research import strategy_multi_seed_robustness as r
         settings, cfg, arms, seeds, contract = _registered_fixture()
         cfg = replace(cfg, cpu_replay_workers=1, gpu_train_workers=1, keep_attribution_source=False)
-        old_units = {(a.arm_id, s) for a in arms[:-2] for s in seeds}
+        new_scored_arms = tuple(a for a in arms if a.dl_enabled)[-2:]
+        new_arm_ids = {arm.arm_id for arm in new_scored_arms}
+        old_units = {(a.arm_id, s) for a in arms if a.arm_id not in new_arm_ids for s in seeds}
         all_units = {(a.arm_id, s) for a in arms for s in seeds}
         dependencies = {a.arm_id: resolve_arm_runtime_dl_source_ids(settings, a) if a.dl_enabled else () for a in arms}
         plan = RobustnessWorkPlan.build(fingerprint=contract["fingerprint"], units=all_units,

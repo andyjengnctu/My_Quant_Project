@@ -317,11 +317,16 @@ def oracle_display_strategy(*, strategy: str, parameter_family: str) -> str:
         baseline_id = get_research_summary_baseline_arm_ids().get(family)
         if not baseline_id:
             raise ValueError(f"Oracle display family has no registered control: {family}")
-        from core.strategy_compare_registry import STRATEGY_COMPARE_ARMS
+        from core.strategy_compare_registry import (
+            STRATEGY_COMPARE_ARMS, STRATEGY_EXPERIMENTAL_PARAM_SOURCES,
+        )
         control = STRATEGY_COMPARE_ARMS.get(baseline_id)
         if not control or str(control.get("entry_strategy", "Breakout")) != name:
             raise ValueError(f"Oracle display family/control entry mismatch: {family}")
-        return research_summary_entry_label(control, family=family)[0]
+        return research_summary_entry_label(
+            control, family=family,
+            parameter_sources=STRATEGY_EXPERIMENTAL_PARAM_SOURCES,
+        )[0]
     return name if family == "min" else f"{name} ({family.capitalize()})"
 
 

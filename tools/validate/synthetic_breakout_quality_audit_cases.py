@@ -173,16 +173,16 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     benchmark_seeds = tuple(benchmark["resolved_seeds"])
     assert benchmark_seeds, "Current Oracle benchmark requires at least one seed"
 
-    # The Research [1] route owns one Min/Full Oracle matrix and one approval.
-    # Model both parameter families in this isolated fixture, independently of
-    # local signed receipts or market data.  Use the formal registry to derive
-    # arm IDs and keys rather than maintaining a second synthetic inventory.
+    # Research [1] owns a single approval for *every* registered Oracle
+    # parameter family. Derive the fixture from the canonical family registry,
+    # so independently fitted Daily/Min and future approved controls cannot
+    # silently escape prerequisite verification.
     current_rows = resolve_current_oracle_comparisons(registered_oracle.source)
     baselines = oracle_baseline_arm_ids(registered_oracle.source)
     sampled_rows = {
         family: next(row for row in current_rows
                      if oracle_parameter_family(row) == family)
-        for family in ("min", "full")
+        for family in baselines
     }
     parameter_plans = {
         baselines[family]: {
@@ -217,9 +217,13 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         "parameter_plans": parameter_plans,
         "targets": existing_targets, "preflight": old_decisions,
     }
+    from core.strategy_compare_registry import STRATEGY_COMPARE_ARMS as current_arms
     names = {base: base for family, base in baselines.items() if family in sampled_rows}
     strategies = {
-        base: oracle_display_strategy(strategy="Breakout", parameter_family=family)
+        base: oracle_display_strategy(
+            strategy=str(current_arms[base].get("entry_strategy", "Breakout")),
+            parameter_family=family,
+        )
         for family, base in baselines.items() if family in sampled_rows
     }
     selectors = {base: "-" for base in names}
@@ -388,7 +392,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     # to the overview is not authorization to FIT, build P16, or run Replay.
     from services.research import target_dl_overview
     overview_console = io.StringIO()
-    with patch("builtins.input", side_effect=["", "8", "0", "0"]) as overview_input, \
+    with patch("builtins.input", side_effect=["", "7", "0", "0"]) as overview_input, \
          patch.object(target_dl_overview, "collect_target_dl_overview", return_value={"rows": []}) as collector, \
          patch.object(target_dl_overview, "render_target_dl_overview", return_value="SYNTHETIC_OVERVIEW") as renderer, \
          patch.object(research_app, "_run_reusable_audit_method", side_effect=AssertionError("Unexpected Oracle")) as oracle_entry, \
@@ -406,23 +410,32 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
             == ["oracle_romd", "rolling_robustness_mean_romd"]
         and overview_console.getvalue().count("SYNTHETIC_OVERVIEW") == 2
         and len([line for line in overview_console.getvalue().splitlines()
-                 if "[1]Target" in line and "[8]Mean Romd" in line
+                 if "[1]Strategy [2]Selector [3]DL Target [4]Rank DL" in line
+                 and "[5]Positive DL [6]Rolling ρ [7]Mean RoMD [8]Oracle RoMD" in line
                  and "[0]返回" in line]) == 2
-        and "[4]Oracle RoMD" in overview_console.getvalue()
-        and "[5]Rank DL" in overview_console.getvalue()
-        and "[6]Positive DL" in overview_console.getvalue()
-        and "[7]Rolling ρ" in overview_console.getvalue()
         and "Win Rate" not in overview_console.getvalue()
-        and "Robustness ρ" not in overview_console.getvalue()
-        and "Robustness RoMD" not in overview_console.getvalue()
-        and "策略編號" not in overview_console.getvalue()
-        and "Mean Romd" in overview_console.getvalue()
+        and "[8]Oracle RoMD" in overview_console.getvalue()
+        and "[7]Mean RoMD" in overview_console.getvalue()
+        and "[4]Rank DL" in overview_console.getvalue()
+        and "[5]Positive DL" in overview_console.getvalue()
+        and "[6]Rolling ρ" in overview_console.getvalue()
         and "Summary" in overview_console.getvalue()
         and oracle_entry.call_count == 0
         and producer.call_count == 0 and replay.call_count == 0,
     )
 
-    # A requested sort remains the primary key; the approved Mean Romd is
+    from core.research_report_contract import target_dl_summary_sort_columns
+    check(
+        "summary_visible_columns_and_sort_menu_match_authorized_order",
+        (("策略編號", "Strategy", "Selector", "DL Target", "Rank DL", "Positive DL",
+          "Rolling ρ", "Robustness ρ", "Rolling RoMD", "Robustness RoMD", "Mean RoMD"),
+         ("Strategy", "Selector", "DL Target", "Rank DL", "Positive DL",
+          "Rolling ρ", "Mean RoMD", "Oracle RoMD")),
+        (target_dl_overview.table_contract(
+            target_dl_overview.REPORT_ID, "comparison", "target_dl").headers,
+         tuple(col.label for col in target_dl_summary_sort_columns())),
+    )
+    # A requested sort remains the primary key; the approved Mean RoMD is
     # the secondary key for every other column, including text and missing.
     from core.report_metrics import weighted_rolling_robustness_romd
     synthetic_sort_rows = [
@@ -476,7 +489,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     })
     check_true(
         "summary_no_legacy_footer_or_duplicate_mean_label",
-        "Mean Romd" in compact
+        "Mean RoMD" in compact
         and "Rolling/Robustness 均值" not in compact
         and "Model Robustness:" not in compact
         and "Strategy Robustness:" not in compact

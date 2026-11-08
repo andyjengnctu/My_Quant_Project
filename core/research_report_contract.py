@@ -811,34 +811,52 @@ STRATEGY_CONSISTENCY_METRIC_KEYS = (
     "expected_value_r", "avg_exposure_pct", "high_mfe_high_safety_pct", "high_mfe_total_pct",
 )
 
-# v2: all comparable numeric columns use canonical best/worst console colors;
-# neutral and unavailable cells remain unstyled (no schema/metric changes).
+# v11: explicitly approved Summary display-only column reordering, Target
+# label and visible column set. Oracle metrics remain in canonical evidence and
+# sorting; no model FIT, strategy replay or signed result identity changes.
 TARGET_DL_VALIDATION_OVERVIEW_REPORT = PersistentReportContract(
     report_id="research.target_dl_validation_overview",
-    version=10,
+    version=11,
     role="read_only_local_completed_report_summary",
     menu_path=("Research", "Summary"),
     sections=(
         S("comparison", 1, "Summary", "local_reports_only", (
             T("target_dl", (
-                C("target", "Target", alignment="left"),
+                C("strategy", "\u7b56\u7565\u7de8\u865f", alignment="left"),
                 C("entry_strategy", "Strategy", alignment="left"),
                 C("selector", "Selector", alignment="left"),
-                C("oracle_romd", "Oracle RoMD", 2, preference="higher", format_kind="number"),
-                C("win_rate_pct", "Win Rate", 2, "%", "higher", "pct"),
+                C("target", "DL Target", alignment="left"),
                 C("model", "Rank DL", alignment="left"),
                 C("positive_model", "Positive DL", alignment="left"),
                 C("rolling_rho", "Rolling \u03c1", 4, preference="higher", format_kind="number"),
                 C("robustness_rho", "Robustness \u03c1", 4, preference="higher", format_kind="number"),
-                C("strategy", "\u7b56\u7565\u7de8\u865f", alignment="left"),
                 C("rolling_romd", "Rolling RoMD", 2, preference="higher", format_kind="number"),
                 C("robustness_romd", "Robustness RoMD", 2, preference="higher", format_kind="number"),
-                C("rolling_robustness_mean_romd", "Mean Romd", 2,
+                C("rolling_robustness_mean_romd", "Mean RoMD", 2,
                   preference="higher", format_kind="number"),
             )),
         )),
     ),
 )
+
+
+# Sort-only Oracle RoMD is intentional: the Summary table has exactly 11
+# approved visible columns, while the 8 pre-existing sort choices remain.
+# The existing five excluded fields still are not interactive sort choices.
+_TARGET_DL_SUMMARY_HIDDEN_SORT = C(
+    "oracle_romd", "Oracle RoMD", 2, preference="higher", format_kind="number",
+)
+_TARGET_DL_SUMMARY_EXCLUDED_SORT_KEYS = frozenset((
+    "strategy", "robustness_rho", "rolling_romd", "robustness_romd",
+))
+
+
+def target_dl_summary_sort_columns() -> tuple[ReportColumnContract, ...]:
+    visible = TARGET_DL_VALIDATION_OVERVIEW_REPORT.sections[0].tables[0].columns
+    return tuple(column for column in visible
+                 if column.key not in _TARGET_DL_SUMMARY_EXCLUDED_SORT_KEYS) + (
+                     _TARGET_DL_SUMMARY_HIDDEN_SORT,
+                 )
 
 
 PERSISTENT_REPORT_CONTRACTS: Mapping[str, PersistentReportContract] = {

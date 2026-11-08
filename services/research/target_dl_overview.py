@@ -47,6 +47,7 @@ from core.research_report_contract import (
     format_contract_value,
     require_approved_report_contract,
     table_contract,
+    target_dl_summary_sort_columns,
 )
 from core.report_metrics import weighted_rolling_robustness_romd
 from core.console_report import render_table, render_title
@@ -58,6 +59,7 @@ from core.strategy_compare_policy import (
 )
 from core.strategy_compare_registry import (
     STRATEGY_COMPARE_ARMS, STRATEGY_COMPARE_PROFILES, STRATEGY_DL_SOURCES,
+    STRATEGY_EXPERIMENTAL_PARAM_SOURCES,
 )
 from core.positive_score_admission import (
     POSITIVE_P_CLASS_COLUMN, requires_positive_score, uses_primary_positive_classifier,
@@ -92,7 +94,9 @@ _DIRECT_MODE = "resource-aware-continuous-score-no-k-no-r0"
 
 def _summary_entry_label(arm: Mapping[str, Any], *, family: str) -> tuple[str, bool]:
     """Use the same Optimizer-owned parameter label as formal Oracle output."""
-    return research_summary_entry_label(arm, family=family)
+    return research_summary_entry_label(
+        arm, family=family, parameter_sources=STRATEGY_EXPERIMENTAL_PARAM_SOURCES,
+    )
 
 
 def _summary_model_target_labels(groups: tuple[Mapping[str, Any], ...]) -> dict[str, set[str]]:
@@ -1007,7 +1011,10 @@ def sort_target_dl_overview_rows(
     lexical order. Missing/nonfinite values go last without numeric fill.
     """
 
-    columns = table_contract(REPORT_ID, "comparison", "target_dl").columns
+    # Programmatic report sorting still accepts every visible column;
+    # only the interactive menu is limited to its unchanged eight choices.
+    columns = (*table_contract(REPORT_ID, "comparison", "target_dl").columns,
+               *target_dl_summary_sort_columns())
     column = next((item for item in columns if item.key == column_key), None)
     if column is None:
         raise ValueError(f"Summary 不支援的排序欄位: {column_key!r}")
@@ -1015,7 +1022,7 @@ def sort_target_dl_overview_rows(
         def sort_value(row: Mapping[str, Any]) -> tuple[int, str]:
             value = str(row.get(column_key) or "").strip().casefold()
             # Selector is a categorical choice, not an alphabetical metric.
-            # Direct precedes Exact regardless of their Mean Romd values.
+            # Direct precedes Exact regardless of their Mean RoMD values.
             priority = {"direct": 2, "exact": 1}
             return (priority.get(value, 0 if value else -1), value)
     elif column.format_kind == "text":
@@ -1026,7 +1033,7 @@ def sort_target_dl_overview_rows(
         def sort_value(row: Mapping[str, Any]) -> tuple[bool, float]:
             value = _number(row.get(column_key))
             return (value is not None, value if value is not None else -math.inf)
-    # Stable priorities: selected column DESC, Mean Romd DESC, Target ASC.
+    # Stable priorities: selected column DESC, Mean RoMD DESC, Target ASC.
     # A missing primary or secondary value always follows a certified value;
     # neither missing metric nor a negative result is converted to zero.
     by_target = sorted(rows, key=lambda row: str(row.get("target") or ""))
@@ -1041,6 +1048,19 @@ def sort_target_dl_overview_rows(
 def collect_target_dl_overview(project_root: Path) -> dict[str, Any]:
     root = Path(project_root).resolve()
     require_approved_report_contract(REPORT_ID)
+    # Validate the presentation Target binding for both Oracle and non-Oracle
+    # groups, including No-DL controls skipped by metric-collection loops.
+    # A wrong display override must fail closed before reading result artifacts.
+    groups = get_research_summary_rows()
+    summary_model_targets = _summary_model_target_labels(groups)
+    for group in groups:
+        if "display_target" not in group:
+            continue
+        bindings = tuple(group.get("bindings") or ())
+        for binding in bindings or ({"arm_id": group.get("arm_id")},):
+            label = _summary_scientific_target(group, binding, summary_model_targets)
+            if "oracle" in group and label != oracle_target_semantics(group["oracle"])[0]:
+                raise ValueError(f"Summary display Target differs from Oracle supervised outcome: {label}")
     versions = load_report_contract_versions(root)
     definition = get_formal_oracle_definition(get_active_audit_module_id())
     suite_id = STRATEGY_COMPARE_PROFILES[STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE]["suite_id"]
@@ -1068,7 +1088,7 @@ def collect_target_dl_overview(project_root: Path) -> dict[str, Any]:
     model_evidence: dict[str, dict[str, Any]] = {}
     declared_models = {
         (oracle_comparison_key(group["oracle"]), binding["rank_model"][1])
-        for group in get_research_summary_rows() if "oracle" in group
+        for group in groups if "oracle" in group
         for binding in group.get("bindings", ()) if binding.get("rank_model")
     }
     for _model_id, profile in get_breakout_quality_model_test_settings().model_profiles:
@@ -1103,7 +1123,6 @@ def collect_target_dl_overview(project_root: Path) -> dict[str, Any]:
     # No display field participates in FIT, signed receipts or REUSE identity.
     display = oracle_work_display_dimensions(definition.source)
     rows = []
-    summary_model_targets = _summary_model_target_labels(get_research_summary_rows())
 
     def append_row(*, target: str, entry: str, selector: str, model: Mapping[str, Any],
                    arm: str, metrics: Mapping[str, Any], classifier: str | None = None) -> None:
@@ -1154,7 +1173,7 @@ def collect_target_dl_overview(project_root: Path) -> dict[str, Any]:
     # contracts have no approved matching Oracle; never borrow another Target's
     # perfect-score result to fill these rows.
     baseline_ids = set(oracle_baseline_arm_ids(definition.source).values())
-    for group in get_research_summary_rows():
+    for group in groups:
         if "oracle" in group:
             continue
         items = ([{"arm_id": group["arm_id"]}] if group.get("arm_id") else [])
@@ -1194,11 +1213,12 @@ def render_target_dl_overview(
         if source["path"] else "no completed matching local report; metrics blank"
     ))
     rows = sort_target_dl_overview_rows(list(report["rows"]), column_key=sort_by)
-    sort_column = next(column for column in table.columns if column.key == sort_by)
+    sort_column = next(column for column in (*table.columns, *target_dl_summary_sort_columns())
+                       if column.key == sort_by)
     sort_description = (
-        "Mean Romd ↓（缺值最後）" if sort_by == "rolling_robustness_mean_romd"
-        else "Selector：Direct → Exact → Mean Romd ↓（缺值最後）" if sort_by == "selector"
-        else f"{sort_column.label} ↓ → Mean Romd ↓（缺值最後）"
+        "Mean RoMD ↓（缺值最後）" if sort_by == "rolling_robustness_mean_romd"
+        else "Selector：Direct → Exact → Mean RoMD ↓（缺值最後）" if sort_by == "selector"
+        else f"{sort_column.label} ↓ → Mean RoMD ↓（缺值最後）"
     )
     header.append(f"排序：{sort_description}")
     # Use the canonical per-column metric preference and best/worst signal owner.

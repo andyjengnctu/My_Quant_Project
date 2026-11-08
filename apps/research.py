@@ -420,23 +420,18 @@ def _show_research_summary(*, sortable: bool = False) -> int:
     from services.research.target_dl_overview import (
         DEFAULT_SORT_COLUMN, collect_target_dl_overview, render_target_dl_overview,
     )
-    from core.research_report_contract import table_contract
+    from core.research_report_contract import target_dl_summary_sort_columns
 
     report = collect_target_dl_overview(PROJECT_ROOT)
-    columns = table_contract("research.target_dl_validation_overview", "comparison", "target_dl").columns
-    # Only the interactive sort choices are restricted; report columns and
-    # canonical metric evidence remain untouched.
-    excluded_sort_keys = {
-        "win_rate_pct", "rolling_romd", "robustness_rho",
-        "robustness_romd", "strategy",
-    }
-    sort_columns = tuple(column for column in columns if column.key not in excluded_sort_keys)
+    # One canonical presentation contract defines the original eight sort
+    # choices and their order, including sort-only Oracle RoMD.
+    sort_columns = target_dl_summary_sort_columns()
     sort_key = DEFAULT_SORT_COLUMN
     while True:
         print("\n" + render_target_dl_overview(report, sort_by=sort_key))
         if not sortable:
             return 0
-        print("\n=== Summary 排序（主欄位遞減；第二順位 Mean Romd 遞減）===")
+        print("\n=== Summary 排序（主欄位遞減；第二順位 Mean RoMD 遞減）===")
         # One logical line: do not use the shared width-based wrapping helper.
         choices = [
             f"[{index}]{column.label}"

@@ -163,6 +163,7 @@ def get_research_summary_model_profiles() -> tuple[tuple[str, str], ...]:
 
 def research_summary_entry_label(
     arm: Mapping[str, Any], *, family: str = "min",
+    parameter_sources: Mapping[str, Mapping[str, Any]],
 ) -> tuple[str, bool]:
     """Canonical strategy display from the actual Optimizer parameter lineage.
 
@@ -171,10 +172,9 @@ def research_summary_entry_label(
     this presentation-only label.
     """
     entry = str(arm.get("entry_strategy", "Breakout"))
-    from core.strategy_compare_registry import STRATEGY_EXPERIMENTAL_PARAM_SOURCES
     from config.strategy_params import STRATEGY_PARAM_PROFILES
 
-    source = STRATEGY_EXPERIMENTAL_PARAM_SOURCES.get(str(arm.get("param_source") or ""), {})
+    source = parameter_sources.get(str(arm.get("param_source") or ""), {})
     profile_id = (source.get("builder") or {}).get("options", {}).get("training_profile_id")
     profile = STRATEGY_PARAM_PROFILES.get(profile_id, {}) if profile_id else {}
     if profile.get("strategy_id") != "daily":
