@@ -424,7 +424,7 @@ def _show_research_summary(*, sortable: bool = False) -> int:
 
     report = collect_target_dl_overview(PROJECT_ROOT)
     # One canonical presentation contract defines the original eight sort
-    # choices and their order, including sort-only Oracle RoMD.
+    # choices and their order, including visible Oracle RoMD.
     sort_columns = target_dl_summary_sort_columns()
     sort_key = DEFAULT_SORT_COLUMN
     while True:

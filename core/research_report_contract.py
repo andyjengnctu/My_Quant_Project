@@ -811,12 +811,11 @@ STRATEGY_CONSISTENCY_METRIC_KEYS = (
     "expected_value_r", "avg_exposure_pct", "high_mfe_high_safety_pct", "high_mfe_total_pct",
 )
 
-# v11: explicitly approved Summary display-only column reordering, Target
-# label and visible column set. Oracle metrics remain in canonical evidence and
-# sorting; no model FIT, strategy replay or signed result identity changes.
+# v12: restore the existing Oracle RoMD metric as the final visible column.
+# Preserve the eight sort choices and all scientific/artifact identities.
 TARGET_DL_VALIDATION_OVERVIEW_REPORT = PersistentReportContract(
     report_id="research.target_dl_validation_overview",
-    version=11,
+    version=12,
     role="read_only_local_completed_report_summary",
     menu_path=("Research", "Summary"),
     sections=(
@@ -834,18 +833,15 @@ TARGET_DL_VALIDATION_OVERVIEW_REPORT = PersistentReportContract(
                 C("robustness_romd", "Robustness RoMD", 2, preference="higher", format_kind="number"),
                 C("rolling_robustness_mean_romd", "Mean RoMD", 2,
                   preference="higher", format_kind="number"),
+                C("oracle_romd", "Oracle RoMD", 2, preference="higher", format_kind="number"),
             )),
         )),
     ),
 )
 
 
-# Sort-only Oracle RoMD is intentional: the Summary table has exactly 11
-# approved visible columns, while the 8 pre-existing sort choices remain.
-# The existing five excluded fields still are not interactive sort choices.
-_TARGET_DL_SUMMARY_HIDDEN_SORT = C(
-    "oracle_romd", "Oracle RoMD", 2, preference="higher", format_kind="number",
-)
+# The existing four excluded columns remain non-interactive sort choices.
+# With Oracle RoMD visible, the eight choices derive directly from the table.
 _TARGET_DL_SUMMARY_EXCLUDED_SORT_KEYS = frozenset((
     "strategy", "robustness_rho", "rolling_romd", "robustness_romd",
 ))
@@ -854,9 +850,7 @@ _TARGET_DL_SUMMARY_EXCLUDED_SORT_KEYS = frozenset((
 def target_dl_summary_sort_columns() -> tuple[ReportColumnContract, ...]:
     visible = TARGET_DL_VALIDATION_OVERVIEW_REPORT.sections[0].tables[0].columns
     return tuple(column for column in visible
-                 if column.key not in _TARGET_DL_SUMMARY_EXCLUDED_SORT_KEYS) + (
-                     _TARGET_DL_SUMMARY_HIDDEN_SORT,
-                 )
+                 if column.key not in _TARGET_DL_SUMMARY_EXCLUDED_SORT_KEYS)
 
 
 PERSISTENT_REPORT_CONTRACTS: Mapping[str, PersistentReportContract] = {

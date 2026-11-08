@@ -428,12 +428,37 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     check(
         "summary_visible_columns_and_sort_menu_match_authorized_order",
         (("策略編號", "Strategy", "Selector", "DL Target", "Rank DL", "Positive DL",
-          "Rolling ρ", "Robustness ρ", "Rolling RoMD", "Robustness RoMD", "Mean RoMD"),
+          "Rolling ρ", "Robustness ρ", "Rolling RoMD", "Robustness RoMD", "Mean RoMD",
+          "Oracle RoMD"),
          ("Strategy", "Selector", "DL Target", "Rank DL", "Positive DL",
           "Rolling ρ", "Mean RoMD", "Oracle RoMD")),
         (target_dl_overview.table_contract(
             target_dl_overview.REPORT_ID, "comparison", "target_dl").headers,
          tuple(col.label for col in target_dl_summary_sort_columns())),
+    )
+    # Oracle is the twelfth visible metric, and must not appear twice in the
+    # eight preserved sorting choices. A real value must render, not just a header.
+    oracle_sort_keys = [column.key for column in target_dl_summary_sort_columns()]
+    check_true(
+        "summary_oracle_is_visible_once_and_sort_options_unchanged",
+        oracle_sort_keys.count("oracle_romd") == 1
+        and len(oracle_sort_keys) == len(set(oracle_sort_keys)) == 8
+        and target_dl_overview.table_contract(
+            target_dl_overview.REPORT_ID, "comparison", "target_dl"
+        ).headers[-2:] == ("Mean RoMD", "Oracle RoMD"),
+    )
+    oracle_example = target_dl_overview.render_target_dl_overview({
+        "rows": [{
+            "strategy": "SYNTHETIC", "entry_strategy": "Daily", "selector": "Direct",
+            "target": "Synthetic", "rolling_robustness_mean_romd": 1.23,
+            "oracle_romd": 987.65,
+        }],
+        "oracle": {"benchmark": "synthetic", "seeds": (), "period": "", "path": "synthetic"},
+    })
+    check_true(
+        "summary_oracle_numeric_value_rendered_at_end",
+        "987.65" in oracle_example and "1.23" in oracle_example
+        and oracle_example.splitlines()[-1].split()[-2:] == ["1.23", "987.65"],
     )
     # A requested sort remains the primary key; the approved Mean RoMD is
     # the secondary key for every other column, including text and missing.
