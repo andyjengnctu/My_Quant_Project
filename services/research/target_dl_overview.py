@@ -56,7 +56,9 @@ from core.strategy_compare_policy import (
 )
 from core.strategy_compare_registry import (
     STRATEGY_COMPARE_ARMS, STRATEGY_COMPARE_PROFILES, STRATEGY_DL_SOURCES,
+    STRATEGY_EXPERIMENTAL_PARAM_SOURCES,
 )
+from config.strategy_params import STRATEGY_PARAM_PROFILES
 from core.positive_score_admission import (
     POSITIVE_P_CLASS_COLUMN, requires_positive_score, uses_primary_positive_classifier,
 )
@@ -86,6 +88,65 @@ REPORT_ID = "research.target_dl_validation_overview"
 DEFAULT_SORT_COLUMN = "oracle_romd"
 _EXACT_MODE = "resource-aware-continuous-score-constrained-optimal"
 _DIRECT_MODE = "resource-aware-continuous-score-no-k-no-r0"
+
+
+def _summary_entry_label(arm: Mapping[str, Any], *, family: str) -> tuple[str, bool]:
+    """Display the entry strategy using the canonical Optimizer's parameter identity.
+
+    A Daily-fitted parameter profile differs from merely disabling Breakout
+    entry on Breakout-fitted P16/P17. The distinction is reported under Strategy,
+    never copied into the scientific Target or a persisted replay identity.
+    """
+    entry = str(arm.get("entry_strategy", "Breakout"))
+    source = STRATEGY_EXPERIMENTAL_PARAM_SOURCES.get(str(arm.get("param_source") or ""), {})
+    profile_id = (source.get("builder") or {}).get("options", {}).get("training_profile_id")
+    profile = STRATEGY_PARAM_PROFILES.get(profile_id, {}) if profile_id else {}
+    if profile.get("strategy_id") != "daily":
+        return oracle_display_strategy(strategy=entry, parameter_family=family), False
+    # One producer defines the fitting profile, parameter set and family. A
+    # stale/mismatched registry link must fail rather than mislabel a strategy.
+    parameter_set = str(profile.get("parameter_set_identity") or "")
+    registered_set = ((source.get("artifact_contract") or {}).get(
+        "breakout_quality_param_adaptation") or {}).get("parameter_set")
+    filter_profile = str(profile.get("filter_profile") or "")
+    if (entry != "Daily" or not parameter_set.startswith("PARAM-")
+            or not parameter_set[6:] or not filter_profile
+            or registered_set != parameter_set):
+        raise ValueError(f"Summary Daily parameter/entry identity mismatch: {arm.get('param_source')}")
+    return f"{entry} ({filter_profile.capitalize()}/{parameter_set[6:]})", True
+
+
+def _summary_model_target_labels(groups: tuple[Mapping[str, Any], ...]) -> dict[str, set[str]]:
+    """Recover a model's scientific Target from approved Oracle bindings only."""
+    labels: dict[str, set[str]] = {}
+    for group in groups:
+        if "oracle" not in group:
+            continue
+        scientific_target, _, _ = oracle_target_semantics(group["oracle"])
+        for binding in group.get("bindings", ()):
+            pair = binding.get("rank_model")
+            if pair:
+                labels.setdefault(str(pair[1]), set()).add(scientific_target)
+    return labels
+
+
+def _summary_scientific_target(
+    group: Mapping[str, Any], binding: Mapping[str, Any],
+    model_targets: Mapping[str, set[str]],
+) -> str:
+    """Target is a supervised outcome, not strategy, parameter, selector or DL ID."""
+    explicit = str(group.get("display_target") or "").strip()
+    pair = binding.get("rank_model")
+    candidates = model_targets.get(str(pair[1]), set()) if pair else set()
+    if explicit:
+        if not pair:
+            raise ValueError(f"Summary Target requires a supervised model binding: {explicit}")
+        if candidates and explicit not in candidates:
+            raise ValueError(f"Summary Target conflicts with registered model Target: {explicit} / {candidates}")
+        return explicit
+    # A model may supervise several different scientific outcomes; don't guess
+    # from its name, arm ID, or a strategy description if no unique Target exists.
+    return next(iter(candidates)) if len(candidates) == 1 else ""
 
 
 def _json(path: Path) -> dict[str, Any] | None:
@@ -1084,6 +1145,7 @@ def collect_target_dl_overview(project_root: Path) -> dict[str, Any]:
     display_selectors = {oracle_comparison_key(item): oracle_target_semantics(item)[1]
                          for item in comparisons}
     rows = []
+    summary_model_targets = _summary_model_target_labels(get_research_summary_rows())
 
     def append_row(*, target: str, entry: str, selector: str, model: Mapping[str, Any],
                    arm: str, metrics: Mapping[str, Any], classifier: str | None = None) -> None:
@@ -1147,13 +1209,19 @@ def collect_target_dl_overview(project_root: Path) -> dict[str, Any]:
             pair = binding.get("rank_model")
             model = model_evidence.get(pair[1], {}) if pair else {}
             mode = arm.get("dl_runtime_mode")
-            selector = "Exact" if mode == _EXACT_MODE else "Direct" if mode == _DIRECT_MODE else "-"
+            entry_label, daily_fitted = _summary_entry_label(
+                arm, family=str(group.get("parameter_family", "min")),
+            )
+            selector = ("Exact" if mode == _EXACT_MODE else
+                        "Direct" if mode == _DIRECT_MODE else
+                        "Default" if daily_fitted and not arm.get("dl_enabled") else "-")
+            # Historical no-DL baseline IDs remain visible as their existing
+            # labels; an independently fitted Daily no-DL arm has no Target.
+            target = _summary_scientific_target(group, binding, summary_model_targets)
+            if not target and not pair and not daily_fitted and arm_id:
+                target = arm_id
             append_row(
-                target=str(group.get("display_target") or arm_id or model.get("model") or ""),
-                entry=oracle_display_strategy(
-                    strategy=str(arm.get("entry_strategy", "Breakout")),
-                    parameter_family=str(group.get("parameter_family", "min")),
-                ),
+                target=target, entry=entry_label,
                 selector=selector, model=model, arm=arm_id, metrics={},
                 classifier=(binding.get("positive_model") or (None, None))[1],
             )

@@ -21,6 +21,16 @@ def get_research_summary_rows() -> tuple[dict[str, Any], ...]:
             raise ValueError("Research Summary row must be a mapping")
         if not any(key in row for key in ("arm_id", "oracle", "bindings")):
             raise ValueError("Research Summary row must declare a Target, model or strategy")
+        if "display_target" in row:
+            # AI: Summary presentation has orthogonal Target / Strategy /
+            # Selector / Model columns. A target override may only be an
+            # outcome name, never an arm's composite display name.
+            target = row["display_target"]
+            if (not isinstance(target, str) or not target.strip()
+                    or target != target.strip() or any(token in target for token in (
+                        "×", "Daily (", "Breakout (", "No DL", "Default Selector",
+                        " Exact", " Direct"))):
+                raise ValueError(f"Research Summary Target mixes report dimensions: {target!r}")
         if row.get("enabled", True) and row.get("oracle", {}).get("enabled", True):
             selected.append(dict(row))
     return tuple(selected)

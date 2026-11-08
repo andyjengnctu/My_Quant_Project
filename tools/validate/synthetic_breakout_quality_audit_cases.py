@@ -532,6 +532,70 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
                    and all(row["oracle_romd"] is None and row["rolling_romd"] is None
                            for row in snapshot["rows"])
                    and before == sorted(path.relative_to(root).as_posix() for path in root.rglob("*")))
+        # One canonical display projection owns independent scientific Target,
+        # entry Strategy, selector, DL and arm ID. Adding a parameter family
+        # must never concatenate these dimensions into the Target column.
+        by_arm = {row["strategy"]: row for row in snapshot["rows"] if row["strategy"]}
+        check(
+            "summary_daily_fitted_parameter_target_strategy_selector_separated",
+            (("T40", "Daily (Min/P18)", "Exact", "MR-13CJ"),
+             ("T40", "Daily (Min/P18)", "Direct", "MR-13CJ"),
+             ("", "Daily (Min/P18)", "Default", "")),
+            tuple((by_arm[arm]["target"], by_arm[arm]["entry_strategy"],
+                   by_arm[arm]["selector"], by_arm[arm]["model"])
+                  for arm in ("C159", "C160", "C161")),
+        )
+        check_true("summary_previous_baseline_and_non_oracle_target_preserved",
+                   (by_arm["C98"]["target"], by_arm["C98"]["entry_strategy"])
+                   == ("C98", "Breakout (Full)")
+                   and by_arm["C103"]["target"] == "D40 Safety + Conditional MFE")
+        corrupted = tuple({**group, "display_target": "T40 × Daily (Min/P18)"}
+                          if any(binding.get("arm_id") == "C159"
+                                 for binding in group.get("bindings", ())) else group
+                          for group in registered_rows)
+        with patch.object(summary_cfg, "RESEARCH_SUMMARY_ROWS", corrupted):
+            check_true("summary_composite_target_override_rejected_on_roster_load",
+                       raises_expected(ValueError, get_research_summary_rows))
+        wrong_target = tuple({**group, "display_target": "R40"}
+                             if any(binding.get("arm_id") == "C159"
+                                    for binding in group.get("bindings", ())) else group
+                             for group in registered_rows)
+        with patch.object(summary_cfg, "RESEARCH_SUMMARY_ROWS", wrong_target):
+            check_true("summary_target_must_match_scientific_model_target",
+                       raises_expected(ValueError, lambda: target_dl_overview.collect_target_dl_overview(root)))
+        invalid_no_dl_target = tuple({**group, "display_target": "T40"}
+                                     if group.get("arm_id") == "C161" else group
+                                     for group in registered_rows)
+        with patch.object(summary_cfg, "RESEARCH_SUMMARY_ROWS", invalid_no_dl_target):
+            check_true("summary_no_dl_arm_must_not_fabricate_target",
+                       raises_expected(ValueError, lambda: target_dl_overview.collect_target_dl_overview(root)))
+        from core.strategy_compare_registry import (STRATEGY_COMPARE_ARMS,
+            STRATEGY_EXPERIMENTAL_PARAM_SOURCES)
+        from config.strategy_params import STRATEGY_PARAM_PROFILES
+        from services.research.target_dl_overview import _summary_entry_label
+        daily_arm = STRATEGY_COMPARE_ARMS["C159"]
+        param_source_id = daily_arm["param_source"]
+        param_source = STRATEGY_EXPERIMENTAL_PARAM_SOURCES[param_source_id]
+        profile_id = param_source["builder"]["options"]["training_profile_id"]
+        original_profile = STRATEGY_PARAM_PROFILES[profile_id]
+        with patch.dict(STRATEGY_PARAM_PROFILES, {profile_id: {
+                **original_profile, "parameter_set_identity": "PARAM-P19",
+        }}):
+            check_true("summary_daily_parameter_profile_source_mismatch_fails_closed",
+                       raises_expected(ValueError, lambda: _summary_entry_label(daily_arm, family="min")))
+        # The display name follows new legitimate registered parameter IDs;
+        # it is not hardwired to P18 or inferred from an arm's descriptive name.
+        from copy import deepcopy
+        upgraded_source = deepcopy(param_source)
+        upgraded_source["artifact_contract"]["breakout_quality_param_adaptation"]["parameter_set"] = "PARAM-P19"
+        with patch.dict(STRATEGY_EXPERIMENTAL_PARAM_SOURCES,
+                        {param_source_id: upgraded_source}), patch.dict(
+                            STRATEGY_PARAM_PROFILES, {profile_id: {
+                                **original_profile, "parameter_set_identity": "PARAM-P19",
+                            }}):
+            check("summary_new_registered_daily_parameter_id_auto_labels_strategy",
+                  ("Daily (Min/P19)", True),
+                  _summary_entry_label(daily_arm, family="min"))
         # A model-only addition belongs in Summary and all model comparisons;
         # it does not invent an Oracle, strategy arm, or execution permission.
         with patch.object(summary_cfg, "RESEARCH_SUMMARY_ROWS", (
