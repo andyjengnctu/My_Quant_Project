@@ -416,12 +416,36 @@ def _run_reusable_audit_method(module_id: str, method_id: str) -> int:
     return 0
 
 
-def _show_research_summary() -> int:
+def _show_research_summary(*, sortable: bool = False) -> int:
     from services.research.target_dl_overview import (
-        collect_target_dl_overview, render_target_dl_overview,
+        DEFAULT_SORT_COLUMN, collect_target_dl_overview, render_target_dl_overview,
     )
-    print("\n" + render_target_dl_overview(collect_target_dl_overview(PROJECT_ROOT)))
-    return 0
+    from core.research_report_contract import table_contract
+
+    report = collect_target_dl_overview(PROJECT_ROOT)
+    columns = table_contract("research.target_dl_validation_overview", "comparison", "target_dl").columns
+    sort_key = DEFAULT_SORT_COLUMN
+    while True:
+        print("\n" + render_target_dl_overview(report, sort_by=sort_key))
+        if not sortable:
+            return 0
+        print("\n=== Summary 排序（所有欄位由大到小；文字欄位 Z→A）===")
+        for index, column in enumerate(columns, start=1):
+            print(render_menu_item(index, column.label, default=column.key == DEFAULT_SORT_COLUMN))
+        print(render_menu_item(0, "返回 Research"))
+        try:
+            choice = input("👉 選擇排序欄位（Enter：Oracle RoMD；0：返回）：").strip().lower()
+        except EOFError:
+            return 0
+        if choice in {"0", "q", "quit", "exit"}:
+            return 0
+        if choice == "":
+            sort_key = DEFAULT_SORT_COLUMN
+            continue
+        if not choice.isdecimal() or not 1 <= int(choice) <= len(columns):
+            print(f"選項無效，請按 Enter 或輸入 0～{len(columns)}。")
+            continue
+        sort_key = columns[int(choice) - 1].key
 
 
 def _target_validation_menu() -> int:
@@ -863,7 +887,7 @@ def _interactive_menu() -> int:
             return 0
         try:
             if choice == "1":
-                _show_research_summary()
+                _show_research_summary(sortable=True)
             elif choice == "2":
                 _target_validation_menu()
             elif choice == "3":

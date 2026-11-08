@@ -1,5 +1,8 @@
 
 真實交易路徑的dl/target不好學，那是否依好學又有考慮上漲下跌的dl/target，設計成breakout策略，使其oracle的勝率還是接近100%
+退役FullTrade_NetPnL_Positive與相關dl/策略，加入FullTrade_NetPnL的策略
+
+145, 146, 147, 148, 154, 153, 155, 156
 
 - bug
     - 0050 cannot be selected by any DL

@@ -5,6 +5,30 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Tuple
 
+from core.report_style import finite_number
+
+
+def weighted_rolling_robustness_romd(
+    rolling_romd: object,
+    robustness_mean_romd: object,
+    robustness_seed_count: int,
+) -> float | None:
+    """Combine certified Rolling (one observation) and Robustness (N seeds).
+
+    Robustness is already a per-seed mean, so its weight is the number of
+    certified seeds, not one. Missing Rolling cannot be silently backfilled.
+    """
+
+    rolling = finite_number(rolling_romd)
+    if rolling is None:
+        return None
+    if robustness_mean_romd is None:
+        return rolling
+    robust = finite_number(robustness_mean_romd)
+    if robust is None or type(robustness_seed_count) is not int or robustness_seed_count < 1:
+        return None
+    return (rolling + robustness_seed_count * robust) / (robustness_seed_count + 1)
+
 
 @dataclass(frozen=True)
 class ReportMetricSpec:

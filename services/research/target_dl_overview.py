@@ -46,6 +46,7 @@ from core.research_report_contract import (
     require_approved_report_contract,
     table_contract,
 )
+from core.report_metrics import weighted_rolling_robustness_romd
 from core.console_report import render_table, render_title
 from core.report_style import best_worst_signals, styled_signal
 from core.strategy_compare_policy import (
@@ -82,6 +83,7 @@ from config.strategy_compare import STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE
 
 
 REPORT_ID = "research.target_dl_validation_overview"
+DEFAULT_SORT_COLUMN = "oracle_romd"
 _EXACT_MODE = "resource-aware-continuous-score-constrained-optimal"
 _DIRECT_MODE = "resource-aware-continuous-score-no-k-no-r0"
 
@@ -955,6 +957,33 @@ def _strategy_robustness_metrics(
     return results
 
 
+def sort_target_dl_overview_rows(
+    rows: list[Mapping[str, Any]], *, column_key: str = DEFAULT_SORT_COLUMN,
+) -> list[Mapping[str, Any]]:
+    """Read-only, stable descending sort using the approved report column keys.
+
+    Text columns use descending lexical order. Missing/nonfinite values go
+    last; sorting never converts missing evidence into a numeric zero.
+    """
+
+    columns = table_contract(REPORT_ID, "comparison", "target_dl").columns
+    column = next((item for item in columns if item.key == column_key), None)
+    if column is None:
+        raise ValueError(f"Summary 不支援的排序欄位: {column_key!r}")
+    if column.format_kind == "text":
+        def sort_value(row: Mapping[str, Any]) -> tuple[bool, str]:
+            value = str(row.get(column_key) or "").strip()
+            return (bool(value), value.casefold())
+    else:
+        def sort_value(row: Mapping[str, Any]) -> tuple[bool, float]:
+            value = _number(row.get(column_key))
+            return (value is not None, value if value is not None else -math.inf)
+    # Keep the previous Oracle-default tie-breaker (Target ascending). The
+    # second stable sort applies the selected column's descending order.
+    by_target = sorted(rows, key=lambda row: str(row.get("target") or ""))
+    return sorted(by_target, key=sort_value, reverse=True)
+
+
 def collect_target_dl_overview(project_root: Path) -> dict[str, Any]:
     root = Path(project_root).resolve()
     require_approved_report_contract(REPORT_ID)
@@ -1045,6 +1074,9 @@ def collect_target_dl_overview(project_root: Path) -> dict[str, Any]:
     def append_row(*, target: str, entry: str, selector: str, model: Mapping[str, Any],
                    arm: str, metrics: Mapping[str, Any], classifier: str | None = None) -> None:
         robust = robust_romd.get(arm) if arm else None
+        rolling = rolling_romd.get(arm)
+        robust_mean = robust[0] if robust else None
+        robust_seeds = robust[1] if robust else ()
         rows.append({
             "target": target,
             "entry_strategy": entry,
@@ -1058,10 +1090,13 @@ def collect_target_dl_overview(project_root: Path) -> dict[str, Any]:
             "robustness_rho": model.get("robustness_rho"),
             "rho_seeds": model.get("rho_seeds") or (),
             "strategy": arm,
-            "rolling_romd": rolling_romd.get(arm),
-            "robustness_romd": robust[0] if robust else None,
-            "romd_seeds": robust[1] if robust else (),
+            "rolling_romd": rolling,
+            "robustness_romd": robust_mean,
+            "romd_seeds": robust_seeds,
             "romd_benchmark": robust[2] if robust else "",
+            "rolling_robustness_mean_romd": weighted_rolling_robustness_romd(
+                rolling, robust_mean, len(robust_seeds),
+            ),
         })
 
     for target in targets:
@@ -1108,15 +1143,13 @@ def collect_target_dl_overview(project_root: Path) -> dict[str, Any]:
                 selector=selector, model=model, arm=arm_id, metrics={},
                 classifier=(binding.get("positive_model") or (None, None))[1],
             )
-    rows.sort(key=lambda row: (
-        row["oracle_romd"] is None,
-        -(row["oracle_romd"] or 0.0),
-        row["target"],
-    ))
-    return {"rows": rows, "oracle": oracle_info, "source": "local_completed_reports_only"}
+    return {"rows": sort_target_dl_overview_rows(rows), "oracle": oracle_info,
+            "source": "local_completed_reports_only"}
 
 
-def render_target_dl_overview(report: Mapping[str, Any]) -> str:
+def render_target_dl_overview(
+    report: Mapping[str, Any], *, sort_by: str = DEFAULT_SORT_COLUMN,
+) -> str:
     contract = require_approved_report_contract(REPORT_ID)
     table = table_contract(REPORT_ID, "comparison", "target_dl")
     source = report["oracle"]
@@ -1125,7 +1158,9 @@ def render_target_dl_overview(report: Mapping[str, Any]) -> str:
         f'{source["benchmark"]} | N={len(source["seeds"])} | {source["period"]}'
         if source["path"] else "no completed matching local report; metrics blank"
     ))
-    rows = list(report["rows"])
+    rows = sort_target_dl_overview_rows(list(report["rows"]), column_key=sort_by)
+    sort_column = next(column for column in table.columns if column.key == sort_by)
+    header.append(f"排序：{sort_column.label}（遞減，缺值最後）")
     # Use the canonical per-column metric preference and best/worst signal owner.
     # Robustness is comparable only within the same actual seed set/benchmark;
     # repeated Exact/Direct rows may receive the same signal for their shared ρ.
@@ -1149,6 +1184,17 @@ def render_target_dl_overview(report: Mapping[str, Any]) -> str:
                 if len(seeds) < 2 or not benchmark:
                     continue
                 cohort = ("strategy", benchmark, seeds)
+            elif column.key == "rolling_robustness_mean_romd":
+                # Do not compare a 4-seed weighted value against a rolling-only
+                # value or values built from a different certified benchmark.
+                if row.get("robustness_romd") is not None:
+                    seeds = tuple(row.get("romd_seeds") or ())
+                    benchmark = str(row.get("romd_benchmark") or "")
+                    if len(seeds) < 2 or not benchmark:
+                        continue
+                    cohort = ("weighted", benchmark, seeds)
+                else:
+                    cohort = ("rolling_only",)
             else:
                 cohort = ("same_column",)
             cohorts.setdefault(cohort, {})[str(i)] = value
@@ -1192,8 +1238,11 @@ def render_target_dl_overview(report: Mapping[str, Any]) -> str:
         "Exact/Direct share a target label but never share a strategy RoMD.",
         "Configured research without a matching Oracle remains visible with blank Oracle metrics.",
         "Robustness values show actual seed count; separate benchmarks are not pooled.",
+        "Rolling/Robustness 均值 = (Rolling RoMD + N x Robustness RoMD) / (N + 1); N = certified strategy seeds.",
+        "Only Rolling => same Rolling RoMD; missing Rolling => blank. Different seed cohorts are not pooled for color ranking.",
     ))
     return "\n".join(header)
 
 
-__all__ = ["collect_target_dl_overview", "render_target_dl_overview"]
+__all__ = ["collect_target_dl_overview", "render_target_dl_overview", "sort_target_dl_overview_rows",
+           "DEFAULT_SORT_COLUMN"]

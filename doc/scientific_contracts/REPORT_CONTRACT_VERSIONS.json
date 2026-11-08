@@ -224,6 +224,11 @@
           "contract_id": "research.target_dl_validation_overview@v7",
           "version": 7,
           "fingerprint": "bb342f08224ed5cf"
+        },
+        {
+          "contract_id": "research.target_dl_validation_overview@v8",
+          "version": 8,
+          "fingerprint": "6c74afb42dc92f98"
         }
       ]
     },

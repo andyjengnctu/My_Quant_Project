@@ -815,7 +815,7 @@ STRATEGY_CONSISTENCY_METRIC_KEYS = (
 # neutral and unavailable cells remain unstyled (no schema/metric changes).
 TARGET_DL_VALIDATION_OVERVIEW_REPORT = PersistentReportContract(
     report_id="research.target_dl_validation_overview",
-    version=7,
+    version=8,
     role="read_only_local_completed_report_summary",
     menu_path=("Research", "Summary"),
     sections=(
@@ -833,6 +833,8 @@ TARGET_DL_VALIDATION_OVERVIEW_REPORT = PersistentReportContract(
                 C("strategy", "\u7b56\u7565\u7de8\u865f", alignment="left"),
                 C("rolling_romd", "Rolling RoMD", 2, preference="higher", format_kind="number"),
                 C("robustness_romd", "Robustness RoMD", 2, preference="higher", format_kind="number"),
+                C("rolling_robustness_mean_romd", "Rolling/Robustness 均值", 2,
+                  preference="higher", format_kind="number"),
             )),
         )),
     ),
