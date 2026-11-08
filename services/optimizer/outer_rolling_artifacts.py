@@ -351,7 +351,20 @@ def _write_policy_paramset_files(
     os.makedirs(models_dir, exist_ok=True)
     _remove_stale_policy_paramset_files(models_dir)
     paths = {}
+    # A contracted parameter producer publishes only policies with actual
+    # canonical fold schedules. Never issue an empty paramset for an unrelated
+    # enabled report indicator: its presence could be mistaken for READY truth.
+    present_policies = {
+        str(policy_name)
+        for row in rows
+        for policy_name, schedule in dict(row.get("policy_schedules") or {}).items()
+        if isinstance(schedule, dict) and (
+            dict(schedule.get("params") or {}) or list(schedule.get("params_ensemble") or [])
+        )
+    }
     for policy_name in REPORT_POLICY_NAMES:
+        if policy_name not in present_policies:
+            continue
         if canonical_strategy_param_family:
             from core.strategy_param_artifacts import POLICY_FILENAME_BY_NAME
 

@@ -21,6 +21,91 @@ from services.audit import target_oracle_romd as oracle
 
 
 class DailyEntryStrategyCases(TestCase):
+    def test_registered_parameter_policy_controls_daily_optimizer_diagnostics(self):
+        """A declared single-parameter policy cannot trigger an unrelated agree replay."""
+        from types import SimpleNamespace
+        from config.strategy_params import STRATEGY_PARAM_PROFILES
+        from services.optimizer.outer_rolling_policy import (
+            _build_policy_items, _session_report_policy_names,
+            _is_policy_ensemble_item, REPORT_POLICY_NAMES,
+        )
+        from services.optimizer.outer_rolling_evaluation import _evaluate_finalist_oos_diagnostics
+
+        registered = STRATEGY_PARAM_PROFILES["broker_cash_daily_min_best_seed42_current"]
+        self.assertEqual(registered["strategy_id"], "daily")
+        self.assertEqual(registered["parameter_policy"], "base-finalist-best")
+        declared = registered["parameter_policy"].replace("-", "_")
+        session = SimpleNamespace(strategy_param_scientific_contract={
+            "scientific_contract": {"strategy": dict(registered)}
+        })
+        finalists = [
+            {"trial": SimpleNamespace(number=i, params={}, user_attrs={}),
+             "base_rank": i + 1, "base_score": 10.0 - i, "gate_pass": True}
+            for i in range(3)
+        ]
+        items = _build_policy_items(finalists, objective_mode="split_train_romd", session=session)
+        self.assertEqual(tuple(items), (declared,))
+        self.assertFalse(any(_is_policy_ensemble_item(item) for item in items.values()))
+        self.assertEqual(_session_report_policy_names(None), REPORT_POLICY_NAMES)
+
+        # The historical failing call was to multi-member portfolio replay
+        # inside _evaluate_finalist_oos_diagnostics. It must remain unreachable.
+        fake_report = {"period": {"test_score_romd": 2.0, "ret_pct": 20.0,
+                                  "mdd": -10.0, "trade_count": 2,
+                                  "benchmark_score_romd": 1.0}}
+        with patch("services.optimizer.outer_rolling_evaluation._evaluate_period_oos",
+                   return_value=fake_report) as period, patch(
+                       "services.optimizer.outer_rolling_evaluation._evaluate_finalist_ensemble_oos_metrics",
+                       side_effect=AssertionError("Unrequested consensus replay")) as consensus:
+            output = _evaluate_finalist_oos_diagnostics(
+                session=session, finalists=finalists, policy_items=items,
+                oos_year=2021, oos_start_date="2021-01-01", oos_end_date="2021-12-31")
+        consensus.assert_not_called()
+        self.assertTrue(output["policies"][declared]["available"])
+        self.assertEqual(output["policies"][declared]["rank_1_trial"], 1)
+        self.assertGreaterEqual(period.call_count, 1)
+
+    def test_optimizer_parameter_policy_selection_fails_closed_when_invalid(self):
+        from types import SimpleNamespace
+        from services.optimizer.outer_rolling_policy import _session_report_policy_names
+        for policy in ("not-an-approved-policy", ""):
+            with self.subTest(policy=policy):
+                session = SimpleNamespace(strategy_param_scientific_contract={
+                    "scientific_contract": {"strategy": {"parameter_policy": policy}}
+                })
+                with self.assertRaisesRegex(ValueError, "scientific contract"):
+                    _session_report_policy_names(session)
+
+    def test_optimizer_does_not_publish_empty_unselected_parameter_artifacts(self):
+        from tempfile import TemporaryDirectory
+        from pathlib import Path
+        from types import SimpleNamespace
+        from services.optimizer.outer_rolling_artifacts import _write_policy_paramset_files
+        from services.optimizer.outer_rolling_active_replay import _build_active_param_replay_payload_from_rows
+        from core.active_param_ensemble import is_active_param_ensemble_payload
+
+        params = {"atr_len": 12}
+        rows = [{"fold": "1/1", "oos_year": 2021,
+                 "oos_start_date": "2021-01-01", "oos_end_date": "2021-12-31",
+                 "best_finalist_params": params,
+                 "policy_schedules": {"base_finalist_best": {
+                     "oos_year": 2021, "effective_start": "2021-01-01",
+                     "effective_end": "2021-12-31", "params": params,
+                 }}}]
+        payload = _build_active_param_replay_payload_from_rows(rows, policy_name="base_finalist_best")
+        self.assertFalse(is_active_param_ensemble_payload(payload))
+        self.assertEqual(payload["params_by_effective_date"]["2021-01-01"], params)
+        with TemporaryDirectory() as temp_dir, patch(
+            "services.optimizer.outer_rolling_artifacts._build_policy_paramset_payload",
+            side_effect=lambda **kw: {"policy": kw["policy_name"]}), patch(
+            "services.optimizer.outer_rolling_artifacts.normalize_strategy_param_payload_for_persistence",
+            side_effect=lambda data: data):
+            result = _write_policy_paramset_files(
+                models_dir=temp_dir, rows=rows,
+                config=SimpleNamespace(), summary={})
+            self.assertEqual(tuple(result), ("base_finalist_best",))
+            self.assertEqual(len(list(Path(temp_dir).glob("*.json"))), 1)
+
     def test_daily_strategy_records_follow_canonical_comparisons(self):
         definition = next(d for d in get_reusable_audit_definitions("breakout_quality")
                           if d.audit_type == oracle.SUPPORTED_AUDIT_TYPE)

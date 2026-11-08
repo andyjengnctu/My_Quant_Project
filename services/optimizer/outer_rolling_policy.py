@@ -28,6 +28,7 @@ from services.optimizer.robustness import (
     is_inner_validate_anti_overfit_enabled,
 )
 from services.optimizer.scientific_runtime import (
+    get_session_scientific_section,
     resolve_finalists_agree_min_agree,
     resolve_session_dominant_year_policy,
     resolve_session_finalists_agree_requested,
@@ -722,22 +723,43 @@ def _select_retention_rank1_item(finalists: list[dict]):
     )
 
 
+def _session_report_policy_names(session=None) -> tuple[str, ...]:
+    """Only the declared parameter-policy truth is published by a contracted producer.
+
+    Generic/uncontracted Optimizer studies retain the historical indicator matrix.
+    In particular, single-member Daily fitting must not run an unrelated
+    finalists-agree ensemble diagnostic (which is a different replay contract).
+    """
+    strategy = get_session_scientific_section(session, "strategy") if session is not None else None
+    if strategy is None:
+        return REPORT_POLICY_NAMES
+    selected = str(strategy.get("parameter_policy") or "").strip().lower().replace("-", "_")
+    if selected not in ALL_REPORT_POLICY_NAMES:
+        raise ValueError(f"Strategy Parameter scientific contract 指定未知參數政策: {selected!r}")
+    if selected not in REPORT_POLICY_NAMES:
+        raise ValueError(f"Strategy Parameter scientific contract 指定的參數政策已停用: {selected!r}")
+    return (selected,)
+
+
 def _build_policy_items(finalists: list[dict], *, objective_mode: str, session=None) -> dict[str, dict | None]:
-    base_rank1 = _select_base_rank1_item(finalists)
-    local_rank1 = _select_local_rank1_item(finalists, objective_mode=objective_mode, session=session)
-    retention_rank1 = _select_retention_rank1_item(finalists)
-    items = {
-        BASE_FINALIST_BEST_POLICY_NAME: base_rank1,
-        LOCAL_FINALIST_BEST_POLICY_NAME: local_rank1,
-        RETENTION_FINALIST_BEST_POLICY_NAME: retention_rank1,
-        BASE_FINALISTS_AGREE_POLICY_NAME: _select_base_finalists_agree_item(finalists, session=session),
-        LOCAL_FINALISTS_AGREE_POLICY_NAME: _select_local_finalists_agree_item(finalists, session=session),
-        RETENTION_FINALISTS_AGREE_POLICY_NAME: _select_retention_finalists_agree_item(finalists, session=session),
-        "base": base_rank1,
-        "local": local_rank1,
-        "retention": retention_rank1,
-    }
-    return {name: item for name, item in items.items() if name in set(REPORT_POLICY_NAMES)}
+    selected_names = _session_report_policy_names(session)
+    # Compute only selected policies. An unselected consensus policy must not
+    # trigger another replay (or publish another physical parameter truth).
+    items: dict[str, dict | None] = {}
+    for name in selected_names:
+        if name in (BASE_FINALIST_BEST_POLICY_NAME, "base"):
+            items[name] = _select_base_rank1_item(finalists)
+        elif name in (LOCAL_FINALIST_BEST_POLICY_NAME, "local"):
+            items[name] = _select_local_rank1_item(finalists, objective_mode=objective_mode, session=session)
+        elif name in (RETENTION_FINALIST_BEST_POLICY_NAME, "retention"):
+            items[name] = _select_retention_rank1_item(finalists)
+        elif name == BASE_FINALISTS_AGREE_POLICY_NAME:
+            items[name] = _select_base_finalists_agree_item(finalists, session=session)
+        elif name == LOCAL_FINALISTS_AGREE_POLICY_NAME:
+            items[name] = _select_local_finalists_agree_item(finalists, session=session)
+        elif name == RETENTION_FINALISTS_AGREE_POLICY_NAME:
+            items[name] = _select_retention_finalists_agree_item(finalists, session=session)
+    return items
 
 
 def get_optimizer_paramset_policy_names() -> tuple[str, ...]:
