@@ -2335,7 +2335,6 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         "pareto_daily_then_global",
         "hmhs_pair_then_pr_auc",
         "daily_spearman_then_percentile_mse",
-        "head_discounted_gain_then_spearman",
     }
     check(
         "registered_profiles_use_declared_epoch_selection_capabilities",
@@ -2350,7 +2349,6 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
     # then daily rho. A pairwise-kind change cannot change the metric family.
     from core.breakout_quality_runtime import (
         CONTINUOUS_RANKER_LOSS_HANDLER_CATEGORICAL_CE as _categorical_handler,
-        CONTINUOUS_RANKER_LOSS_HANDLER_HEAD_WEIGHTED_LISTWISE as _head_listwise_handler,
         CONTINUOUS_RANKER_LOSS_HANDLER_RAW_R as _raw_r_handler,
         CONTINUOUS_RANKER_TARGET_BUILDER_DIRECT_HMHS as _direct_hmhs_builder,
         CONTINUOUS_RANKER_TARGET_BUILDER_PARETO_COMPONENTS as _pareto_builder,
@@ -2360,15 +2358,7 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         _policy = get_continuous_ranker_training_policy(
             get_breakout_quality_experiment_profile(_name).training_objective
         )
-        if _policy.loss_handler == _head_listwise_handler:
-            _expected_family = "head_discounted_gain_then_spearman"
-            # The primary checkpoint criterion must use independently validated
-            # front-discounted ranking quality, not generic daily correlation.
-            if _policy.expected_epoch_metric(
-                get_breakout_quality_experiment_profile(_name).loss_name
-            ) != "mean_daily_head_discounted_gain":
-                _epoch_family_errors.append((_name, "head_metric_contract_mismatch"))
-        elif _policy.loss_handler == _categorical_handler:
+        if _policy.loss_handler == _categorical_handler:
             _expected_family = "categorical_cross_entropy_then_event_brier"
         elif _policy.loss_handler == _raw_r_handler:
             _expected_family = "regression_loss_then_spearman"

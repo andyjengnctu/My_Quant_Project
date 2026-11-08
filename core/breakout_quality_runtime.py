@@ -57,7 +57,6 @@ TRAINING_OBJECTIVE_DAILY_RAW_R_REGRESSION = "daily_raw_r_regression"
 TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION = "daily_dual_component_r_regression"
 TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING = "daily_pairwise_ranking"
 TRAINING_OBJECTIVE_DAILY_PAIRWISE_PROBABILITY = "daily_pairwise_probability_ranking"
-TRAINING_OBJECTIVE_DAILY_HEAD_WEIGHTED_LISTWISE = "daily_head_weighted_listwise_ranking"
 TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING = "daily_pareto_pairwise_ranking"
 TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING = (
     "daily_conditional_mfe_safety_pairwise_ranking"
@@ -453,7 +452,6 @@ CONTINUOUS_RANKER_LOSS_HANDLER_SHARED_SAFETY_STRATIFIED_MFE_DUO_PAIRWISE = (
 )
 CONTINUOUS_RANKER_LOSS_HANDLER_SAFETY_MFE_JOINT_TRI_PAIRWISE = "safety_mfe_joint_tri_pairwise"
 CONTINUOUS_RANKER_LOSS_HANDLER_LISTWISE = "listwise"
-CONTINUOUS_RANKER_LOSS_HANDLER_HEAD_WEIGHTED_LISTWISE = "head_weighted_sequential_choice"
 CONTINUOUS_RANKER_LOSS_HANDLER_CATEGORICAL_CE = "categorical_cross_entropy"
 CONTINUOUS_RANKER_AUX_TARGET_NONE = "none"
 CONTINUOUS_RANKER_AUX_TARGET_CONDITIONAL_MFE_SAFETY = "conditional_mfe_safety"
@@ -461,7 +459,6 @@ CONTINUOUS_RANKER_AUX_TARGET_CONDITIONAL_MFE_OPPORTUNITY = "conditional_mfe_oppo
 CONTINUOUS_RANKER_SEMANTICS_DEFAULT = "default"
 CONTINUOUS_RANKER_SEMANTICS_PAIRWISE = "pairwise"
 CONTINUOUS_RANKER_SEMANTICS_LISTWISE = "listwise"
-CONTINUOUS_RANKER_SEMANTICS_HEAD_WEIGHTED_LISTWISE = "head_weighted_listwise"
 CONTINUOUS_RANKER_SEMANTICS_RAW_R = "raw_r"
 CONTINUOUS_RANKER_SEMANTICS_DUAL_COMPONENT_R = "dual_component_r"
 CONTINUOUS_RANKER_SEMANTICS_CONDITIONAL_MFE_SAFETY = "conditional_mfe_safety"
@@ -910,8 +907,6 @@ class ContinuousRankerTrainingPolicy:
         These labels affect only execution dispatch. Historical profile
         ``epoch_selection_metric`` and all scientific identity fields stay as-is.
         """
-        if self.loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_HEAD_WEIGHTED_LISTWISE:
-            return "head_discounted_gain_then_spearman"
         if self.loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_CATEGORICAL_CE:
             return "categorical_cross_entropy_then_event_brier"
         if self.loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_RAW_R:
@@ -1755,13 +1750,6 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             ),
             epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
         ),
-        TRAINING_OBJECTIVE_DAILY_HEAD_WEIGHTED_LISTWISE: ContinuousRankerTrainingPolicy(
-            batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
-            target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_SCALAR_PAIRWISE,
-            loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_HEAD_WEIGHTED_LISTWISE,
-            profile_loss_metrics=(("head_weighted_sequential_choice_ce", "mean_daily_head_discounted_gain"),),
-            semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_HEAD_WEIGHTED_LISTWISE,
-        ),
         TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING: ContinuousRankerTrainingPolicy(
             batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
             target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_PERCENTILE,
@@ -2000,9 +1988,6 @@ __all__ = (
     "CONTINUOUS_RANKER_SCORE_TRANSFORM_PAIRWISE_WIN",
     "CONTINUOUS_RANKER_LOSS_HANDLER_PAIRWISE_PROBABILITY",
     "TRAINING_OBJECTIVE_DAILY_PAIRWISE_PROBABILITY",
-    "TRAINING_OBJECTIVE_DAILY_HEAD_WEIGHTED_LISTWISE",
-    "CONTINUOUS_RANKER_LOSS_HANDLER_HEAD_WEIGHTED_LISTWISE",
-    "CONTINUOUS_RANKER_SEMANTICS_HEAD_WEIGHTED_LISTWISE",
     "CONTINUOUS_RANKER_TRAINER_EVENT",
     "CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL",
     "CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR",

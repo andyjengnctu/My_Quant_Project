@@ -31,7 +31,6 @@ from core.breakout_quality_runtime import (
     TRAINING_OBJECTIVE_DAILY_DUAL_COMPONENT_R_REGRESSION,
     TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_PAIRWISE_PROBABILITY,
-    TRAINING_OBJECTIVE_DAILY_HEAD_WEIGHTED_LISTWISE,
     TRAINING_OBJECTIVE_DAILY_PARETO_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_SAFETY_PAIRWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_CONDITIONAL_MFE_PAIRWISE_RANKING,
@@ -402,7 +401,6 @@ DAILY_UNIVERSAL_TERMINAL_R40_PAIRWISE_PROFILE = "daily_universal_terminal_r40_fu
 DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_PAIRWISE_PROFILE = "daily_universal_terminal_mae_gated_t40_full_list_ndcg_pairwise"
 DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_POSITIVE_PROFILE = "daily_universal_terminal_mae_gated_t40_positive_binary"
 DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_PROBABILISTIC_PROFILE = "daily_universal_terminal_mae_gated_t40_probabilistic_pairwise"
-DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_HEAD_WEIGHTED_LISTWISE_PROFILE = "daily_universal_terminal_mae_gated_t40_head_weighted_listwise"
 DAILY_UNIVERSAL_FULL_HORIZON_MAE_GATED_MFE_T40_PAIRWISE_PROFILE = "daily_universal_full_horizon_mae_gated_mfe_t40_full_list_ndcg_pairwise"
 DAILY_UNIVERSAL_COUNTERFACTUAL_MINTRADE40_NETR_PAIRWISE_PROFILE = "daily_universal_counterfactual_mintrade40_netr_full_list_ndcg_pairwise"
 DAILY_UNIVERSAL_FORMAL_MINTRADE40_NETR_PAIRWISE_PROFILE = "daily_universal_formal_mintrade40_netr_per_seed_full_list_ndcg_pairwise"
@@ -1700,18 +1698,6 @@ _EXPERIMENT_PROFILES = {
         continuous_target_id="daily_terminal_mae_gated_t40_v1",
         loss_name="pairwise_bernoulli_probability",
         epoch_selection_metric="mean_daily_spearman",
-        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
-        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
-        model_architecture="inception_time_v1",
-    ),
-    DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_HEAD_WEIGHTED_LISTWISE_PROFILE: BreakoutQualityExperimentProfile(
-        name=DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_HEAD_WEIGHTED_LISTWISE_PROFILE,
-        optimizer_name="adam",
-        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
-        training_objective=TRAINING_OBJECTIVE_DAILY_HEAD_WEIGHTED_LISTWISE,
-        continuous_target_id="daily_terminal_mae_gated_t40_v1",
-        loss_name="head_weighted_sequential_choice_ce",
-        epoch_selection_metric="mean_daily_head_discounted_gain",
         training_label_scope=TRAINING_LABEL_SCOPE_ALL,
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
         model_architecture="inception_time_v1",
@@ -3445,31 +3431,6 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         metric_scope="all_stock_days_terminal_mae_gated_t40_probabilistic_rank",
         score_semantic_id="daily_terminal_mae_gated_t40_expected_pairwise_win_fraction",
         pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
-        selection_pit_authorized=True,
-        current_time_validation_authorized=True,
-    ),
-    DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_HEAD_WEIGHTED_LISTWISE_PROFILE: ContinuousRankerResearchSpec(
-        profile_name=DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_HEAD_WEIGHTED_LISTWISE_PROFILE,
-        model_research_id="MR-13CY",
-        experiment_name="MR-13CY T40 Head-Weighted Probabilistic Listwise Ranker",
-        phase="13CY",
-        trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
-        target_description=(
-            "Same mature T40=(1-min(MAE40_R,1))*R40-min(MAE40_R,1) as CJ/CX; "
-            "same date/target maturity and all-stock-day eligible universe"
-        ),
-        objective_description=(
-            "Single-head 300x10 InceptionTime rank utilities trained using tie-aware "
-            "sequential remaining-list categorical log loss with marginal log2 rank "
-            "discount. Earlier true positions receive more total training importance "
-            "without a Top-K or manual lambda; tied T40 items have no forced order. "
-            "Independent validatable front-discounted gain selects training epoch. "
-            "Runtime score is bounded monotone ranking utility, not a calibrated "
-            "individual top-one probability, predicted R, or Positive classifier. "
-            "Same PIT input, legal maturity, P16 and Selectors as CJ/CX; no OOS tuning."
-        ),
-        metric_scope="all_stock_days_terminal_mae_gated_t40_head_weighted_listwise",
-        score_semantic_id="daily_terminal_mae_gated_t40_head_weighted_rank_utility",
         selection_pit_authorized=True,
         current_time_validation_authorized=True,
     ),

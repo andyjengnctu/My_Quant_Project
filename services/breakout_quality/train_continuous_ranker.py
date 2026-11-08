@@ -42,7 +42,6 @@ from core.breakout_quality_runtime import (
     CONTINUOUS_RANKER_AUX_TARGET_CONDITIONAL_MFE_SAFETY,
     CONTINUOUS_RANKER_LOSS_HANDLER_DUAL_COMPONENT_R,
     CONTINUOUS_RANKER_LOSS_HANDLER_LISTWISE,
-    CONTINUOUS_RANKER_LOSS_HANDLER_HEAD_WEIGHTED_LISTWISE,
     CONTINUOUS_RANKER_LOSS_HANDLER_CATEGORICAL_CE,
     CONTINUOUS_RANKER_TARGET_BUILDER_JOINT_MFE_D40,
     CONTINUOUS_RANKER_TARGET_BUILDER_NETPNL_POSITIVE,
@@ -151,9 +150,6 @@ from filters.breakout_quality.adaptive_horizon_safety import (
     AdaptiveHorizonSafetyTargetProvider,
 )
 from filters.breakout_quality.continuous_ranker_data import build_same_date_percentile_targets, source_data_end
-from filters.breakout_quality.head_weighted_listwise import (
-    head_weighted_sequential_choice_loss, mean_daily_head_discounted_gain,
-)
 from filters.breakout_quality.pairwise_confidence_ranking import (
     expected_pairwise_win_fraction, probabilistic_pairwise_loss,
 )
@@ -2474,14 +2470,6 @@ def _train_epoch(
                     if loss is None:
                         continue
                     loss_weight = int(supervision_count)
-                elif loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_HEAD_WEIGHTED_LISTWISE:
-                    margins = logits.float()[:, LABEL_PASS] - logits.float()[:, LABEL_REJECT]
-                    loss, ranked_date_count = head_weighted_sequential_choice_loss(
-                        torch, margins, target, group_dates_series.iloc[ids].to_numpy(),
-                    )
-                    if loss is None:
-                        continue
-                    loss_weight = int(ranked_date_count)
                 elif loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_LISTWISE:
                     margins = logits.float()[:, LABEL_PASS] - logits.float()[:, LABEL_REJECT]
                     loss, ranked_date_count = _listnet_top_one_loss(
@@ -4336,7 +4324,6 @@ def select_epoch(
     best_validation_scores = None
     best_epoch = 0
     best_daily_spearman = -math.inf
-    best_head_discounted_gain = -math.inf
     best_primary_mfe_daily_spearman = -math.inf
     best_validation_mse = math.inf
     best_joint_ce = math.inf
@@ -4486,22 +4473,7 @@ def select_epoch(
                 raise ValueError("Pareto validation global pair concordance不可用")
 
         selection_rule = training_policy.epoch_selection_rule
-        head_discounted_gain = None
-        if selection_rule == "head_discounted_gain_then_spearman":
-            head_discounted_gain = mean_daily_head_discounted_gain(
-                group_table.iloc[validation_ids]["date"],
-                percentile_target[validation_ids], validation_scores,
-            )
-            if head_discounted_gain is None or not math.isfinite(head_discounted_gain):
-                raise ValueError("head-weighted listwise validation has no rankable date")
-            comparison = (
-                head_discounted_gain, best_head_discounted_gain,
-                float(daily_spearman), best_daily_spearman, "max", "max",
-            )
-            validation_huber = None
-            validation_mse_raw_r = None
-            validation_mae = None
-        elif selection_rule == "categorical_cross_entropy_then_event_brier":
+        if selection_rule == "categorical_cross_entropy_then_event_brier":
             if not validation_joint_metrics:
                 raise ValueError("categorical validation proper-scoring evidence missing")
             joint_ce = float(validation_joint_metrics["cross_entropy"])
@@ -4572,8 +4544,6 @@ def select_epoch(
                 best_validation_scores = np.array(validation_scores, dtype=np.float32, copy=True)
             best_epoch = int(epoch)
             best_daily_spearman = float(daily_spearman)
-            if head_discounted_gain is not None:
-                best_head_discounted_gain = float(head_discounted_gain)
             if primary_daily_spearman is not None and math.isfinite(float(primary_daily_spearman)):
                 best_primary_mfe_daily_spearman = float(primary_daily_spearman)
             best_validation_mse = validation_mse
@@ -4606,8 +4576,6 @@ def select_epoch(
         history.append({
             "epoch": int(epoch),
             "batch_loss": float(batch_loss),
-            **({"validation_head_discounted_gain": float(head_discounted_gain)}
-               if head_discounted_gain is not None else {}),
             "inner_train_metrics": train_metrics,
             "inner_validation_metrics": validation_metrics,
             "inner_validation_conditional_mfe_safety_metrics": validation_conditional_metrics,

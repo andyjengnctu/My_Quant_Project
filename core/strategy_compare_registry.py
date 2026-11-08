@@ -142,7 +142,7 @@ STRATEGY_COMPARE_SUITES = {
         "arm_ids": (
             "C96", "C97", "C98", "C99", "C100", "C101", "C102", "C103",
             "C105", "C106", "C107", "C108", "C109", "C110",
-            "C111", "C112", "C115", "C116", "C117", "C118", "C119", "C120", "C121", "C122", "C123", "C124", "C125", "C126", "C133", "C134", "C135", "C136", "C137", "C138", "C145", "C146", "C147", "C148", "C151", "C152", "C153", "C154", "C155", "C156",
+            "C111", "C112", "C115", "C116", "C117", "C118", "C119", "C120", "C121", "C122", "C123", "C124", "C125", "C126", "C133", "C134", "C135", "C136", "C137", "C138", "C145", "C146", "C147", "C148", "C153", "C154", "C155", "C156",
         ),
         # A compact connected contrast graph supports each selected model
         # versus C96 plus the matched CK/CJ label contrast. Historical AO/CH
@@ -161,7 +161,6 @@ STRATEGY_COMPARE_SUITES = {
             "C145-C96", "C146-C96", "C145-C146", "C145-C107", "C146-C109",
             "C147-C107", "C148-C109",
             "C147-C148",
-            "C151-C107", "C152-C109", "C151-C147", "C152-C148", "C151-C152",
             "C153-C97", "C154-C97", "C153-C107", "C154-C109", "C154-C153",
             "C155-C97", "C156-C97", "C155-C156", "C155-C153", "C156-C154",
         ),
@@ -204,8 +203,6 @@ STRATEGY_COMPARE_SUITES = {
             "C146": "Daily Min MR-13CJ T40 Rank Direct No-K No-R0 / Broker-Cash",
             "C147": "Min MR-13CX T40 Pairwise-Confidence Exact K/R0 / Broker-Cash",
             "C148": "Min MR-13CX T40 Pairwise-Confidence Direct No-K No-R0 / Broker-Cash",
-            "C151": "Min MR-13CY T40 Head-Weighted Listwise Exact K/R0 / Broker-Cash",
-            "C152": "Min MR-13CY T40 Head-Weighted Listwise Direct No-K No-R0 / Broker-Cash",
             "C153": "Full MR-13CJ T40 Exact K/R0 / Broker-Cash",
             "C154": "Full MR-13CJ T40 Direct No-K No-R0 / Broker-Cash",
             "C155": "Full MR-13CZ Rank + MR-13DA Positive Exact K/R0 / Broker-Cash",
@@ -2238,23 +2235,6 @@ STRATEGY_DL_SOURCES = {
             "options": {"resume": True, "allow_stale_source": False},
         },
     },
-    "CONT13CY_ROLL": {
-        "filter_id": "breakout_quality_v1",
-        "model_architecture": "inception_time_v1",
-        "experiment_profile": "daily_universal_terminal_mae_gated_t40_head_weighted_listwise",
-        "threshold": None,
-        "score_source": "selection_point_in_time",
-        "single_seed_strategy_conversion_authorized": True,
-        "description": (
-            "MR-13CY same-date head-weighted sequential-choice listwise utility. "
-            "T40 rank source for Breakout Exact/Direct, no Positive/absolute R/Top-K head."
-        ),
-        "forward_scores_builder": {
-            "enabled": True,
-            "builder_type": "selection_pit_from_existing_folds",
-            "options": {"resume": True, "allow_stale_source": False},
-        },
-    },
     "CONT13CM_ROLL": {
         "filter_id": "breakout_quality_v1",
         "model_architecture": "inception_time_v1",
@@ -2970,33 +2950,6 @@ STRATEGY_COMPARE_ARMS = {
         },
         "robustness_role": "off",
     },
-    "C151": {
-        "replay_contract_version": 1,
-        "name": "Min MR-13CY T40 Head-Weighted Listwise Exact K/R0 / Broker-Cash",
-        "description": "Independent CY T40 PIT head-weighted listwise rank score; matched to C107/C147 Breakout P16 Exact.",
-        "param_source": "min_best_broker_cash_rolling_experiment",
-        "param_policy": "base-finalist-best", "rule_policy": "all_off",
-        "dl_enabled": True, "dl_id": "CONT13CY_ROLL",
-        "dl_runtime_mode": "resource-aware-continuous-score-constrained-optimal",
-        "dl_runtime_options": {
-            "preserve_k_r0": True, "constrained_solver": "exact_branch_and_bound_v1", "selection_only": True,
-        },
-        "robustness_role": "off",
-    },
-    "C152": {
-        "replay_contract_version": 1,
-        "name": "Min MR-13CY T40 Head-Weighted Listwise Direct No-K No-R0 / Broker-Cash",
-        "description": "Independent CY T40 PIT head-weighted listwise rank score; matched to C109/C148 Breakout P16 Direct.",
-        "param_source": "min_best_broker_cash_rolling_experiment",
-        "param_policy": "base-finalist-best", "rule_policy": "all_off",
-        "dl_enabled": True, "dl_id": "CONT13CY_ROLL",
-        "dl_runtime_mode": "resource-aware-continuous-score-no-k-no-r0",
-        "dl_runtime_options": {
-            "preserve_k": False, "preserve_r0": False,
-            "selection_order": "model_score_desc_then_canonical_tie_v1", "selection_only": True,
-        },
-        "robustness_role": "off",
-    },
     "C153": {
         "replay_contract_version": 1,
         "name": "Full MR-13CJ T40 Exact K/R0 / Broker-Cash",
@@ -3545,11 +3498,6 @@ STRATEGY_COMPARE_CONTRASTS = {
     "C146-C109": {"left": "C146", "right": "C109", "description": "Same CJ T40 PIT score, P16 and Direct selector: Daily versus Breakout entry"},
     "C147-C107": {"left": "C147", "right": "C107", "description": "Same T40/P16 Breakout Exact: probabilistic pairwise confidence CX versus CJ"},
     "C148-C109": {"left": "C148", "right": "C109", "description": "Same T40/P16 Breakout Direct: probabilistic pairwise confidence CX versus CJ"},
-    "C151-C107": {"left": "C151", "right": "C107", "description": "Same T40/P16 Breakout Exact: head-priority listwise CY vs CJ"},
-    "C152-C109": {"left": "C152", "right": "C109", "description": "Same T40/P16 Breakout Direct: head-priority listwise CY vs CJ"},
-    "C151-C147": {"left": "C151", "right": "C147", "description": "Same T40/P16 Breakout Exact: head-priority listwise CY vs pairwise confidence CX"},
-    "C152-C148": {"left": "C152", "right": "C148", "description": "Same T40/P16 Breakout Direct: head-priority listwise CY vs pairwise confidence CX"},
-    "C151-C152": {"left": "C151", "right": "C152", "description": "CY Breakout Exact versus Direct"},
     "C149-C145": {"left": "C149", "right": "C145", "description": "Same T40/P16 Daily Exact: probabilistic pairwise confidence CX versus CJ"},
     "C150-C146": {"left": "C150", "right": "C146", "description": "Same T40/P16 Daily Direct: probabilistic pairwise confidence CX versus CJ"},
     "C147-C148": {"left": "C147", "right": "C148", "description": "CX Breakout Exact versus Direct"},
