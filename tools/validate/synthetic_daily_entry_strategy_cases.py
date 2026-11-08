@@ -719,11 +719,144 @@ class DailyEntryStrategyCases(TestCase):
                 self.assertTrue(switches.issubset(search))
                 self.assertTrue(switches.isdisjoint(overrides))
 
+    def test_oracle_legacy_provenance_isolated_from_new_daily_candidate_capability(self):
+        """An unrelated P20 candidate edit cannot invalidate old Oracle receipts.
+
+        A shared numerical primitive edit *must* invalidate the legacy source.
+        The P19 signature excludes the P20-only filter owner, but P20 includes it.
+        """
+        from pathlib import Path
+        from unittest.mock import patch
+        from services.research.oracle_artifact_contract import (
+            _LEGACY_V1_REPLAY_IMPLEMENTATION,
+            replay_implementation_sha256, portfolio_candidate_execution_sha256,
+            execution_context,
+        )
+        from core.portfolio_entry_policy import (
+            DAILY_EXECUTION_ATR_LIMIT, DAILY_EXECUTION_FULL_FILTERS,
+        )
+        legacy = replay_implementation_sha256()
+        self.assertEqual(legacy, _LEGACY_V1_REPLAY_IMPLEMENTATION)
+        p19 = portfolio_candidate_execution_sha256(
+            daily_execution_contract=DAILY_EXECUTION_ATR_LIMIT)
+        p20 = portfolio_candidate_execution_sha256(
+            daily_execution_contract=DAILY_EXECUTION_FULL_FILTERS)
+        self.assertNotEqual(p19, p20)
+        original = Path.read_text
+        daily_file = Path(__file__).resolve().parents[2] / "core/daily_common_entry_filters.py"
+
+        def edited_daily_file(path, *args, **kwargs):
+            value = original(path, *args, **kwargs)
+            return value.replace("eligible = (volume > 0).copy()",
+                                 "eligible = (volume >= 0).copy()") if path == daily_file else value
+
+        portfolio_candidate_execution_sha256.cache_clear()
+        try:
+            with patch.object(Path, "read_text", edited_daily_file):
+                self.assertEqual(replay_implementation_sha256(), legacy)
+                self.assertEqual(portfolio_candidate_execution_sha256(
+                    daily_execution_contract=DAILY_EXECUTION_ATR_LIMIT), p19)
+                self.assertNotEqual(portfolio_candidate_execution_sha256(
+                    daily_execution_contract=DAILY_EXECUTION_FULL_FILTERS), p20)
+        finally:
+            portfolio_candidate_execution_sha256.cache_clear()
+
+        def digest(policy):
+            return execution_context(
+                dataset="full", price_sha256="a" * 64, param_sha256="b" * 64,
+                seed=42, target="T40", start="2021-01-01", end="2026-03-02",
+                cutoff="2026-03-02", max_positions=10, evaluation_mode="rolling",
+                ranking_policy="direct", ranking_options={}, replay_policy=policy,
+                score_contract=None, source_contract=None, dataset_inputs=None,
+                execution_gate=None,
+            )
+        old = digest({"entry_policy": "daily_stockday_close_limit_next_exchange_session_v1"})
+        self.assertNotIn("daily_candidate_implementation_sha256", old["replay_policy"])
+        self.assertEqual(old["replay_implementation_sha256"], legacy)
+        for mode, expected in ((DAILY_EXECUTION_ATR_LIMIT, p19),
+                               (DAILY_EXECUTION_FULL_FILTERS, p20)):
+            actual = digest({"daily_execution_contract": mode})
+            self.assertEqual(actual["replay_policy"]["daily_candidate_implementation_sha256"], expected)
+            self.assertNotEqual(actual, old)
+        with self.assertRaisesRegex(ValueError, "fingerprint"):
+            digest({"daily_execution_contract": DAILY_EXECUTION_FULL_FILTERS,
+                    "daily_candidate_implementation_sha256": "0" * 64})
+
+        # A change to an actually shared stop/entry primitive is never ignored.
+        signal_file = Path(__file__).resolve().parents[2] / "core/signal_utils.py"
+        def edited_shared_file(path, *args, **kwargs):
+            value = original(path, *args, **kwargs)
+            if path == signal_file:
+                self.assertIn("raw_buy_limits = C + ATR_main * params.atr_buy_tol", value)
+                return value.replace("raw_buy_limits = C + ATR_main * params.atr_buy_tol",
+                                     "raw_buy_limits = C + 2.0 * ATR_main * params.atr_buy_tol")
+            return value
+        replay_implementation_sha256.cache_clear()
+        try:
+            with patch.object(Path, "read_text", edited_shared_file):
+                self.assertNotEqual(replay_implementation_sha256(), legacy)
+        finally:
+            replay_implementation_sha256.cache_clear()
+
+    def test_daily_full_signal_primitive_parity_in_canonical_bundle(self):
+        """Daily Full filtering uses shared features; legacy generator stays unchanged."""
+        from dataclasses import replace
+        import numpy as np
+        from tools.validate.synthetic_daily_trade40_cases import fixture
+        from core.portfolio_fast_data import prep_optimizer_stock_data_bundle
+        from core.signal_utils import generate_signals
+        from core.portfolio_entry_policy import (
+            DAILY_EXECUTION_FULL_FILTERS, daily_signal_execution_context,
+        )
+        _, frame, params, _ = fixture(count=160)
+        params = replace(params, use_breakout_buy=False)
+        scenarios = (
+            (params, 160),
+            (replace(params, use_vol=True, vol_long_len=5, vol_breakout_mult=1.5), 0),
+            (replace(params, use_breakout_ema_filter=True, breakout_ema_len=21), 156),
+            (replace(params, use_bb=True, bb_len=14, bb_mult=2.0), 6),
+            (replace(params, use_breakout_return_filter=True, breakout_return_min=0.01), 3),
+            (replace(params, use_breakout_false_filter=True,
+                     breakout_false_filter_atr_pct_min=0.02), 4),
+        )
+        for configuration, expected in scenarios:
+            with self.subTest(expected=expected), daily_signal_execution_context(
+                    DAILY_EXECUTION_FULL_FILTERS):
+                self.assertFalse(np.any(generate_signals(frame, configuration)[1]),
+                                 "The legacy signal owner cannot acquire P20-only branches")
+                dynamic, *_ = prep_optimizer_stock_data_bundle(
+                    frame, configuration, include_trade_logs=False,
+                    include_pit_stats_index=False)
+                self.assertEqual(int(np.count_nonzero(dynamic["is_setup"])), expected)
+                self.assertEqual(int(np.count_nonzero(np.isfinite(dynamic["buy_limit"]))),
+                                 int(np.count_nonzero(dynamic["is_setup"] &
+                                                        np.isfinite(dynamic["ATR"]))))
+
+    def test_scoped_oracle_policy_uses_registered_parameter_execution(self):
+        from core.audit_policy import get_reusable_audit_definitions
+        from services.audit.target_oracle_romd import (
+            _oracle_strategy_scopes, _contract, _canonical_oracle_replay_policy,
+        )
+        from core.portfolio_entry_policy import (
+            DAILY_EXECUTION_ATR_LIMIT, DAILY_EXECUTION_FULL_FILTERS,
+        )
+        definition = next(d for d in get_reusable_audit_definitions("breakout_quality")
+                          if d.audit_type == "target_ground_truth_strategy_romd")
+        names = {}
+        for scope, selected in _oracle_strategy_scopes(definition):
+            _, base, exact = _contract(selected)
+            names[base.arm_id] = _canonical_oracle_replay_policy(
+                selected, base_arm=base, exact_arm=exact)
+        self.assertNotIn("daily_execution_contract", names["C96"])
+        self.assertNotIn("daily_execution_contract", names["C161"])
+        self.assertEqual(names["C166"]["daily_execution_contract"], DAILY_EXECUTION_ATR_LIMIT)
+        self.assertEqual(names["C168"]["daily_execution_contract"], DAILY_EXECUTION_FULL_FILTERS)
+
     def test_daily_full_signal_filters_are_real_and_other_modes_preserved(self):
         from dataclasses import replace
         import numpy as np
         from tools.validate.synthetic_daily_trade40_cases import fixture
-        from core.signal_utils import generate_signals, unpack_precomputed_signals
+        from core.portfolio_fast_data import prep_optimizer_stock_data_bundle
         from core.portfolio_entry_policy import (
             DAILY_EXECUTION_FULL_FILTERS, DAILY_EXECUTION_ATR_LIMIT,
             DAILY_EXECUTION_LEGACY, daily_signal_execution_context,
@@ -733,8 +866,10 @@ class DailyEntryStrategyCases(TestCase):
         params = replace(params, use_breakout_buy=False)
         def count(contract, cfg):
             with daily_signal_execution_context(contract):
-                _, setup, _, _ = unpack_precomputed_signals(generate_signals(frame, cfg))
-                return int(np.count_nonzero(setup))
+                dynamic, _, _ = prep_optimizer_stock_data_bundle(
+                    frame, cfg, include_trade_logs=False, include_pit_stats_index=False,
+                )
+                return int(np.count_nonzero(dynamic["is_setup"]))
         self.assertEqual(count(DAILY_EXECUTION_LEGACY, params), 0)
         self.assertEqual(count(DAILY_EXECUTION_ATR_LIMIT, params), 0)
         self.assertGreater(count(DAILY_EXECUTION_FULL_FILTERS, params), 0)

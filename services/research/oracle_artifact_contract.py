@@ -341,8 +341,9 @@ def broker_cash_economics_contract() -> dict[str, Any]:
     }
 
 
-def portfolio_candidate_execution_sha256() -> str:
-    """Executable Broker-Cash portfolio capabilities for newly registered scopes.
+@lru_cache(maxsize=4)
+def portfolio_candidate_execution_sha256(*, daily_execution_contract: str | None = None) -> str:
+    """Attest executable portfolio capabilities for a registered execution scope.
 
     This extends the shared replay witness without revising the frozen
     ``replay_implementation_sha256`` consumed by existing P16 Oracle receipts.
@@ -373,8 +374,21 @@ def portfolio_candidate_execution_sha256() -> str:
         "core/seed_ensemble_policy.py", "core/history_filters.py",
         "services/portfolio_replay.py", "services/portfolio_replay_runtime.py",
     )
-    parts = {}
-    for relative in dict.fromkeys(owners):
+    # Optional capabilities belong only to the arms that execute them.  A
+    # revision to Daily Full candidate admission must never invalidate a
+    # Min ATR-limit or any legacy Breakout/Daily replay.  The shared portfolio
+    # owners above remain strict for all newly registered execution scopes.
+    from core.portfolio_entry_policy import (
+        DAILY_EXECUTION_ATR_LIMIT, DAILY_EXECUTION_FULL_FILTERS,
+        resolve_daily_execution_contract,
+    )
+    mode = resolve_daily_execution_contract(daily_execution_contract)
+    if mode not in {DAILY_EXECUTION_ATR_LIMIT, DAILY_EXECUTION_FULL_FILTERS}:
+        raise ValueError("Scoped portfolio source requires registered new Daily execution")
+    optional = (("core/daily_common_entry_filters.py",)
+                if mode == DAILY_EXECUTION_FULL_FILTERS else ())
+    parts = {"daily_execution_contract": mode}
+    for relative in dict.fromkeys((*owners, *optional)):
         path = code_root / relative
         if not path.is_file():
             raise ValueError(f"Oracle replay numerical owner missing: {relative}")
@@ -538,6 +552,33 @@ def source_calculation_contract(*, recipe: str, profile_id: str,
     }
 
 
+
+def attest_daily_candidate_execution(policy: Mapping[str, Any]) -> dict[str, Any]:
+    """One canonical P19/P20 numerical witness for planning AND signed replay.
+
+    Legacy policies are byte-for-byte unchanged: new Daily-only capabilities
+    cannot silently invalidate old Breakout or P18 Oracle receipts.  A caller
+    cannot supply a foreign witness to obtain a fake REUSE authorization.
+    """
+    result = dict(policy)
+    from core.portfolio_entry_policy import (
+        DAILY_EXECUTION_ATR_LIMIT, DAILY_EXECUTION_FULL_FILTERS,
+        resolve_daily_execution_contract,
+    )
+    daily_mode = resolve_daily_execution_contract(result.get("daily_execution_contract"))
+    if daily_mode in {DAILY_EXECUTION_ATR_LIMIT, DAILY_EXECUTION_FULL_FILTERS}:
+        required_sha = portfolio_candidate_execution_sha256(
+            daily_execution_contract=daily_mode,
+        )
+        if ("daily_candidate_implementation_sha256" in result and
+                result["daily_candidate_implementation_sha256"] != required_sha):
+            raise ValueError("Daily candidate capability fingerprint mismatch")
+        result["daily_candidate_implementation_sha256"] = required_sha
+    elif "daily_candidate_implementation_sha256" in result:
+        raise ValueError("Unscoped Daily candidate implementation fingerprint")
+    return result
+
+
 def execution_context(*, dataset: str, price_sha256: str, param_sha256: str,
                       seed: int, target: str, start: str, end: str, cutoff: str,
                       max_positions: int, evaluation_mode: str,
@@ -550,7 +591,10 @@ def execution_context(*, dataset: str, price_sha256: str, param_sha256: str,
         raise ValueError("Oracle execution context requires verified price/P16 identity")
     if execution_gate is not None:
         raise ValueError("Retired raw-outcome Oracle gate; Positive must enter through scores")
-    policy = oracle_replay_policy(replay_policy)
+    # The same witness must be present in the physical signed Replay policy
+    # and the derived effective context (see _arm_replay_policy). A read-only
+    # context witness alone is insufficient to authorize native receipt reuse.
+    policy = attest_daily_candidate_execution(oracle_replay_policy(replay_policy))
     payload = {
         "schema": _SCHEMA, "purpose": "hindsight_oracle_completed_replay",
         "replay_calculation_revision": REPLAY_CALCULATION_REVISION,

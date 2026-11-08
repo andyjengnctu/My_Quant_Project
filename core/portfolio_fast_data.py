@@ -170,12 +170,21 @@ def prep_optimizer_stock_data_bundle(df, params, profile_stats=None, ticker=None
         use_compiled_kernels=is_optimizer_compiled_signal_kernels_enabled(),
         use_native_hotpath=is_optimizer_native_hotpath_kernels_enabled(),
     )
+    from core.portfolio_entry_policy import DAILY_EXECUTION_FULL_FILTERS, current_daily_execution_contract
+    if current_daily_execution_contract() == DAILY_EXECUTION_FULL_FILTERS:
+        from core.daily_common_entry_filters import daily_common_filter_signals
+        atr, _old_setup, sell, _old_limits = unpack_precomputed_signals(precomputed_signals)
+        setup, limits = daily_common_filter_signals(
+            df, params, atr_main=atr, ticker=resolved_ticker,
+            feature_bank=feature_bank,
+            use_native_hotpath=is_optimizer_native_hotpath_kernels_enabled(),
+        )
+        precomputed_signals = (atr, setup, sell, limits)
     if profile_stats is not None:
         profile_stats['generate_signals_sec'] = time.perf_counter() - t0
 
     t0 = time.perf_counter() if profile_stats is not None else None
     _atr_main, buy_condition, _sell_condition, _buy_limits = unpack_precomputed_signals(precomputed_signals)
-    from core.portfolio_entry_policy import DAILY_EXECUTION_FULL_FILTERS, current_daily_execution_contract
     has_executable_setup = (
         current_daily_execution_contract() != DAILY_EXECUTION_FULL_FILTERS
         and bool(np.any(np.asarray(buy_condition, dtype=bool)[:-1]))

@@ -1846,6 +1846,30 @@ def _canonical_oracle_replay_policy(definition, *, base_arm, exact_arm=None) -> 
             for key, spec in sorted(EXECUTION_POLICY_PARAM_SPECS.items())
         },
     }
+    # Resolve the execution capability from the canonical parameter producer,
+    # never a C-number, filename, model ID, or a second family-specific list.
+    # This field exists ONLY for a new opt-in execution contract; historical
+    # P16/P18 policy bytes must remain identical to their signed receipts.
+    if base_arm.entry_strategy == "Daily":
+        from config.strategy_params import STRATEGY_PARAM_PROFILES
+        from strategies.daily.search_space import resolve_daily_search_profile
+        from core.portfolio_entry_policy import DAILY_EXECUTION_LEGACY
+        settings = get_strategy_comparison_settings(str(definition.source["strategy_profile_id"]))
+        source = settings.parameter_sources[str(base_arm.param_source)]
+        builder = source.builder
+        if builder is None or not builder.enabled:
+            raise OracleBlockedError("Daily Oracle requires a registered parameter producer")
+        training_profile = str(builder.options.get("training_profile_id") or "")
+        if training_profile not in STRATEGY_PARAM_PROFILES:
+            raise OracleBlockedError("Daily Oracle parameter scientific profile unavailable")
+        declared = STRATEGY_PARAM_PROFILES[training_profile]
+        if declared.get("strategy_id") != "daily":
+            raise OracleBlockedError("Daily Oracle parameter entry policy does not match training")
+        daily_execution = resolve_daily_search_profile(
+            declared.get("daily_search_profile"),
+        )["execution_contract"]
+        if daily_execution != DAILY_EXECUTION_LEGACY:
+            replay_policy["daily_execution_contract"] = daily_execution
     return replay_policy
 
 
@@ -1871,7 +1895,10 @@ def _arm_replay_policy(definition, *, plan: Mapping[str, Any], target: str,
                        project_root: Path | None = None,
                        effective_context: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """One target-scoped economic/score identity for fast and normal REUSE."""
-    policy = dict(replay_policy)
+    # Canonical witness must be part of the physical signed Replay identity,
+    # not only its effective-context SHA. Preserve legacy policy bytes.
+    from services.research.oracle_artifact_contract import attest_daily_candidate_execution
+    policy = attest_daily_candidate_execution(replay_policy)
     if _oracle_target_strategy(definition, target) == "Daily":
         policy["entry_policy"] = DAILY_ENTRY_CONTRACT
     if effective_context is not None:

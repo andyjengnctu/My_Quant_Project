@@ -320,15 +320,6 @@ def generate_signals(df, params, ticker=None, feature_bank=None, use_compiled_ke
     feature_cache = coerce_feature_bank(feature_bank)
     atr_len = int(params.atr_len)
     use_breakout_buy = bool(getattr(params, 'use_breakout_buy', True))
-    # The replay-scoped Daily contract is deliberately not stored in a shared
-    # mutable parameter object or inferred from a particular strategy C-code.
-    from core.portfolio_entry_policy import (
-        DAILY_EXECUTION_FULL_FILTERS, current_daily_execution_contract,
-    )
-    daily_common_filters = (
-        not use_breakout_buy
-        and current_daily_execution_contract() == DAILY_EXECUTION_FULL_FILTERS
-    )
     high_len = int(params.high_len)
     use_breakout_ema_filter = bool(getattr(params, 'use_breakout_ema_filter', True))
     breakout_ema_len = int(getattr(params, 'breakout_ema_len', 240))
@@ -377,11 +368,7 @@ def generate_signals(df, params, ticker=None, feature_bank=None, use_compiled_ke
         )
     else:
         HighN = None
-        BreakoutEMA = (
-            _feature('ema_close', (breakout_ema_len,), lambda: tv_ema(C, breakout_ema_len, use_native_hotpath=use_native_hotpath))
-            if daily_common_filters and use_breakout_ema_filter
-            else None
-        )
+        BreakoutEMA = None
 
     SuperTrend_Dir = _feature(
         'supertrend_dir',
@@ -408,11 +395,8 @@ def generate_signals(df, params, ticker=None, feature_bank=None, use_compiled_ke
 
     # Build the buy mask incrementally. Disabled filters no longer allocate
     # throw-away all-True arrays, while the filter order/semantics stay identical.
-    if use_breakout_buy or daily_common_filters:
-        breakoutBuyCondition = (
-            is_tradable_bar & (C > O) & isPriceCrossover
-            if use_breakout_buy else is_tradable_bar.copy()
-        )
+    if use_breakout_buy:
+        breakoutBuyCondition = is_tradable_bar & (C > O) & isPriceCrossover
 
         if use_breakout_ema_filter:
             breakoutBuyCondition &= (C > BreakoutEMA)

@@ -254,7 +254,7 @@ class OracleParameterFamilyCases(TestCase):
         targets = oracle_target_work_inventory(d.source)
         controls = oracle_control_dependency_inventory(d.source)
         self.assertEqual(len(targets), len(resolve_current_oracle_comparisons(d.source)))
-        self.assertEqual(set(controls), {"C96", "C97", "C161"})
+        self.assertEqual(set(controls), set(oracle_baseline_arm_ids(d.source).values()))
         self.assertFalse(set(controls).intersection(targets))
         seed_set = (693545351, 2014432738, 104504529, 762252050)
         decisions = {(seed, target): "REUSE" for seed in seed_set for target in targets}
@@ -335,7 +335,9 @@ class OracleParameterFamilyCases(TestCase):
         d = definition()
         comparisons = resolve_current_oracle_comparisons(d.source)
         baselines = oracle_baseline_arm_ids(d.source)
-        self.assertEqual(baselines, {"min": "C96", "full": "C97", "daily_min": "C161"})
+        self.assertEqual({key: baselines[key] for key in ("min", "full", "daily_min")},
+                         {"min": "C96", "full": "C97", "daily_min": "C161"})
+        self.assertEqual(len(set(baselines.values())), len(baselines))
         scopes = oracle._oracle_strategy_scopes(d)
         by_scope = {}
         for row in comparisons:
@@ -343,12 +345,15 @@ class OracleParameterFamilyCases(TestCase):
             name = row.get("strategy", "Breakout")
             name = name if family == "min" else f"{name}::{family.capitalize() if family != 'daily_min' else 'Daily_min'}"
             by_scope[name] = by_scope.get(name, 0) + 1
-        self.assertEqual([(name, scope.source["baseline_arm_id"],
-                           len(scope.source["oracle_comparisons"])) for name, scope in scopes],
-                         [(name, baselines[family], count)
-                          for name, family in (("Breakout", "min"), ("Daily", "min"),
-                                               ("Breakout::Full", "full"), ("Daily::Daily_min", "daily_min"))
-                          if (count := by_scope.get(name, 0))])
+        expected_scope_counts = {name: count for name, count in by_scope.items() if count}
+        self.assertEqual(
+            {name: len(scope.source["oracle_comparisons"]) for name, scope in scopes},
+            expected_scope_counts,
+        )
+        self.assertEqual(
+            {scope.source["baseline_arm_id"] for _name, scope in scopes},
+            {baselines[oracle_parameter_family(row)] for row in comparisons},
+        )
         with TemporaryDirectory() as temp:
             root = Path(temp)
             ledger = root / "doc/scientific_contracts/REPORT_CONTRACT_VERSIONS.json"
@@ -364,7 +369,7 @@ class OracleParameterFamilyCases(TestCase):
                   oracle_comparison_key(row) for row in comparisons
                   if oracle_parameter_family(row) == family))),
         ))
-        self.assertEqual(set(targets), {"C96", "C97", "C161", *(
+        self.assertEqual(set(targets), {*baselines.values(), *(
             oracle_comparison_key(row) for row in comparisons)})
         full_arms = {row["strategy"]: (row["target"], row["oracle_romd"])
                      for row in overview["rows"]
@@ -437,10 +442,10 @@ class OracleParameterFamilyCases(TestCase):
             for _name, scope in oracle._oracle_strategy_scopes(d):
                 base = scope.source["baseline_arm_id"]
                 plans[base] = oracle._oracle_parameter_reuse_plan(scope, root)
-        self.assertEqual(set(plans), {"C96", "C97", "C161"})
+        self.assertEqual(set(plans), set(oracle_baseline_arm_ids(d.source).values()))
         profiles = {base: plan["producer_kwargs"]["training_profile_id"]
                     for base, plan in plans.items()}
-        self.assertEqual(len(set(profiles.values())), 3)
+        self.assertEqual(len(set(profiles.values())), len(profiles))
         self.assertEqual(profiles["C161"], "broker_cash_daily_min_best_seed42_current")
         self.assertTrue(all(len(plan["rows"]) == 4 for plan in plans.values()))
         self.assertEqual(set(source_kwargs), set(profiles.values()))
@@ -625,10 +630,13 @@ class OracleParameterFamilyCases(TestCase):
             "baseline": {"target": "C96", "strategy": "Breakout", "seeds": len(seeds),
                          "romd": 9.0, "win_rate_pct": 40.0},
             "control_baselines": [
-                {"target": "C97", "strategy": "Breakout", "parameter_family": "full",
-                 "seeds": len(seeds), "romd": 14.5, "win_rate_pct": 44.0},
-                {"target": "C161", "strategy": "Daily", "parameter_family": "daily_min",
-                 "seeds": len(seeds), "romd": 12.5, "win_rate_pct": 47.0},
+                {"target": arm_id, "strategy": next(
+                     row.get("strategy", "Breakout") for row in comparisons
+                     if oracle_parameter_family(row) == family),
+                 "parameter_family": family, "seeds": len(seeds),
+                 "romd": 14.5 if family == "full" else 12.5,
+                 "win_rate_pct": 44.0 if family == "full" else 47.0}
+                for family, arm_id in baselines.items() if family != "min"
             ],
             "oracles": [{"target": row["target"], "strategy": row.get("strategy", "Breakout"),
                          "parameter_family": oracle_parameter_family(row),
@@ -666,16 +674,17 @@ class OracleParameterFamilyCases(TestCase):
             report["control_baselines"] = []
             self.assertEqual(inspect(), {})
             report["control_baselines"] = [
-                {"target": "C97", "strategy": "Breakout", "parameter_family": "full",
-                 "seeds": len(seeds), "romd": 14.5, "win_rate_pct": 44.0},
-                {"target": "C161", "strategy": "Daily", "parameter_family": "daily_min",
-                 "seeds": len(seeds), "romd": 12.5, "win_rate_pct": 47.0},
+                {"target": arm_id, "strategy": next(
+                     row.get("strategy", "Breakout") for row in comparisons
+                     if oracle_parameter_family(row) == family),
+                 "parameter_family": family, "seeds": len(seeds),
+                 "romd": 14.5 if family == "full" else 12.5,
+                 "win_rate_pct": 44.0 if family == "full" else 47.0}
+                for family, arm_id in baselines.items() if family != "min"
             ]
-            report["control_baselines"].pop()
-            self.assertEqual(inspect(), {})  # New family also needs its own control.
-            report["control_baselines"].append(
-                {"target": "C161", "strategy": "Daily", "parameter_family": "daily_min",
-                 "seeds": len(seeds), "romd": 12.5, "win_rate_pct": 47.0})
+            removed_control = report["control_baselines"].pop()
+            self.assertEqual(inspect(), {})  # Every registered family needs its own control.
+            report["control_baselines"].append(removed_control)
             report["comparison_reference_arms"].pop("T40_Direct::Full")
             values = inspect()
             self.assertNotIn("T40_Direct::Full", values)
@@ -716,9 +725,14 @@ class OracleParameterFamilyCases(TestCase):
         d = definition()
         from core.training_policy import get_robustness_benchmark_policy_snapshot
         seeds = tuple(get_robustness_benchmark_policy_snapshot()["resolved_seeds"])
-        profiles = {"C96": "broker_cash_min_best_seed42_current",
-                    "C97": "broker_cash_full_best_seed42_current",
-                    "C161": "broker_cash_daily_min_best_seed42_current"}
+        from core.strategy_compare_policy import get_strategy_comparison_settings
+        profiles = {}
+        for _name, scoped in oracle._oracle_strategy_scopes(d):
+            settings, base_arm, _exact = oracle._contract(scoped)
+            parameter_source = settings.parameter_sources[str(base_arm.param_source)]
+            profiles[scoped.source["baseline_arm_id"]] = str(
+                parameter_source.builder.options["training_profile_id"])
+        self.assertEqual(len(profiles), len(oracle_baseline_arm_ids(d.source)))
         done = {"value": False}
         def inspect(scoped, *, project_root):
             baseline = scoped.source["baseline_arm_id"]
@@ -730,12 +744,10 @@ class OracleParameterFamilyCases(TestCase):
             } for seed in seeds),
                 "producer_kwargs": {"training_profile_id": profiles[baseline]}}
         plans = {
-            "C96": {"seed_set": seeds, "missing": (),
-                    "producer_kwargs": {"training_profile_id": profiles["C96"]}},
-            "C97": {"seed_set": seeds, "missing": (seeds[-1],),
-                    "producer_kwargs": {"training_profile_id": profiles["C97"]}},
-            "C161": {"seed_set": seeds, "missing": (),
-                     "producer_kwargs": {"training_profile_id": profiles["C161"]}},
+            arm_id: {"seed_set": seeds,
+                     "missing": (seeds[-1],) if arm_id == "C97" else (),
+                     "producer_kwargs": {"training_profile_id": training_id}}
+            for arm_id, training_id in profiles.items()
         }
         with TemporaryDirectory() as temp, \
              patch.object(app, "inspect_oracle_parameter_prerequisites", side_effect=inspect), \
@@ -801,7 +813,8 @@ class OracleParameterFamilyCases(TestCase):
                             for seed in seeds for key in keys if key not in min_keys))
         self.assertTrue(new_keys.issubset(set(keys)))
         self.assertFalse(set(preview["control_dependencies"]).intersection(keys))
-        self.assertEqual(set(preview["parameter_plans"]), {"C96", "C97", "C161"})
+        self.assertEqual(set(preview["parameter_plans"]),
+                         set(oracle_baseline_arm_ids(d.source).values()))
         self.assertNotEqual(preview["parameter_plans"]["C161"]["producer_kwargs"],
                             preview["parameter_plans"]["C96"]["producer_kwargs"])
         self.assertNotEqual(preview["parameter_plans"]["C96"]["producer_kwargs"],
