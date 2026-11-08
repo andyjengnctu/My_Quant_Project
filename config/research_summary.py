@@ -13,12 +13,17 @@ RESEARCH_SUMMARY_ROWS = (
     {'arm_id': 'C96', 'oracle_parameter_family': 'min'},
     {'arm_id': 'C97', 'oracle_parameter_family': 'full'},
     {'arm_id': 'C98', 'parameter_family': 'full'},
-    {'arm_id': 'C161'},
-    {'display_target': 'T40',
+    # P18 is an independent economic parameter family. The No-DL C161
+    # control and its T40 treatments are declared together in this roster.
+    {'arm_id': 'C161', 'oracle_parameter_family': 'daily_min'},
+    # Reuse the existing approved T40 Daily Oracle truth/score recipes; only
+    # the formal execution arm and parameter lineage change (P16 -> P18).
+    {'oracle_template_arm_id': 'C145', 'parameter_family': 'daily_min',
      'bindings': ({'arm_id': 'C159',
-                   'rank_model': ('MR-13CJ', 'daily_universal_terminal_mae_gated_t40_full_list_ndcg_pairwise')},
-                  {'arm_id': 'C160',
-                   'rank_model': ('MR-13CJ', 'daily_universal_terminal_mae_gated_t40_full_list_ndcg_pairwise')})},
+                   'rank_model': ('MR-13CJ', 'daily_universal_terminal_mae_gated_t40_full_list_ndcg_pairwise')},)},
+    {'oracle_template_arm_id': 'C146', 'parameter_family': 'daily_min',
+     'bindings': ({'arm_id': 'C160',
+                   'rank_model': ('MR-13CJ', 'daily_universal_terminal_mae_gated_t40_full_list_ndcg_pairwise')},)},
     {'oracle': {'target': 'MFE40_Control',
                 'description': '40D MFE only (control, not target recommendation)',
                 'score': 'mfe',

@@ -127,6 +127,7 @@ from core.audit_registry import (
     AUDIT_REUSABLE_REPORTS, resolve_current_oracle_comparisons, oracle_comparison_key,
     oracle_target_semantics, oracle_scientific_target_name,
     oracle_parameter_family, oracle_baseline_arm_ids, oracle_baseline_display_name,
+    oracle_work_inventory, oracle_work_display_dimensions,
     oracle_display_strategy,
     oracle_positive_output_for_recipe,
 )
@@ -3721,10 +3722,16 @@ def _oracle_strategy_scopes(definition) -> tuple[tuple[str, Any], ...]:
     comparisons = resolve_current_oracle_comparisons(definition.source)
     baselines = oracle_baseline_arm_ids(definition.source)
     settings = get_strategy_comparison_settings(str(definition.source["strategy_profile_id"]))
-    groups = tuple(dict.fromkeys(
+    # Keep the original Min/P16 execution as the primary report baseline,
+    # regardless of where additional-family rows appear in the Summary roster.
+    # This is a presentation/execution order only; declared inventory is not
+    # filtered or redefined by this ordering.
+    unordered_groups = tuple(dict.fromkeys(
         (oracle_parameter_family(row), str(row.get("strategy", "Breakout")))
         for row in comparisons
     ))
+    groups = tuple(group for family in baselines for group in unordered_groups
+                   if group[0] == family)
     definitions = []
     for family, strategy in groups:
         subset = tuple(row for row in comparisons if (
@@ -3772,9 +3779,16 @@ def _oracle_strategy_scopes(definition) -> tuple[tuple[str, Any], ...]:
     return tuple(definitions)
 
 
-def _oracle_scoped_key(target: str, scope: str) -> str:
-    """Map a scope-local signed receipt to the one shared display/plan key."""
-    if target in oracle_baseline_arm_ids(_ORACLE_CATALOG_SOURCE).values():
+def _oracle_scoped_key(
+    target: str, scope: str, *, baselines: Mapping[str, str] | None = None,
+) -> str:
+    """Map a signed receipt; production callers pass their run's family set.
+
+    Direct historical diagnostics without an explicit run use the canonical
+    registered source (not a second hard-coded list of baseline IDs).
+    """
+    active = baselines if baselines is not None else oracle_baseline_arm_ids(_ORACLE_CATALOG_SOURCE)
+    if target in active.values():
         return target
     if "::" in scope:
         strategy, family = scope.split("::", 1)
@@ -3806,21 +3820,10 @@ def _oracle_combined_preview(definition, *, project_root: Path) -> tuple[dict[st
     completed: dict[tuple[int, str], dict[str, Any]] = {}
     completed_identities: dict[tuple[int, str], dict[str, Any]] = {}
     baseline_param_scientific: dict[str, dict[int, str]] = {}
-    registered = resolve_current_oracle_comparisons(definition.source)
-    registry_rows = {oracle_comparison_key(row): row for row in registered}
-    control_arms = get_strategy_comparison_settings(
-        str(definition.source["strategy_profile_id"])
-    ).arms
-    strategies = {
-        arm_id: oracle_display_strategy(
-            strategy=control_arms[arm_id].entry_strategy, parameter_family=family,
-        ) for family, arm_id in baselines.items()
-    }
-    display_targets = {
-        arm_id: oracle_baseline_display_name(definition.source, arm_id)
-        for arm_id in baselines.values()
-    }
-    selectors = {arm_id: "-" for arm_id in baselines.values()}
+    display = oracle_work_display_dimensions(definition.source)
+    strategies = {key: fields[1] for key, fields in display.items()}
+    display_targets = {key: fields[0] for key, fields in display.items()}
+    selectors = {key: fields[2] for key, fields in display.items()}
     for scope, scoped, preview in previews:
         control_id = _baseline_target(scoped)
         if (tuple(preview["seed_set"]) != seeds or
@@ -3840,12 +3843,12 @@ def _oracle_combined_preview(definition, *, project_root: Path) -> tuple[dict[st
             )
         baseline_param_scientific[control_id] = scientific_source
         for (seed, target), action in preview["preflight"].items():
-            key = (int(seed), _oracle_scoped_key(target, scope))
+            key = (int(seed), _oracle_scoped_key(target, scope, baselines=declared_baselines))
             if key in decisions and decisions[key] != action:
                 raise OracleBlockedError(f"Oracle shared baseline {control_id} has inconsistent authorization")
             decisions[key] = action
         for (seed, target), observation in preview["completed_observations"].items():
-            key = (int(seed), _oracle_scoped_key(target, scope))
+            key = (int(seed), _oracle_scoped_key(target, scope, baselines=declared_baselines))
             if key in completed and completed[key] != observation:
                 raise OracleBlockedError(f"Oracle shared baseline {control_id} has inconsistent receipts")
             completed[key] = observation
@@ -3853,21 +3856,7 @@ def _oracle_combined_preview(definition, *, project_root: Path) -> tuple[dict[st
             if key in completed_identities and completed_identities[key] != identity:
                 raise OracleBlockedError(f"Oracle shared baseline {control_id} has inconsistent identities")
             completed_identities[key] = identity
-        for target in preview["targets"]:
-            if target == control_id:
-                continue
-            key = _oracle_scoped_key(target, scope)
-            row = registry_rows[key]
-            display_targets[key], selectors[key], entry_strategy = oracle_target_semantics(row)
-            strategies[key] = oracle_display_strategy(
-                strategy=entry_strategy, parameter_family=oracle_parameter_family(row),
-            )
-    # Preserve all original Min ordering, append only newly declared families.
-    registry_keys = tuple((baselines[family] for family in baselines if family == "min")) + tuple(
-        oracle_comparison_key(row) for row in registered if oracle_parameter_family(row) == "min"
-    ) + tuple(baselines[family] for family in baselines if family != "min") + tuple(
-        oracle_comparison_key(row) for row in registered if oracle_parameter_family(row) != "min"
-    )
+    registry_keys = oracle_work_inventory(definition.source)
     if set(registry_keys) != {key for _, key in decisions} or len(registry_keys) != len(set(registry_keys)):
         raise OracleBlockedError("Oracle Target x Strategy x family preview/inventory mismatch")
     text = render_replay_preflight(
@@ -3923,7 +3912,7 @@ def _oracle_merge_scoped_reports(definition, reports: list[tuple[str, Mapping[st
             item = dict(original)
             if item.get("strategy") != strategy:
                 raise OracleBlockedError("Oracle result has wrong entry strategy")
-            key = _oracle_scoped_key(str(item["target"]), scope)
+            key = _oracle_scoped_key(str(item["target"]), scope, baselines=baselines)
             if key in by_key:
                 raise OracleBlockedError("Duplicate Target x Strategy x family result")
             item.update(comparison_key=key, parameter_family=family,
@@ -3933,13 +3922,12 @@ def _oracle_merge_scoped_reports(definition, reports: list[tuple[str, Mapping[st
         raise OracleBlockedError("Completed Oracle and registered inventory differ")
     base["oracles"] = [by_key[oracle_comparison_key(row)] for row in registered]
     base["definitions"] = {str(row["target"]): descriptions[str(row["target"])] for row in registered}
-    base["comparison_inventory"] = [
-        *baselines.values(), *(oracle_comparison_key(row) for row in registered)]
+    base["comparison_inventory"] = list(oracle_work_inventory(definition.source))
     base["control_baselines"] = [dict(family_baselines[family], parameter_family=family)
                                  for family in baselines if family != "min"]
     if base["control_baselines"]:
         base["limitations"] = [*base.get("limitations", ()),
-            "Full/P17 Oracle Win/Seed uses its own C97 same-seed control; "
+            "Each non-Min Oracle family uses its own same-seed No-DL control; "
             "the unchanged C96 Seed RoMD report column remains the historical Min reference."]
     base["parameter_family_artifacts"] = param_evidence
     from services.research.oracle_artifact_contract import reference_arm_execution_binding
@@ -4065,7 +4053,7 @@ def build_report(
             receipt_keys = (_baseline_target(scoped),
                             *(str(row["target"]) for row in scoped.source["oracle_comparisons"]))
             scope_decisions = {
-                (seed, receipt): approved_replay_decisions[(seed, _oracle_scoped_key(receipt, scope))]
+                (seed, receipt): approved_replay_decisions[(seed, _oracle_scoped_key(receipt, scope, baselines=oracle_baseline_arm_ids(definition.source)))]
                 for seed in {pair[0] for pair in approved_replay_decisions}
                 for receipt in receipt_keys
             }
@@ -4093,34 +4081,28 @@ def render_result(report: Mapping[str, Any], *, target: str) -> str:
     paired_table = sections[3].tables[0]
     baseline = dict(report["baseline"])
     # Presentation projection only; signed observations and Replay keys are not touched.
-    approved_rows = {oracle_comparison_key(row): row for row in
-                     resolve_current_oracle_comparisons(_ORACLE_CATALOG_SOURCE)}
+    display = oracle_work_display_dimensions(_ORACLE_CATALOG_SOURCE)
     def _present(item):
         strategy = str(item.get("strategy", "Breakout"))
         legacy = str(item["target"])
         key = str(item.get("comparison_key") or oracle_comparison_key(
             {"target": legacy, "strategy": strategy,
              "parameter_family": item.get("parameter_family", "min")}))
-        scientific = approved_rows.get(key)
-        if scientific is not None:
-            name, selector, entry_strategy = oracle_target_semantics(scientific)
-            strategy = oracle_display_strategy(
-                strategy=entry_strategy, parameter_family=oracle_parameter_family(scientific),
-            )
+        if key in display:
+            name, strategy, selector = display[key]
         else:
-            # Historical-only receipts still render, but never gain a new
-            # active science or Selector identity merely from their label.
+            # Historical-only receipts retain their own display, never gain
+            # new active science from a model/parameter-name guess.
             name, selector = _oracle_display_name(legacy), "-"
         return dict(item, strategy=strategy, target=name, selector=selector,
                     wins=f'{item["positive_seed_count"]}/{item["seeds"]}')
-    items = [dict(baseline, target="C96 Same-Window", strategy="Breakout",
-                  selector="-", wins="-"),
-             *(dict(row, target=f"{row['target']} Same-Window",
-                     strategy=oracle_display_strategy(
-                         strategy=str(row.get("strategy", "Breakout")),
-                         parameter_family=str(row.get("parameter_family", "min"))),
-                     selector="-", wins="-") for row in report.get("control_baselines", ())),
-             *[_present(item) for item in report["oracles"]]]
+    def _control_presentation(item):
+        target, strategy, selector = display[str(item["target"])]
+        return dict(item, target=target, strategy=strategy, selector=selector, wins="-")
+    reference_control_row = _control_presentation(baseline)
+    items = [reference_control_row,
+             *(_control_presentation(row) for row in report.get("control_baselines", ())),
+             *(_present(item) for item in report["oracles"])]
     # Presentation-only sort; preserve the canonical comparison/Replay order.
     items.sort(key=lambda row: (float(row["romd"]), str(row["target"]),
                                 str(row.get("strategy", "Breakout"))))
@@ -4133,7 +4115,7 @@ def render_result(report: Mapping[str, Any], *, target: str) -> str:
         f'Benchmark: {report["benchmark_id"]}, same-seed pairs N={len(report["seeds"])}',
         f'Report schema: {report["schema_version"]}, Oracle treatments: '
         f'{len(report["oracles"])} (Exact + Direct); not Standard SOP',
-        'Ranking: Exact K/R0 or Direct No-K/No-R0; each control uses its own canonical Min/P16 or Full/P17 parameters; future scores are hindsight.',
+        'Ranking: Exact K/R0 or Direct No-K/No-R0; each control uses its own certified parameter family; future scores are hindsight.',
         'Presentation: ascending RoMD Mean (lowest to highest; Target name breaks ties).',
         'T40: (1 - min(MAE40, 1R)) * R40 - min(MAE40, 1R); MAE40 >= 1R -> T40 = -1R.',
         'CG = equal-rank 50/50 geometry PROXY, not a neural-network model head.',
@@ -4190,7 +4172,9 @@ def render_result(report: Mapping[str, Any], *, target: str) -> str:
             f' ({item["strategy"]} / {item["selector"]})'
             if repeated_targets[str(item["target"])] > 1 else ''),
              c96_romd=baselines[int(obs["seed"])])
-        for item in items if item["target"] != "C96 Same-Window"
+        # Exclude the primary reference by its row identity, never by the
+        # presentation-only Target label (all No-DL Targets are blank).
+        for item in items if item is not reference_control_row
         for obs in item["seed_observations"]
     ]
     for paired_cells in format_comparison_rows(

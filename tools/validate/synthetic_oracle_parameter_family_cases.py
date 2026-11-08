@@ -56,11 +56,62 @@ class OracleParameterFamilyCases(TestCase):
         for arm in ("C153", "C154"):
             self.assertEqual(by_arm[arm]["target"], "T40")
             self.assertEqual(by_arm[arm]["entry_strategy"], "Breakout (Full)")
-        self.assertEqual(by_arm["C97"]["target"], "C97")
+        self.assertEqual(by_arm["C97"]["target"], "")
         self.assertEqual(by_arm["C97"]["entry_strategy"], "Breakout (Full)")
         self.assertEqual(by_arm["C107"]["entry_strategy"], "Breakout")
         self.assertEqual(by_arm["C109"]["entry_strategy"], "Breakout")
-        self.assertFalse(any("(Full)" in r["target"] for r in rows))
+        for arm, selector in (("C159", "Exact"), ("C160", "Direct")):
+            self.assertEqual((by_arm[arm]["target"], by_arm[arm]["entry_strategy"],
+                              by_arm[arm]["selector"]), ("T40", "Daily (Min/P18)", selector))
+        self.assertEqual((by_arm["C161"]["target"], by_arm["C161"]["entry_strategy"],
+                          by_arm["C161"]["selector"]), ("", "Daily (Min/P18)", "Default"))
+        self.assertFalse(any("(Full)" in r["target"] or "P18" in r["target"] for r in rows))
+
+    def test_every_oracle_arm_has_the_same_columns_in_both_menus(self):
+        """Future families need no separate [1]/[2] column mapping."""
+        from core.audit_registry import oracle_work_display_dimensions, oracle_work_inventory
+        d = definition()
+        dimensions = oracle_work_display_dimensions(d.source)
+        self.assertEqual(tuple(dimensions), oracle_work_inventory(d.source))
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ledger = root / "doc/scientific_contracts/REPORT_CONTRACT_VERSIONS.json"
+            ledger.parent.mkdir(parents=True)
+            ledger.write_bytes((Path(__file__).resolve().parents[2] /
+                                "doc/scientific_contracts/REPORT_CONTRACT_VERSIONS.json").read_bytes())
+            rows = {row["strategy"]: row for row in collect_target_dl_overview(root)["rows"]
+                    if row["strategy"]}
+        referenced_arms = {
+            oracle_comparison_key(row): row["strategy_arm_id"]
+            for row in resolve_current_oracle_comparisons(d.source)
+            if row.get("strategy_arm_id")
+        }
+        controls = set(oracle_baseline_arm_ids(d.source).values())
+        by_arm = {
+            (key if key in controls else referenced_arms[key]): value
+            for key, value in dimensions.items()
+            if key in controls or key in referenced_arms
+        }
+        for arm_id, expected in by_arm.items():
+            with self.subTest(arm=arm_id):
+                row = rows[arm_id]
+                self.assertEqual((row["target"], row["entry_strategy"], row["selector"]),
+                                 expected)
+        # No-DL has no Target regardless of when its economic parameter
+        # family was registered or whether it is an Oracle baseline.
+        for arm_id, arm in STRATEGY_COMPARE_ARMS.items():
+            if arm_id in rows and not arm.get("dl_enabled"):
+                with self.subTest(control=arm_id):
+                    self.assertEqual((rows[arm_id]["target"], rows[arm_id]["selector"]),
+                                     ("", "Default"))
+        # A future accidental conversion of a control to a scored arm fails
+        # before either UI can render it as a baseline.
+        control_id = next(iter(oracle_baseline_arm_ids(d.source).values()))
+        with patch.dict(STRATEGY_COMPARE_ARMS, {
+            control_id: {**STRATEGY_COMPARE_ARMS[control_id], "dl_enabled": True}
+        }):
+            with self.assertRaisesRegex(ValueError, "No-DL control"):
+                oracle_work_display_dimensions(d.source)
 
     def test_formal_four_seed_plan_shows_full_in_strategy_only(self):
         import re
@@ -86,8 +137,12 @@ class OracleParameterFamilyCases(TestCase):
         visible = result["text"]
         self.assertNotIn("T40 (Full)", visible)
         self.assertGreaterEqual(len(re.findall(r"T40\s+Breakout \(Full\)\s+(Exact|Direct)", visible)), 2)
-        self.assertRegex(visible, r"C97\s+Breakout \(Full\)\s+-")
+        self.assertRegex(visible, r"Breakout \(Full\)\s+Default")
         self.assertRegex(visible, r"T40\s+Breakout\s+Exact")
+        self.assertRegex(visible, r"T40\s+Daily \(Min/P18\)\s+Exact")
+        self.assertRegex(visible, r"T40\s+Daily \(Min/P18\)\s+Direct")
+        self.assertIn("Daily (Min/P18)", visible)
+        self.assertNotIn("T40 × Daily", visible)
         self.assertEqual(len(result["seed_set"]), 4)
 
     def test_oracle_human_report_shows_target_not_family_suffix(self):
@@ -122,6 +177,17 @@ class OracleParameterFamilyCases(TestCase):
                     self.assertIn("| T40 | Breakout (Full) | Exact |", visible)
                     self.assertIn("| T40 | Breakout | Exact |", visible)
                     self.assertIn("### T40 (Breakout (Full) / Exact)", visible)
+                    # The reference No-DL control has a blank display Target,
+                    # but must not be paired against itself in the seed table.
+                    paired_heading = oracle.report_contract(
+                        "audit.target_oracle_romd").sections[3].display_title
+                    paired_section = visible.split(
+                        f"## {paired_heading}\n", 1)[1].split("\n## ", 1)[0]
+                    paired_data_lines = [line for line in paired_section.splitlines()
+                                         if line.startswith("| ")]
+                    self.assertEqual(len(paired_data_lines),
+                                     1 + (len(report["control_baselines"]) +
+                                          len(report["oracles"])) * len(seeds))
                 else:
                     self.assertRegex(visible, r"T40\s+Breakout \(Full\)\s+Exact")
 
@@ -129,13 +195,19 @@ class OracleParameterFamilyCases(TestCase):
         d = definition()
         comparisons = resolve_current_oracle_comparisons(d.source)
         baselines = oracle_baseline_arm_ids(d.source)
-        self.assertEqual(baselines, {"min": "C96", "full": "C97"})
+        self.assertEqual(baselines, {"min": "C96", "full": "C97", "daily_min": "C161"})
         scopes = oracle._oracle_strategy_scopes(d)
         self.assertEqual([(name, scope.source["baseline_arm_id"],
                            len(scope.source["oracle_comparisons"])) for name, scope in scopes],
-                         [("Breakout", "C96", 18), ("Daily", "C96", 6),
+                         [("Breakout", "C96", len([row for row in comparisons
+                            if oracle_parameter_family(row) == "min" and
+                            row.get("strategy", "Breakout") == "Breakout"])),
+                          ("Daily", "C96", len([row for row in comparisons
+                            if oracle_parameter_family(row) == "min" and
+                            row.get("strategy", "Breakout") == "Daily"])),
                           ("Breakout::Full", "C97", len([row for row in comparisons
-                          if oracle_parameter_family(row) == "full"]))])
+                            if oracle_parameter_family(row) == "full"])),
+                          ("Daily::Daily_min", "C161", 2)])
         with TemporaryDirectory() as temp:
             root = Path(temp)
             ledger = root / "doc/scientific_contracts/REPORT_CONTRACT_VERSIONS.json"
@@ -146,23 +218,32 @@ class OracleParameterFamilyCases(TestCase):
             overview = collect_target_dl_overview(root)
         self.assertEqual(len(targets), len(comparisons) + len(baselines))
         self.assertEqual(targets, (
-            "C96", *(oracle_comparison_key(row) for row in comparisons
-                     if oracle_parameter_family(row) == "min"),
-            "C97", *(oracle_comparison_key(row) for row in comparisons
-                     if oracle_parameter_family(row) == "full"),
+            *(key for family, control_id in baselines.items()
+              for key in (control_id, *(
+                  oracle_comparison_key(row) for row in comparisons
+                  if oracle_parameter_family(row) == family))),
         ))
-        self.assertEqual(set(targets), {"C96", "C97", *(
+        self.assertEqual(set(targets), {"C96", "C97", "C161", *(
             oracle_comparison_key(row) for row in comparisons)})
         full_arms = {row["strategy"]: (row["target"], row["oracle_romd"])
                      for row in overview["rows"]
                      if row["strategy"] in {"C97", "C153", "C154"}}
         self.assertEqual(set(full_arms), {"C97", "C153", "C154"})
         self.assertTrue(all(metric is None for _target, metric in full_arms.values()))
+        p18 = {row["strategy"]: row for row in overview["rows"]
+               if row["strategy"] in {"C159", "C160", "C161"}}
+        self.assertEqual(set(p18), {"C159", "C160", "C161"})
+        self.assertEqual({p18[arm]["target"] for arm in ("C159", "C160")}, {"T40"})
+        self.assertEqual({p18[arm]["entry_strategy"] for arm in p18}, {"Daily (Min/P18)"})
+        self.assertEqual(p18["C161"]["target"], "")
+        self.assertEqual(p18["C161"]["selector"], "Default")
+        self.assertTrue(all(row["oracle_romd"] is None for row in p18.values()))
 
     def test_reference_arms_use_full_formal_parameters_and_same_t40_truth(self):
         d = definition()
-        min_scoped, daily_scoped, full_scoped = (scope for _name, scope
-                                                  in oracle._oracle_strategy_scopes(d))
+        scopes = {name: scope for name, scope in oracle._oracle_strategy_scopes(d)}
+        min_scoped, daily_scoped, full_scoped, p18_scoped = (
+            scopes[name] for name in ("Breakout", "Daily", "Breakout::Full", "Daily::Daily_min"))
         settings, min_base, min_exact = oracle._contract(min_scoped)
         _settings, full_base, full_exact = oracle._contract(full_scoped)
         min_direct = oracle._direct_arm(min_scoped, settings, min_base, min_exact)
@@ -180,6 +261,16 @@ class OracleParameterFamilyCases(TestCase):
         self.assertEqual(full_plan["aliases"]["T40_Direct"], "T40")
         self.assertEqual(daily_scoped.source["baseline_arm_id"], "C96")
         self.assertNotEqual(full_scoped.output_subdir, min_scoped.output_subdir)
+        _settings, p18_base, p18_exact = oracle._contract(p18_scoped)
+        p18_direct = oracle._direct_arm(p18_scoped, settings, p18_base, p18_exact)
+        self.assertEqual((p18_base.arm_id, p18_exact.arm_id, p18_direct.arm_id),
+                         ("C161", "C159", "C160"))
+        self.assertNotEqual(p18_base.param_source, min_base.param_source)
+        self.assertNotEqual(p18_base.param_source, full_base.param_source)
+        self.assertEqual(oracle._oracle_comparison_plan(p18_scoped)["recipes"]["T40"],
+                         min_plan["recipes"]["T40"])
+        self.assertEqual(oracle._oracle_comparison_plan(p18_scoped)["aliases"]["T40_Direct"], "T40")
+        self.assertNotEqual(p18_scoped.output_subdir, full_scoped.output_subdir)
 
     def test_min_and_full_have_distinct_canonical_optimizer_sources_for_four_seeds(self):
         d = definition()
@@ -199,13 +290,13 @@ class OracleParameterFamilyCases(TestCase):
             for _name, scope in oracle._oracle_strategy_scopes(d):
                 base = scope.source["baseline_arm_id"]
                 plans[base] = oracle._oracle_parameter_reuse_plan(scope, root)
-        self.assertEqual(set(plans), {"C96", "C97"})
-        self.assertNotEqual(plans["C96"]["producer_kwargs"]["training_profile_id"],
-                            plans["C97"]["producer_kwargs"]["training_profile_id"])
-        self.assertEqual(len(plans["C96"]["rows"]), 4)
-        self.assertEqual(len(plans["C97"]["rows"]), 4)
-        self.assertEqual(set(source_kwargs), {plans["C96"]["producer_kwargs"]["training_profile_id"],
-                                             plans["C97"]["producer_kwargs"]["training_profile_id"]})
+        self.assertEqual(set(plans), {"C96", "C97", "C161"})
+        profiles = {base: plan["producer_kwargs"]["training_profile_id"]
+                    for base, plan in plans.items()}
+        self.assertEqual(len(set(profiles.values())), 3)
+        self.assertEqual(profiles["C161"], "broker_cash_daily_min_best_seed42_current")
+        self.assertTrue(all(len(plan["rows"]) == 4 for plan in plans.values()))
+        self.assertEqual(set(source_kwargs), set(profiles.values()))
         self.assertTrue(all(not row["ready"] and row["action"] == "BUILD"
                             for plan in plans.values() for row in plan["rows"]))
 
@@ -373,10 +464,9 @@ class OracleParameterFamilyCases(TestCase):
         settings = get_strategy_comparison_settings(d.source["strategy_profile_id"])
         versions = load_report_contract_versions(Path(__file__).resolve().parents[2])
         current = versions["audit.target_oracle_romd"][-1]
-        keys = ["C96", *(oracle_comparison_key(row) for row in comparisons
-                         if oracle_parameter_family(row) == "min"), "C97",
-                *(oracle_comparison_key(row) for row in comparisons
-                  if oracle_parameter_family(row) == "full")]
+        keys = [baseline for family, arm_id in baselines.items()
+                for baseline in [arm_id] + [oracle_comparison_key(row) for row in comparisons
+                                              if oracle_parameter_family(row) == family]]
         seeds = list(get_robustness_benchmark_policy_snapshot()["resolved_seeds"])
         report = {
             "status": "COMPLETED", "read_only": True, "hindsight_non_pit": True,
@@ -387,9 +477,12 @@ class OracleParameterFamilyCases(TestCase):
             "start_date": "2021-01-01", "end_date": "2026-03-02",
             "baseline": {"target": "C96", "strategy": "Breakout", "seeds": len(seeds),
                          "romd": 9.0, "win_rate_pct": 40.0},
-            "control_baselines": [{"target": "C97", "strategy": "Breakout",
-                                   "parameter_family": "full", "seeds": len(seeds),
-                                   "romd": 14.5, "win_rate_pct": 44.0}],
+            "control_baselines": [
+                {"target": "C97", "strategy": "Breakout", "parameter_family": "full",
+                 "seeds": len(seeds), "romd": 14.5, "win_rate_pct": 44.0},
+                {"target": "C161", "strategy": "Daily", "parameter_family": "daily_min",
+                 "seeds": len(seeds), "romd": 12.5, "win_rate_pct": 47.0},
+            ],
             "oracles": [{"target": row["target"], "strategy": row.get("strategy", "Breakout"),
                          "parameter_family": oracle_parameter_family(row),
                          "comparison_key": oracle_comparison_key(row), "seeds": len(seeds),
@@ -425,9 +518,17 @@ class OracleParameterFamilyCases(TestCase):
             # control is not a completed report, not an implicit C96 alias.
             report["control_baselines"] = []
             self.assertEqual(inspect(), {})
-            report["control_baselines"] = [{"target": "C97", "strategy": "Breakout",
-                                            "parameter_family": "full", "seeds": len(seeds),
-                                            "romd": 14.5, "win_rate_pct": 44.0}]
+            report["control_baselines"] = [
+                {"target": "C97", "strategy": "Breakout", "parameter_family": "full",
+                 "seeds": len(seeds), "romd": 14.5, "win_rate_pct": 44.0},
+                {"target": "C161", "strategy": "Daily", "parameter_family": "daily_min",
+                 "seeds": len(seeds), "romd": 12.5, "win_rate_pct": 47.0},
+            ]
+            report["control_baselines"].pop()
+            self.assertEqual(inspect(), {})  # New family also needs its own control.
+            report["control_baselines"].append(
+                {"target": "C161", "strategy": "Daily", "parameter_family": "daily_min",
+                 "seeds": len(seeds), "romd": 12.5, "win_rate_pct": 47.0})
             report["comparison_reference_arms"].pop("T40_Direct::Full")
             values = inspect()
             self.assertNotIn("T40_Direct::Full", values)
@@ -449,6 +550,18 @@ class OracleParameterFamilyCases(TestCase):
         # counterpart; shared Target/Selector rows remain supported.
         self.assertGreater(len(active), len(d.source["oracle_comparisons"]))
 
+    def test_roster_scored_family_cannot_be_summary_only_without_oracle(self):
+        from config import research_summary as cfg
+        from services.research.target_oracle_application import get_formal_oracle_definition
+        original = cfg.RESEARCH_SUMMARY_ROWS
+        broken = tuple({key: value for key, value in row.items()
+                        if key != "oracle_template_arm_id"}
+                       if row.get("oracle_template_arm_id") == "C145" else row
+                       for row in original)
+        with patch.object(cfg, "RESEARCH_SUMMARY_ROWS", broken):
+            with self.assertRaisesRegex(ValueError, "no executable matching comparison"):
+                get_formal_oracle_definition("breakout_quality")
+
     def test_oracle_authorized_missing_full_parameters_use_own_canonical_producer(self):
         """Missing Full/P17 is built on its own source; Min/P16 remains reused."""
         from services.research import target_oracle_application as app
@@ -457,15 +570,16 @@ class OracleParameterFamilyCases(TestCase):
         from core.training_policy import get_robustness_benchmark_policy_snapshot
         seeds = tuple(get_robustness_benchmark_policy_snapshot()["resolved_seeds"])
         profiles = {"C96": "broker_cash_min_best_seed42_current",
-                    "C97": "broker_cash_full_best_seed42_current"}
+                    "C97": "broker_cash_full_best_seed42_current",
+                    "C161": "broker_cash_daily_min_best_seed42_current"}
         done = {"value": False}
         def inspect(scoped, *, project_root):
             baseline = scoped.source["baseline_arm_id"]
             return {"rows": tuple({
                 "seed": seed,
-                "ready": baseline == "C96" or seed != seeds[-1] or done["value"],
-                "action": "REUSE" if (baseline == "C96" or seed != seeds[-1] or done["value"]) else "BUILD",
-                "status": "READY" if (baseline == "C96" or seed != seeds[-1] or done["value"]) else "MISSING",
+                "ready": baseline != "C97" or seed != seeds[-1] or done["value"],
+                "action": "REUSE" if (baseline != "C97" or seed != seeds[-1] or done["value"]) else "BUILD",
+                "status": "READY" if (baseline != "C97" or seed != seeds[-1] or done["value"]) else "MISSING",
             } for seed in seeds),
                 "producer_kwargs": {"training_profile_id": profiles[baseline]}}
         plans = {
@@ -473,6 +587,8 @@ class OracleParameterFamilyCases(TestCase):
                     "producer_kwargs": {"training_profile_id": profiles["C96"]}},
             "C97": {"seed_set": seeds, "missing": (seeds[-1],),
                     "producer_kwargs": {"training_profile_id": profiles["C97"]}},
+            "C161": {"seed_set": seeds, "missing": (),
+                     "producer_kwargs": {"training_profile_id": profiles["C161"]}},
         }
         with TemporaryDirectory() as temp, \
              patch.object(app, "inspect_oracle_parameter_prerequisites", side_effect=inspect), \
@@ -482,7 +598,8 @@ class OracleParameterFamilyCases(TestCase):
             with self.assertRaisesRegex(RuntimeError, "缺少 C97"):
                 app.ensure_authorized_oracle_parameters(
                     project_root=Path(temp), definition=d,
-                    approved_plan={"parameter_plans": {"C96": plans["C96"]}},
+                    approved_plan={"parameter_plans": {
+                        "C96": plans["C96"], "C161": plans["C161"]}},
                 )
             producer.assert_not_called()
             def build(_root, *, replication_seed, training_profile_id, **kwargs):
@@ -507,11 +624,12 @@ class OracleParameterFamilyCases(TestCase):
         comparisons = resolve_current_oracle_comparisons(d.source)
         def fake_run(scoped, *, preview_only=False, **_kwargs):
             self.assertTrue(preview_only)
-            family = "full" if scoped.source["baseline_arm_id"] == "C97" else "min"
+            family = next(family for family, arm in oracle_baseline_arm_ids(d.source).items()
+                          if arm == scoped.source["baseline_arm_id"])
             base = scoped.source["baseline_arm_id"]
             targets = (base, *(row["target"] for row in scoped.source["oracle_comparisons"]))
             return {"status": "PREVIEW", "preflight": {
-                (seed, target): ("RUN" if family == "full" else "REUSE")
+                (seed, target): ("REUSE" if family == "min" else "RUN")
                 for seed in seeds for target in targets},
                 "benchmark_id": "end_to_end_v1", "start_date": "2021-01-01",
                 "end_date": "2026-03-02", "seed_set": seeds,
@@ -522,11 +640,17 @@ class OracleParameterFamilyCases(TestCase):
         keys = preview["targets"]
         self.assertEqual(len(keys), len(comparisons) + len(oracle_baseline_arm_ids(d.source)))
         self.assertEqual(len(preview["preflight"]), len(keys) * len(seeds))
+        min_keys = {"C96", *(oracle_comparison_key(row) for row in comparisons
+                              if oracle_parameter_family(row) == "min")}
+        new_keys = {"C161", "T40::Daily::Daily_min", "T40_Direct::Daily::Daily_min"}
         self.assertTrue(all(preview["preflight"][(seed, key)] == "REUSE"
-                            for seed in seeds for key in keys[:25]))
+                            for seed in seeds for key in min_keys))
         self.assertTrue(all(preview["preflight"][(seed, key)] == "RUN"
-                            for seed in seeds for key in keys[25:]))
-        self.assertEqual(set(preview["parameter_plans"]), {"C96", "C97"})
+                            for seed in seeds for key in keys if key not in min_keys))
+        self.assertTrue(new_keys.issubset(set(keys)))
+        self.assertEqual(set(preview["parameter_plans"]), {"C96", "C97", "C161"})
+        self.assertNotEqual(preview["parameter_plans"]["C161"]["producer_kwargs"],
+                            preview["parameter_plans"]["C96"]["producer_kwargs"])
         self.assertNotEqual(preview["parameter_plans"]["C96"]["producer_kwargs"],
                             preview["parameter_plans"]["C97"]["producer_kwargs"])
         self.assertEqual(tuple(row["target"] for row in comparisons if
@@ -692,8 +816,8 @@ class BaselineRobustnessReuseCases(TestCase):
     def test_controls_display_same_names_and_no_oracle_metrics(self):
         from core.audit_registry import oracle_baseline_display_name
         d = definition()
-        for arm_id in ("C96", "C97"):
-            self.assertEqual(oracle_baseline_display_name(d.source, arm_id), arm_id)
+        for arm_id in oracle_baseline_arm_ids(d.source).values():
+            self.assertEqual(oracle_baseline_display_name(d.source, arm_id), "")
         with self.assertRaisesRegex(ValueError, "Unknown Oracle no-DL control"):
             oracle_baseline_display_name(d.source, "C153")
         with TemporaryDirectory() as tmp:
@@ -704,8 +828,9 @@ class BaselineRobustnessReuseCases(TestCase):
                                 "doc/scientific_contracts/REPORT_CONTRACT_VERSIONS.json").read_bytes())
             result = collect_target_dl_overview(root)
             rows = {row["strategy"]: row for row in result["rows"]}
-            for arm_id in ("C96", "C97"):
-                self.assertEqual(rows[arm_id]["target"], arm_id)
+            for arm_id in ("C96", "C97", "C98", "C161"):
+                self.assertEqual(rows[arm_id]["target"], "")
+                self.assertEqual(rows[arm_id]["selector"], "Default")
                 self.assertIsNone(rows[arm_id]["oracle_romd"])
                 self.assertIsNone(rows[arm_id]["win_rate_pct"])
 

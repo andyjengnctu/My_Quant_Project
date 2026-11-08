@@ -545,9 +545,11 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
                    by_arm[arm]["selector"], by_arm[arm]["model"])
                   for arm in ("C159", "C160", "C161")),
         )
-        check_true("summary_previous_baseline_and_non_oracle_target_preserved",
-                   (by_arm["C98"]["target"], by_arm["C98"]["entry_strategy"])
-                   == ("C98", "Breakout (Full)")
+        check_true("summary_no_dl_controls_have_no_target_and_other_targets_preserved",
+                   all(by_arm[arm]["target"] == ""
+                           and by_arm[arm]["selector"] == "Default"
+                           for arm in ("C96", "C97", "C98", "C161"))
+                   and by_arm["C98"]["entry_strategy"] == "Breakout (Full)"
                    and by_arm["C103"]["target"] == "D40 Safety + Conditional MFE")
         corrupted = tuple({**group, "display_target": "T40 × Daily (Min/P18)"}
                           if any(binding.get("arm_id") == "C159"

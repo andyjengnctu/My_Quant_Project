@@ -22,13 +22,28 @@ def get_formal_oracle_definition(module_id: str):
     )
     if len(definitions) != 1:
         raise RuntimeError("Target 驗證必須只有一個啟用的正式 Oracle 定義")
+    # Both the Summary and Oracle entry must reject an active additional-
+    # parameter-family DL arm whose Target binding was omitted.  The roster
+    # determines membership, while the Compare registry remains the single
+    # owner of the arm's actual execution and parameter contracts.
+    from config.strategy_compare import STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE
+    from core.audit_registry import validate_oracle_compare_family_coverage
+    from core.strategy_compare_policy import get_strategy_compare_suite
+    from core.strategy_compare_registry import STRATEGY_COMPARE_ARMS, STRATEGY_COMPARE_PROFILES
+
+    suite_id = STRATEGY_COMPARE_PROFILES[STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE]["suite_id"]
+    validate_oracle_compare_family_coverage(
+        definitions[0].source,
+        active_arm_ids=get_strategy_compare_suite(suite_id)["arm_ids"],
+        arm_registry=STRATEGY_COMPARE_ARMS,
+    )
     return definitions[0]
 
 
 def ensure_authorized_oracle_parameters(
     *, project_root: Path, definition, approved_plan: Mapping[str, Any],
 ) -> dict[str, int]:
-    """Build only approved missing P16/P17 seeds, then reattest every source.
+    """Build only approved missing canonical-family seeds, then reattest every source.
 
     The displayed, read-only plan is the authorization boundary. Validate all
     parameter families first; never begin fitting if any seed is in conflict or

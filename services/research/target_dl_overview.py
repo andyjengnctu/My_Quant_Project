@@ -15,10 +15,12 @@ from statistics import fmean
 from pathlib import Path
 from typing import Any, Mapping
 
-from core.research_summary import get_research_summary_rows
+from core.research_summary import (get_research_summary_rows, research_summary_entry_label,
+                                   research_summary_selector_label)
 from core.audit_policy import get_active_audit_module_id
 from core.audit_registry import (resolve_current_oracle_comparisons, oracle_comparison_key,
                                  oracle_parameter_family, oracle_baseline_arm_ids, oracle_baseline_display_name,
+                                 oracle_work_inventory, oracle_work_display_dimensions,
                                  oracle_display_strategy,
                                  validate_oracle_compare_family_coverage,
                                  oracle_supervised_target_id, oracle_target_semantics)
@@ -56,9 +58,7 @@ from core.strategy_compare_policy import (
 )
 from core.strategy_compare_registry import (
     STRATEGY_COMPARE_ARMS, STRATEGY_COMPARE_PROFILES, STRATEGY_DL_SOURCES,
-    STRATEGY_EXPERIMENTAL_PARAM_SOURCES,
 )
-from config.strategy_params import STRATEGY_PARAM_PROFILES
 from core.positive_score_admission import (
     POSITIVE_P_CLASS_COLUMN, requires_positive_score, uses_primary_positive_classifier,
 )
@@ -91,29 +91,8 @@ _DIRECT_MODE = "resource-aware-continuous-score-no-k-no-r0"
 
 
 def _summary_entry_label(arm: Mapping[str, Any], *, family: str) -> tuple[str, bool]:
-    """Display the entry strategy using the canonical Optimizer's parameter identity.
-
-    A Daily-fitted parameter profile differs from merely disabling Breakout
-    entry on Breakout-fitted P16/P17. The distinction is reported under Strategy,
-    never copied into the scientific Target or a persisted replay identity.
-    """
-    entry = str(arm.get("entry_strategy", "Breakout"))
-    source = STRATEGY_EXPERIMENTAL_PARAM_SOURCES.get(str(arm.get("param_source") or ""), {})
-    profile_id = (source.get("builder") or {}).get("options", {}).get("training_profile_id")
-    profile = STRATEGY_PARAM_PROFILES.get(profile_id, {}) if profile_id else {}
-    if profile.get("strategy_id") != "daily":
-        return oracle_display_strategy(strategy=entry, parameter_family=family), False
-    # One producer defines the fitting profile, parameter set and family. A
-    # stale/mismatched registry link must fail rather than mislabel a strategy.
-    parameter_set = str(profile.get("parameter_set_identity") or "")
-    registered_set = ((source.get("artifact_contract") or {}).get(
-        "breakout_quality_param_adaptation") or {}).get("parameter_set")
-    filter_profile = str(profile.get("filter_profile") or "")
-    if (entry != "Daily" or not parameter_set.startswith("PARAM-")
-            or not parameter_set[6:] or not filter_profile
-            or registered_set != parameter_set):
-        raise ValueError(f"Summary Daily parameter/entry identity mismatch: {arm.get('param_source')}")
-    return f"{entry} ({filter_profile.capitalize()}/{parameter_set[6:]})", True
+    """Use the same Optimizer-owned parameter label as formal Oracle output."""
+    return research_summary_entry_label(arm, family=family)
 
 
 def _summary_model_target_labels(groups: tuple[Mapping[str, Any], ...]) -> dict[str, set[str]]:
@@ -197,11 +176,7 @@ def _oracle_rows(root: Path, definition, versions: Mapping[str, tuple]):
     # remains unchanged and is displayed separately.  Old Breakout report
     # rows retain their original Target key, preserving historical REUSE.
     baselines = oracle_baseline_arm_ids(definition.source)
-    targets = (baseline, *(oracle_comparison_key(item) for item in comparisons
-                           if oracle_parameter_family(item) == "min"),
-               *(arm_id for family, arm_id in baselines.items() if family != "min"),
-               *(oracle_comparison_key(item) for item in comparisons
-                 if oracle_parameter_family(item) != "min"))
+    targets = oracle_work_inventory(definition.source)
     if len(set(targets)) != len(targets):
         raise ValueError("Oracle Target x Strategy identities are not unique")
     by_comparison = {oracle_comparison_key(item): item for item in comparisons}
@@ -282,9 +257,13 @@ def _oracle_rows(root: Path, definition, versions: Mapping[str, tuple]):
             target = str(item.get("target") or "")
             strategy = str(item.get("strategy", "Breakout"))
             if target in control_arm_ids:
-                key = target if strategy == "Breakout" else ""
+                # A no-DL control is the registered baseline arm, not a
+                # Breakout-specific Target. Daily controls are equally valid.
+                key = target
                 expected_family = next(f for f, arm_id in baselines.items() if arm_id == target)
-                if item.get("parameter_family") not in (None, expected_family):
+                registered_entry = str(STRATEGY_COMPARE_ARMS[target].get("entry_strategy", "Breakout"))
+                if (strategy != registered_entry or
+                        item.get("parameter_family") not in (None, expected_family)):
                     metrics.clear()
                     break
             else:
@@ -1120,30 +1099,9 @@ def collect_target_dl_overview(project_root: Path) -> dict[str, Any]:
         }
         for target in possible_targets:
             model_map.setdefault(target, []).append(model_evidence[profile])
-    # Presentation projection only; signed comparison IDs and supervised
-    # Target semantics remain unchanged across Min/P16 and Full/P17.
-    entry_strategies = {
-        oracle_comparison_key(item): oracle_display_strategy(
-            strategy=oracle_target_semantics(item)[2],
-            parameter_family=oracle_parameter_family(item),
-        ) for item in comparisons
-    }
-    entry_strategies.update({
-        arm_id: oracle_display_strategy(
-            strategy=str(STRATEGY_COMPARE_ARMS[arm_id].get("entry_strategy", "Breakout")),
-            parameter_family=family,
-        ) for family, arm_id in oracle_baseline_arm_ids(definition.source).items()
-    })
-    display_targets = {
-        oracle_comparison_key(item): oracle_target_semantics(item)[0]
-        for item in comparisons
-    }
-    # Same label source as [1][1]; unscored controls are Strategy arms,
-    # not a differently named family of hypothetical Oracle Targets.
-    for control_id in oracle_baseline_arm_ids(definition.source).values():
-        display_targets[control_id] = oracle_baseline_display_name(definition.source, control_id)
-    display_selectors = {oracle_comparison_key(item): oracle_target_semantics(item)[1]
-                         for item in comparisons}
+    # One presentation projection shared verbatim with formal Replay [2].
+    # No display field participates in FIT, signed receipts or REUSE identity.
+    display = oracle_work_display_dimensions(definition.source)
     rows = []
     summary_model_targets = _summary_model_target_labels(get_research_summary_rows())
 
@@ -1186,9 +1144,9 @@ def collect_target_dl_overview(project_root: Path) -> dict[str, Any]:
             # Unscored controls do not have hypothetical Oracle performance.
             is_baseline = target in oracle_baseline_arm_ids(definition.source).values()
             append_row(
-                target=display_targets.get(target, target),
-                entry=entry_strategies.get(target, "Breakout"),
-                selector=display_selectors.get(target, "-"), model=model, arm=arm,
+                target=display[target][0],
+                entry=display[target][1],
+                selector=display[target][2], model=model, arm=arm,
                 metrics={} if is_baseline else (oracle.get(target) or {}), classifier=classifier,
             )
 
@@ -1208,18 +1166,13 @@ def collect_target_dl_overview(project_root: Path) -> dict[str, Any]:
             arm = STRATEGY_COMPARE_ARMS.get(arm_id, {})
             pair = binding.get("rank_model")
             model = model_evidence.get(pair[1], {}) if pair else {}
-            mode = arm.get("dl_runtime_mode")
-            entry_label, daily_fitted = _summary_entry_label(
+            entry_label, _daily_fitted = _summary_entry_label(
                 arm, family=str(group.get("parameter_family", "min")),
             )
-            selector = ("Exact" if mode == _EXACT_MODE else
-                        "Direct" if mode == _DIRECT_MODE else
-                        "Default" if daily_fitted and not arm.get("dl_enabled") else "-")
-            # Historical no-DL baseline IDs remain visible as their existing
-            # labels; an independently fitted Daily no-DL arm has no Target.
+            selector = research_summary_selector_label(arm)
+            # No-DL controls never have a supervised Target. Arm IDs stay in
+            # the Strategy ID column and in signed Replay identities only.
             target = _summary_scientific_target(group, binding, summary_model_targets)
-            if not target and not pair and not daily_fitted and arm_id:
-                target = arm_id
             append_row(
                 target=target, entry=entry_label,
                 selector=selector, model=model, arm=arm_id, metrics={},

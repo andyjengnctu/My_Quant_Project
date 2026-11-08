@@ -535,7 +535,11 @@ class PositiveNetPnlContractCases(TestCase):
                 })
             # A historical signed report cannot claim newly registered Full/P17
             # Oracle items. It retains only its own completed Min inventory.
-            full_keys = {"C97"} | {
+            from core.audit_registry import oracle_baseline_arm_ids
+            full_keys = {
+                control_id for family, control_id in oracle_baseline_arm_ids(definition.source).items()
+                if family != "min"
+            } | {
                 oracle_comparison_key(row) for row in comparisons
                 if oracle_parameter_family(row) != "min"
             }

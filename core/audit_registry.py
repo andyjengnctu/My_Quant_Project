@@ -13,7 +13,7 @@ from config.market_data import RESEARCH_REQUIRED_CUTOFF
 from core.research_summary import (
     get_research_summary_oracle_comparisons,
     get_research_summary_oracle_source_catalog,
-    get_research_summary_baseline_arm_ids,
+    get_research_summary_baseline_arm_ids, research_summary_entry_label,
 )
 
 from core.breakout_quality_registry import (
@@ -311,6 +311,17 @@ def oracle_display_strategy(*, strategy: str, parameter_family: str) -> str:
     if name not in {"Breakout", "Daily"}:
         raise ValueError(f"Invalid Oracle display entry strategy: {name}")
     family = oracle_parameter_family({"parameter_family": parameter_family})
+    # Non-legacy families must display the *actual* registered Optimizer
+    # lineage, not an invented title derived from the family identifier.
+    if family not in {"min", "full"}:
+        baseline_id = get_research_summary_baseline_arm_ids().get(family)
+        if not baseline_id:
+            raise ValueError(f"Oracle display family has no registered control: {family}")
+        from core.strategy_compare_registry import STRATEGY_COMPARE_ARMS
+        control = STRATEGY_COMPARE_ARMS.get(baseline_id)
+        if not control or str(control.get("entry_strategy", "Breakout")) != name:
+            raise ValueError(f"Oracle display family/control entry mismatch: {family}")
+        return research_summary_entry_label(control, family=family)[0]
     return name if family == "min" else f"{name} ({family.capitalize()})"
 
 
@@ -357,9 +368,77 @@ def oracle_baseline_display_name(source: Mapping[str, Any], arm_id: str) -> str:
     identity is displayed without a family-specific presentation alias.
     """
     arm = str(arm_id)
-    if arm not in oracle_baseline_arm_ids(source).values():
+    baselines = oracle_baseline_arm_ids(source)
+    family = next((family for family, baseline_id in baselines.items()
+                   if baseline_id == arm), None)
+    if family is None:
         raise ValueError(f"Unknown Oracle no-DL control: {arm}")
-    return arm
+    # Every no-DL control has an internal arm/receipt identity, but none has
+    # a supervised Target. Historical C96/C97 keys stay untouched on disk.
+    return ""
+
+
+
+def oracle_work_inventory(source: Mapping[str, Any]) -> tuple[str, ...]:
+    """Single ordered inventory of economic controls and scored treatments.
+
+    Presentation, read-only result projection and replay authorization consume
+    this same list. A new parameter family adds one control and its own
+    treatments without perturbing earlier families or their receipt keys.
+    """
+    baselines = oracle_baseline_arm_ids(source)
+    rows = resolve_current_oracle_comparisons(dict(source))
+    keys = tuple(
+        key
+        for family, control_id in baselines.items()
+        for key in (control_id, *(
+            oracle_comparison_key(row) for row in rows
+            if oracle_parameter_family(row) == family
+        ))
+    )
+    if len(keys) != len(set(keys)):
+        raise ValueError("Oracle control/treatment inventory has duplicate identities")
+    return keys
+
+
+
+def oracle_work_display_dimensions(
+    source: Mapping[str, Any],
+) -> dict[str, tuple[str, str, str]]:
+    """Canonical read-only Target / Strategy / Selector for the Oracle roster.
+
+    Execution identities and receipt keys are intentionally untouched. Both
+    Summary and Target validation render these dimensions from this function;
+    adding another registered economic parameter family cannot require a
+    parallel display mapping in either menu.
+    """
+    from core.research_summary import research_summary_selector_label
+    from core.strategy_compare_registry import STRATEGY_COMPARE_ARMS
+
+    display: dict[str, tuple[str, str, str]] = {}
+    for family, control_id in oracle_baseline_arm_ids(source).items():
+        arm = STRATEGY_COMPARE_ARMS.get(control_id)
+        if arm is None or arm.get("dl_enabled"):
+            raise ValueError(f"Oracle No-DL control is missing or scored: {control_id}")
+        strategy = str(arm.get("entry_strategy", "Breakout"))
+        display[control_id] = (
+            oracle_baseline_display_name(source, control_id),
+            oracle_display_strategy(strategy=strategy, parameter_family=family),
+            research_summary_selector_label(arm),
+        )
+    for row in resolve_current_oracle_comparisons(dict(source)):
+        target, selector, strategy = oracle_target_semantics(row)
+        key = oracle_comparison_key(row)
+        display[key] = (
+            target,
+            oracle_display_strategy(strategy=strategy,
+                                    parameter_family=oracle_parameter_family(row)),
+            selector,
+        )
+    ordered = oracle_work_inventory(source)
+    if set(display) != set(ordered):
+        raise ValueError("Oracle display dimensions and executable inventory differ")
+    return {key: display[key] for key in ordered}
 
 
 def validate_oracle_compare_family_coverage(
@@ -459,6 +538,8 @@ __all__ = [
     "oracle_parameter_family",
     "oracle_baseline_arm_ids",
     "oracle_baseline_display_name",
+    "oracle_work_inventory",
+    "oracle_work_display_dimensions",
     "oracle_display_strategy",
     "validate_oracle_compare_family_coverage",
     "oracle_target_semantics",

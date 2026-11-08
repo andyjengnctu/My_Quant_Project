@@ -15,8 +15,45 @@ def get_research_summary_rows() -> tuple[dict[str, Any], ...]:
     rows = cfg.RESEARCH_SUMMARY_ROWS
     if not isinstance(rows, (tuple, list)) or not rows:
         raise ValueError("Research Summary roster must be a nonempty ordered list")
+    # An Oracle binding may inherit an existing, approved perfect-score recipe
+    # without replicating Target/selector/provider/description in another arm.
+    # Resolve the full roster first: a reference may precede its template.
+    oracle_templates: dict[str, Mapping[str, Any]] = {}
+    for registered in rows:
+        if not isinstance(registered, Mapping):
+            raise ValueError("Research Summary row must be a mapping")
+        if "oracle" in registered:
+            for binding in registered.get("bindings", ()):
+                arm_id = binding.get("arm_id")
+                if arm_id:
+                    if arm_id in oracle_templates:
+                        raise ValueError(f"Duplicate Summary Oracle template arm: {arm_id}")
+                    oracle_templates[arm_id] = registered
     selected = []
-    for row in rows:
+    for raw_row in rows:
+        row = dict(raw_row)
+        template_arm = row.get("oracle_template_arm_id")
+        if template_arm is not None:
+            template = oracle_templates.get(template_arm)
+            bindings = tuple(row.get("bindings", ()))
+            if (template is None or not template.get("enabled", True)
+                    or not template["oracle"].get("enabled", True)
+                    or "oracle" in row or "arm_id" in row
+                    or len(bindings) != 1 or not bindings[0].get("arm_id")
+                    or not isinstance(row.get("parameter_family"), str)
+                    or not row["parameter_family"].strip()):
+                raise ValueError(f"Invalid Summary Oracle template binding: {template_arm}")
+            template_bindings = tuple(b for b in template.get("bindings", ())
+                                      if b.get("arm_id") == template_arm)
+            if (len(template_bindings) != 1
+                    or any(bindings[0].get(role) != template_bindings[0].get(role)
+                           for role in ("rank_model", "positive_model"))):
+                raise ValueError(f"Summary Oracle template changes supervised models: {template_arm}")
+            row["oracle"] = {
+                **template["oracle"],
+                "strategy_arm_id": bindings[0]["arm_id"],
+                "parameter_family": row["parameter_family"],
+            }
         if not isinstance(row, Mapping):
             raise ValueError("Research Summary row must be a mapping")
         if not any(key in row for key in ("arm_id", "oracle", "bindings")):
@@ -121,6 +158,57 @@ def get_research_summary_model_profiles() -> tuple[tuple[str, str], ...]:
                         raise ValueError(f"Conflicting Summary model identity: {pair!r}")
                     result.append(pair)
     return tuple(result)
+
+
+
+def research_summary_entry_label(
+    arm: Mapping[str, Any], *, family: str = "min",
+) -> tuple[str, bool]:
+    """Canonical strategy display from the actual Optimizer parameter lineage.
+
+    An independently daily-fitted Min profile is NOT a Breakout-fitted Min
+    with the entry filter disabled. No scientific Target or Replay key uses
+    this presentation-only label.
+    """
+    entry = str(arm.get("entry_strategy", "Breakout"))
+    from core.strategy_compare_registry import STRATEGY_EXPERIMENTAL_PARAM_SOURCES
+    from config.strategy_params import STRATEGY_PARAM_PROFILES
+
+    source = STRATEGY_EXPERIMENTAL_PARAM_SOURCES.get(str(arm.get("param_source") or ""), {})
+    profile_id = (source.get("builder") or {}).get("options", {}).get("training_profile_id")
+    profile = STRATEGY_PARAM_PROFILES.get(profile_id, {}) if profile_id else {}
+    if profile.get("strategy_id") != "daily":
+        return entry if family == "min" else f"{entry} ({family.capitalize()})", False
+    parameter_set = str(profile.get("parameter_set_identity") or "")
+    registered_set = ((source.get("artifact_contract") or {}).get(
+        "breakout_quality_param_adaptation") or {}).get("parameter_set")
+    filter_profile = str(profile.get("filter_profile") or "")
+    if (entry != "Daily" or not parameter_set.startswith("PARAM-")
+            or not parameter_set[6:] or not filter_profile
+            or registered_set != parameter_set):
+        raise ValueError(f"Summary Daily parameter/entry identity mismatch: {arm.get('param_source')}")
+    return f"{entry} ({filter_profile.capitalize()}/{parameter_set[6:]})", True
+
+
+
+def research_summary_selector_label(arm: Mapping[str, Any]) -> str:
+    """Selector column from the execution contract, never an arm name.
+
+    No-DL uses the canonical default selection. Unknown scored selectors are
+    a contract error, not a silent '-' or display-only exception.
+    """
+    if not arm.get("dl_enabled"):
+        if arm.get("dl_runtime_mode") is not None:
+            raise ValueError("No-DL strategy unexpectedly declares a DL selector")
+        return "Default"
+    modes = {
+        "resource-aware-continuous-score-constrained-optimal": "Exact",
+        "resource-aware-continuous-score-no-k-no-r0": "Direct",
+    }
+    mode = arm.get("dl_runtime_mode")
+    if mode not in modes:
+        raise ValueError(f"Unsupported scored Strategy selector: {mode!r}")
+    return modes[mode]
 
 
 def validate_research_summary_strategy_bindings(
