@@ -341,6 +341,64 @@ class ScientificVersionCases(TestCase):
         self.assertEqual(rank_rows[0]["rho_seeds"], (101, 102, 103, 104))
         self.assertFalse(any(row["model"] == "MR-13CP" for row in rows))
 
+    def test_rolling_standard_sop_is_read_from_output_not_model_fit_tree(self):
+        """The approved negative Rolling rho survives a stale comparison inventory."""
+        import hashlib
+        from core.breakout_quality_registry import (
+            DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_HEAD_WEIGHTED_LISTWISE_PROFILE,
+            get_continuous_ranker_research_spec,
+        )
+        from core.report_contract_versions import load_report_contract_versions
+        from core.research_report_contract import persistent_report_contract_fingerprint
+        from filters.breakout_quality.paths import (
+            resolve_filter_point_in_time_dir, resolve_filter_model_output_dir,
+        )
+        from services.research.target_dl_overview import (
+            _model_paths, _model_fit_publication_dir, _single_model_rho,
+            _rolling_fit_version_current,
+        )
+        versions = load_report_contract_versions(Path(__file__).resolve().parents[2])
+        profile = DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_HEAD_WEIGHTED_LISTWISE_PROFILE
+        filter_id = "breakout_quality_v1"
+        architecture = get_breakout_quality_experiment_profile(profile).model_architecture
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            report, markdown = _model_paths(root, filter_id=filter_id, profile=profile)
+            self.assertEqual(
+                report.parent,
+                resolve_filter_model_output_dir(root, filter_id, architecture, profile) / "point_in_time",
+            )
+            self.assertNotEqual(
+                report.parent,
+                resolve_filter_point_in_time_dir(root, filter_id, architecture, profile),
+            )
+            self.assertEqual(
+                _model_fit_publication_dir(root, filter_id=filter_id, profile=profile,
+                                           evaluation_mode="rolling_oos"),
+                resolve_filter_point_in_time_dir(root, filter_id, architecture, profile),
+            )
+            markdown.parent.mkdir(parents=True)
+            markdown.write_text("approved negative Rolling metric\n", encoding="utf-8")
+            _write_json(report, {
+                "report_id": "model.standard_sop",
+                "report_version": versions["model.standard_sop"][-1]["version"],
+                "report_contract_fingerprint": persistent_report_contract_fingerprint("model.standard_sop"),
+                "markdown_sha256": hashlib.sha256(markdown.read_text().encode()).hexdigest(),
+                "profile": profile, "filter_id": filter_id,
+                "model_research_id": get_continuous_ranker_research_spec(profile).model_research_id,
+                "evaluation_mode": "rolling_oos",
+                "standard_model_sop": {"evaluation_mode": "rolling_oos", "split_metrics": {
+                    "oos": {"mean_daily_spearman": -0.05575566460937493},
+                }},
+            })
+            self.assertTrue(_rolling_fit_version_current(root, filter_id=filter_id, profile=profile))
+            self.assertAlmostEqual(_single_model_rho(
+                report, markdown, filter_id=filter_id, profile=profile, versions=versions,
+                fit_publication_dir=_model_fit_publication_dir(
+                    root, filter_id=filter_id, profile=profile, evaluation_mode="rolling_oos",
+                ),
+            ), -0.05575566460937493)
+
     def test_old_model_and_strategy_results_blank_until_matching_v2(self):
         import hashlib
         from core.breakout_quality_fit_contract_version import current_fit_contract_artifact_identity
@@ -358,7 +416,9 @@ class ScientificVersionCases(TestCase):
             root = Path(tmp)
             publication = root / "model_rolling"
             _write_rolling(publication, VERSIONED_PROFILE, legacy=True)
-            md = publication / "standard_model_report.md"
+            report_dir = root / "output_rolling"
+            report_dir.mkdir()
+            md = report_dir / "standard_model_report.md"
             md.write_text("valid synthetic Standard SOP\n", encoding="utf-8")
             payload = {
                 "report_id": "model.standard_sop", "report_version": versions["model.standard_sop"][-1]["version"],
@@ -368,11 +428,12 @@ class ScientificVersionCases(TestCase):
                 "markdown_sha256": hashlib.sha256(md.read_text().encode()).hexdigest(),
                 "standard_model_sop": {"evaluation_mode": "rolling_oos", "split_metrics": {"oos": {"mean_daily_spearman": 0.11}}},
             }
-            report = publication / "standard_model_report.json"
+            report = report_dir / "standard_model_report.json"
             def read():
                 return _published_model_report(
                     report, md, profile=VERSIONED_PROFILE, filter_id="breakout_quality_v1",
                     evaluation_mode="rolling_oos", versions=versions,
+                    fit_publication_dir=publication,
                 )
             _write_json(report, payload)
             self.assertIsNone(read())  # Old v1 report must not appear as v2.

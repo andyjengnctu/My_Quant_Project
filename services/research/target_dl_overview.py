@@ -65,6 +65,7 @@ from filters.breakout_quality.strategy_compare_pit_contract import (
 from filters.breakout_quality.ranking_score_store import SCORE_SOURCE_SELECTION_POINT_IN_TIME
 from filters.breakout_quality.paths import (
     resolve_filter_point_in_time_dir,
+    resolve_filter_model_dir,
     resolve_filter_model_output_dir,
     resolve_filter_output_dir,
 )
@@ -349,18 +350,32 @@ def _model_paths(root: Path, *, filter_id: str, profile: str,
     registered = get_breakout_quality_experiment_profile(profile)
     from core.breakout_quality_policy import BREAKOUT_QUALITY_WORKFLOW_MODEL_ARCHITECTURE
     architecture = str(registered.model_architecture or BREAKOUT_QUALITY_WORKFLOW_MODEL_ARCHITECTURE)
+    # AI: Standard SOP reports are EVIDENCE under outputs/, not FIT manifests
+    # under models/. The latter are consulted separately for FIT lineage.
+    directory = resolve_filter_model_output_dir(root, filter_id, architecture, profile)
     if evaluation_mode == "rolling_oos":
-        directory = resolve_filter_point_in_time_dir(root, filter_id, architecture, profile)
-    elif evaluation_mode == "forward_oos":
-        directory = resolve_filter_model_output_dir(root, filter_id, architecture, profile)
-    else:
+        directory = directory / "point_in_time"
+    elif evaluation_mode != "forward_oos":
         raise ValueError(f"Unsupported Standard Model SOP evaluation_mode: {evaluation_mode}")
     return directory / "standard_model_report.json", directory / "standard_model_report.md"
 
 
+def _model_fit_publication_dir(root: Path, *, filter_id: str, profile: str,
+                               evaluation_mode: str) -> Path:
+    registered = get_breakout_quality_experiment_profile(profile)
+    from core.breakout_quality_policy import BREAKOUT_QUALITY_WORKFLOW_MODEL_ARCHITECTURE
+    architecture = str(registered.model_architecture or BREAKOUT_QUALITY_WORKFLOW_MODEL_ARCHITECTURE)
+    if evaluation_mode == "rolling_oos":
+        return resolve_filter_point_in_time_dir(root, filter_id, architecture, profile)
+    if evaluation_mode == "forward_oos":
+        return resolve_filter_model_dir(root, filter_id, architecture, profile)
+    raise ValueError(f"Unsupported Standard Model SOP evaluation_mode: {evaluation_mode}")
+
+
 def _published_model_report(path: Path, markdown: Path, *, profile: str,
                             filter_id: str, evaluation_mode: str,
-                            versions: Mapping[str, tuple]) -> dict[str, Any] | None:
+                            versions: Mapping[str, tuple],
+                            fit_publication_dir: Path | None = None) -> dict[str, Any] | None:
     payload = _json(path)
     if not payload or not markdown.is_file() or not _approved(payload, "model.standard_sop", versions):
         return None
@@ -382,8 +397,12 @@ def _published_model_report(path: Path, markdown: Path, *, profile: str,
         # Fold has been rebuilt. Publishing v2 EVIDENCE creates a fresh report.
         if payload.get("fit_contract_version") != lineage["version"]:
             return None
+        # AI: A report in outputs/ cannot prove a versioned FIT in models/.
+        # Reject an unlocated FIT rather than accepting report metadata alone.
+        if fit_publication_dir is None:
+            return None
         state, _ = published_fit_contract_version_state(
-            experiment_profile=profile, publication_dir=path.parent,
+            experiment_profile=profile, publication_dir=fit_publication_dir,
             rolling=evaluation_mode == "rolling_oos",
         )
         if state != "CURRENT":
@@ -395,10 +414,12 @@ def _published_model_report(path: Path, markdown: Path, *, profile: str,
 
 
 def _single_model_rho(path: Path, markdown: Path, *, profile: str, filter_id: str,
-                      versions: Mapping[str, tuple]) -> float | None:
+                      versions: Mapping[str, tuple],
+                      fit_publication_dir: Path | None = None) -> float | None:
     payload = _published_model_report(
         path, markdown, profile=profile, filter_id=filter_id,
         evaluation_mode="rolling_oos", versions=versions,
+        fit_publication_dir=fit_publication_dir,
     )
     if payload is None:
         return None
@@ -411,9 +432,12 @@ def _rolling_fit_version_current(root: Path, *, filter_id: str, profile: str) ->
     """A v2+ model's published metrics need a current canonical FIT owner."""
     if current_fit_contract_artifact_identity(profile) is None:
         return True  # Preserve existing v1 publication and historical comparisons.
-    report, _ = _model_paths(root, filter_id=filter_id, profile=profile)
     state, _ = published_fit_contract_version_state(
-        experiment_profile=profile, publication_dir=report.parent, rolling=True,
+        experiment_profile=profile,
+        publication_dir=_model_fit_publication_dir(
+            root, filter_id=filter_id, profile=profile, evaluation_mode="rolling_oos",
+        ),
+        rolling=True,
     )
     return state == "CURRENT"
 
@@ -939,8 +963,12 @@ def collect_target_dl_overview(project_root: Path) -> dict[str, Any]:
             continue
         model = get_continuous_ranker_research_spec(profile)
         json_path, md_path = _model_paths(root, filter_id=filter_id, profile=profile)
-        rolling_rho = _single_model_rho(json_path, md_path, profile=profile,
-                                        filter_id=filter_id, versions=versions)
+        rolling_rho = _single_model_rho(
+            json_path, md_path, profile=profile, filter_id=filter_id, versions=versions,
+            fit_publication_dir=_model_fit_publication_dir(
+                root, filter_id=filter_id, profile=profile, evaluation_mode="rolling_oos",
+            ),
+        )
         if rolling_rho is None:
             comparison = comparison_rolling.get(profile)
             rolling_rho = comparison[0] if comparison else None
@@ -954,6 +982,9 @@ def collect_target_dl_overview(project_root: Path) -> dict[str, Any]:
         published_forward = _published_model_report(
             forward_json, forward_md, profile=profile, filter_id=filter_id,
             evaluation_mode="forward_oos", versions=versions,
+            fit_publication_dir=_model_fit_publication_dir(
+                root, filter_id=filter_id, profile=profile, evaluation_mode="forward_oos",
+            ),
         ) is not None
         if (profile not in active and rolling_rho is None and robust_rho is None
                 and not published_forward and profile not in historical_strategy_profiles
