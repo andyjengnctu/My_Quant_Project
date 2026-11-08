@@ -416,30 +416,18 @@ def _run_reusable_audit_method(module_id: str, method_id: str) -> int:
     return 0
 
 
+def _show_research_summary() -> int:
+    from services.research.target_dl_overview import (
+        collect_target_dl_overview, render_target_dl_overview,
+    )
+    print("\n" + render_target_dl_overview(collect_target_dl_overview(PROJECT_ROOT)))
+    return 0
+
+
 def _target_validation_menu() -> int:
-    while True:
-        print("\n=== Target \u9a57\u8b49 ===")
-        print(render_menu_item(1, "Target Oracle \u9a57\u8b49", default=True))
-        print(render_menu_item(2, "Target \u00d7 DL \u9a57\u8b49\u7e3d\u89bd"))
-        print(render_menu_item(0, "\u8fd4\u56de"))
-        try:
-            raw = input("\u27a1 \u8acb\u9078\u64c7\uff1a").strip().lower()
-        except EOFError:
-            return 0
-        choice = "1" if raw == "" else raw
-        if choice in {"0", "q", "quit", "exit"}:
-            return 0
-        if choice == "1":
-            _run_reusable_audit_method(
-                get_active_audit_module_id(), "target_ground_truth_strategy_romd"
-            )
-        elif choice == "2":
-            from services.research.target_dl_overview import (
-                collect_target_dl_overview, render_target_dl_overview,
-            )
-            print("\n" + render_target_dl_overview(collect_target_dl_overview(PROJECT_ROOT)))
-        else:
-            print("\u9078\u9805\u7121\u6548\uff0c\u8acb\u8f38\u5165 0\uff5e2\u3002")
+    return _run_reusable_audit_method(
+        get_active_audit_module_id(), "target_ground_truth_strategy_romd"
+    )
 
 
 def _audit_reusable_menu(module_id: str) -> int:
@@ -845,19 +833,20 @@ def _print_main_menu() -> None:
     print("\n====================================================================================================")
     print(" Research")
     print("====================================================================================================")
-    print(render_menu_item(1, get_audit_method("target_ground_truth_strategy_romd").menu_label, default=True))
-    print(render_menu_item(2, "模型訓練／驗證"))
-    print(render_menu_item(3, "策略參數最佳化"))
-    print(render_menu_item(4, "策略組合比較"))
-    print(render_menu_item(5, "Audit／診斷"))
+    print(render_menu_item(1, "Summary", default=True))
+    print(render_menu_item(2, get_audit_method("target_ground_truth_strategy_romd").menu_label))
+    print(render_menu_item(3, "模型訓練／驗證"))
+    print(render_menu_item(4, "策略參數最佳化"))
+    print(render_menu_item(5, "策略組合比較"))
+    print(render_menu_item(6, "Audit／診斷"))
     integration_cfg = get_strategy_runtime_integration_settings()
     integration_label = integration_cfg.label
     if not runtime_integration_execution_enabled():
         integration_label += "  [歷史／唯讀]"
-    print(render_menu_item(6, integration_label))
-    print(render_menu_item(7, "查看目前研究狀態與工件"))
-    print(render_menu_item(8, "Market Data generation／Research V2 lifecycle"))
-    print(render_menu_item(9, "策略升格（Research → Trading）"))
+    print(render_menu_item(7, integration_label))
+    print(render_menu_item(8, "查看目前研究狀態與工件"))
+    print(render_menu_item(9, "Market Data generation／Research V2 lifecycle"))
+    print(render_menu_item(10, "策略升格（Research → Trading）"))
     print(render_menu_item(0, "離開"))
 
 
@@ -874,25 +863,27 @@ def _interactive_menu() -> int:
             return 0
         try:
             if choice == "1":
-                _target_validation_menu()
+                _show_research_summary()
             elif choice == "2":
-                _run_model_training_menu()
+                _target_validation_menu()
             elif choice == "3":
-                _run_optimizer()
+                _run_model_training_menu()
             elif choice == "4":
-                _strategy_compare_menu()
+                _run_optimizer()
             elif choice == "5":
-                _audit_menu()
+                _strategy_compare_menu()
             elif choice == "6":
-                _strategy_runtime_integration_menu()
+                _audit_menu()
             elif choice == "7":
-                _show_research_status()
+                _strategy_runtime_integration_menu()
             elif choice == "8":
-                _market_data_menu()
+                _show_research_status()
             elif choice == "9":
+                _market_data_menu()
+            elif choice == "10":
                 _strategy_promotion_menu()
             else:
-                print("選項無效，請按 Enter 或輸入 0～9。")
+                print("選項無效，請按 Enter 或輸入 0～10。")
         except (FileNotFoundError, ImportError, RuntimeError, ValueError) as exc:
             print(f"[錯誤] {type(exc).__name__}: {exc}")
         except KeyboardInterrupt:
@@ -900,8 +891,9 @@ def _interactive_menu() -> int:
 
 
 def _print_help(program_name: str) -> None:
-    print(f"用法: python {program_name} [target|model|optimizer|compare|audit|market-data|status] [options]")
+    print(f"用法: python {program_name} [summary|target|model|optimizer|compare|audit|market-data|status] [options]")
     print("說明: Research 單一正式入口；互動選單只選工作類型，研究標的與設定由 config/ 決定。")
+    print("  summary    研究成果總覽（唯讀）；Target／DL／策略共用 Summary 清單")
     print("  target     正式 Target 驗證（非 PIT hindsight Oracle）；可接 run/status/latest")
     print("  model      目前 active model 的模型訓練／驗證；後續參數原樣轉交model provider")
     print("  optimizer  依 config/strategy_params.py 執行目前策略參數訓練 profile")
@@ -933,6 +925,10 @@ def main(argv=None) -> int:
     if command in {"-h", "--help", "help"}:
         _print_help(program_name)
         return 0
+    if command == "summary":
+        if rest:
+            raise ValueError("summary 不接受額外參數")
+        return _show_research_summary()
     if command in {"target", "target-validation", "target_validation"}:
         if len(rest) > 1:
             raise ValueError(f"target不支援額外參數: {' '.join(rest[1:])}")

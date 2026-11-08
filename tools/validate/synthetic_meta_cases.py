@@ -5659,7 +5659,11 @@ def validate_research_report_contract_freeze_case(_base_params):
     if extra_pair is None:
         raise AssertionError("模型比較清單擴充測試缺少未選用的合法registry model/profile")
     synthetic_pairs = (*current_pairs, extra_pair)
-    with patch.object(bq, "BREAKOUT_QUALITY_MODEL_TEST_PROFILES", synthetic_pairs):
+    from config import research_summary as summary_cfg
+    with patch.object(summary_cfg, "RESEARCH_SUMMARY_ROWS", (
+        *summary_cfg.RESEARCH_SUMMARY_ROWS,
+        {"bindings": ({"rank_model": extra_pair},)},
+    )):
         resolved_shared = bq_policy.get_breakout_quality_model_test_settings()
         resolved = bq_policy.get_breakout_quality_standard_model_comparison_settings()
     check_true(

@@ -15,6 +15,7 @@ from statistics import fmean
 from pathlib import Path
 from typing import Any, Mapping
 
+from core.research_summary import get_research_summary_rows
 from core.audit_policy import get_active_audit_module_id
 from core.audit_registry import (resolve_current_oracle_comparisons, oracle_comparison_key,
                                  oracle_parameter_family, oracle_baseline_arm_ids, oracle_baseline_display_name,
@@ -23,7 +24,6 @@ from core.audit_registry import (resolve_current_oracle_comparisons, oracle_comp
                                  oracle_supervised_target_id, oracle_target_semantics)
 from core.breakout_quality_registry import (
     SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES,
-    get_predicted_upside_context_contract,
     get_breakout_quality_experiment_profile,
     get_continuous_ranker_research_spec,
 )
@@ -607,9 +607,23 @@ def _strategy_bindings(*, target_names: tuple[str, ...],
                     or not _is_exact_supervision(profile, str(score_targets[target]))):
                 continue
             candidates.setdefault((target, profile), set()).add(str(arm_id))
-    # Ambiguous historical strategies must never be selected by ID order.
-    bindings.update({key: next(iter(arm_ids)) for key, arm_ids in candidates.items()
-                     if len(arm_ids) == 1})
+    # AI: Validate the Summary's explicit bindings against existing scientific
+    # semantics. A compatible historical arm cannot silently join current work.
+    for group in get_research_summary_rows():
+        if "oracle" not in group:
+            continue
+        target = oracle_comparison_key(group["oracle"])
+        if target not in comparisons:
+            continue
+        for binding in group.get("bindings", ()):
+            if not binding.get("arm_id"):
+                continue
+            profile = str(binding["rank_model"][1])
+            arm_id = str(binding["arm_id"])
+            if candidates.get((target, profile)) != {arm_id}:
+                raise ValueError(f"Summary Oracle/model/strategy contract differs: {target}/{arm_id}")
+            bindings[(target, profile)] = arm_id
+
     return bindings
 
 
@@ -927,25 +941,12 @@ def collect_target_dl_overview(project_root: Path) -> dict[str, Any]:
     )
     targets, comparisons, score_targets, oracle, oracle_info = _oracle_rows(root, definition, versions)
     filter_id = str(definition.source["filter_id"])
-    active = {profile for _model_id, profile in get_breakout_quality_model_test_settings().model_profiles}
     comparison_rolling = _model_comparison_rhos(
         root, filter_id=filter_id, versions=versions, robustness=False,
     )
     robustness_rho = _model_comparison_rhos(
         root, filter_id=filter_id, versions=versions, robustness=True,
     )
-    # The historical Strategy Registry is an existing model-identity owner.
-    # It can establish a model's place in the overview, but never supply ρ or RoMD.
-    historical_strategy_profiles = {
-        str(source.get("experiment_profile") or "")
-        for source in STRATEGY_DL_SOURCES.values()
-    }
-    # Historical model-composition dependencies are registered scientific
-    # references too. They may appear with blank Rolling metrics when only
-    # Forward evidence was published, without importing Forward rho as Rolling.
-    historical_model_dependencies = {
-        str(get_predicted_upside_context_contract()["stage1_profile"]),
-    }
     bindings = _strategy_bindings(target_names=targets, score_targets=score_targets, definition=definition)
     positive_targets = {
         oracle_comparison_key(item) for item in comparisons if item.get("positive_output")
@@ -955,12 +956,16 @@ def collect_target_dl_overview(project_root: Path) -> dict[str, Any]:
         root, versions, oracle_info=oracle_info, oracle_source=definition.source,
     )
     model_map: dict[str, list[dict[str, Any]]] = {}
-    for profile in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES:
+    model_evidence: dict[str, dict[str, Any]] = {}
+    declared_models = {
+        (oracle_comparison_key(group["oracle"]), binding["rank_model"][1])
+        for group in get_research_summary_rows() if "oracle" in group
+        for binding in group.get("bindings", ()) if binding.get("rank_model")
+    }
+    for _model_id, profile in get_breakout_quality_model_test_settings().model_profiles:
         possible_targets = [name for name, label_id in score_targets.items()
-                            if label_id and _is_exact_supervision(profile, label_id)
-                            and (name not in positive_targets or (name, profile) in bindings)]
-        if not possible_targets:
-            continue
+                            if (name, profile) in declared_models and label_id
+                            and _is_exact_supervision(profile, label_id)]
         model = get_continuous_ranker_research_spec(profile)
         json_path, md_path = _model_paths(root, filter_id=filter_id, profile=profile)
         rolling_rho = _single_model_rho(
@@ -976,29 +981,15 @@ def collect_target_dl_overview(project_root: Path) -> dict[str, Any]:
         if not _rolling_fit_version_current(root, filter_id=filter_id, profile=profile):
             # Robustness has independent per-seed FIT evidence, validated above.
             rolling_rho = None
-        forward_json, forward_md = _model_paths(
-            root, filter_id=filter_id, profile=profile, evaluation_mode="forward_oos",
-        )
-        published_forward = _published_model_report(
-            forward_json, forward_md, profile=profile, filter_id=filter_id,
-            evaluation_mode="forward_oos", versions=versions,
-            fit_publication_dir=_model_fit_publication_dir(
-                root, filter_id=filter_id, profile=profile, evaluation_mode="forward_oos",
-            ),
-        ) is not None
-        if (profile not in active and rolling_rho is None and robust_rho is None
-                and not published_forward and profile not in historical_strategy_profiles
-                and profile not in historical_model_dependencies
-                and not any((name, profile) in bindings for name in possible_targets)):
-            continue
+        model_evidence[profile] = {
+            "model": model.model_research_id,
+            "profile": profile,
+            "rolling_rho": rolling_rho,
+            "robustness_rho": robust_rho,
+            "rho_seeds": robust_seeds,
+        }
         for target in possible_targets:
-            model_map.setdefault(target, []).append({
-                "model": model.model_research_id,
-                "profile": profile,
-                "rolling_rho": rolling_rho,
-                "robustness_rho": robust_rho,
-                "rho_seeds": robust_seeds,
-            })
+            model_map.setdefault(target, []).append(model_evidence[profile])
     # Presentation projection only; signed comparison IDs and supervised
     # Target semantics remain unchanged across Min/P16 and Full/P17.
     entry_strategies = {
@@ -1024,47 +1015,73 @@ def collect_target_dl_overview(project_root: Path) -> dict[str, Any]:
     display_selectors = {oracle_comparison_key(item): oracle_target_semantics(item)[1]
                          for item in comparisons}
     rows = []
-    profiles_with_current_strategies = {
-        profile for (_, profile), arm_id in bindings.items() if profile and arm_id
-    }
+
+    def append_row(*, target: str, entry: str, selector: str, model: Mapping[str, Any],
+                   arm: str, metrics: Mapping[str, Any], classifier: str | None = None) -> None:
+        robust = robust_romd.get(arm) if arm else None
+        rows.append({
+            "target": target,
+            "entry_strategy": entry,
+            "selector": selector,
+            "oracle_romd": metrics.get("oracle_romd"),
+            "win_rate_pct": metrics.get("win_rate_pct"),
+            "model": model.get("model") or "",
+            "positive_model": (get_continuous_ranker_research_spec(classifier).model_research_id
+                               if classifier else ""),
+            "rolling_rho": model.get("rolling_rho"),
+            "robustness_rho": model.get("robustness_rho"),
+            "rho_seeds": model.get("rho_seeds") or (),
+            "strategy": arm,
+            "rolling_romd": rolling_romd.get(arm),
+            "robustness_romd": robust[0] if robust else None,
+            "romd_seeds": robust[1] if robust else (),
+            "romd_benchmark": robust[2] if robust else "",
+        })
+
     for target in targets:
-        # The canonical scientific profile registry already provides a stable
-        # chronology; keep historical model groups (e.g. K / AH / AK) together.
-        models = model_map.get(target) or [{}]
-        for model in models:
+        for model in model_map.get(target) or [{}]:
             profile = str(model.get("profile") or "")
             arm = bindings.get((target, profile), "")
-            # A model bound to a current strategy must not reappear under a
-            # different entry/selector solely through a retired historical arm.
-            # Keep purely model-only research rows unchanged.
-            if profile in profiles_with_current_strategies and not arm:
-                continue
             classifier = (
                 _positive_classifier_for_arm(STRATEGY_COMPARE_ARMS[arm], str(score_targets[target]))
                 if arm and target in positive_targets else None
             )
-            # C96/C97 are no-DL controls, not Perfect-score Oracle treatments.
+            # Unscored controls do not have hypothetical Oracle performance.
             is_baseline = target in oracle_baseline_arm_ids(definition.source).values()
-            metrics = {} if is_baseline else (oracle.get(target) or {})
-            robust = robust_romd.get(arm) if arm else None
-            rows.append({
-                "target": display_targets.get(target, target),
-                "entry_strategy": entry_strategies.get(target, "Breakout"),
-                "selector": display_selectors.get(target, "-"),
-                "oracle_romd": metrics.get("oracle_romd"),
-                "win_rate_pct": metrics.get("win_rate_pct"),
-                "model": model.get("model") or "",
-                "positive_model": (get_continuous_ranker_research_spec(classifier).model_research_id
-                                   if classifier else ""),
-                "rolling_rho": model.get("rolling_rho"),
-                "robustness_rho": model.get("robustness_rho"),
-                "rho_seeds": model.get("rho_seeds") or (),
-                "strategy": arm,
-                "rolling_romd": rolling_romd.get(arm),
-                "robustness_romd": robust[0] if robust else None,
-                "romd_seeds": robust[1] if robust else (),
-                "romd_benchmark": robust[2] if robust else "",
-            })
+            append_row(
+                target=display_targets.get(target, target),
+                entry=entry_strategies.get(target, "Breakout"),
+                selector=display_selectors.get(target, "-"), model=model, arm=arm,
+                metrics={} if is_baseline else (oracle.get(target) or {}), classifier=classifier,
+            )
+
+    # AI: All configured research belongs in Summary. Some real model/strategy
+    # contracts have no approved matching Oracle; never borrow another Target's
+    # perfect-score result to fill these rows.
+    baseline_ids = set(oracle_baseline_arm_ids(definition.source).values())
+    for group in get_research_summary_rows():
+        if "oracle" in group:
+            continue
+        items = ([{"arm_id": group["arm_id"]}] if group.get("arm_id") else [])
+        items.extend(group.get("bindings", ()))
+        for binding in items:
+            arm_id = str(binding.get("arm_id") or "")
+            if arm_id in baseline_ids:
+                continue
+            arm = STRATEGY_COMPARE_ARMS.get(arm_id, {})
+            pair = binding.get("rank_model")
+            model = model_evidence.get(pair[1], {}) if pair else {}
+            mode = arm.get("dl_runtime_mode")
+            selector = "Exact" if mode == _EXACT_MODE else "Direct" if mode == _DIRECT_MODE else "-"
+            append_row(
+                target=str(group.get("display_target") or arm_id or model.get("model") or ""),
+                entry=oracle_display_strategy(
+                    strategy=str(arm.get("entry_strategy", "Breakout")),
+                    parameter_family=str(group.get("parameter_family", "min")),
+                ),
+                selector=selector, model=model, arm=arm_id, metrics={},
+                classifier=(binding.get("positive_model") or (None, None))[1],
+            )
     rows.sort(key=lambda row: (
         row["oracle_romd"] is None,
         -(row["oracle_romd"] or 0.0),
@@ -1147,6 +1164,7 @@ def render_target_dl_overview(report: Mapping[str, Any]) -> str:
         "Source: Oracle audit.json / Model Standard SOP / Strategy Standard SOP (read-only)",
         "Missing/incompatible evidence = blank; Forward values never substitute Rolling.",
         "Exact/Direct share a target label but never share a strategy RoMD.",
+        "Configured research without a matching Oracle remains visible with blank Oracle metrics.",
         "Robustness values show actual seed count; separate benchmarks are not pooled.",
     ))
     return "\n".join(header)

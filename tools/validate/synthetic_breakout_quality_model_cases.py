@@ -1822,64 +1822,33 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         for model_id, profile_name
         in breakout_quality_config.BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES
     )
-    config_source = (project_root / "config" / "breakout_quality.py").read_text(encoding="utf-8")
-    # Evaluate only the declarative membership expression with isolated synthetic
-    # inputs, without mutating the user's config or assuming the current MR identity.
-    membership_declaration = next(
-        (
-            node.value
-            for node in ast.parse(config_source).body
-            if isinstance(node, ast.Assign)
-            and any(
-                isinstance(target, ast.Name) and target.id == "BREAKOUT_QUALITY_MODEL_TEST_PROFILES"
-                for target in node.targets
-            )
-        ),
-        None,
-    )
-    synthetic_new_training_pair = ("MR-SYNTHETIC-NEW", "synthetic_new_training_profile")
-    synthetic_merged = (
-        eval(
-            compile(ast.Expression(body=membership_declaration), "config/breakout_quality.py", "eval"),
-            {"__builtins__": {"tuple": tuple, "dict": dict}},
-            {
-                "BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES": reference_test_profiles,
-                "BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE": synthetic_new_training_pair,
-            },
-        )
-        if membership_declaration is not None
-        else ()
-    )
-    expected_current_profiles = tuple(dict.fromkeys((
-        *reference_test_profiles,
-        canonical_training_pair,
-    )))
+    from config import research_summary as summary_cfg
+    from core.research_summary import get_research_summary_model_profiles
+
     check_true(
-        "model_compare_test_list_structurally_contains_training_model_and_reference_controls",
-        len(canonical_training_pair) == 2
-        and canonical_training_pair[1] == str(shared_training.experiment_profile)
-        and tuple(shared_test) == expected_current_profiles
+        "model_compare_test_membership_is_projected_from_summary",
+        tuple(shared_test) == get_research_summary_model_profiles()
         and canonical_training_pair in shared_test
-        and all(item in shared_test for item in reference_test_profiles),
+        and canonical_training_pair[1] == str(shared_training.experiment_profile),
     )
-    check_true(
-        "future_training_model_is_automatically_injected_into_compare_and_robustness_membership",
-        tuple(synthetic_merged) == tuple(dict.fromkeys((
-            *reference_test_profiles,
-            synthetic_new_training_pair,
-        ))),
-    )
+    # A new model joins every model workflow through the Summary roster once;
+    # choosing a training model alone cannot create a second membership source.
+    with patch.object(breakout_quality_config, "BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE",
+                      ("MR-SYNTHETIC-NEW", "synthetic_new_training_profile")):
+        absent_training_rejected = raises_expected(
+            ValueError, breakout_quality_policy.get_breakout_quality_model_test_settings,
+        )
+    check_true("training_selection_outside_summary_is_rejected", absent_training_rejected)
 
     original_test_pairs = tuple(shared_test)
     conflicting_model_pair = (original_test_pairs[0][0], "synthetic_different_profile")
     conflicting_profile_pair = ("MR-SYNTHETIC-CONFLICT", original_test_pairs[0][1])
     collision_rejections = []
     for conflicting_pair in (conflicting_model_pair, conflicting_profile_pair):
-        with patch.object(
-            breakout_quality_config,
-            "BREAKOUT_QUALITY_MODEL_TEST_PROFILES",
-            (*original_test_pairs, conflicting_pair),
-        ):
+        with patch.object(summary_cfg, "RESEARCH_SUMMARY_ROWS", (
+            *summary_cfg.RESEARCH_SUMMARY_ROWS,
+            {"bindings": ({"rank_model": conflicting_pair},)},
+        )):
             collision_rejections.extend((
                 raises_expected(
                     ValueError,

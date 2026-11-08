@@ -242,9 +242,11 @@ class PositiveNetPnlContractCases(TestCase):
         # Swapping the classifier for a NetPnL ranker must not silently pass,
         # even when their continuous_target_id matches perfectly.
         with patch.dict(STRATEGY_DL_SOURCES, {'CONT13CP_ROLL': STRATEGY_DL_SOURCES['CONT13CO_ROLL']}):
-            missing = _strategy_bindings(target_names=targets,score_targets=labels, definition=definition)
-        self.assertNotIn((target, rank_profile), missing)
-        self.assertEqual(missing[('DailyUniversal_MinTrade_NetPnL', rank_profile)], 'C123')
+            with self.assertRaisesRegex(ValueError, "Summary Positive binding differs"):
+                _strategy_bindings(target_names=targets,score_targets=labels, definition=definition)
+        # Restoring the scientific source restores the same signed bindings.
+        restored = _strategy_bindings(target_names=targets,score_targets=labels, definition=definition)
+        self.assertEqual(restored[('DailyUniversal_MinTrade_NetPnL', rank_profile)], 'C123')
 
     def test_no_filter_on_original_netpnl_and_positive_filter_fail_closed(self):
         rank = {'available': True,'score':0.70,'score_date':'2024-10-01',

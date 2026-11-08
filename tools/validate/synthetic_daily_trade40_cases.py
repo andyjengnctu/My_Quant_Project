@@ -3170,6 +3170,9 @@ class ExecutionAccelerationCases(unittest.TestCase):
         from core.file_integrity import compute_file_sha256
         relative = "config/breakout_quality.py"
         original = (Path(__file__).resolve().parents[2] / relative).read_text(encoding="utf-8")
+        baseline_identity = proof.reviewed_execution_source_sha256(
+            relative, compute_file_sha256(Path(__file__).resolve().parents[2] / relative),
+        )
         with TemporaryDirectory() as directory:
             source = Path(directory) / relative
             source.parent.mkdir(parents=True)
@@ -3184,16 +3187,15 @@ class ExecutionAccelerationCases(unittest.TestCase):
                     source.write_text(ast.unparse(tree), encoding="utf-8")
                     self.assertEqual(proof.reviewed_execution_source_sha256(relative,
                                          compute_file_sha256(source)),
-                                     proof._RESEARCH_SELECTION_ONLY_CONFIG_BASELINE_SHA256)
+                                     baseline_identity)
                 # Reference-model membership is NOT covered by the exemption;
                 # only the active model-selection tuple may change.
                 tree = ast.parse(original)
                 node = next(item for item in tree.body if isinstance(item, ast.Assign)
-                            and len(item.targets) == 1
                             and isinstance(item.targets[0], ast.Name)
                             and item.targets[0].id == "BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES")
-                node.value.elts[0].elts[0].value = "MR-UNREVIEWED-REFERENCE"
-                source.write_text(ast.unparse(tree), encoding="utf-8")
+                node.value = ast.Tuple(elts=[ast.Constant("MR-UNREVIEWED-REFERENCE")], ctx=ast.Load())
+                source.write_text(ast.unparse(ast.fix_missing_locations(tree)), encoding="utf-8")
                 changed = compute_file_sha256(source)
                 self.assertEqual(proof.reviewed_execution_source_sha256(relative, changed), changed)
                 # Changing any price-affecting setting cannot receive equivalence.
@@ -3202,7 +3204,7 @@ class ExecutionAccelerationCases(unittest.TestCase):
                             and isinstance(item.targets[0], ast.Name)
                             and item.targets[0].id == "BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD")
                 node.value = ast.Constant(value=0.314159)
-                source.write_text(ast.unparse(tree), encoding="utf-8")
+                source.write_text(ast.unparse(ast.fix_missing_locations(tree)), encoding="utf-8")
                 changed = compute_file_sha256(source)
                 self.assertEqual(proof.reviewed_execution_source_sha256(relative, changed), changed)
                 # Arbitrary executable expressions in the exempt field are unsafe.
@@ -3215,6 +3217,32 @@ class ExecutionAccelerationCases(unittest.TestCase):
                 source.write_text(ast.unparse(ast.fix_missing_locations(tree)), encoding="utf-8")
                 changed = compute_file_sha256(source)
                 self.assertEqual(proof.reviewed_execution_source_sha256(relative, changed), changed)
+
+    def test_summary_membership_policy_proof_preserves_only_reviewed_execution(self):
+        import ast
+        from core import research_execution_equivalence as proof
+        from core.file_integrity import compute_file_sha256
+        relative = "core/breakout_quality_policy.py"
+        current = Path(__file__).resolve().parents[2] / relative
+        original = current.read_text(encoding="utf-8")
+        baseline = proof.reviewed_execution_source_sha256(relative, compute_file_sha256(current))
+        with TemporaryDirectory() as directory:
+            target = Path(directory) / relative
+            target.parent.mkdir(parents=True)
+            fake_module = str(Path(directory) / "core/research_execution_equivalence.py")
+            target.write_text(original + "\n# comment-only change\n", encoding="utf-8")
+            with patch.object(proof, "__file__", fake_module):
+                self.assertEqual(proof.reviewed_execution_source_sha256(
+                    relative, compute_file_sha256(target)), baseline)
+                self.assertEqual(proof.reviewed_execution_source_sha256(relative, "f" * 64), "f" * 64)
+                tree = ast.parse(original)
+                resolver = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
+                                and node.name == "resolve_breakout_quality_random_seed")
+                assignment = next(node for node in resolver.body if isinstance(node, ast.Assign))
+                assignment.value = ast.Constant(value=7)
+                target.write_text(ast.unparse(ast.fix_missing_locations(tree)), encoding="utf-8")
+                actual = compute_file_sha256(target)
+                self.assertEqual(proof.reviewed_execution_source_sha256(relative, actual), actual)
 
     def test_reviewed_execution_proof_never_accepts_unknown_source_or_calculation(self):
         from core.research_execution_equivalence import (

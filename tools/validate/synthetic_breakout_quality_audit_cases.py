@@ -240,10 +240,10 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     route_console = io.StringIO()
     prompts = []
     executions = []
-    # Root Enter -> Target submenu Enter -> Oracle approval Enter ->
-    # Target submenu 0 -> Research root 0.  Menu navigation must not count
+    # Root Target -> Oracle approval Enter -> Research root 0.
+    # Menu navigation must not count
     # as a second execution authorization.
-    answers = iter(["", "", "", "0", "0"])
+    answers = iter(["2", "", "0"])
 
     def input_after_plan(prompt):
         prompts.append((prompt, preview in route_console.getvalue()))
@@ -267,7 +267,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         route_rc = research_app._interactive_menu()
     root_text = route_console.getvalue()
     check_true(
-        "target_validation_runs_once_from_research_target_submenu_enter",
+        "target_validation_runs_once_from_research_target_root",
         route_rc == 0 and preview_owner.call_count == 1
         and ensure.call_count == 1 and oracle_runner.call_count == 1
         and oracle_runner.call_args.kwargs.get("method_id") == oracle_method_id
@@ -276,11 +276,10 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         and "before_replay" not in oracle_runner.call_args.kwargs
         and not expensive_status.called
         and "[1]" in root_text and "Target 驗證" in root_text
-        and "Target Oracle 驗證" in root_text
-        and "Target × DL 驗證總覽" in root_text
-        and "[2]" in root_text and "模型訓練／驗證" in root_text
-        and "[5]" in root_text and "Audit／診斷" in root_text
-        and "[9]" in root_text and "策略升格" in root_text,
+        and "Summary" in root_text
+        and "[3]" in root_text and "模型訓練／驗證" in root_text
+        and "[6]" in root_text and "Audit／診斷" in root_text
+        and "[10]" in root_text and "策略升格" in root_text,
     )
     check_true(
         "target_validation_verifies_both_parameter_family_plans_before_replay",
@@ -293,9 +292,9 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     )
     check_true(
         "target_validation_only_one_confirm_even_if_verified_run_count_changes",
-        len(prompts) == 5
-        and not prompts[0][1] and not prompts[1][1] and prompts[2][1]
-        and "必要參數自動補建" in prompts[2][0]
+        len(prompts) == 3
+        and not prompts[0][1] and prompts[1][1]
+        and "必要參數自動補建" in prompts[1][0]
         and all("輸入 RUN" not in prompt for prompt, _ in prompts)
         and root_text.count(preview) == 1
         and "P16 前置工件計畫" not in root_text
@@ -385,11 +384,11 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         and verifier.call_count == 0 and replay.call_count == 0,
     )
 
-    # The second submenu item must only consume existing reports; navigating
+    # The default root Summary must only consume existing reports; navigating
     # to the overview is not authorization to FIT, build P16, or run Replay.
     from services.research import target_dl_overview
     overview_console = io.StringIO()
-    with patch("builtins.input", side_effect=["1", "2", "0", "0"]) as overview_input, \
+    with patch("builtins.input", side_effect=["", "0"]) as overview_input, \
          patch.object(target_dl_overview, "collect_target_dl_overview", return_value={"rows": []}) as collector, \
          patch.object(target_dl_overview, "render_target_dl_overview", return_value="SYNTHETIC_OVERVIEW") as renderer, \
          patch.object(research_app, "_run_reusable_audit_method", side_effect=AssertionError("Unexpected Oracle")) as oracle_entry, \
@@ -398,16 +397,121 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
          redirect_stdout(overview_console):
         overview_rc = research_app._interactive_menu()
     check_true(
-        "target_dl_overview_submenu_is_read_only_and_returns_to_research",
-        overview_rc == 0 and overview_input.call_count == 4
+        "summary_root_is_read_only_and_returns_to_research",
+        overview_rc == 0 and overview_input.call_count == 2
         and collector.call_count == 1 and renderer.call_count == 1
         and collector.call_args.args == (research_app.PROJECT_ROOT,)
         and renderer.call_args.args == ({"rows": []},)
         and overview_console.getvalue().count("SYNTHETIC_OVERVIEW") == 1
-        and "Target × DL 驗證總覽" in overview_console.getvalue()
+        and "Summary" in overview_console.getvalue()
         and oracle_entry.call_count == 0
         and producer.call_count == 0 and replay.call_count == 0,
     )
+
+    # The roster, rather than artifact availability or a second model list,
+    # defines every current workflow. Exercise both addition and removal in
+    # isolation without writing a model, replay or scientific result.
+    from config import research_summary as summary_cfg
+    from core.research_summary import (
+        get_research_summary_rows, get_research_summary_model_profiles,
+        get_research_summary_strategy_arm_ids, get_research_summary_oracle_comparisons,
+    )
+    from core.breakout_quality_policy import get_breakout_quality_model_test_settings
+    from core.breakout_quality_registry import (
+        SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES,
+        get_continuous_ranker_research_spec,
+        get_breakout_quality_experiment_profile,
+        CONTINUOUS_RANKER_TRAINING_OBJECTIVES,
+    )
+    from core.strategy_compare_policy import get_strategy_comparison_settings
+    from config.strategy_compare import (
+        STRATEGY_COMPARE_CURRENT_OOS_PROFILE, STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE,
+    )
+    from core.audit_registry import resolve_current_oracle_comparisons
+    import shutil
+
+    original_rows = get_research_summary_rows()
+    pairs = get_research_summary_model_profiles()
+    arms = set(get_research_summary_strategy_arm_ids())
+    selected_profiles = {profile for _name, profile in pairs}
+    extra_profile = next(profile for profile in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES
+                         if profile not in selected_profiles
+                         and get_breakout_quality_experiment_profile(profile).training_objective
+                         in CONTINUOUS_RANKER_TRAINING_OBJECTIVES)
+    extra_pair = (get_continuous_ranker_research_spec(extra_profile).model_research_id, extra_profile)
+    with TemporaryDirectory(prefix="synthetic_summary_roster_") as root_text:
+        root = Path(root_text)
+        ledger = Path("doc/scientific_contracts/REPORT_CONTRACT_VERSIONS.json")
+        (root / ledger).parent.mkdir(parents=True)
+        shutil.copy2(research_app.PROJECT_ROOT / ledger, root / ledger)
+        before = sorted(path.relative_to(root).as_posix() for path in root.rglob("*"))
+        snapshot = target_dl_overview.collect_target_dl_overview(root)
+        visible_models = {row[field] for row in snapshot["rows"]
+                          for field in ("model", "positive_model") if row[field]}
+        visible_arms = {row["strategy"] for row in snapshot["rows"] if row["strategy"]}
+        check_true("summary_missing_artifacts_keep_all_declared_models_and_strategies",
+                   visible_models == {name for name, _profile in pairs} and visible_arms == arms
+                   and all(row["oracle_romd"] is None and row["rolling_romd"] is None
+                           for row in snapshot["rows"])
+                   and before == sorted(path.relative_to(root).as_posix() for path in root.rglob("*")))
+        # A model-only addition belongs in Summary and all model comparisons;
+        # it does not invent an Oracle, strategy arm, or execution permission.
+        with patch.object(summary_cfg, "RESEARCH_SUMMARY_ROWS", (
+                *original_rows, {"bindings": ({"rank_model": extra_pair},)},
+        )):
+            extra_report = target_dl_overview.collect_target_dl_overview(root)
+            check_true("summary_model_only_addition_is_shared_without_inventing_strategy_or_oracle",
+                       extra_pair in get_breakout_quality_model_test_settings().model_profiles
+                       and set(get_research_summary_strategy_arm_ids()) == arms
+                       and any(row["model"] == extra_pair[0] and not row["strategy"]
+                               and row["oracle_romd"] is None for row in extra_report["rows"]))
+        # Pick a configured, isolated Oracle/model group dynamically. Removing
+        # its source and Direct variants must change all three workflows once.
+        from config.breakout_quality import BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE
+        active_profile = BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE[1]
+        removable = next(profile for _name, profile in pairs if profile != active_profile
+                         and any("oracle" in group and group.get("bindings")
+                                 and all(binding.get("rank_model", (None, None))[1] == profile
+                                         for binding in group["bindings"]) for group in original_rows)
+                         and all(all(binding.get("rank_model", (None, None))[1] == profile
+                                     for binding in group.get("bindings", ()))
+                                 for group in original_rows
+                                 if any(binding.get("rank_model", (None, None))[1] == profile
+                                        for binding in group.get("bindings", ()))))
+        removed = [group for group in original_rows if any(
+            binding.get("rank_model", (None, None))[1] == removable
+            for binding in group.get("bindings", ()))]
+        remaining = tuple(group for group in original_rows if group not in removed)
+        removed_arms = {binding["arm_id"] for group in removed for binding in group.get("bindings", ())}
+        with patch.object(summary_cfg, "RESEARCH_SUMMARY_ROWS", remaining):
+            current_definition = oracle_application.get_formal_oracle_definition("breakout_quality")
+            updated = target_dl_overview.collect_target_dl_overview(root)
+            check_true("summary_removal_updates_target_model_and_both_strategy_modes",
+                       removable not in {profile for _name, profile
+                                         in get_breakout_quality_model_test_settings().model_profiles}
+                       and resolve_current_oracle_comparisons(current_definition.source)
+                           == get_research_summary_oracle_comparisons()
+                       and all({arm.arm_id for arm in get_strategy_comparison_settings(mode).enabled_arms}
+                               == arms - removed_arms
+                               for mode in (STRATEGY_COMPARE_CURRENT_OOS_PROFILE,
+                                            STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE))
+                       and {row["strategy"] for row in updated["rows"] if row["strategy"]}
+                           == arms - removed_arms)
+
+    # No stale root key may route to another work type after inserting Summary.
+    root_handlers = ("_show_research_summary", "_target_validation_menu", "_run_model_training_menu",
+                     "_run_optimizer", "_strategy_compare_menu", "_audit_menu",
+                     "_strategy_runtime_integration_menu", "_show_research_status",
+                     "_market_data_menu", "_strategy_promotion_menu")
+    from contextlib import ExitStack
+    with ExitStack() as stack:
+        handlers = [stack.enter_context(patch.object(research_app, name, return_value=0))
+                    for name in root_handlers]
+        stack.enter_context(patch("builtins.input", side_effect=[*(str(i) for i in range(1, 11)), "0"]))
+        stack.enter_context(redirect_stdout(io.StringIO()))
+        menu_rc = research_app._interactive_menu()
+    check_true("summary_insertion_preserves_every_root_work_type_dispatch",
+               menu_rc == 0 and all(handler.call_count == 1 for handler in handlers))
 
     # Cancel leaves both Optimizer and Replay untouched. The visible matrix is
     # a scientific read-only plan, not a parameter file-existence inventory.

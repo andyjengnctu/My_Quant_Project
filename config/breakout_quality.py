@@ -372,43 +372,12 @@ BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_REFERENCE_ARM = "C17"
 BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_SUMMARY_PAIR = ("MR-12B", "MR-12A")
 # Forward-OOS top-prefix diagnostic. Values are descriptive only and never enter training.
 BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_FIXED_K_VALUES = (1, 2, 3, 5, 10)
-# Explicit historical/reference controls for model comparison.  This is NOT the full
-# [3]~[6] membership list: the active [1]/[2] training model is injected below from
-# BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE so it cannot be forgotten when a new DL
-# becomes the current research model.
-BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES = (
-    ("MR-13K", "daily_universal_full_horizon_pure_mfe_full_list_ndcg_pairwise"),
-    ("MR-13AH", "daily_universal_predicted_safety_product_weighted_pure_mfe_full_list_ndcg_pairwise"),
-    ("MR-13AK", "daily_universal_shared_safety_weighted_pure_mfe_full_list_ndcg_pairwise"),
-    ("MR-13CG", "daily_universal_shared_full_d40_safety_hs_conditional_mfe_full_list_ndcg_pairwise"),
-    ("MR-13CI", "daily_universal_terminal_r40_full_list_ndcg_pairwise"),
-    ("MR-13CJ", "daily_universal_terminal_mae_gated_t40_full_list_ndcg_pairwise"),
-    ("MR-13CX", "daily_universal_terminal_mae_gated_t40_probabilistic_pairwise"),
-    ("MR-13CK", "daily_universal_full_horizon_mae_gated_mfe_t40_full_list_ndcg_pairwise"),
-    ("MR-13CM", "daily_universal_formal_mintrade40_netr_per_seed_full_list_ndcg_pairwise"),
-    ("MR-13CN", "daily_universal_formal_mintrade_fullcycle_netr_per_seed_full_list_ndcg_pairwise"),
-    ("MR-13CO", "daily_universal_formal_mintrade_fullcycle_netpnl_per_seed_full_list_ndcg_pairwise"),
-    ("MR-13CP", "daily_universal_formal_mintrade_fullcycle_netpnl_positive_binary"),
-    ("MR-13CZ", "daily_universal_formal_fulltrade_fullcycle_netpnl_full_list_ndcg_pairwise"),
-    ("MR-13DA", "daily_universal_formal_fulltrade_fullcycle_netpnl_positive_binary"),
-    ("MR-13CT", "true_daily_universal_mintrade_fullcycle_netpnl_positive_binary"),
-    ("MR-13CU", "true_daily_universal_mintrade_fullcycle_netpnl_full_list_ndcg_pairwise"),
-    # AI: Retired MR-13CW is reserved in the historical Experiment Registry, not the current model list.
-    # Archived AO/CH and historical identities/artifacts remain retained; CI is active for R40 comparison.
-)
+# AI: Compatibility projections; current membership is owned by Summary.
+from core.research_summary import get_research_summary_model_profiles
 
-
-
-# Canonical [3]~[6] Model Compare/Test List.  Its required subset is generated from the
-# same canonical pair that drives [1]/[2]; reference controls may only add membership.
-# Therefore every current training DL is structurally guaranteed to appear in Forward /
-# Rolling comparison and Forward / Rolling robustness without a second manual edit.
-BREAKOUT_QUALITY_MODEL_TEST_PROFILES = tuple(dict.fromkeys((
-    *BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES,
-    BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE,
-)))
+BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES = get_research_summary_model_profiles()
+BREAKOUT_QUALITY_MODEL_TEST_PROFILES = BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES
 BREAKOUT_QUALITY_STANDARD_MODEL_COMPARISON_MENU_LABEL = "模型比較（Standard SOP）"
-# Backward-compatible alias; there is no second model list.
 BREAKOUT_QUALITY_STANDARD_MODEL_COMPARISON_PROFILES = BREAKOUT_QUALITY_MODEL_TEST_PROFILES
 
 

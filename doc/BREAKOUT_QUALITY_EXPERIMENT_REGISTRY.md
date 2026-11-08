@@ -43,6 +43,8 @@ Registry 回答「**這個 ID 是什麼、屬於哪一層、是否已被占用�
 
 ## 3. Canonical identity 與 current／historical status（current 執行以設定為準）
 
+現行成果總覽入口為 Research `[1] Summary`。Target 驗證、模型訓練／驗證與策略組合比較的目前集合均從 `config/research_summary.py` 派生，解析與 binding 驗證由 `core/research_summary.py` 持有；本文件以下的歷史選單編號不作現行入口真理。Summary 清單只選擇研究範圍，不改寫既有 Target／Model／Strategy 身分、訓練與 Replay 契約；未有 matching Oracle 的既有研究仍可列示真實績效，但不得借用其他 Oracle 數值。現行總覽報表為 `research.target_dl_validation_overview@v7`，沿用原指標／欄位，舊版 ledger 與研究 evidence 保留。
+
 | 層級 | Canonical identity | 目前語意 | 狀態 |
 |---|---|---|---|
 | Dataset | `DATA-breakout_quality_v1` | 既有 300×10 breakout-quality feature-bank dataset | ACTIVE |

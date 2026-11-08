@@ -123,13 +123,25 @@ def get_reusable_audit_definitions(
     raw_module = AUDIT_REUSABLE_REPORTS.get(str(module_id), {})
     definitions: list[ReusableAuditDefinition] = []
     for report_id, raw in raw_module.items():
+        source = dict(raw.get("source") or {})
+        if raw.get("report_type") == "target_ground_truth_strategy_romd":
+            from core.research_summary import (
+                get_research_summary_oracle_comparisons,
+                get_research_summary_baseline_arm_ids,
+            )
+            baselines = get_research_summary_baseline_arm_ids()
+            source["oracle_comparisons"] = get_research_summary_oracle_comparisons()
+            source["baseline_arm_id"] = baselines["min"]
+            source["additional_parameter_baselines"] = {
+                family: arm_id for family, arm_id in baselines.items() if family != "min"
+            }
         definition = ReusableAuditDefinition(
             module_id=str(module_id),
             report_id=str(report_id),
             enabled=bool(raw.get("enabled", False)),
             report_type=str(raw.get("report_type") or "").strip(),
             description=str(raw.get("description") or "").strip(),
-            source=dict(raw.get("source") or {}),
+            source=source,
             dimensions=dict(raw.get("dimensions") or {}),
             output_subdir=str(raw.get("output_subdir") or "").strip(),
         )

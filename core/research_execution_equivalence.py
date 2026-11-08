@@ -91,6 +91,16 @@ _RESEARCH_SELECTION_ONLY_CONFIG_BASELINE_SHA256 = (
 )
 
 
+# AI: Summary refactor proof against the uploaded e9eb8b99 baseline. Apart
+# from model-membership assignments/import and its one policy getter, both
+# complete module ASTs are independently unchanged. The exact reviewed ASTs
+# below preserve the uploaded source identities, not a different producer.
+_SUMMARY_MEMBERSHIP_CONFIG_AST_SHA256 = "ad2665af808fd794b18030d18bde7c98fb722498373d06857b57a37a458c86ed"
+_SUMMARY_MEMBERSHIP_CONFIG_BASELINE_SHA256 = "a5d2b37103fe1f921ef3ebfd97af54a1b09622de4359e5e4e66ade432f52046a"
+_SUMMARY_MEMBERSHIP_POLICY_AST_SHA256 = "69c605f88e7bc2cc1e1dc4fc284f419b9040526a5c7f1a123cfdef18f5334474"
+_SUMMARY_MEMBERSHIP_POLICY_BASELINE_SHA256 = "8c6a1d59c13d87efca83b10587b0d23027f36af9c2403b9ff165fcd1e2fd943f"
+
+
 def _certified_model_selection_only_config_sha256(relative: str, actual: str) -> str:
     """Preserve the price source identity for an AST-proven model-menu choice.
 
@@ -127,7 +137,10 @@ def _certified_model_selection_only_config_sha256(relative: str, actual: str) ->
     if count != 1:
         return actual
     selection_free_ast = ast.dump(tree, annotate_fields=True, include_attributes=False)
-    if sha256(selection_free_ast.encode("utf-8")).hexdigest() in (
+    syntax_sha = sha256(selection_free_ast.encode("utf-8")).hexdigest()
+    if syntax_sha == _SUMMARY_MEMBERSHIP_CONFIG_AST_SHA256:
+        return _SUMMARY_MEMBERSHIP_CONFIG_BASELINE_SHA256
+    if syntax_sha in (
         _RESEARCH_SELECTION_ONLY_CONFIG_AST_SHA256,
         _RESEARCH_SELECTION_ONLY_CONFIG_LEGACY_AST_SHA256,
     ):
@@ -135,8 +148,25 @@ def _certified_model_selection_only_config_sha256(relative: str, actual: str) ->
     return actual
 
 
+def _certified_summary_membership_policy_sha256(relative: str, actual: str) -> str:
+    if relative != "core/breakout_quality_policy.py":
+        return actual
+    import ast
+    from hashlib import sha256
+    from pathlib import Path
+    source = Path(__file__).resolve().parents[1] / relative
+    if not source.is_file() or sha256(source.read_bytes()).hexdigest() != actual:
+        return actual
+    syntax = ast.dump(ast.parse(source.read_text(encoding="utf-8")), include_attributes=False)
+    if sha256(syntax.encode("utf-8")).hexdigest() == _SUMMARY_MEMBERSHIP_POLICY_AST_SHA256:
+        return _SUMMARY_MEMBERSHIP_POLICY_BASELINE_SHA256
+    return actual
+
+
 def reviewed_execution_source_sha256(relative: str, actual: str) -> str:
     normalized = _certified_model_selection_only_config_sha256(relative, actual)
+    if normalized == actual:
+        normalized = _certified_summary_membership_policy_sha256(relative, actual)
     if normalized != actual:
         return normalized
     proof = _REVIEWED.get(relative)

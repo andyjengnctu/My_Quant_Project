@@ -10,6 +10,10 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 from config.market_data import RESEARCH_REQUIRED_CUTOFF
+from core.research_summary import (
+    get_research_summary_oracle_comparisons,
+    get_research_summary_baseline_arm_ids,
+)
 
 from core.breakout_quality_registry import (
     DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
@@ -103,7 +107,7 @@ AUDIT_REUSABLE_REPORTS: dict[str, dict[str, Any]] = {
                 "pure_mfe40_provider": DAILY_UNIVERSAL_FULL_HORIZON_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
                 "mfe20_d20_provider": DAILY_UNIVERSAL_SHARED_FULL_D20_SAFETY_HS_CONDITIONAL_MFE_PROFILE,
                 "first_breach_provider": DAILY_UNIVERSAL_FIRST_RISK_BREACH_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
-                # AI: The Oracle comparison list is the dependency SSOT.
+                # AI: Summary membership projects the executable Oracle inventory.
                 # Score recipes declare their consumed truth provider; Direct
                 # rows share an existing score and change only the selector.
                 # Removing a comparison automatically retires its unused
@@ -134,40 +138,13 @@ AUDIT_REUSABLE_REPORTS: dict[str, dict[str, Any]] = {
                     "DailyUniversal_MinTrade60_NetPnL": "LABEL-daily_universal_formal_min_roos_trade60_netpnl_v1",
                     "DailyUniversal_MinTrade60_NetPnL_Direct": "LABEL-daily_universal_formal_min_roos_trade60_netpnl_v1",
                 },
-                # Additional parameter baselines are defined once here.  [1][1]
-                # and [1][2] both consume this same Oracle comparison inventory.
-                "additional_parameter_baselines": {"full": "C97"},
-                "oracle_comparisons": (
-                    {"target": "MFE40_Control", "description": "40D MFE only (control, not target recommendation)", "score": "mfe", "provider": "pure_mfe40_provider", "selector": "exact"},
-                    {"target": "R40", "description": "40D close-to-close terminal return divided by canonical risk budget R", "score": "terminal_r", "provider": "pure_mfe40_provider", "selector": "exact"},
-                    {"target": "T40", "description": "(1 - min(MAE40, 1R)) * R40 - min(MAE40, 1R); MAE40 is nonnegative in R", "score": "terminal_mae_gate", "provider": "pure_mfe40_provider", "selector": "exact"},
-                    {"target": "T40", "description": "(1 - min(MAE40, 1R)) * R40 - min(MAE40, 1R); MAE40 is nonnegative in R", "score": "terminal_mae_gate", "provider": "pure_mfe40_provider", "selector": "exact", "strategy_arm_id": "C145", "strategy": "Daily"},
-                    {"target": "T40-MFE", "description": "(1 - min(MAE40_R,1)) * MFE40_R - min(MAE40_R,1); full 40D path", "score": "mfe_mae_gate", "provider": "pure_mfe40_provider", "selector": "exact"},
-                    {"target": "MFE40_Direct", "description": "Same MFE40_Control score; canonical No-K/No-R0 direct allocation", "score_source": "MFE40_Control", "selector": "direct"},
-                    {"target": "R40_Direct", "description": "Same R40 score; canonical No-K/No-R0 direct allocation", "score_source": "R40", "selector": "direct"},
-                    {"target": "T40_Direct", "description": "Same T40 score; canonical No-K/No-R0 direct allocation", "score_source": "T40", "selector": "direct"},
-                    {"target": "T40_Direct", "description": "Same T40 score; canonical No-K/No-R0 direct allocation", "score_source": "T40", "selector": "direct", "strategy_arm_id": "C146", "strategy": "Daily"},
-                    {"target": "T40", "description": "(1 - min(MAE40, 1R)) * R40 - min(MAE40, 1R); MAE40 is nonnegative in R", "score": "terminal_mae_gate", "provider": "pure_mfe40_provider", "selector": "exact", "strategy_arm_id": "C153", "parameter_family": "full"},
-                    {"target": "T40_Direct", "description": "Same T40 score; canonical No-K/No-R0 direct allocation", "score_source": "T40", "selector": "direct", "strategy_arm_id": "C154", "parameter_family": "full"},
-                    {"target": "FullTrade_NetPnL_Positive", "description": "Verified Full/P17 per-seed natural-exit broker NetPnL; perfect daily rank and strict positive membership; Exact K/R0", "score": "daily_trade_path_full_net_pnl", "provider": "daily_trade40_profile", "horizon_mode": "full_trade_cycle", "selector": "exact", "positive_output": "netpnl_positive_probability_v1", "strategy_arm_id": "C155", "parameter_family": "full"},
-                    {"target": "FullTrade_NetPnL_Positive_Direct", "description": "Same Full/P17 NetPnL truth and positive membership; No-K/No-R0 Direct", "score_source": "FullTrade_NetPnL_Positive", "selector": "direct", "positive_output": "netpnl_positive_probability_v1", "strategy_arm_id": "C156", "parameter_family": "full"},
-                    {"target": "T40-MFE_Direct", "description": "Same T40-MFE score; canonical No-K/No-R0 direct allocation", "score_source": "T40-MFE", "selector": "direct"},
-                    {"target": "DailyUniversal_MinTrade40_NetR", "description": "Formal Min ROOS Net-R, natural exit / 40 sessions / Research cutoff (earliest), hindsight ranking", "score": "daily_trade_path_net_r", "provider": "daily_trade40_profile", "selector": "exact"},
-                    {"target": "DailyUniversal_MinTrade40_NetR_Direct", "description": "Same formal per-seed Min ROOS daily truth and ranks; canonical No-K/No-R0 selector", "score_source": "DailyUniversal_MinTrade40_NetR", "selector": "direct"},
-                    {"target": "DailyUniversal_MinTrade_NetR", "description": "Formal per-seed Min ROOS stock-day Net-R through natural exit or Research-data-end closeout; no session cap", "score": "daily_trade_path_net_r", "provider": "daily_trade40_profile", "horizon_mode": "full_trade_cycle", "selector": "exact"},
-                    {"target": "DailyUniversal_MinTrade_NetR_Direct", "description": "Same full-cycle Min Net-R target and ranks; canonical No-K/No-R0 selector", "score_source": "DailyUniversal_MinTrade_NetR", "selector": "direct"},
-                    {"target": "DailyUniversal_MinTrade_NetPnL", "description": "Formal Min full-cycle realized broker-ledger NetPnL at canonical reference sizing; natural exit or Research-cutoff closeout, hindsight ranking", "score": "daily_trade_path_net_pnl", "provider": "daily_trade40_profile", "horizon_mode": "full_trade_cycle", "selector": "exact"},
-                    {"target": "DailyUniversal_MinTrade_NetPnL_Direct", "description": "Same full-cycle Min NetPnL perfect daily ranks; canonical No-K/No-R0 selector", "score_source": "DailyUniversal_MinTrade_NetPnL", "selector": "direct"},
-                    {"target": "DailyUniversal_MinTrade_NetPnL_Positive", "description": "Formal perfect dual-output NetPnL rank plus Positive membership under Exact K/R0; common model-score admission", "score_source": "DailyUniversal_MinTrade_NetPnL", "selector": "exact", "positive_output": "netpnl_positive_probability_v1", "strategy_arm_id": "C125"},
-                    {"target": "DailyUniversal_MinTrade_NetPnL_Positive_Direct", "description": "Formal perfect dual-output NetPnL rank plus Positive membership under Direct No-K/No-R0; historical raw-gated 204.88 is NON-PIT evidence, not reusable", "score_source": "DailyUniversal_MinTrade_NetPnL", "selector": "direct", "positive_output": "netpnl_positive_probability_v1", "strategy_arm_id": "C126"},
-                    {"target": "TrueDailyUniversal_MinTrade_NetPnL_Positive", "description": "Every feature-eligible stock-day has an independent next-session prior-close limit buy attempt; canonical full-cycle Min broker NetPnL, perfect rank plus Positive output, Exact K/R0", "score": "daily_trade_path_true_net_pnl", "provider": "daily_trade40_profile", "horizon_mode": "full_trade_cycle", "selector": "exact", "positive_output": "netpnl_positive_probability_v1", "strategy_arm_id": "C135"},
-                    {"target": "TrueDailyUniversal_MinTrade_NetPnL_Positive", "description": "Every feature-eligible stock-day has an independent next-session prior-close limit buy attempt; canonical full-cycle Min broker NetPnL, perfect rank plus Positive output, Exact K/R0", "score": "daily_trade_path_true_net_pnl", "provider": "daily_trade40_profile", "horizon_mode": "full_trade_cycle", "selector": "exact", "positive_output": "netpnl_positive_probability_v1", "strategy_arm_id": "C133", "strategy": "Daily"},
-                    {"target": "TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct", "description": "Same hypothetical daily entry full-cycle Min truth / Positive output; Direct No-K/No-R0", "score_source": "TrueDailyUniversal_MinTrade_NetPnL_Positive", "selector": "direct", "positive_output": "netpnl_positive_probability_v1", "strategy_arm_id": "C136"},
-                    {"target": "TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct", "description": "Same hypothetical daily entry full-cycle Min truth / Positive output; Direct No-K/No-R0", "score_source": "TrueDailyUniversal_MinTrade_NetPnL_Positive", "selector": "direct", "positive_output": "netpnl_positive_probability_v1", "strategy_arm_id": "C134", "strategy": "Daily"},
-                    # AI註: Raw TrueDaily truth is shared; Positive admission is comparison-local.
-                    {"target": "TrueDailyUniversal_MinTrade_NetPnL", "description": "Same TrueDaily full-cycle Min broker NetPnL truth; continuous perfect rank without Positive admission, Daily Exact K/R0", "score_source": "TrueDailyUniversal_MinTrade_NetPnL_Positive", "selector": "exact", "strategy_arm_id": "C137", "strategy": "Daily"},
-                    {"target": "TrueDailyUniversal_MinTrade_NetPnL_Direct", "description": "Same TrueDaily full-cycle Min broker NetPnL truth; continuous perfect rank without Positive admission, Daily Direct No-K/No-R0", "score_source": "TrueDailyUniversal_MinTrade_NetPnL_Positive", "selector": "direct", "strategy_arm_id": "C138", "strategy": "Daily"},
-                ),
+                # AI: Summary owns the baselines and comparison membership;
+                # Target validation and Summary consume the same projections.
+                "additional_parameter_baselines": {
+                    family: arm_id for family, arm_id in get_research_summary_baseline_arm_ids().items()
+                    if family != "min"
+                },
+                "oracle_comparisons": get_research_summary_oracle_comparisons(),
             },
             "dimensions": {
                 "percentile_method": "average_zero_based",

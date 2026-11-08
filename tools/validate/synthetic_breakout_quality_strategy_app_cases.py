@@ -543,13 +543,13 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and 'render_menu_item(2, "Rolling OOS Test")' in research_shell_source
         and 'render_menu_item(3, "Forward OOS Robustness Test")' in research_shell_source
         and 'render_menu_item(4, "Rolling OOS Robustness Test")' in research_shell_source
-        # AI: The formal Target [1] shifted only the Research root menu;
+        # AI: Summary moved into the first Research root slot;
         # the four Strategy Compare work types stay [1]..[4] in their submenu.
-        and 'render_menu_item(1, get_audit_method("target_ground_truth_strategy_romd").menu_label, default=True)' in research_shell_source
-        and 'render_menu_item(4, "策略組合比較")' in research_shell_source
-        and 'render_menu_item(6, integration_label)' in research_shell_source
-        and 'render_menu_item(7, "查看目前研究狀態與工件")' in research_shell_source
-        and 'elif choice == "6":\n                _strategy_runtime_integration_menu()' in research_shell_source
+        and 'render_menu_item(2, get_audit_method("target_ground_truth_strategy_romd").menu_label)' in research_shell_source
+        and 'render_menu_item(5, "策略組合比較")' in research_shell_source
+        and 'render_menu_item(7, integration_label)' in research_shell_source
+        and 'render_menu_item(8, "查看目前研究狀態與工件")' in research_shell_source
+        and 'elif choice == "7":\n                _strategy_runtime_integration_menu()' in research_shell_source
         and '"OOS + Rolling 一鍵／Consistency"' not in research_shell_source
         and '"OOS + Rolling Multi-seed 一鍵"' not in research_shell_source
         and "_run_strategy_oos_rolling_one_click" not in research_shell_source
@@ -1236,9 +1236,12 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and all(
             all(
                 bool(strategy_config.STRATEGY_COMPARE_ARMS[arm_id].get("dl_enabled"))
-                and str(strategy_config.STRATEGY_DL_SOURCES[
-                    strategy_config.STRATEGY_COMPARE_ARMS[arm_id]["dl_id"]
-                ].get("experiment_profile") or "") == str(row["experiment_profile"])
+                and str(row["experiment_profile"]) in {
+                    current_settings.dl_sources[source_id].experiment_profile
+                    for source_id in resolve_arm_runtime_dl_source_ids(
+                        current_settings, current_settings.arms[arm_id],
+                    )
+                }
                 for arm_id in row["strategy_arm_ids"]
             )
             for row in model_bindings

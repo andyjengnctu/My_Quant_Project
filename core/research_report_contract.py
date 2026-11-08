@@ -815,11 +815,11 @@ STRATEGY_CONSISTENCY_METRIC_KEYS = (
 # neutral and unavailable cells remain unstyled (no schema/metric changes).
 TARGET_DL_VALIDATION_OVERVIEW_REPORT = PersistentReportContract(
     report_id="research.target_dl_validation_overview",
-    version=6,
+    version=7,
     role="read_only_local_completed_report_summary",
-    menu_path=("Research", "Target Validation", "Target x DL Overview"),
+    menu_path=("Research", "Summary"),
     sections=(
-        S("comparison", 1, "Target \u00d7 DL \u9a57\u8b49\u7e3d\u89bd", "local_reports_only", (
+        S("comparison", 1, "Summary", "local_reports_only", (
             T("target_dl", (
                 C("target", "Target", alignment="left"),
                 C("entry_strategy", "Strategy", alignment="left"),

@@ -278,16 +278,15 @@ class BreakoutQualityModelTestSettings:
 
 
 def get_breakout_quality_model_test_settings() -> BreakoutQualityModelTestSettings:
-    model_profiles = tuple(
-        (str(model_id).strip(), str(profile).strip())
-        for model_id, profile in cfg.BREAKOUT_QUALITY_MODEL_TEST_PROFILES
-    )
+    from core.research_summary import get_research_summary_model_profiles
+
+    model_profiles = get_research_summary_model_profiles()
     required_training_model = tuple(
         str(value).strip() for value in cfg.BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE
     )
     if len(required_training_model) != 2 or required_training_model not in model_profiles:
         raise ValueError(
-            "模型比較／測試清單必須自動包含[1]/[2] canonical Training Model: "
+            "Summary 清單必須包含目前選定的 Training Model: "
             f"{required_training_model!r}"
         )
     if len(model_profiles) < 2:

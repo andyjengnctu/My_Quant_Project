@@ -6,6 +6,8 @@ It is not a user settings surface and contains no runtime resolver functions.
 
 from __future__ import annotations
 
+from core.research_summary import get_research_summary_strategy_arm_ids
+
 from config.breakout_quality import (
     BREAKOUT_QUALITY_SHARED_FITTING_CHECKPOINT_CACHE_ROOT,
 )
@@ -132,11 +134,11 @@ STRATEGY_COMPARE_SUITES = {
         },
     },
     "broker_cash_dl_conversion_v1": {
-        "filter_by_current_model_list": True,
+        "membership_source": "research_summary",
         # Single scientific matrix shared by OOS/Rolling and multi-seed robustness.
         # Historical DL arms reuse C96/P16; source identity remains registry-owned.
-        # Historical AO/CH/CI/Direct arms remain registered but filtered by the
-        # canonical Model Compare list; C104 is explicitly retired from this suite.
+        # AI: This catalog preserves historical ordering/display references.
+        # Current membership is projected exclusively from Research Summary.
         # Current CJ/CK Direct and K/AH Exact/Direct use the same P16 broker-cash
         # accounting; they differ only by model score or selector.
         "arm_ids": (
@@ -3408,7 +3410,9 @@ for _mode in ("oos", "rolling"):
     _profile_param_sources = STRATEGY_COMPARE_PROFILES[
         f"broker_cash_dl_conversion_{_mode}"
     ]["arm_param_source_overrides"]
-    for _arm_id in _BROKER_CASH_DL_ARM_IDS:
+    for _arm_id in dict.fromkeys((*_BROKER_CASH_DL_ARM_IDS, *get_research_summary_strategy_arm_ids())):
+        if not STRATEGY_COMPARE_ARMS[_arm_id].get("dl_enabled"):
+            continue
         _registered_source = str(STRATEGY_COMPARE_ARMS[_arm_id]["param_source"])
         if not _registered_source.endswith("_rolling_experiment"):
             raise ValueError(f"Unrecognized rolling parameter source: {_arm_id}/{_registered_source}")

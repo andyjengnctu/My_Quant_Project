@@ -595,6 +595,49 @@ def get_strategy_compare_suite(suite_id: str) -> dict[str, object]:
         str(key): str(value).strip()
         for key, value in dict(raw.get("display_name_bases") or {}).items()
     }
+    # AI: The Summary is the current membership owner. The stored suite is a
+    # scientific/display catalog; newly registered Summary arms require no second
+    # manual membership edit. Existing ordering remains stable for old artifacts.
+    if raw.get("membership_source") == "research_summary":
+        from core.research_summary import (
+            get_research_summary_strategy_arm_ids,
+            validate_research_summary_strategy_bindings,
+        )
+
+        selected_ids = get_research_summary_strategy_arm_ids()
+        validate_research_summary_strategy_bindings()
+        arm_ids = tuple(dict.fromkeys((
+            *(arm_id for arm_id in arm_ids if arm_id in selected_ids),
+            *selected_ids,
+        )))
+        active_set = set(arm_ids)
+        contrast_ids = tuple(
+            cid for cid in contrast_ids
+            if cid not in STRATEGY_COMPARE_CONTRASTS
+            or (str(STRATEGY_COMPARE_CONTRASTS[cid].get("left") or "") in active_set
+                and str(STRATEGY_COMPARE_CONTRASTS[cid].get("right") or "") in active_set)
+        )
+        display_name_bases = {
+            arm_id: display_name_bases.get(arm_id) or str(STRATEGY_COMPARE_ARMS[arm_id]["name"])
+            for arm_id in arm_ids
+        }
+
+    elif bool(raw.get("filter_by_current_model_list", False)):
+        # AI: Historical suites retain their registered projection semantics,
+        # while consuming the same Summary-derived current model set.
+        selected_profiles = {profile for _model_id, profile
+                             in get_breakout_quality_model_test_settings().model_profiles}
+        arm_ids = tuple(arm_id for arm_id in arm_ids if (
+            not STRATEGY_COMPARE_ARMS[arm_id].get("dl_enabled")
+            or STRATEGY_DL_SOURCES.get(STRATEGY_COMPARE_ARMS[arm_id].get("dl_id"), {})
+                .get("experiment_profile") in selected_profiles
+        ))
+        active = set(arm_ids)
+        contrast_ids = tuple(cid for cid in contrast_ids
+                             if STRATEGY_COMPARE_CONTRASTS[cid]["left"] in active
+                             and STRATEGY_COMPARE_CONTRASTS[cid]["right"] in active)
+        display_name_bases = {key: value for key, value in display_name_bases.items() if key in active}
+
     if not arm_ids or len(set(arm_ids)) != len(arm_ids):
         raise ValueError(f"Strategy Compare suite arm_ids不可空白／重複: {selected}")
     if len(set(contrast_ids)) != len(contrast_ids):
@@ -622,36 +665,6 @@ def get_strategy_compare_suite(suite_id: str) -> dict[str, object]:
         if str(spec.get("left") or "") not in arm_ids or str(spec.get("right") or "") not in arm_ids:
             raise ValueError(f"Strategy Compare suite contrast端點不在suite: {selected}/{cid}")
 
-    # Model-list-gated suites consume the same model-level SSOT as [1][3]～[1][6].
-    # Baselines remain enabled. DL arms are enabled only when their source profile is
-    # selected in BREAKOUT_QUALITY_MODEL_TEST_PROFILES and a formal arm already exists.
-    # A selected model without an authorized strategy arm remains MODEL-ONLY; no binding
-    # is synthesized here. Historical/non-current suites keep their stored membership.
-    if bool(raw.get("filter_by_current_model_list", False)):
-        selected_profiles = {
-            str(profile)
-            for _model_id, profile in get_breakout_quality_model_test_settings().model_profiles
-        }
-        active_arm_ids = []
-        for arm_id in arm_ids:
-            arm = dict(STRATEGY_COMPARE_ARMS[arm_id])
-            if not bool(arm.get("dl_enabled")):
-                active_arm_ids.append(arm_id)
-                continue
-            dl_id = str(arm.get("dl_id") or "").strip()
-            source = dict(STRATEGY_DL_SOURCES.get(dl_id) or {})
-            selected_primary = str(source.get("experiment_profile") or "") in selected_profiles
-            if selected_primary:
-                active_arm_ids.append(arm_id)
-        active = tuple(active_arm_ids)
-        active_set = set(active)
-        contrast_ids = tuple(
-            cid for cid in contrast_ids
-            if str(STRATEGY_COMPARE_CONTRASTS[cid].get("left") or "") in active_set
-            and str(STRATEGY_COMPARE_CONTRASTS[cid].get("right") or "") in active_set
-        )
-        arm_ids = active
-        display_name_bases = {key: value for key, value in display_name_bases.items() if key in active_set}
 
     return {
         "suite_id": selected,
@@ -663,6 +676,7 @@ def get_strategy_compare_suite(suite_id: str) -> dict[str, object]:
 
 def get_strategy_compare_model_bindings() -> tuple[dict[str, object], ...]:
     """Resolve shared model-list bindings without authorizing new strategy conversions."""
+    from core.research_summary import get_research_summary_rows
 
     # Historical arm contracts remain registered for artifact interpretation,
     # but current model-to-strategy bindings must use the active Compare Suite.
@@ -671,15 +685,12 @@ def get_strategy_compare_model_bindings() -> tuple[dict[str, object], ...]:
     rows = []
     for model_id, profile in get_breakout_quality_model_test_settings().model_profiles:
         bound = []
-        for arm_id, arm_raw in STRATEGY_COMPARE_ARMS.items():
-            if arm_id not in active_ids:
-                continue
-            arm = dict(arm_raw)
-            if not bool(arm.get("dl_enabled")):
-                continue
-            source = dict(STRATEGY_DL_SOURCES.get(str(arm.get("dl_id") or "")) or {})
-            if str(source.get("experiment_profile") or "") == str(profile):
-                bound.append(str(arm_id))
+        for group in get_research_summary_rows():
+            for binding in group.get("bindings", ()):
+                arm_id = str(binding.get("arm_id") or "")
+                profiles = {binding[role][1] for role in ("rank_model", "positive_model") if role in binding}
+                if arm_id in active_ids and profile in profiles:
+                    bound.append(arm_id)
         rows.append({
             "model_id": str(model_id),
             "experiment_profile": str(profile),
