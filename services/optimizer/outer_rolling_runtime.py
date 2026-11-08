@@ -117,6 +117,51 @@ def _validate_optimizer_runtime_context(session, session_spec: dict | None) -> N
         ) from exc
 
 
+def summarize_optimizer_no_finalist(study, *, objective_mode: str) -> str:
+    """Explain an unpublishable search using the canonical trial evidence.
+
+    This function is diagnostic-only: no score, gate, trial budget, or
+    optimizer selection policy is changed. A COMPLETE trial with an invalid
+    objective value is not a qualified candidate.
+    """
+    from collections import Counter
+
+    from services.optimizer.study_utils import (
+        _trial_matches_objective_mode,
+        is_qualified_trial_value,
+    )
+
+    trials = list(getattr(study, "trials", ()) or ())
+    states = Counter()
+    reasons = Counter()
+    qualified = 0
+    invalid = 0
+    for trial in trials:
+        state = str(getattr(getattr(trial, "state", None), "name", "UNKNOWN"))
+        states[state] += 1
+        value = getattr(trial, "value", None)
+        attrs = dict(getattr(trial, "user_attrs", None) or {})
+        if (state == "COMPLETE" and is_qualified_trial_value(value)
+                and _trial_matches_objective_mode(trial, objective_mode)):
+            qualified += 1
+            continue
+        if state == "COMPLETE":
+            invalid += 1
+        reason = " ".join(str(attrs.get("fail_reason") or "").split())
+        if not reason:
+            if state == "COMPLETE":
+                reason = "無有效分數但未紀錄 fail_reason" if not is_qualified_trial_value(value) else "objective_mode 不一致"
+            else:
+                reason = f"trial state={state}"
+        reasons[reason[:110]] += 1
+    major = "; ".join(f"{reason} ×{count}" for reason, count in reasons.most_common(3))
+    states_text = ",".join(f"{state}:{count}" for state, count in sorted(states.items()))
+    return (
+        f"trials={len(trials)} | qualified={qualified} | invalid={invalid} "
+        f"| states={states_text or 'none'} | fail_reason={major or '沒有 trial 證據'}"
+    )
+
+
 def _is_non_retryable_fold_failure(exc: BaseException | None) -> bool:
     seen: set[int] = set()
     current = exc
@@ -128,6 +173,7 @@ def _is_non_retryable_fold_failure(exc: BaseException | None) -> bool:
     text = " ".join(parts).lower()
     markers = (
         "non_retryable_runtime_identity_error",
+        "non_retryable_no_finalist",
         "找不到 breakout quality 正式 manifest",
         "breakout quality manifest experiment_profile",
         "找不到selection pit score",

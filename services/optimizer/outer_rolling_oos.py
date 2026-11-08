@@ -176,6 +176,7 @@ from services.optimizer.outer_rolling_runtime import (
     _remaining_optimizer_trials,
     _resolve_outer_rolling_db_file,
     _tail_text_file,
+    summarize_optimizer_no_finalist,
     _validate_optimizer_runtime_context,
 )
 from services.optimizer.outer_rolling_parallel_progress import (
@@ -698,7 +699,7 @@ def _run_missing_parallel_fold_tasks_sequentially(*, tasks: list[dict], rows: li
         return chain_state
     if _is_non_retryable_fold_failure(cause):
         raise RuntimeError(
-            "NON_RETRYABLE_RUNTIME_IDENTITY_ERROR: parallel fold發生runtime identity／manifest錯誤；"
+            "NON_RETRYABLE_OPTIMIZER_ERROR: parallel fold發生不可重試的科學契約或參數品質失敗；"
             "序列fallback不會改變結果，已直接中止。"
             f" cause={_format_exception_summary(cause)}"
         ) from cause
@@ -1143,6 +1144,7 @@ def _build_outer_rolling_fold_task(
         "fold_workers": int(common["fold_workers"]),
         "optimizer_session_spec": dict(common["optimizer_session_spec"]),
         "progress_display_contract": dict(common["progress_display_contract"]),
+        "require_complete_param_schedule": bool(common.get("require_complete_param_schedule", False)),
     })
     if mode in {"parallel", "seed"}:
         task["seed_ensemble_policy"] = dict(seed_ensemble_policy or {})
@@ -1485,6 +1487,7 @@ def _run_outer_rolling_oos_fold_ensemble_task(task: dict) -> dict:
             "selection_period": str(task.get("selection_period") or ""),
             "show_oos": True,
             "progress_display_contract": progress_display_contract,
+        "require_complete_param_schedule": paramset_models_dir is not None,
         }
         for member_index, seed in enumerate(seeds, start=1)
     ]
@@ -2228,6 +2231,14 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
             )
             policy_items = _build_policy_items(finalists, objective_mode=objective_mode, session=session)
             if not any(item is not None for item in policy_items.values()):
+                if bool(task.get("require_complete_param_schedule", False)):
+                    details = summarize_optimizer_no_finalist(study, objective_mode=objective_mode)
+                    print(f"[失敗] 必要參數 Fold 無合格 Finalist | {details}", flush=True)
+                    raise RuntimeError(
+                        "NON_RETRYABLE_NO_FINALIST: 正式策略參數排程無合格 Finalist，"
+                        "不得略過該 Fold 或發布不完整參數；"
+                        f"fold={fold_idx}/{fold_count} OOS={oos_period_display} | {details}"
+                    )
                 fold_elapsed = (
                     time.perf_counter() - fold_start
                     + float(resume_progress.get("search_active_elapsed_sec", 0.0) or 0.0)
@@ -2641,6 +2652,7 @@ def run_outer_rolling_oos(
         "fold_workers": fold_workers,
         "optimizer_session_spec": session_spec,
         "progress_display_contract": progress_display_contract,
+        "require_complete_param_schedule": paramset_models_dir is not None,
     }
     if fold_parallel_enabled:
         log_dir = os.path.join(output_dir, "outer_rolling_oos", "fold_logs", session_ts)
@@ -2988,6 +3000,13 @@ def run_outer_rolling_oos(
             )
             policy_items = _build_policy_items(finalists, objective_mode=objective_mode, session=session)
             if not any(item is not None for item in policy_items.values()):
+                if paramset_models_dir is not None:
+                    details = summarize_optimizer_no_finalist(study, objective_mode=objective_mode)
+                    raise RuntimeError(
+                        "NON_RETRYABLE_NO_FINALIST: 正式策略參數排程無合格 Finalist，"
+                        "不得略過該 Fold 或發布不完整參數；"
+                        f"fold={fold_idx}/{fold_count} OOS={oos_period_display} | {details}"
+                    )
                 fold_elapsed = time.perf_counter() - fold_start
                 fold_timing_rows.append(_build_outer_timing_row(
                     fold_idx=fold_idx,

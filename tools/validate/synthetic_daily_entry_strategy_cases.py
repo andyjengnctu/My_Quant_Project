@@ -21,6 +21,70 @@ from services.audit import target_oracle_romd as oracle
 
 
 class DailyEntryStrategyCases(TestCase):
+    def test_optimizer_no_finalist_evidence_keeps_unqualified_trials_invalid(self):
+        """Canonical Parameter Producer may not publish an invalid Trial as best."""
+        import optuna
+        from services.optimizer.outer_rolling_runtime import summarize_optimizer_no_finalist
+        from services.optimizer.study_utils import INVALID_TRIAL_VALUE
+
+        study = optuna.create_study(direction="maximize")
+        study.add_trial(optuna.trial.create_trial(
+            state=optuna.trial.TrialState.COMPLETE,
+            value=float(INVALID_TRIAL_VALUE),
+            user_attrs={"objective_mode": "split_train_romd", "fail_reason": "年化交易次數過低"},
+        ))
+        study.add_trial(optuna.trial.create_trial(
+            state=optuna.trial.TrialState.COMPLETE,
+            value=float(INVALID_TRIAL_VALUE),
+            user_attrs={"objective_mode": "split_train_romd", "fail_reason": "年化交易次數過低"},
+        ))
+        study.add_trial(optuna.trial.create_trial(
+            state=optuna.trial.TrialState.COMPLETE,
+            value=float(INVALID_TRIAL_VALUE),
+            user_attrs={"objective_mode": "split_train_romd", "fail_reason": "權益曲線過度震盪"},
+        ))
+        summary = summarize_optimizer_no_finalist(study, objective_mode="split_train_romd")
+        self.assertIn("trials=3", summary)
+        self.assertIn("qualified=0", summary)
+        self.assertIn("invalid=3", summary)
+        self.assertIn("年化交易次數過低 ×2", summary)
+
+    def test_optimizer_no_finalist_is_non_retryable_and_does_not_relaunch_folds(self):
+        from services.optimizer.outer_rolling_runtime import _is_non_retryable_fold_failure
+        from services.optimizer.outer_rolling_oos import _run_missing_parallel_fold_tasks_sequentially
+
+        failure = RuntimeError("NON_RETRYABLE_NO_FINALIST: trials=300 | qualified=0")
+        self.assertTrue(_is_non_retryable_fold_failure(failure))
+        with patch("services.optimizer.outer_rolling_oos._run_outer_rolling_oos_fold_task",
+                   side_effect=AssertionError("不應重新搜尋")) as retried:
+            with self.assertRaisesRegex(RuntimeError, "NON_RETRYABLE_OPTIMIZER_ERROR"):
+                _run_missing_parallel_fold_tasks_sequentially(
+                    tasks=[{"oos_year": 202101, "fold_idx": 1, "fold_count": 1}],
+                    rows=[], fold_timing_rows=[], chain_state={}, cause=failure,
+                )
+        retried.assert_not_called()
+
+    def test_optimizer_parameter_fold_payload_demands_completed_schedule(self):
+        from services.optimizer.outer_rolling_oos import _build_outer_rolling_fold_task
+
+        task = _build_outer_rolling_fold_task(
+            mode="parallel",
+            fold={"oos_year": 202101, "oos_start_date": "2021-01-01",
+                  "oos_end_date": "2021-12-31", "oos_period": "2021-01~2021-12",
+                  "selection_start_date": "2011-01-01", "selection_end_date": "2020-12-31",
+                  "selection_period": "2011-01~2020-12"},
+            fold_idx=1, fold_count=6,
+            config_payload={},
+            common={"project_root": ".", "output_dir": ".", "base_policy": {},
+                    "selected_data_dir": ".", "optimizer_required_min_rows": 1,
+                    "session_ts": "fixture", "optimizer_seed": 42, "sampler_kind": "random",
+                    "timing_mode": False, "fold_workers": 1,
+                    "optimizer_session_spec": {}, "progress_display_contract": {},
+                    "require_complete_param_schedule": True},
+            log_dir="logs", seed_ensemble_policy={},
+        )
+        self.assertTrue(task["require_complete_param_schedule"])
+
     def test_registered_parameter_policy_controls_daily_optimizer_diagnostics(self):
         """A declared single-parameter policy cannot trigger an unrelated agree replay."""
         from types import SimpleNamespace
