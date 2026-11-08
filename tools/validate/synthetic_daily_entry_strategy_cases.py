@@ -159,9 +159,15 @@ class DailyEntryStrategyCases(TestCase):
                                   if item["target"] == row["score_source"])
                 self.assertEqual(profile.continuous_target_id,
                                  oracle_supervised_target_id(source))
-                expected_oracle_target = (profile.continuous_target_id
-                                          if source.get("score", "").startswith("daily_trade_path_")
-                                          else source["target"])
+                expected_oracle_target = (
+                    oracle._daily_truth_identity(
+                        source["score"],
+                        None if source.get("horizon_mode") == "full_trade_cycle" else
+                        source.get("horizon_sessions", oracle.HORIZON_SESSIONS),
+                    )[0]
+                    if source.get("score", "").startswith("daily_trade_path_")
+                    else source["target"]
+                )
                 self.assertEqual(contracts[row["target"]]["target_id"], expected_oracle_target)
         self.assertTrue(all(oracle._oracle_target_strategy(d, r["target"]) == strategy.split("::", 1)[0]
                             for strategy, d in scoped

@@ -284,8 +284,10 @@ def oracle_target_semantics(row: Mapping[str, Any]) -> tuple[str, str, str]:
     if raw.endswith("_Direct") != (selector == "direct"):
         raise ValueError(f"Legacy receipt selector mismatch: {raw} / {selector}")
     name = oracle_scientific_target_name(raw)
-    if raw.startswith("DailyUniversal_") and strategy != "Breakout":
-        raise ValueError(f"DailyUniversal is historically Breakout: {raw}")
+    # AI: The legacy name identifies the *score truth* (event-driven), not
+    # the portfolio entry policy. A separately registered Daily arm may
+    # consume those PIT scores without changing their Target or maturity.
+    # Arm/entry/family agreement is checked by the canonical Compare contract.
     if "_Control" in name or name.endswith("_Direct"):
         raise ValueError(f"Non-target suffix remains in scientific Target: {name}")
     if name.endswith("_Positive") != bool(row.get("positive_output")):
@@ -558,8 +560,11 @@ def resolve_current_oracle_comparisons(source: dict[str, Any]) -> tuple[dict[str
         key = oracle_comparison_key(row)
         if key in keys:
             raise ValueError(f"Canonical Oracle comparison duplicate Target x Strategy: {key}")
-        if name in inactive:
-            raise ValueError(f"Historical-only Oracle target cannot be executable: {name}")
+        # AI: Retirement belongs to the complete historical treatment key.
+        # A different entry/parameter family may reuse the same unchanged
+        # Target, but the original Breakout/Min receipt remains retired.
+        if key in inactive:
+            raise ValueError(f"Historical-only Oracle target cannot be executable: {key}")
         keys.add(key)
         if row.get("enabled", True):
             family = oracle_parameter_family(row)

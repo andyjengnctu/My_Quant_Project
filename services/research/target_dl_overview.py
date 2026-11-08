@@ -193,8 +193,8 @@ def _oracle_rows(root: Path, definition, versions: Mapping[str, tuple]):
     # those rows. Do not use them as current Oracle or DL results.
     retired = (set(definition.source.get("retired_oracle_targets") or ())
                | set(definition.source.get("historical_only_oracle_targets") or ()))
-    if retired.intersection(str(item["target"]) for item in comparisons):
-        raise ValueError("Current and retired Oracle target identities overlap")
+    if retired.intersection(oracle_comparison_key(item) for item in comparisons):
+        raise ValueError("Current and retired Oracle treatment identities overlap")
     score_targets = {}
     for item in comparisons:
         raw = item
@@ -279,7 +279,7 @@ def _oracle_rows(root: Path, definition, versions: Mapping[str, tuple]):
                 except ValueError:
                     metrics.clear()
                     break
-            if ((key not in targets and target not in retired) or key in seen or
+            if ((key not in targets and key not in retired) or key in seen or
                     _count(item.get("seeds")) != len(payload["seeds"]) or
                     (item.get("comparison_key") not in (None, key))):
                 metrics.clear()

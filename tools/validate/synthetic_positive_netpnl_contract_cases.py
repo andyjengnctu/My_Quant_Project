@@ -465,8 +465,11 @@ class PositiveNetPnlContractCases(TestCase):
             self.assertEqual(set(values), legacy_keys)
             self.assertNotIn(positive_exact, values)  # Never backfill a new Target.
             self.assertNotIn(positive_direct, values)  # Old raw Gate != formal dual-head.
+            # A historical Min/P16 publication predates independently
+            # registered Daily/P18 parameter-family treatments.
             true_daily = {row["target"] for row in comparisons
-                          if row.get("strategy") == "Daily"}
+                          if row.get("strategy") == "Daily"
+                          and oracle_parameter_family(row) == "min"}
             self.assertTrue(true_daily)
             self.assertTrue({name + "::Daily" for name in true_daily}.isdisjoint(values))
             # A Target may already have a certified Breakout receipt (e.g. T40)

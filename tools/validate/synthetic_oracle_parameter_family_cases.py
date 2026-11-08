@@ -29,6 +29,76 @@ def definition():
 
 
 class OracleParameterFamilyCases(TestCase):
+    def test_event_netpnl_daily_p18_does_not_reactivate_legacy_p16(self):
+        from config import research_summary as roster
+        from core.research_summary import (
+            get_research_summary_rows, get_research_summary_strategy_arm_ids,
+            get_research_summary_oracle_source_catalog,
+        )
+        from core.strategy_compare_policy import get_strategy_comparison_settings
+        from core.strategy_compare_registry import STRATEGY_COMPARE_ARMS
+
+        assert_roster = get_research_summary_rows()
+        by_arm = {binding["arm_id"]: group
+                  for group in assert_roster
+                  for binding in group.get("bindings", ()) if binding.get("arm_id")}
+        archived = {binding["arm_id"]: group
+                    for group in roster.RESEARCH_SUMMARY_ROWS
+                    if not group.get("enabled", True)
+                    for binding in group.get("bindings", ()) if binding.get("arm_id")}
+        d = definition()
+        current = {r.get("strategy_arm_id"): r
+                   for r in resolve_current_oracle_comparisons(d.source)}
+        self.assertTrue({"C162", "C163"}.issubset(current))
+        self.assertTrue({"C123", "C124"}.isdisjoint(get_research_summary_strategy_arm_ids()))
+        settings = get_strategy_comparison_settings("broker_cash_dl_conversion_rolling")
+        active = {arm.arm_id for arm in settings.enabled_arms}
+        self.assertTrue({"C162", "C163"}.issubset(active))
+        self.assertTrue({"C123", "C124"}.isdisjoint(active))
+        for arm_id, historical, selector in (("C162", "C123", "exact"),
+                                             ("C163", "C124", "direct")):
+            with self.subTest(arm=arm_id):
+                new = by_arm[arm_id]["oracle"]
+                frozen = archived[historical]["oracle"]
+                self.assertEqual({k: new.get(k) for k in ("target", "selector", "score", "provider",
+                                                            "horizon_mode", "score_source")},
+                                 {k: frozen.get(k) for k in ("target", "selector", "score", "provider",
+                                                                "horizon_mode", "score_source")})
+                self.assertEqual(new["strategy_arm_id"], arm_id)
+                self.assertEqual((new["strategy"], new["parameter_family"]), ("Daily", "daily_min"))
+                self.assertEqual(new["selector"], selector)
+                self.assertEqual(oracle_comparison_key(new),
+                                 f'{new["target"]}::Daily::Daily_min')
+                arm = STRATEGY_COMPARE_ARMS[arm_id]
+                self.assertEqual((arm["dl_id"], arm["entry_strategy"], arm["param_source"]),
+                                 ("CONT13CO_ROLL", "Daily", "daily_min_best_broker_cash_rolling_experiment"))
+                self.assertEqual(arm["replay_contract_version"], 1)
+                self.assertNotIn("positive_dl_id", arm.get("dl_runtime_options", {}))
+        producers = {row["target"]: row for row in get_research_summary_oracle_source_catalog()}
+        self.assertEqual(producers["DailyUniversal_MinTrade_NetPnL"]["score"],
+                         archived["C123"]["oracle"]["score"])
+        scope = next(sc for name, sc in oracle._oracle_strategy_scopes(d)
+                     if name == "Daily::Daily_min")
+        plan = oracle._oracle_comparison_plan(scope)
+        self.assertEqual(plan["daily_recipes"]["DailyUniversal_MinTrade_NetPnL"],
+                         ("daily_trade_path_net_pnl", "daily_trade40_profile", None))
+        self.assertEqual(plan["aliases"]["DailyUniversal_MinTrade_NetPnL_Direct"],
+                         "DailyUniversal_MinTrade_NetPnL")
+        self.assertTrue({"C162-C161", "C163-C161", "C162-C163"}.issubset(
+            {contrast.contrast_id for contrast in settings.enabled_contrasts}))
+        # Same old Breakout/min receipt key can never become current again.
+        with self.assertRaisesRegex(ValueError, "Historical-only Oracle target"):
+            resolve_current_oracle_comparisons({**d.source,
+                "oracle_comparisons": (*d.source["oracle_comparisons"],
+                                      dict(archived["C123"]["oracle"]))})
+        # Even a frozen historical template may not re-open its original Min family.
+        modified = tuple({**row, "parameter_family": "min"}
+                         if row.get("oracle_template_arm_id") == "C123" else row
+                         for row in roster.RESEARCH_SUMMARY_ROWS)
+        with patch.object(roster, "RESEARCH_SUMMARY_ROWS", modified):
+            with self.assertRaisesRegex(ValueError, "Invalid Summary Oracle template"):
+                get_research_summary_rows()
+
     def test_parameter_family_is_a_strategy_display_qualifier_not_a_target(self):
         d = definition()
         comparisons = resolve_current_oracle_comparisons(d.source)
@@ -172,7 +242,7 @@ class OracleParameterFamilyCases(TestCase):
         for control in controls:
             self.assertNotIn(control, shown_targets)
             self.assertIn(control, out.split("Portfolio REUSE", 1)[1])
-        self.assertIn("Portfolio REUSE 96 / RUN", out)
+        self.assertIn(f"Portfolio REUSE {len(targets) * len(seed_set)} / RUN", out)
         self.assertIn("RUN 4", out)
         self.assertIn("No-DL Portfolio", out)
         with self.assertRaisesRegex(ValueError, "mixed into Target"):
@@ -252,7 +322,8 @@ class OracleParameterFamilyCases(TestCase):
                             row.get("strategy", "Breakout") == "Daily"])),
                           ("Breakout::Full", "C97", len([row for row in comparisons
                             if oracle_parameter_family(row) == "full"])),
-                          ("Daily::Daily_min", "C161", 2)])
+                          ("Daily::Daily_min", "C161", len([row for row in comparisons
+                            if oracle_parameter_family(row) == "daily_min"]))])
         with TemporaryDirectory() as temp:
             root = Path(temp)
             ledger = root / "doc/scientific_contracts/REPORT_CONTRACT_VERSIONS.json"

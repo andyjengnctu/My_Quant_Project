@@ -6332,7 +6332,12 @@ class OracleInventoryAndSourceIsolationRegressionCases(TestCase):
             "DailyUniversal_MinTrade_NetPnL", "DailyUniversal_MinTrade_NetPnL_Direct",
             "T40-MFE", "T40-MFE_Direct",
         }
-        self.assertTrue(retired_targets.isdisjoint(names))
+        # Retire the original Breakout/P16 treatment identities, not the
+        # immutable NetPnL outcome reused with an independently fitted P18
+        # entry policy.  Display names alone cannot identify a Replay.
+        from core.audit_registry import oracle_comparison_key
+        current_keys = {oracle_comparison_key(row) for row in selected}
+        self.assertTrue(retired_targets.isdisjoint(current_keys))
         self.assertTrue(retired_targets.issubset(
             definition.source["historical_only_oracle_targets"]))
         self.assertTrue({"DailyUniversal_MinTrade_NetPnL_Positive",
@@ -6344,7 +6349,13 @@ class OracleInventoryAndSourceIsolationRegressionCases(TestCase):
         catalog = definition.source["oracle_source_catalog"]
         root = next(row for row in catalog if row["target"] ==
                     "DailyUniversal_MinTrade_NetPnL")
-        self.assertTrue(root["source_only"])
+        # A source-only producer can become the active producer in another
+        # family without restoring the retired Breakout/Min comparison.
+        self.assertTrue(root.get("source_only") or (
+            oracle_comparison_key(root) ==
+            "DailyUniversal_MinTrade_NetPnL::Daily::Daily_min"
+            and root["selector"] == "exact"
+        ))
         self.assertEqual(root["score"], "daily_trade_path_net_pnl")
         self.assertEqual(root["horizon_mode"], "full_trade_cycle")
         self.assertFalse(any(row["target"] in {"T40-MFE", "T40-MFE_Direct"}

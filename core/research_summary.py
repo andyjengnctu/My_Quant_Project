@@ -36,7 +36,17 @@ def get_research_summary_rows() -> tuple[dict[str, Any], ...]:
         if template_arm is not None:
             template = oracle_templates.get(template_arm)
             bindings = tuple(row.get("bindings", ()))
-            if (template is None or not template.get("enabled", True)
+            # AI: An inactive historical treatment can still supply its
+            # approved immutable score recipe to a *different* parameter
+            # family.  Retirement of the original comparison key is enforced
+            # by the Oracle registry; this never reactivates the old arm.
+            retired_template_same_family = bool(
+                template is not None
+                and not template.get("enabled", True)
+                and str(row.get("parameter_family") or "min") ==
+                    str(template["oracle"].get("parameter_family") or "min")
+            )
+            if (template is None or retired_template_same_family
                     or not template["oracle"].get("enabled", True)
                     or "oracle" in row or "arm_id" in row
                     or len(bindings) != 1 or not bindings[0].get("arm_id")
@@ -52,6 +62,8 @@ def get_research_summary_rows() -> tuple[dict[str, Any], ...]:
             row["oracle"] = {
                 **template["oracle"],
                 "strategy_arm_id": bindings[0]["arm_id"],
+                "strategy": str(row.get("strategy") or
+                                template["oracle"].get("strategy", "Breakout")),
                 "parameter_family": row["parameter_family"],
             }
         if not isinstance(row, Mapping):

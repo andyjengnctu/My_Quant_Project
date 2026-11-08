@@ -287,8 +287,8 @@ def _oracle_comparison_plan(definition) -> dict[str, Any]:
             raise OracleBlockedError(f"Oracle comparison name缺少、重複或非法：{name}")
         # Historical identities are owned by the canonical Audit Registry.
         # Removing a row does not free its name for a different recipe.
-        if name in _ORACLE_RETIRED_TARGETS:
-            raise OracleBlockedError(f"Oracle retired Target identity不得重新啟用或改作其他score：{name}")
+        if oracle_comparison_key(entry) in _ORACLE_RETIRED_TARGETS:
+            raise OracleBlockedError(f"Oracle retired Target treatment不得重新啟用或改作其他score：{name}")
         if selector not in {"exact", "direct"}:
             raise OracleBlockedError(f"Oracle comparison selector未支援：{name} {selector}")
         # Scientific target names are immutable. A previous name cannot be
@@ -308,7 +308,10 @@ def _oracle_comparison_plan(definition) -> dict[str, Any]:
         if entry.get("score_source"):
             source = str(entry["score_source"])
             if source in _ORACLE_RETIRED_TARGETS and not any(
-                row["target"] == source and row.get("source_only")
+                row["target"] == source and (
+                    row.get("source_only") or
+                    (row.get("selector") == "exact" and row.get("score") and row.get("provider"))
+                )
                 for row in _ORACLE_DEFAULT_COMPARISONS
             ):
                 raise OracleBlockedError(f"Oracle score來源非法：{name} -> {source}")
@@ -353,7 +356,9 @@ def _oracle_comparison_plan(definition) -> dict[str, Any]:
         )
         if (source_entry is None
                 or (source_name in _ORACLE_RETIRED_TARGETS
-                    and not source_entry.get("source_only"))
+                    and not (source_entry.get("source_only") or
+                             (source_entry.get("selector") == "exact" and
+                              source_entry.get("score") and source_entry.get("provider"))))
                 or source_entry.get("selector") != "exact"
                 or source_entry.get("score_source")):
             raise OracleBlockedError(

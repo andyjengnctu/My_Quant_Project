@@ -24,6 +24,18 @@ RESEARCH_SUMMARY_ROWS = (
     {'oracle_template_arm_id': 'C146', 'parameter_family': 'daily_min',
      'bindings': ({'arm_id': 'C160',
                    'rank_model': ('MR-13CJ', 'daily_universal_terminal_mae_gated_t40_full_list_ndcg_pairwise')},)},
+    # Keep C123/C124 retired in Breakout/P16.  Only reuse their immutable
+    # event-driven full-cycle NetPnL score recipes for new Daily/P18 arms.
+    {'oracle_template_arm_id': 'C123', 'parameter_family': 'daily_min',
+     'strategy': 'Daily',
+     'bindings': ({'arm_id': 'C162',
+                   'rank_model': ('MR-13CO',
+                                  'daily_universal_formal_mintrade_fullcycle_netpnl_per_seed_full_list_ndcg_pairwise')},)},
+    {'oracle_template_arm_id': 'C124', 'parameter_family': 'daily_min',
+     'strategy': 'Daily',
+     'bindings': ({'arm_id': 'C163',
+                   'rank_model': ('MR-13CO',
+                                  'daily_universal_formal_mintrade_fullcycle_netpnl_per_seed_full_list_ndcg_pairwise')},)},
     {'oracle': {'target': 'MFE40_Control',
                 'description': '40D MFE only (control, not target recommendation)',
                 'score': 'mfe',
