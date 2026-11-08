@@ -3244,6 +3244,23 @@ class ExecutionAccelerationCases(unittest.TestCase):
                 actual = compute_file_sha256(target)
                 self.assertEqual(proof.reviewed_execution_source_sha256(relative, actual), actual)
 
+    def test_ast_fingerprints_match_across_empty_list_dump_conventions(self):
+        import ast
+        from copy import deepcopy
+        from core.research_execution_equivalence import canonical_ast_schema
+        original = ast.parse("def f():\n    return []\n")
+        native_fields = [(type(n), n._fields) for n in ast.walk(original)]
+        modern = deepcopy(original)
+        for node in ast.walk(modern):
+            node._fields = tuple(key for key in node._fields if getattr(node, key, None) != [])
+        canonical = canonical_ast_schema(original)
+        self.assertEqual(ast.dump(canonical, include_attributes=False),
+                         ast.dump(canonical_ast_schema(modern), include_attributes=False))
+        self.assertEqual(native_fields, [(type(n), n._fields) for n in ast.walk(original)])
+        self.assertNotEqual(ast.dump(canonical, include_attributes=False),
+                            ast.dump(canonical_ast_schema(ast.parse("def f():\n    return [1]\n")),
+                                     include_attributes=False))
+
     def test_reviewed_execution_proof_never_accepts_unknown_source_or_calculation(self):
         from core.research_execution_equivalence import (
             _REVIEWED, reviewed_execution_source_sha256, reviewed_calculation_sha256,

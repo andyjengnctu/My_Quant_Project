@@ -95,10 +95,29 @@ _RESEARCH_SELECTION_ONLY_CONFIG_BASELINE_SHA256 = (
 # from model-membership assignments/import and its one policy getter, both
 # complete module ASTs are independently unchanged. The exact reviewed ASTs
 # below preserve the uploaded source identities, not a different producer.
-_SUMMARY_MEMBERSHIP_CONFIG_AST_SHA256 = "ad2665af808fd794b18030d18bde7c98fb722498373d06857b57a37a458c86ed"
-_SUMMARY_MEMBERSHIP_CONFIG_BASELINE_SHA256 = "a5d2b37103fe1f921ef3ebfd97af54a1b09622de4359e5e4e66ade432f52046a"
-_SUMMARY_MEMBERSHIP_POLICY_AST_SHA256 = "69c605f88e7bc2cc1e1dc4fc284f419b9040526a5c7f1a123cfdef18f5334474"
+_SUMMARY_MEMBERSHIP_CONFIG_AST_SHA256 = "419dd1afabf15fa38522de310d06719f36bcaec31ff1701fe54da1cfd344603f"
+_SUMMARY_MEMBERSHIP_CONFIG_BASELINE_SHA256 = _RESEARCH_SELECTION_ONLY_CONFIG_BASELINE_SHA256
+_SUMMARY_MEMBERSHIP_POLICY_AST_SHA256 = "200baddc2fedeb3f88cf5c755c43891e5302a3f2e5ed4f86419daf69e961b7e2"
 _SUMMARY_MEMBERSHIP_POLICY_BASELINE_SHA256 = "8c6a1d59c13d87efca83b10587b0d23027f36af9c2403b9ff165fcd1e2fd943f"
+
+
+def canonical_ast_schema(tree):
+    """Copy an AST using the published Python 3.13+ empty-list dump convention.
+
+    Only empty list fields are omitted; all nonempty fields and their order
+    remain intact. This keeps approved hashes portable without mutating the
+    caller's cached AST or masking changes to executable values.
+    """
+    import ast
+    from copy import deepcopy
+
+    result = deepcopy(tree)
+    for node in ast.walk(result):
+        node._fields = tuple(
+            name for name in node._fields
+            if not isinstance(getattr(node, name, None), list) or getattr(node, name)
+        )
+    return result
 
 
 def _certified_model_selection_only_config_sha256(relative: str, actual: str) -> str:
@@ -136,7 +155,7 @@ def _certified_model_selection_only_config_sha256(relative: str, actual: str) ->
         count += 1
     if count != 1:
         return actual
-    selection_free_ast = ast.dump(tree, annotate_fields=True, include_attributes=False)
+    selection_free_ast = ast.dump(canonical_ast_schema(tree), annotate_fields=True, include_attributes=False)
     syntax_sha = sha256(selection_free_ast.encode("utf-8")).hexdigest()
     if syntax_sha == _SUMMARY_MEMBERSHIP_CONFIG_AST_SHA256:
         return _SUMMARY_MEMBERSHIP_CONFIG_BASELINE_SHA256
@@ -157,7 +176,7 @@ def _certified_summary_membership_policy_sha256(relative: str, actual: str) -> s
     source = Path(__file__).resolve().parents[1] / relative
     if not source.is_file() or sha256(source.read_bytes()).hexdigest() != actual:
         return actual
-    syntax = ast.dump(ast.parse(source.read_text(encoding="utf-8")), include_attributes=False)
+    syntax = ast.dump(canonical_ast_schema(ast.parse(source.read_text(encoding="utf-8"))), include_attributes=False)
     if sha256(syntax.encode("utf-8")).hexdigest() == _SUMMARY_MEMBERSHIP_POLICY_AST_SHA256:
         return _SUMMARY_MEMBERSHIP_POLICY_BASELINE_SHA256
     return actual

@@ -1822,6 +1822,7 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         for model_id, profile_name
         in breakout_quality_config.BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES
     )
+    config_source = (project_root / "config" / "breakout_quality.py").read_text(encoding="utf-8")
     from config import research_summary as summary_cfg
     from core.research_summary import get_research_summary_model_profiles
 
