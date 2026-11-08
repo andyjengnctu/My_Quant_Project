@@ -167,8 +167,20 @@ def load_full_history(path: Path, *, expected_seed: int,
         raise FormalMinTrade40PITBlocked("Historical Full teacher source/adaptation mismatch")
     meta = dict(params.get("meta") or {})
     for key, wanted in reference["meta"].items():
-        if str(meta.get(key)) != str(wanted):
-            raise FormalMinTrade40PITBlocked(f"Historical Full schedule field differs: {key}")
+        actual = meta.get(key)
+        if key in {"first_oos_date", "last_oos_date"}:
+            # Canonical Outer Rolling stores fold-start month buckets (e.g.
+            # requested 2020-12-31 is published as 2020-12-01). The canonical
+            # Full Optimizer validator already compares these two fields by
+            # month. Keep the *signed* preflight and exact fold/seed/PIT checks.
+            try:
+                if pd.Timestamp(str(actual)).to_period("M") == pd.Timestamp(str(wanted)).to_period("M"):
+                    continue
+            except (TypeError, ValueError, OverflowError):
+                pass
+        elif str(actual) == str(wanted):
+            continue
+        raise FormalMinTrade40PITBlocked(f"Historical Full schedule field differs: {key}")
     if str(meta.get("trials_per_fold")) != str(policy_args.trials_per_fold):
         raise FormalMinTrade40PITBlocked("Historical Full trial budget differs")
     records = resolve_formal_min_param_records("rolling_active_param_ensemble", params)

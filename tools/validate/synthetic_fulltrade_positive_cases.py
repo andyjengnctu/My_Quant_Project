@@ -5,16 +5,23 @@ Synthetic, temporary, never a live optimizer run or formal Test Suite.
 from __future__ import annotations
 
 from dataclasses import replace
+from types import SimpleNamespace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase, main
 from unittest.mock import patch
+import pandas as pd
 
 from core.audit_policy import get_reusable_audit_definitions
 from config.breakout_quality import BREAKOUT_QUALITY_MODEL_TEST_PROFILES
 from core.breakout_quality_runtime import get_continuous_ranker_training_policy
 from core.strategy_compare_policy import get_strategy_multi_seed_robustness_settings
 from core.file_integrity import canonical_json_sha256
+from core.params_io import params_to_json_dict
+from core.strategy_params import V16StrategyParams
+from services.optimizer.strategy_param_training import (
+    FULL_ROOS_SEARCH_FIELDS, _build_selection_full_roos_schedule_contract,
+)
 import json
 from core.breakout_quality_registry import get_breakout_quality_experiment_profile
 from core.strategy_compare_policy import get_strategy_comparison_settings
@@ -24,7 +31,7 @@ from services.audit.fulltrade_oracle_truth import (
 from services.audit.fullcycle_positive_truth import load_or_build_positive_truth
 from services.breakout_quality.formal_fulltrade_training_source import (
     FULL_SOURCE_ID, FULL_BASELINE_ARM, _full_execution_schedule,
-    historical_params_path, inspect_full_history, prepare_full_history,
+    historical_params_path, inspect_full_history, prepare_full_history, load_full_history,
 )
 from services.breakout_quality.trade_path_target_source import registered_trade_path_source
 from services.research.oracle_artifact_contract import source_calculation_contract
@@ -139,6 +146,101 @@ class FullTradePositiveContracts(TestCase):
                        return_value=({}, {}, None, {"runtime_identity_sha256": digest})):
                 state = inspect_full_history(project_root=root, seed=693545351)
             self.assertEqual(state["action"], "RESUME")
+
+    @staticmethod
+    def _signed_historical_full_fixture(root: Path, seed: int):
+        """Create actual optimizer-readable 7-fold JSON, without running a search."""
+        path = historical_params_path(root, seed)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        reference = _build_selection_full_roos_schedule_contract(
+            first_oos_date="2014-01-01", last_oos_date="2020-12-31",
+            train_window_months=120, oos_months=12,
+        )
+        parameters = params_to_json_dict(V16StrategyParams())
+        folds = []
+        members = {}
+        for year in range(2014, 2021):
+            start = pd.Timestamp(year, 1, 1)
+            selection_start = start - pd.DateOffset(months=120)
+            selection_end = start - pd.Timedelta(days=1)
+            day = start.strftime("%Y-%m-%d")
+            members[day] = [{"seed": seed, "params": parameters}]
+            folds.append({
+                "oos_start_date": day, "oos_end_date": f"{year}-12-31",
+                "effective_start": day, "effective_end": f"{year}-12-31",
+                "selection_start_date": selection_start.strftime("%Y-%m-%d"),
+                "selection_end_date": selection_end.strftime("%Y-%m-%d"),
+                "optimizer_seed": seed,
+            })
+        # Outer Rolling's actual producer normalizes the requested final
+        # fold-month (2020-12-31) to its month start (2020-12-01).
+        payload = {
+            "schema_type": "optimizer_active_param_ensemble", "mode": "rolling",
+            "meta": {**reference["meta"], "last_oos_date": "2020-12-01",
+                     "trials_per_fold": 300},
+            "summary": {"oos_end_date": "2020-12-31"},
+            "params_ensemble_by_effective_date": members,
+            "folds": folds,
+            "breakout_quality_param_adaptation": {
+                "mode": "selection_full_roos_training",
+                "parameter_set": "FULLTRADE_P17_HISTORICAL_LABEL_V1",
+                "training_dl_enabled": False,
+                "search_fields": list(FULL_ROOS_SEARCH_FIELDS),
+            },
+        }
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        preflight_unsigned = {"schema_version": 4, "mode": "selection_full_roos_parameter_training",
+                              "rolling_policy": reference["meta"], "dataset": "full"}
+        digest = canonical_json_sha256(preflight_unsigned)
+        preflight = {**preflight_unsigned, "runtime_identity_sha256": digest,
+                     "status": "P4_HISTORY_PREFLIGHT_PASS", "created_at": "2026-11-08T00:00:00+08:00"}
+        (path.parent.parent / "rolling_preflight.json").write_text(
+            json.dumps(preflight), encoding="utf-8",
+        )
+        fake_policy = ({}, reference, SimpleNamespace(trials_per_fold=300),
+                       {"runtime_identity_sha256": digest})
+        return path, fake_policy
+
+    def test_historical_full_month_bucket_keeps_completed_seven_folds_reusable(self):
+        with TemporaryDirectory() as tmp:
+            path, policy = self._signed_historical_full_fixture(Path(tmp), 693545351)
+            with patch("services.breakout_quality.formal_fulltrade_training_source._optimizer_policy",
+                       return_value=policy), patch(
+                       "services.breakout_quality.formal_fulltrade_training_source.prepare_selection_historical_full_roos_params",
+                       side_effect=AssertionError("Completed folds must not rerun the optimizer")):
+                loaded = load_full_history(path, expected_seed=693545351)
+                self.assertEqual(len(loaded.schedule), 7)
+                self.assertEqual(loaded.publication_dates[-1], "2019-12-31")
+                self.assertEqual(str(loaded.schedule[-1].end.date()), "2020-12-31")
+                self.assertEqual(inspect_full_history(project_root=tmp, seed=693545351)["action"], "REUSE")
+                resumed = prepare_full_history(project_root=tmp, seed=693545351, authorized=True)
+                self.assertEqual(loaded.param_sha256, resumed.param_sha256)
+
+    def test_historical_full_month_equivalence_does_not_hide_identity_or_pit_drift(self):
+        with TemporaryDirectory() as tmp:
+            path, policy = self._signed_historical_full_fixture(Path(tmp), 693545351)
+            original = json.loads(path.read_text(encoding="utf-8"))
+            cases = (
+                (lambda d: d["meta"].update(last_oos_date="2020-11-01"), "last_oos_date"),
+                (lambda d: d["meta"].update(trials_per_fold=301), "trial budget"),
+                (lambda d: d["folds"][-1].update(selection_end_date="2020-12-31"), "future/invalid window"),
+                (lambda d: d["params_ensemble_by_effective_date"]["2020-01-01"][0].update(seed=42), "seed differs"),
+            )
+            with patch("services.breakout_quality.formal_fulltrade_training_source._optimizer_policy",
+                       return_value=policy):
+                for change, message in cases:
+                    value = json.loads(json.dumps(original))
+                    change(value)
+                    path.write_text(json.dumps(value), encoding="utf-8")
+                    with self.subTest(message=message):
+                        with self.assertRaisesRegex(ValueError, message):
+                            load_full_history(path, expected_seed=693545351)
+                path.write_text(json.dumps(original), encoding="utf-8")
+                original_preflight = json.loads((path.parent.parent / "rolling_preflight.json").read_text(encoding="utf-8"))
+                original_preflight["dataset"] = "unverified_data"
+                (path.parent.parent / "rolling_preflight.json").write_text(json.dumps(original_preflight), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "tampered"):
+                    load_full_history(path, expected_seed=693545351)
 
     def test_signed_full_netpnl_build_reuse_and_positive_witness(self):
         trading, frames, bundle, min_schedule = source_fixture()
