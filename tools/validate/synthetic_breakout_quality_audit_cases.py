@@ -388,7 +388,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     # to the overview is not authorization to FIT, build P16, or run Replay.
     from services.research import target_dl_overview
     overview_console = io.StringIO()
-    with patch("builtins.input", side_effect=["", "11", "0", "0"]) as overview_input, \
+    with patch("builtins.input", side_effect=["", "8", "0", "0"]) as overview_input, \
          patch.object(target_dl_overview, "collect_target_dl_overview", return_value={"rows": []}) as collector, \
          patch.object(target_dl_overview, "render_target_dl_overview", return_value="SYNTHETIC_OVERVIEW") as renderer, \
          patch.object(research_app, "_run_reusable_audit_method", side_effect=AssertionError("Unexpected Oracle")) as oracle_entry, \
@@ -403,10 +403,19 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         and collector.call_args.args == (research_app.PROJECT_ROOT,)
         and all(call.args == ({"rows": []},) for call in renderer.call_args_list)
         and [call.kwargs.get("sort_by") for call in renderer.call_args_list]
-            == ["oracle_romd", "rolling_romd"]
+            == ["oracle_romd", "rolling_robustness_mean_romd"]
         and overview_console.getvalue().count("SYNTHETIC_OVERVIEW") == 2
-        and any("[1]" in line and "[2]" in line
-                for line in overview_console.getvalue().splitlines())
+        and len([line for line in overview_console.getvalue().splitlines()
+                 if "[1]Target" in line and "[8]Mean Romd" in line
+                 and "[0]返回" in line]) == 2
+        and "[4]Oracle RoMD" in overview_console.getvalue()
+        and "[5]Rank DL" in overview_console.getvalue()
+        and "[6]Positive DL" in overview_console.getvalue()
+        and "[7]Rolling ρ" in overview_console.getvalue()
+        and "Win Rate" not in overview_console.getvalue()
+        and "Robustness ρ" not in overview_console.getvalue()
+        and "Robustness RoMD" not in overview_console.getvalue()
+        and "策略編號" not in overview_console.getvalue()
         and "Mean Romd" in overview_console.getvalue()
         and "Summary" in overview_console.getvalue()
         and oracle_entry.call_count == 0
@@ -441,6 +450,19 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
             for column in target_dl_overview.table_contract(
                 target_dl_overview.REPORT_ID, "comparison", "target_dl").columns
         ),
+    )
+    selector_rows = [
+        {"target": "Exact", "selector": "Exact", "rolling_robustness_mean_romd": 100.0},
+        {"target": "DirectA", "selector": "Direct", "rolling_robustness_mean_romd": 1.0},
+        {"target": "DirectB", "selector": "Direct", "rolling_robustness_mean_romd": 5.0},
+        {"target": "Other", "selector": "-", "rolling_robustness_mean_romd": 200.0},
+        {"target": "Missing", "selector": None, "rolling_robustness_mean_romd": 300.0},
+    ]
+    check_true(
+        "summary_selector_direct_before_exact_then_mean_romd_descending",
+        [row["target"] for row in target_dl_overview.sort_target_dl_overview_rows(
+            selector_rows, column_key="selector"
+        )] == ["DirectB", "DirectA", "Exact", "Other", "Missing"],
     )
     check_true(
         "summary_mean_romd_one_rolling_and_actual_seed_count",

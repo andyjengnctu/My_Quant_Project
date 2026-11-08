@@ -960,17 +960,24 @@ def _strategy_robustness_metrics(
 def sort_target_dl_overview_rows(
     rows: list[Mapping[str, Any]], *, column_key: str = DEFAULT_SORT_COLUMN,
 ) -> list[Mapping[str, Any]]:
-    """Read-only, stable descending sort using the approved report column keys.
+    """Read-only, stable sort using the approved report column keys.
 
-    Text columns use descending lexical order. Missing/nonfinite values go
-    last; sorting never converts missing evidence into a numeric zero.
+    Selector prioritizes Direct before Exact; other text sorts use descending
+    lexical order. Missing/nonfinite values go last without numeric fill.
     """
 
     columns = table_contract(REPORT_ID, "comparison", "target_dl").columns
     column = next((item for item in columns if item.key == column_key), None)
     if column is None:
         raise ValueError(f"Summary 不支援的排序欄位: {column_key!r}")
-    if column.format_kind == "text":
+    if column_key == "selector":
+        def sort_value(row: Mapping[str, Any]) -> tuple[int, str]:
+            value = str(row.get(column_key) or "").strip().casefold()
+            # Selector is a categorical choice, not an alphabetical metric.
+            # Direct precedes Exact regardless of their Mean Romd values.
+            priority = {"direct": 2, "exact": 1}
+            return (priority.get(value, 0 if value else -1), value)
+    elif column.format_kind == "text":
         def sort_value(row: Mapping[str, Any]) -> tuple[bool, str]:
             value = str(row.get(column_key) or "").strip()
             return (bool(value), value.casefold())
@@ -1166,8 +1173,11 @@ def render_target_dl_overview(
     ))
     rows = sort_target_dl_overview_rows(list(report["rows"]), column_key=sort_by)
     sort_column = next(column for column in table.columns if column.key == sort_by)
-    sort_description = ("Mean Romd ↓（缺值最後）" if sort_by == "rolling_robustness_mean_romd"
-                        else f"{sort_column.label} ↓ → Mean Romd ↓（缺值最後）")
+    sort_description = (
+        "Mean Romd ↓（缺值最後）" if sort_by == "rolling_robustness_mean_romd"
+        else "Selector：Direct → Exact → Mean Romd ↓（缺值最後）" if sort_by == "selector"
+        else f"{sort_column.label} ↓ → Mean Romd ↓（缺值最後）"
+    )
     header.append(f"排序：{sort_description}")
     # Use the canonical per-column metric preference and best/worst signal owner.
     # Robustness is comparable only within the same actual seed set/benchmark;

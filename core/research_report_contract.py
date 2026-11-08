@@ -815,7 +815,7 @@ STRATEGY_CONSISTENCY_METRIC_KEYS = (
 # neutral and unavailable cells remain unstyled (no schema/metric changes).
 TARGET_DL_VALIDATION_OVERVIEW_REPORT = PersistentReportContract(
     report_id="research.target_dl_validation_overview",
-    version=9,
+    version=10,
     role="read_only_local_completed_report_summary",
     menu_path=("Research", "Summary"),
     sections=(
