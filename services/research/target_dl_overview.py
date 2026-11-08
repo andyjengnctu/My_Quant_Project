@@ -34,7 +34,9 @@ from core.breakout_quality_runtime import (
     CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH,
 )
 from core.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
-from core.breakout_quality_policy import get_breakout_quality_model_test_settings
+from core.breakout_quality_policy import (
+    get_breakout_quality_model_test_settings, get_breakout_quality_workflow_settings,
+)
 from core.breakout_quality_fit_contract_version import (
     current_fit_contract_artifact_identity, published_fit_contract_version_state,
 )
@@ -486,7 +488,7 @@ def _model_comparison_rhos(root: Path, *, filter_id: str, versions: Mapping[str,
             or not _approved(payload, "model.standard_comparison", versions)
             or payload.get("evaluation_mode") != "rolling_oos"
             or payload.get("robustness") is not robustness):
-        return result
+        payload = {}
     ambiguous: set[str] = set()
     for model in payload.get("models") or []:
         if not isinstance(model, dict) or model.get("filter_id") != filter_id:
@@ -532,6 +534,30 @@ def _model_comparison_rhos(root: Path, *, filter_id: str, versions: Mapping[str,
                 ambiguous.add(profile)
             else:
                 result[profile] = evidence
+    if robustness:
+        from services.research.breakout_quality_application import load_completed_rolling_model_robustness
+
+        rank_profiles = {
+            binding["rank_model"][1]
+            for group in get_research_summary_rows()
+            for binding in group.get("bindings", ()) if binding.get("rank_model")
+        }
+        for _model_id, profile in get_breakout_quality_model_test_settings().model_profiles:
+            if profile in result or profile in ambiguous or profile not in rank_profiles:
+                continue
+            settings = get_breakout_quality_workflow_settings(experiment_profile=profile)
+            if settings.filter_id != filter_id:
+                continue
+            # AI: A completed model must not depend on publication of every
+            # other model's comparison. Reuse the verified per-seed SOP owner,
+            # including its complete-cohort aggregation, without any Producer.
+            sop, _reason = load_completed_rolling_model_robustness(
+                settings, project_root=root, seeds=current_robustness_seeds,
+            )
+            oos = ((sop or {}).get("split_metrics") or {}).get("oos") or {}
+            rho = _number(oos.get("mean_daily_spearman"))
+            if rho is not None:
+                result[profile] = (rho, current_robustness_seeds)
     return result
 
 

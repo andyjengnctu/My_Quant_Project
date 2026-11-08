@@ -4656,7 +4656,9 @@ def _rolling_robustness_score_core_contract(settings, *, seed: int):
     return source, None
 
 
-def _inspect_rolling_robustness_seed(settings, *, seed: int) -> ModelRobustnessSeedSource:
+def _inspect_rolling_robustness_seed(
+    settings, *, seed: int, project_root: Path | None = None,
+) -> ModelRobustnessSeedSource:
     """Observe a seed's EVIDENCE and SCORE from one canonical source read.
 
     A missing/bad Audit may retain the independently validated SCORE returned
@@ -4664,10 +4666,17 @@ def _inspect_rolling_robustness_seed(settings, *, seed: int) -> ModelRobustnessS
     seed before either evidence can authorize REUSE. The execution-time producer
     separately revalidates SCORE to handle changes after this preview.
     """
-    pit_dir, _unused = _model_robustness_dirs(settings, seed=seed, rolling=True)
+    root = PROJECT_ROOT if project_root is None else Path(project_root).resolve()
+    if project_root is None:
+        pit_dir, _unused = _model_robustness_dirs(settings, seed=seed, rolling=True)
+    else:
+        pit_dir, _unused = resolve_model_research_robustness_seed_dirs(
+            root, str(settings.filter_id), str(settings.model_architecture),
+            str(settings.experiment_profile), seed=int(seed), rolling=True,
+        )
     audit_path = pit_dir / SELECTION_POINT_IN_TIME_AUDIT_JSON_FILENAME
     resolved = load_rolling_model_source(
-        project_root=PROJECT_ROOT,
+        project_root=root,
         filter_id=str(settings.filter_id),
         model_architecture=str(settings.model_architecture),
         experiment_profile=str(settings.experiment_profile),
@@ -4712,6 +4721,36 @@ def _inspect_rolling_robustness_seed(settings, *, seed: int) -> ModelRobustnessS
             score_contract=source,
         )
     return ModelRobustnessSeedSource(int(seed), audit, audit_path, None)
+
+
+def load_completed_rolling_model_robustness(
+    settings, *, project_root: Path, seeds: tuple[int, ...],
+) -> tuple[dict | None, str | None]:
+    """Read one model's current benchmark result without running Producers.
+
+    Summary and the model workflow consume the same per-seed observation,
+    readiness policy and SOP aggregation owner. A different unfinished model
+    or an unpublished cross-model comparison cannot hide completed evidence.
+    No partial seed set, SCORE-only source or checkpoint candidate is a result.
+    """
+    if (len(seeds) < 2 or any(type(seed) is not int for seed in seeds)
+            or len(set(seeds)) != len(seeds)):
+        raise ValueError("Model robustness requires unique benchmark seeds")
+    payloads = []
+    for seed in seeds:
+        observed = _inspect_rolling_robustness_seed(
+            settings, seed=seed, project_root=project_root,
+        )
+        if observed.seed != seed:
+            return None, f"seed={seed}: canonical observation seed mismatch"
+        stage = resolve_model_robustness_seed_readiness(mode="rolling", source=observed)
+        if not stage.readiness.evidence_ready:
+            return None, f"seed={seed}: {stage.readiness.source_reason}"
+        payloads.append(dict(stage.readiness.evidence_payload["standard_model_sop"]))
+    try:
+        return aggregate_standard_model_sop_robustness(payloads, seeds=seeds), None
+    except ValueError as exc:
+        return None, f"Model robustness Standard SOP incomplete: {exc}"
 
 
 def _load_rolling_robustness_seed(settings, *, seed: int):

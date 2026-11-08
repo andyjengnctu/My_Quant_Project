@@ -345,7 +345,6 @@ class ScientificVersionCases(TestCase):
         """The approved negative Rolling rho survives a stale comparison inventory."""
         import hashlib
         from core.breakout_quality_registry import (
-            DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_HEAD_WEIGHTED_LISTWISE_PROFILE,
             get_continuous_ranker_research_spec,
         )
         from core.report_contract_versions import load_report_contract_versions
@@ -358,7 +357,7 @@ class ScientificVersionCases(TestCase):
             _rolling_fit_version_current,
         )
         versions = load_report_contract_versions(Path(__file__).resolve().parents[2])
-        profile = DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_HEAD_WEIGHTED_LISTWISE_PROFILE
+        profile = UNAFFECTED_PROFILE
         filter_id = "breakout_quality_v1"
         architecture = get_breakout_quality_experiment_profile(profile).model_architecture
         with tempfile.TemporaryDirectory() as tmp:
@@ -780,6 +779,161 @@ class ScientificVersionCases(TestCase):
                 experiment_profile=VERSIONED_PROFILE, publication_dir=path, rolling=True,
             )[0], "CURRENT")
 
+
+
+class SummaryRobustnessEvidenceCases(TestCase):
+    """A partial cross-model run must not hide complete per-model evidence."""
+
+    def setUp(self):
+        from core.breakout_quality_policy import get_breakout_quality_workflow_settings
+        from core.training_policy import get_robustness_benchmark_policy_snapshot
+        from config.robustness_benchmark import MODEL_STRATEGY_ROBUSTNESS_BENCHMARK_ID
+
+        self.settings = get_breakout_quality_workflow_settings(experiment_profile=UNAFFECTED_PROFILE)
+        self.seeds = tuple(get_robustness_benchmark_policy_snapshot(
+            MODEL_STRATEGY_ROBUSTNESS_BENCHMARK_ID)["resolved_seeds"])
+        self.profile = self.settings.experiment_profile
+        self.scopes = ("validation", "oos", "breakout_candidate_oos")
+
+    def _audit(self, seed):
+        rho = (self.seeds.index(seed) + 1) / 10
+        return {
+            "filter_id": self.settings.filter_id,
+            "model_architecture": self.settings.model_architecture,
+            "experiment_profile": self.profile,
+            "training": {"seed": seed},
+            "standard_model_sop": {
+                "schema": "standard_model_sop_v10", "evaluation_mode": "rolling_oos",
+                "training": {"objective": "synthetic"},
+                "evaluation_truth": {
+                    "horizon_bars": 40, "mfe_source": "target_favorable_return",
+                    "adverse_source": "target_adverse_return_to_peak",
+                    "joint_quality_id": "same_day_min_mfe_safety_percentile_v1",
+                    "cohort_identity": {key: "f" * 64 for key in self.scopes},
+                    "price_truth_identity": {key: "a" * 64 for key in self.scopes},
+                },
+                "split_metrics": {key: {
+                    "group_count": 8, "mean_daily_spearman": rho,
+                    "global_spearman_vs_raw_target": 0.2, "pairwise_concordance": 0.6,
+                    "top_score_decile_raw_target_mean": 2.5,
+                    "bottom_score_decile_raw_target_mean": 0.5,
+                } for key in self.scopes},
+                "upside_downside_alignment_evaluation": {key: {
+                    "target_to_full_mfe_daily_spearman": 0.5,
+                    "target_to_low_adverse_daily_spearman": 0.3,
+                    "score_to_full_mfe_daily_spearman": 0.4,
+                    "score_to_low_adverse_daily_spearman": 0.1,
+                    "joint_quality_evaluation_id": "same_day_min_mfe_safety_percentile_v1",
+                    "top_10pct": {"n": 8, "mfe_pct_mean": 20.0,
+                                  "adverse_pct_mean": 4.0, "joint_quality_pct": 70.0},
+                } for key in self.scopes},
+                "mode_extensions": {"rolling": {
+                    "fold_drift": {"drift_flag": False, "flagged_folds": []},
+                }},
+            },
+        }
+
+    def _source_loader(self, root, *, defect=None):
+        from filters.breakout_quality.paths import resolve_model_research_robustness_seed_dirs
+        from services.breakout_quality.rolling_model_source import RollingModelSource
+
+        def load(**kwargs):
+            seed = kwargs["expected_seed"]
+            self.assertIn(seed, self.seeds)
+            self.assertEqual(Path(kwargs["project_root"]), root)
+            directory, _unused = resolve_model_research_robustness_seed_dirs(
+                root, self.settings.filter_id, self.settings.model_architecture,
+                self.profile, seed=seed, rolling=True,
+            )
+            self.assertEqual(kwargs["point_in_time_dir_override"], directory)
+            audit = self._audit(seed)
+            complete = SimpleNamespace(seed=seed, manifest={}, audit=audit)
+            if seed == self.seeds[-1]:
+                if defect == "score_only":
+                    return RollingModelSource(complete, None, "Audit missing", None)
+                if defect == "missing":
+                    return RollingModelSource(None, None, "Audit missing", "SCORE missing")
+                if defect == "wrong_seed":
+                    complete.seed = seed + 1
+                if defect == "incomplete_sop":
+                    audit["standard_model_sop"]["split_metrics"]["oos"].pop("mean_daily_spearman")
+                if defect == "different_cohort":
+                    audit["standard_model_sop"]["evaluation_truth"]["cohort_identity"]["oos"] = "b" * 64
+            return RollingModelSource(complete, complete, None, None)
+        return load
+
+    def test_summary_recovers_completed_model_before_cross_model_publication(self):
+        from core.breakout_quality_registry import get_continuous_ranker_research_spec
+        from core.report_contract_versions import load_report_contract_versions
+        from core.research_report_contract import persistent_report_contract_fingerprint
+        from filters.breakout_quality.paths import resolve_filter_output_dir
+        from services.research import target_dl_overview as overview
+
+        versions = load_report_contract_versions(Path(__file__).resolve().parents[2])
+        model_id = get_continuous_ranker_research_spec(self.profile).model_research_id
+        for previous_comparison in (False, True):
+            with self.subTest(previous_comparison=previous_comparison), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                if previous_comparison:
+                    directory = (resolve_filter_output_dir(root, filter_id=self.settings.filter_id)
+                                 / "standard_model_comparison" / "rolling_oos_robustness")
+                    contract = application.require_approved_report_contract("model.standard_comparison")
+                    _write_json(directory / "standard_model_comparison.json", {
+                        "report_id": contract.report_id, "report_version": contract.version,
+                        "report_contract_fingerprint": persistent_report_contract_fingerprint(contract.report_id),
+                        "evaluation_mode": "rolling_oos", "robustness": True, "models": [],
+                    })
+                    (directory / "standard_model_comparison.md").write_text("Previous comparison\n")
+                before = {p.relative_to(root): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+                with patch.object(overview, "get_breakout_quality_model_test_settings", return_value=SimpleNamespace(
+                    model_profiles=((model_id, self.profile),))), \
+                     patch.object(application, "load_rolling_model_source", side_effect=self._source_loader(root)) as load, \
+                     patch.object(application, "pit_fold_fitting_settings_issues", return_value=()), \
+                     patch.object(application, "_run_command", side_effect=AssertionError("Summary must stay read-only")), \
+                     patch.object(application, "_write_standard_model_comparison_report", side_effect=AssertionError("No publication")):
+                    actual = overview._model_comparison_rhos(
+                        root, filter_id=self.settings.filter_id, versions=versions, robustness=True,
+                    )
+                expected = sum((i + 1) / 10 for i in range(len(self.seeds))) / len(self.seeds)
+                self.assertEqual(actual[self.profile], (expected, self.seeds))
+                self.assertEqual(tuple(call.kwargs["expected_seed"] for call in load.call_args_list), self.seeds)
+                self.assertEqual(before, {p.relative_to(root): p.read_bytes() for p in root.rglob("*") if p.is_file()})
+
+    def test_read_through_uses_identical_workflow_evidence_and_aggregation(self):
+        from services.breakout_quality.model_artifact_readiness import resolve_model_robustness_readiness
+        from services.breakout_quality.standard_model_sop import aggregate_standard_model_sop_robustness
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch.object(application, "load_rolling_model_source", side_effect=self._source_loader(root)), \
+                 patch.object(application, "pit_fold_fitting_settings_issues", return_value=()):
+                sources = tuple(application._inspect_rolling_robustness_seed(
+                    self.settings, seed=seed, project_root=root,
+                ) for seed in self.seeds)
+                readiness = resolve_model_robustness_readiness(mode="rolling", sources=sources)
+                result, reason = application.load_completed_rolling_model_robustness(
+                    self.settings, project_root=root, seeds=self.seeds,
+                )
+            self.assertEqual(readiness.display_action, "REUSE")
+            self.assertIsNone(reason)
+            expected = aggregate_standard_model_sop_robustness(
+                [dict(source.verified_evidence["standard_model_sop"]) for source in sources],
+                seeds=self.seeds,
+            )
+            self.assertEqual(result, expected)
+
+    def test_incomplete_wrong_seed_or_incompatible_evidence_stays_blank(self):
+        for defect in ("missing", "score_only", "wrong_seed", "incomplete_sop", "different_cohort", "stale_fit"):
+            with self.subTest(defect=defect), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                with patch.object(application, "load_rolling_model_source", side_effect=self._source_loader(root, defect=defect)), \
+                     patch.object(application, "pit_fold_fitting_settings_issues", return_value=("stale FIT",) if defect == "stale_fit" else ()), \
+                     patch.object(application, "_run_command", side_effect=AssertionError("No rebuild")):
+                    result, reason = application.load_completed_rolling_model_robustness(
+                        self.settings, project_root=root, seeds=self.seeds,
+                    )
+                self.assertIsNone(result)
+                self.assertTrue(reason)
 
 
 if __name__ == "__main__":
