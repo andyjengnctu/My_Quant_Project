@@ -441,16 +441,17 @@ def _compute_reference_console_cache(session):
 
         params = source["primary_params"]
         prep_executor_bundle = session.get_trial_prep_executor_bundle(build_runtime_param_raw_value(params, "optimizer_max_workers"))
-        prep_result = prepare_trial_inputs(
-            raw_data_cache=session.raw_data_cache,
-            params=params,
-            default_max_workers=session.default_max_workers,
-            executor_bundle=prep_executor_bundle,
-            static_fast_cache=session.static_fast_cache,
-            static_master_dates=session.master_dates,
-            include_trade_logs=False,
-            include_pit_stats_index=True,
-        )
+        with session.optimizer_runtime_context():
+            prep_result = prepare_trial_inputs(
+                raw_data_cache=session.raw_data_cache,
+                params=params,
+                default_max_workers=session.default_max_workers,
+                executor_bundle=prep_executor_bundle,
+                static_fast_cache=session.static_fast_cache,
+                static_master_dates=session.master_dates,
+                include_trade_logs=False,
+                include_pit_stats_index=True,
+            )
         benchmark_data = prep_result["all_dfs_fast"].get("0050", None)
         pf_profile = {}
         portfolio_metrics = as_portfolio_training_result(
@@ -691,16 +692,17 @@ def _build_optimizer_trial_dashboard_payload(session, trial, *, timing_breakdown
                 pit_stats_index=cached_trial_inputs.get("all_pit_stats_index"),
             )
         else:
-            prep_result = prepare_trial_inputs(
-                raw_data_cache=session.raw_data_cache,
-                params=params,
-                default_max_workers=session.default_max_workers,
-                executor_bundle=prep_executor_bundle,
-                static_fast_cache=session.static_fast_cache,
-                static_master_dates=session.master_dates,
-                include_trade_logs=False,
-                include_pit_stats_index=True,
-            )
+            with session.optimizer_runtime_context():
+                prep_result = prepare_trial_inputs(
+                    raw_data_cache=session.raw_data_cache,
+                    params=params,
+                    default_max_workers=session.default_max_workers,
+                    executor_bundle=prep_executor_bundle,
+                    static_fast_cache=session.static_fast_cache,
+                    static_master_dates=session.master_dates,
+                    include_trade_logs=False,
+                    include_pit_stats_index=True,
+                )
             candidate_wf_report = evaluate_walk_forward(
                 all_dfs_fast=prep_result["all_dfs_fast"],
                 all_trade_logs=prep_result["all_trade_logs"],

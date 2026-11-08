@@ -67,17 +67,21 @@ def _materialize_deferred_pit_stats(session, params, prep_result):
     prep_executor_bundle = session.get_trial_prep_executor_bundle(
         build_runtime_param_raw_value(params, "optimizer_max_workers")
     )
-    full_prep = prepare_trial_inputs(
-        raw_data_cache=session.raw_data_cache,
-        params=params,
-        default_max_workers=session.default_max_workers,
-        executor_bundle=prep_executor_bundle,
-        static_fast_cache=session.static_fast_cache,
-        static_master_dates=session.master_dates,
-        include_trade_logs=False,
-        include_pit_stats_index=True,
-        profile_enabled=False,
-    )
+    # The same session contract must govern both trial-data preparation and
+    # portfolio evaluation. A Daily Full entry mask cannot be prepared under
+    # the implicit legacy/Breakout signal context.
+    with session.optimizer_runtime_context():
+        full_prep = prepare_trial_inputs(
+            raw_data_cache=session.raw_data_cache,
+            params=params,
+            default_max_workers=session.default_max_workers,
+            executor_bundle=prep_executor_bundle,
+            static_fast_cache=session.static_fast_cache,
+            static_master_dates=session.master_dates,
+            include_trade_logs=False,
+            include_pit_stats_index=True,
+            profile_enabled=False,
+        )
     if full_prep.get("prep_failures") != prep_result.get("prep_failures"):
         raise RuntimeError("deferred PIT stats materialization 與原 trial prep failure set 不一致")
     prep_result["all_pit_stats_index"] = full_prep.get("all_pit_stats_index") or {}
@@ -648,17 +652,21 @@ def run_optimizer_objective(session, trial):
     if prep_result is None:
         prep_executor_bundle = session.get_trial_prep_executor_bundle(build_runtime_param_raw_value(ai_params, "optimizer_max_workers"))
         defer_pit_stats = _can_defer_optimizer_pit_stats(session, ai_params)
-        prep_result = prepare_trial_inputs(
-            raw_data_cache=session.raw_data_cache,
-            params=ai_params,
-            default_max_workers=session.default_max_workers,
-            executor_bundle=prep_executor_bundle,
-            static_fast_cache=session.static_fast_cache,
-            static_master_dates=session.master_dates,
-            include_trade_logs=False,
-            include_pit_stats_index=not defer_pit_stats,
-            profile_enabled=detailed_profile_enabled,
-        )
+        # Each Optuna trial may run on its own thread. Bind the resolved
+        # scientific entry contract here, before signal preparation; merely
+        # binding it in portfolio evaluation is too late for P20 is_setup.
+        with session.optimizer_runtime_context():
+            prep_result = prepare_trial_inputs(
+                raw_data_cache=session.raw_data_cache,
+                params=ai_params,
+                default_max_workers=session.default_max_workers,
+                executor_bundle=prep_executor_bundle,
+                static_fast_cache=session.static_fast_cache,
+                static_master_dates=session.master_dates,
+                include_trade_logs=False,
+                include_pit_stats_index=not defer_pit_stats,
+                profile_enabled=detailed_profile_enabled,
+            )
         if defer_pit_stats:
             _install_neutral_pit_stats_index(prep_result, ai_params)
         cache_prep = getattr(session, "cache_prepared_trial_inputs", None)

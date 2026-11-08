@@ -25,6 +25,10 @@ DAILY_SEARCH_PROFILES = {
             "use_breakout_false_filter", "breakout_false_filter_atr_pct_min",
         ),
         "execution_contract": DAILY_EXECUTION_FULL_FILTERS,
+        # Engineering trial-preparation revision, independent of the P20
+        # scientific search contract. Isolates old zero-candidate Optuna studies
+        # whose signal preparation ran outside the Daily Full runtime context.
+        "optimizer_trial_prep_revision": "daily_full_scoped_input_preparation_v2",
     },
 }
 

@@ -21,6 +21,212 @@ from services.audit import target_oracle_romd as oracle
 
 
 class DailyEntryStrategyCases(TestCase):
+    def test_optimizer_trial_prepares_daily_data_with_trial_scoped_execution_contract(self):
+        """The P20 signal mask must be computed under the same policy as replay.
+
+        Optuna invokes ``session.objective`` outside the OOS evaluation context
+        (and may use threads). The old implementation bound the context only in
+        portfolio evaluation, so signal preparation silently used legacy buys.
+        """
+        from contextlib import contextmanager
+        from types import SimpleNamespace
+        from core.portfolio_entry_policy import (
+            DAILY_EXECUTION_LEGACY, DAILY_EXECUTION_ATR_LIMIT,
+            DAILY_EXECUTION_FULL_FILTERS, current_daily_execution_contract,
+            portfolio_entry_policy_context,
+        )
+        from core.strategy_params import V16StrategyParams
+        from services.optimizer.objective_runner import run_optimizer_objective
+
+        class StopAfterPreparing(Exception):
+            pass
+
+        for execution in (DAILY_EXECUTION_LEGACY, DAILY_EXECUTION_ATR_LIMIT,
+                          DAILY_EXECUTION_FULL_FILTERS):
+            observed = []
+            @contextmanager
+            def runtime_context():
+                with portfolio_entry_policy_context(
+                    "Daily", unscored=True, daily_execution_contract=execution
+                ):
+                    yield
+            session = SimpleNamespace(
+                runtime_cache_identity="synthetic", fixed_strategy_param_overrides={},
+                optimizer_runtime_context=runtime_context,
+                apply_fixed_strategy_param_overrides=lambda params: params,
+                get_prepared_trial_inputs_from_cache=lambda key: None,
+                get_trial_prep_executor_bundle=lambda maximum: None,
+                raw_data_cache={}, default_max_workers=1, static_fast_cache={},
+                master_dates=set(), profile_recorder=SimpleNamespace(enabled=False),
+            )
+            trial = SimpleNamespace(set_user_attr=lambda key, value: None)
+            def inspect_preparation(**kwargs):
+                observed.append(current_daily_execution_contract())
+                raise StopAfterPreparing
+            with self.subTest(execution=execution), patch(
+                "services.optimizer.objective_runner.build_trial_params",
+                return_value=V16StrategyParams(use_breakout_buy=False),
+            ), patch(
+                "services.optimizer.objective_runner._can_defer_optimizer_pit_stats",
+                return_value=False,
+            ), patch(
+                "services.optimizer.objective_runner.prepare_trial_inputs",
+                side_effect=inspect_preparation,
+            ):
+                with self.assertRaises(StopAfterPreparing):
+                    run_optimizer_objective(session, trial)
+                self.assertEqual(observed, [execution])
+                self.assertEqual(current_daily_execution_contract(), DAILY_EXECUTION_LEGACY)
+
+    def test_optimizer_local_min_preparation_uses_session_entry_contract(self):
+        """Local-Min diagnostics must not reprepare P20 as legacy Breakout."""
+        from contextlib import contextmanager
+        from types import SimpleNamespace
+        from core.portfolio_entry_policy import (
+            DAILY_EXECUTION_FULL_FILTERS, current_daily_execution_contract,
+            portfolio_entry_policy_context,
+        )
+        from core.strategy_params import V16StrategyParams, strategy_params_to_dict
+        from services.optimizer.robustness import _evaluate_local_min_neighbor_payload
+
+        class StopAfterPreparing(Exception):
+            pass
+
+        @contextmanager
+        def runtime_context():
+            with portfolio_entry_policy_context(
+                "Daily", unscored=True,
+                daily_execution_contract=DAILY_EXECUTION_FULL_FILTERS,
+            ):
+                yield
+
+        session = SimpleNamespace(
+            optimizer_runtime_context=runtime_context,
+            get_prepared_trial_inputs_from_cache=lambda key: None,
+            get_trial_prep_executor_bundle=lambda max_workers: None,
+            raw_data_cache={}, default_max_workers=1, static_fast_cache={},
+            master_dates=set(), runtime_cache_identity="test_p20",
+        )
+        observed = []
+
+        def observe_preparation(**kwargs):
+            observed.append(current_daily_execution_contract())
+            raise StopAfterPreparing
+
+        with patch(
+            "services.optimizer.robustness._build_session_params_from_mapping",
+            return_value=V16StrategyParams(use_breakout_buy=False),
+        ), patch(
+            "services.optimizer.robustness.prepare_trial_inputs",
+            side_effect=observe_preparation,
+        ):
+            with self.assertRaises(StopAfterPreparing):
+                _evaluate_local_min_neighbor_payload(
+                    session, strategy_params_to_dict(V16StrategyParams(use_breakout_buy=False)), {}
+                )
+        self.assertEqual(observed, [DAILY_EXECUTION_FULL_FILTERS])
+
+    def test_daily_full_preparation_and_replay_are_one_execution_semantic(self):
+        """Prove the former P20 0-trade failure and corrected P20 portfolio path.
+
+        The exact same market and trading parameters must trade when the
+        preparation uses the declared Full contract, but the old implicit
+        legacy preparation creates no setup rows for a non-Breakout strategy.
+        """
+        from dataclasses import replace
+        from core.portfolio_fast_data import (
+            prep_optimizer_stock_data_bundle, pack_static_market_data,
+            merge_static_market_with_dynamic,
+        )
+        from core.portfolio_engine import run_portfolio_timeline
+        from core.portfolio_entry_policy import (
+            DAILY_EXECUTION_LEGACY, DAILY_EXECUTION_FULL_FILTERS,
+            daily_signal_execution_context, portfolio_entry_policy_context,
+        )
+        from tools.validate.synthetic_daily_trade40_cases import fixture
+        days, frame, original, _ = fixture(count=160)
+        params = replace(
+            original, use_breakout_buy=False, use_bb=False, use_kc=False,
+            use_vol=False, use_breakout_ema_filter=False,
+            use_breakout_return_filter=False, use_breakout_false_filter=False,
+        )
+        trade_counts = {}
+        for preparation in (DAILY_EXECUTION_LEGACY, DAILY_EXECUTION_FULL_FILTERS):
+            with daily_signal_execution_context(preparation):
+                prepared, _, _ = prep_optimizer_stock_data_bundle(
+                    frame, params, ticker="2330", include_trade_logs=False,
+                    include_pit_stats_index=False,
+                )
+            market = {"2330": merge_static_market_with_dynamic(
+                pack_static_market_data(frame), prepared,
+            )}
+            with portfolio_entry_policy_context(
+                "Daily", unscored=True,
+                daily_execution_contract=DAILY_EXECUTION_FULL_FILTERS,
+            ):
+                result = run_portfolio_timeline(
+                    market, {}, list(days), 2021, params, 10, False,
+                    benchmark_ticker="2330", benchmark_data=market["2330"],
+                    is_training=True, verbose=False,
+                )
+            trade_counts[preparation] = int(result[4])
+        self.assertEqual(trade_counts[DAILY_EXECUTION_LEGACY], 0)
+        self.assertGreater(trade_counts[DAILY_EXECUTION_FULL_FILTERS], 0)
+
+    def test_optimizer_p20_study_implementation_revision_rebuilds_only_full_daily(self):
+        """Old zero-candidate P20 trials may not be reused after the prep fix."""
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+        from types import SimpleNamespace
+        from core.file_integrity import canonical_json_sha256
+        from services.optimizer.strategy_param_training import _runtime_contract
+        from services.optimizer.outer_rolling_runtime import _resolve_outer_rolling_db_file
+
+        def contract(profile):
+            args = SimpleNamespace(
+                strategy_id="daily", daily_search_profile=profile, dataset="full",
+                trials_per_fold=300, fixed_risk=0.01, max_position_cap_pct=1.0,
+                max_positions=10, rotation="off", optimizer_search_protocol="",
+            )
+            return _runtime_contract(
+                root=Path(__file__).resolve().parents[2], args=args,
+                baseline_contract={"sha256": "a" * 64, "meta": {
+                    "window_mode": "fixed", "first_oos_date": "2021-01-01",
+                    "last_oos_date": "2026-03-02", "train_window_months": 120,
+                    "oos_horizon_months": 12,
+                }},
+                fold_overrides={}, model_artifact=None, arm_id="P2",
+                training_dl_enabled=False, binary_pit=None, dataset_inventory={},
+            )
+        for profile in (None, "min_atr_limit_v2", "full_common_filters_v2"):
+            with self.subTest(profile=profile):
+                payload = contract(profile)
+                previous = {key: value for key, value in payload.items()
+                            if key not in ("runtime_identity_sha256", "optimizer_trial_prep_revision")}
+                old_identity = canonical_json_sha256(previous)
+                if profile == "full_common_filters_v2":
+                    self.assertEqual(payload["optimizer_trial_prep_revision"],
+                                     "daily_full_scoped_input_preparation_v2")
+                    self.assertNotEqual(payload["runtime_identity_sha256"], old_identity)
+                    with TemporaryDirectory() as temp_dir:
+                        old_db, _ = _resolve_outer_rolling_db_file(
+                            output_dir=temp_dir, session_ts="test", oos_year=202401,
+                            task={"runtime_cache_identity": old_identity},
+                            environ={"OPTIMIZER_ROLLING_RESUME_EXISTING_STUDIES": "1"},
+                        )
+                        Path(old_db).touch()
+                        new_db, resume = _resolve_outer_rolling_db_file(
+                            output_dir=temp_dir, session_ts="test", oos_year=202401,
+                            task={"runtime_cache_identity": payload["runtime_identity_sha256"]},
+                            environ={"OPTIMIZER_ROLLING_RESUME_EXISTING_STUDIES": "1"},
+                        )
+                        self.assertFalse(resume)
+                        self.assertNotEqual(old_db, new_db)
+                        self.assertTrue(Path(old_db).is_file())
+                else:
+                    self.assertNotIn("optimizer_trial_prep_revision", payload)
+                    self.assertEqual(payload["runtime_identity_sha256"], old_identity)
+
     def test_optimizer_no_finalist_evidence_keeps_unqualified_trials_invalid(self):
         """Canonical Parameter Producer may not publish an invalid Trial as best."""
         import optuna

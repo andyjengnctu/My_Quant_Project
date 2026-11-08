@@ -479,17 +479,18 @@ def _evaluate_local_min_neighbor_payload(session, payload: dict, payload_score_c
     prep_result = get_cached_prep(prep_cache_key) if callable(get_cached_prep) else None
     if prep_result is None:
         prep_executor_bundle = session.get_trial_prep_executor_bundle(build_runtime_param_raw_value(ai_params, "optimizer_max_workers"))
-        prep_result = prepare_trial_inputs(
-            raw_data_cache=session.raw_data_cache,
-            params=ai_params,
-            default_max_workers=session.default_max_workers,
-            executor_bundle=prep_executor_bundle,
-            static_fast_cache=session.static_fast_cache,
-            static_master_dates=session.master_dates,
-            include_trade_logs=False,
-            include_pit_stats_index=True,
-            profile_enabled=False,
-        )
+        with session.optimizer_runtime_context():
+            prep_result = prepare_trial_inputs(
+                raw_data_cache=session.raw_data_cache,
+                params=ai_params,
+                default_max_workers=session.default_max_workers,
+                executor_bundle=prep_executor_bundle,
+                static_fast_cache=session.static_fast_cache,
+                static_master_dates=session.master_dates,
+                include_trade_logs=False,
+                include_pit_stats_index=True,
+                profile_enabled=False,
+            )
         cache_prep = getattr(session, "cache_prepared_trial_inputs", None)
         if callable(cache_prep):
             cache_prep(prep_cache_key, prep_result)
@@ -1467,17 +1468,18 @@ def _resolve_trial_dependency_diagnostics(session, trial, objective_mode: str):
 
     ai_params = _build_session_params_from_mapping(session, payload)
     prep_executor_bundle = session.get_trial_prep_executor_bundle(build_runtime_param_raw_value(ai_params, "optimizer_max_workers"))
-    prep_result = prepare_trial_inputs(
-        raw_data_cache=session.raw_data_cache,
-        params=ai_params,
-        default_max_workers=session.default_max_workers,
-        executor_bundle=prep_executor_bundle,
-        static_fast_cache=session.static_fast_cache,
-        static_master_dates=session.master_dates,
-        include_trade_logs=False,
-        include_pit_stats_index=True,
-        profile_enabled=False,
-    )
+    with session.optimizer_runtime_context():
+        prep_result = prepare_trial_inputs(
+            raw_data_cache=session.raw_data_cache,
+            params=ai_params,
+            default_max_workers=session.default_max_workers,
+            executor_bundle=prep_executor_bundle,
+            static_fast_cache=session.static_fast_cache,
+            static_master_dates=session.master_dates,
+            include_trade_logs=False,
+            include_pit_stats_index=True,
+            profile_enabled=False,
+        )
     search_scope = resolve_search_train_scope(session, prep_result["master_dates"], objective_mode=objective_mode)
     evaluation = evaluate_prepared_train_score(
         session,
@@ -1534,17 +1536,18 @@ def _resolve_trial_inner_validate_diagnostics(session, trial, objective_mode: st
 
     ai_params = _build_session_params_from_mapping(session, payload)
     prep_executor_bundle = session.get_trial_prep_executor_bundle(build_runtime_param_raw_value(ai_params, "optimizer_max_workers"))
-    prep_result = prepare_trial_inputs(
-        raw_data_cache=session.raw_data_cache,
-        params=ai_params,
-        default_max_workers=session.default_max_workers,
-        executor_bundle=prep_executor_bundle,
-        static_fast_cache=session.static_fast_cache,
-        static_master_dates=session.master_dates,
-        include_trade_logs=False,
-        include_pit_stats_index=True,
-        profile_enabled=False,
-    )
+    with session.optimizer_runtime_context():
+        prep_result = prepare_trial_inputs(
+            raw_data_cache=session.raw_data_cache,
+            params=ai_params,
+            default_max_workers=session.default_max_workers,
+            executor_bundle=prep_executor_bundle,
+            static_fast_cache=session.static_fast_cache,
+            static_master_dates=session.master_dates,
+            include_trade_logs=False,
+            include_pit_stats_index=True,
+            profile_enabled=False,
+        )
     validate_scope = resolve_inner_validate_scope(session, prep_result["master_dates"], objective_mode=objective_mode)
     diagnostics = evaluate_prepared_inner_validate_score(
         session,
@@ -1590,17 +1593,18 @@ def _resolve_trial_oos_diagnostics(session, trial):
 
     ai_params = _build_session_params_from_mapping(session, payload)
     prep_executor_bundle = session.get_trial_prep_executor_bundle(build_runtime_param_raw_value(ai_params, 'optimizer_max_workers'))
-    prep_result = prepare_trial_inputs(
-        raw_data_cache=session.raw_data_cache,
-        params=ai_params,
-        default_max_workers=session.default_max_workers,
-        executor_bundle=prep_executor_bundle,
-        static_fast_cache=session.static_fast_cache,
-        static_master_dates=session.master_dates,
-        include_trade_logs=True,
-        include_pit_stats_index=True,
-        profile_enabled=False,
-    )
+    with session.optimizer_runtime_context():
+        prep_result = prepare_trial_inputs(
+            raw_data_cache=session.raw_data_cache,
+            params=ai_params,
+            default_max_workers=session.default_max_workers,
+            executor_bundle=prep_executor_bundle,
+            static_fast_cache=session.static_fast_cache,
+            static_master_dates=session.master_dates,
+            include_trade_logs=True,
+            include_pit_stats_index=True,
+            profile_enabled=False,
+        )
     report = evaluate_walk_forward(
         all_dfs_fast=prep_result['all_dfs_fast'],
         all_trade_logs=prep_result['all_trade_logs'],

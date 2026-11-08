@@ -645,16 +645,17 @@ def generate_walk_forward_report_from_payload(*, session, params_payload, datase
     prep_executor_bundle = session.get_trial_prep_executor_bundle(
         build_runtime_param_raw_value(ai_params, "optimizer_max_workers")
     )
-    prep_result = prepare_trial_inputs(
-        raw_data_cache=session.raw_data_cache,
-        params=ai_params,
-        default_max_workers=session.default_max_workers,
-        executor_bundle=prep_executor_bundle,
-        static_fast_cache=session.static_fast_cache,
-        static_master_dates=session.master_dates,
-        include_trade_logs=False,
-        include_pit_stats_index=True,
-    )
+    with session.optimizer_runtime_context():
+        prep_result = prepare_trial_inputs(
+            raw_data_cache=session.raw_data_cache,
+            params=ai_params,
+            default_max_workers=session.default_max_workers,
+            executor_bundle=prep_executor_bundle,
+            static_fast_cache=session.static_fast_cache,
+            static_master_dates=session.master_dates,
+            include_trade_logs=False,
+            include_pit_stats_index=True,
+        )
     report = evaluate_walk_forward(
         all_dfs_fast=prep_result["all_dfs_fast"],
         all_trade_logs=prep_result["all_trade_logs"],

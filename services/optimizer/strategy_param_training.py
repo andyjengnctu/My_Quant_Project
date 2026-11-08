@@ -690,6 +690,15 @@ def _runtime_contract(*, root, args, baseline_contract, fold_overrides, model_ar
     strategy_id = str(getattr(args, "strategy_id", "breakout"))
     if strategy_id != "breakout":
         payload["entry_strategy"] = strategy_id
+    if strategy_id == "daily":
+        # Runtime/implementation identity only; do not change the registered
+        # scientific P20 fingerprint or invalidate unrelated P18/P19 studies.
+        from strategies.daily.search_space import resolve_daily_search_profile
+        prep_revision = resolve_daily_search_profile(
+            getattr(args, "daily_search_profile", None)
+        ).get("optimizer_trial_prep_revision")
+        if prep_revision is not None:
+            payload["optimizer_trial_prep_revision"] = str(prep_revision)
     optimizer_search_protocol = str(getattr(args, "optimizer_search_protocol", "") or "").strip()
     if optimizer_search_protocol:
         from services.optimizer.validation_budget_refit import resolve_validation_budget_spec
