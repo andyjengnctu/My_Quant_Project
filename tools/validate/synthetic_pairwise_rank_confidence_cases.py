@@ -113,15 +113,15 @@ class PairwiseConfidenceCases(unittest.TestCase):
         for profile in (STRATEGY_COMPARE_CURRENT_OOS_PROFILE, STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE):
             settings = get_strategy_comparison_settings(profile)
             current = {arm.arm_id for arm in settings.enabled_arms}
-            self.assertTrue({'C147', 'C148', 'C146'}.issubset(current))
-            self.assertNotIn('C145', current)
+            self.assertTrue({'C147', 'C148', 'C160'}.issubset(current))
+            self.assertTrue({'C145', 'C146'}.isdisjoint(current))
             self.assertTrue({'C149', 'C150'}.isdisjoint(current))
             self.assertTrue(all('C149' not in c.contrast_id and 'C150' not in c.contrast_id
                                 for c in settings.enabled_contrasts))
         for profile in (STRATEGY_COMPARE_CURRENT_OOS_ROBUSTNESS,
                         STRATEGY_COMPARE_CURRENT_ROLLING_ROBUSTNESS):
             settings = get_strategy_multi_seed_robustness_settings(profile)
-            self.assertTrue({'C149', 'C150', 'C145'}.isdisjoint(set(settings.stochastic_arm_ids)))
+            self.assertTrue({'C149', 'C150', 'C145', 'C146'}.isdisjoint(set(settings.stochastic_arm_ids)))
         cx_bindings = next(row for row in get_strategy_compare_model_bindings()
                            if row['model_id'] == 'MR-13CX')
         self.assertEqual(set(cx_bindings['strategy_arm_ids']), {'C147', 'C148'})
@@ -153,13 +153,15 @@ class PairwiseConfidenceCases(unittest.TestCase):
                        and i['selector'] == selector)
             self.assertEqual(bindings[(key, profile_cx)], cx)
             self.assertIn(cj, bindings.values())
-        for selector, cj in (('direct', 'C146'),):
-            key = next(oracle_comparison_key(i) for i in comparisons if
-                       i['target'] == ('T40' if selector == 'exact' else 'T40_Direct')
-                       and str(i.get('strategy', 'Breakout')) == 'Daily'
-                       and i['selector'] == selector)
-            self.assertNotIn((key, profile_cx), bindings)
-            self.assertIn(cj, bindings.values())
+        self.assertNotIn('C146', bindings.values())
+        key = next(oracle_comparison_key(i) for i in comparisons if
+                   i['target'] == 'T40_Direct'
+                   and i.get('parameter_family') == 'daily_min'
+                   and str(i.get('strategy')) == 'Daily'
+                   and i['selector'] == 'direct')
+        self.assertEqual(bindings.get((key, 'daily_universal_terminal_mae_gated_t40_full_list_ndcg_pairwise')),
+                         'C160')
+        self.assertNotIn((key, profile_cx), bindings)
         from pathlib import Path
         from services.research.target_dl_overview import collect_target_dl_overview
         rows = collect_target_dl_overview(Path(__file__).resolve().parents[2])['rows']

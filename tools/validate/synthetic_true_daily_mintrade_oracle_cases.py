@@ -61,7 +61,7 @@ class TrueDailyUniversalOracleCases(TestCase):
         ))
         self.assertIn("Target", output)
         self.assertIn("Strategy", output)
-        self.assertIn("Portfolio REUSE 8 / RUN（需回放）4 / BLOCKED 0", output)
+        self.assertIn("Portfolio REUSE 8 / RUN（需回放）2 / BLOCKED 0", output)
         self.assertIn("Target 真值及 Score 另依各自簽章 REUSE／RUN", output)
         for line in output.splitlines():
             if "TrueDailyUniversal_MinTrade_NetPnL_Positive" in line:

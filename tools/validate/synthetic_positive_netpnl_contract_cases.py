@@ -149,7 +149,8 @@ class PositiveNetPnlContractCases(TestCase):
         self.assertNotIn('MR-13CW', {model for model, _ in BREAKOUT_QUALITY_MODEL_TEST_PROFILES})
         settings = get_strategy_comparison_settings(STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE)
         active = {arm.arm_id for arm in settings.enabled_arms}
-        self.assertTrue({'C96', 'C107', 'C109', 'C125', 'C126', 'C134', 'C135', 'C136', 'C164'}.issubset(active))
+        self.assertTrue({'C96', 'C107', 'C109', 'C125', 'C126', 'C135', 'C136', 'C164'}.issubset(active))
+        self.assertTrue({'C134', 'C138', 'C146', 'C163'}.isdisjoint(active))
         self.assertTrue({'C142', 'C143', 'C144'}.isdisjoint(active))
         self.assertIn('C144', settings.arms)  # Immutable historical strategy ID.
         self.assertIn('CONT13CW_ROLL', STRATEGY_DL_SOURCES)  # Historical PIT source ID.
@@ -186,9 +187,7 @@ class PositiveNetPnlContractCases(TestCase):
         cases = (
             ("MinTrade_NetPnL_Positive", "Breakout", "Exact", "C125", "MR-13CO", "MR-13CP"),
             ("MinTrade_NetPnL_Positive", "Breakout", "Direct", "C126", "MR-13CO", "MR-13CP"),
-            ("DailyUniversal_MinTrade_NetPnL", "Daily", "Direct", "C138", "MR-13CU", ""),
             ("DailyUniversal_MinTrade_NetPnL", "Daily (Min/P18)", "Direct", "C165", "MR-13CU", ""),
-            ("DailyUniversal_MinTrade_NetPnL_Positive", "Daily", "Direct", "C134", "MR-13CU", "MR-13CT"),
             ("DailyUniversal_MinTrade_NetPnL_Positive", "Daily (Min/P18)", "Direct", "C164", "MR-13CU", "MR-13CT"),
             ("DailyUniversal_MinTrade_NetPnL_Positive", "Breakout", "Exact", "C135", "MR-13CU", "MR-13CT"),
             ("DailyUniversal_MinTrade_NetPnL_Positive", "Breakout", "Direct", "C136", "MR-13CU", "MR-13CT"),
@@ -200,6 +199,8 @@ class PositiveNetPnlContractCases(TestCase):
         group = {keys(row): [] for row in report['rows']}
         for row in report['rows']:
             group[keys(row)].append(row)
+        for retired_arm in ("C134", "C138"):
+            self.assertNotIn(retired_arm, {row["strategy"] for row in report["rows"]})
         for target, strategy, selector, arm_id, rank, classifier in cases:
             with self.subTest(arm=arm_id):
                 matched = group[(target, strategy, selector)]
@@ -467,14 +468,16 @@ class PositiveNetPnlContractCases(TestCase):
             self.assertNotIn(positive_direct, values)  # Old raw Gate != formal dual-head.
             # A historical Min/P16 publication predates independently
             # registered Daily/P18 parameter-family treatments.
-            true_daily = {row["target"] for row in comparisons
+            # Retired P16 Daily treatments are not reintroduced by a historical
+            # Min receipt. P18 transfers have independent comparison keys.
+            self.assertFalse(any(row.get("strategy") == "Daily"
+                                 and oracle_parameter_family(row) == "min"
+                                 for row in comparisons))
+            true_daily = {oracle_comparison_key(row) for row in comparisons
                           if row.get("strategy") == "Daily"
-                          and oracle_parameter_family(row) == "min"}
+                          and oracle_parameter_family(row) == "daily_min"}
             self.assertTrue(true_daily)
-            self.assertTrue({name + "::Daily" for name in true_daily}.isdisjoint(values))
-            # A Target may already have a certified Breakout receipt (e.g. T40)
-            # even when the newly authorized Daily receipt is not certified.
-            self.assertTrue((true_daily - legacy_keys).isdisjoint(values))
+            self.assertTrue(true_daily.isdisjoint(values))
             scientific_daily = {oracle_target_semantics(row)[0] for row in comparisons
                                 if row.get("strategy") == "Daily"}
             ledger = Path(temp) / "doc/scientific_contracts/REPORT_CONTRACT_VERSIONS.json"
@@ -490,7 +493,8 @@ class PositiveNetPnlContractCases(TestCase):
             self.assertTrue(all(row["oracle_romd"] is None for row in overview["rows"]
                                 if row["target"] == "MinTrade_NetPnL_Positive"))
             self.assertTrue(all(row["oracle_romd"] is None for row in overview["rows"]
-                                if row["target"] in scientific_daily and row["entry_strategy"] == "Daily"))
+                                if row["target"] in scientific_daily
+                                and row["entry_strategy"] == "Daily (Min/P18)"))
             historical_breakout_labels = {oracle_target_semantics(row)[0] for row in published
                                           if oracle_comparison_key(row) in legacy_keys}
             self.assertTrue(all(row["oracle_romd"] is None for row in overview["rows"]
@@ -527,15 +531,8 @@ class PositiveNetPnlContractCases(TestCase):
                 row["description"] for row in comparisons if row["target"] == positive_exact)
             payload["oracles"].append({"target": positive_exact, "seeds": len(seeds),
                                        "romd": 25.0, "win_rate_pct": 60.0})
-            # Same Target, independent Strategy results: Breakout receipts
-            # retain their old identity; Daily may only use its own evidence.
-            for target in sorted(true_daily):
-                payload["definitions"][target] = next(
-                    row["description"] for row in comparisons if row["target"] == target)
-                payload["oracles"].append({
-                    "target": target, "strategy": "Daily", "seeds": len(seeds),
-                    "romd": 41.0, "win_rate_pct": 96.0,
-                })
+            # Retired P16 Daily receipts must not be recreated or certified;
+            # active P18 Daily uses an independent parameter-family scope.
             # A historical signed report cannot claim newly registered Full/P17
             # Oracle items. It retains only its own completed Min inventory.
             from core.audit_registry import oracle_baseline_arm_ids
@@ -565,21 +562,24 @@ class PositiveNetPnlContractCases(TestCase):
             self.assertTrue(full_keys.isdisjoint(values))
             self.assertEqual(values[positive_direct]["oracle_romd"], 204.88)
             self.assertEqual(values["TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct"]["oracle_romd"], 24.62)
-            self.assertEqual(values["TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct::Daily"]["oracle_romd"], 41.0)
             daily_direct_key = "TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct::Daily"
-            original_receipt = payload["comparison_reference_arms"][daily_direct_key]
-            payload["comparison_reference_arms"][daily_direct_key] = {
+            self.assertNotIn(daily_direct_key, values)
+            self.assertNotIn(daily_direct_key, payload["comparison_reference_arms"])
+            # Even an active Breakout receipt requires its exact registered
+            # score-consumer signature. An archived C132 cannot impersonate it.
+            breakout_direct_key = "TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct"
+            original_receipt = payload["comparison_reference_arms"][breakout_direct_key]
+            payload["comparison_reference_arms"][breakout_direct_key] = {
                 "arm_id": "C132", "execution_sha256": original_receipt["execution_sha256"],
             }
             _, _, _, values, info = read_rows()
-            # A retired dual-source arm is not an equivalent reference name.
-            self.assertNotIn(daily_direct_key, values)
-            payload["comparison_reference_arms"][daily_direct_key] = {
+            self.assertNotIn(breakout_direct_key, values)
+            payload["comparison_reference_arms"][breakout_direct_key] = {
                 "arm_id": "C132", "execution_sha256": "f" * 64,
             }
-            self.assertNotIn(daily_direct_key, read_rows()[3])
-            self.assertEqual(values["TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct"]["oracle_romd"], 24.62)
-            payload["comparison_reference_arms"][daily_direct_key] = original_receipt
+            self.assertNotIn(breakout_direct_key, read_rows()[3])
+            payload["comparison_reference_arms"][breakout_direct_key] = original_receipt
+            self.assertEqual(read_rows()[3][breakout_direct_key]["oracle_romd"], 24.62)
 
             # An incomplete/corrupt original report must not supply partial metrics.
             payload["oracles"].pop()
@@ -628,11 +628,11 @@ class PositiveNetPnlContractCases(TestCase):
             self.assertEqual(references[key], reference_arm_execution_binding(row, settings))
         true_daily = "TrueDailyUniversal_MinTrade_NetPnL_Positive"
         self.assertEqual(references[true_daily]["arm_id"], "C135")
-        self.assertEqual(references[true_daily + "_Direct::Daily"]["arm_id"], "C134")
+        self.assertNotIn(true_daily + "_Direct::Daily", references)
         self.assertEqual(references[true_daily + "_Direct::Daily::Daily_min"]["arm_id"], "C164")
         self.assertEqual(references["TrueDailyUniversal_MinTrade_NetPnL_Direct::Daily::Daily_min"]["arm_id"], "C165")
-        self.assertNotEqual(references[true_daily + "_Direct::Daily"]["execution_sha256"],
-                            references[true_daily + "_Direct::Daily::Daily_min"]["execution_sha256"])
+        self.assertNotIn("TrueDailyUniversal_MinTrade_NetPnL_Direct::Daily", references)
+        self.assertEqual(references[true_daily + "_Direct::Daily::Daily_min"]["arm_id"], "C164")
 
     def test_report_resolves_positive_exact_and_direct_without_ambiguity(self):
         definition = get_formal_oracle_definition(get_active_audit_module_id())
@@ -645,7 +645,7 @@ class PositiveNetPnlContractCases(TestCase):
         for key,value in expected.items():
             self.assertEqual(bindings.get(key),value)
         self.assertFalse(any(arm in {'C123', 'C124'} for arm in bindings.values()))
-        # All four TrueDaily arms use the CU ranker and independent CT admission.
+        # Current Breakout TrueDaily arms and P18 transfer use the shared CU/CT sources.
         for suffix in ("", "_Direct"):
             name = "TrueDailyUniversal_MinTrade_NetPnL_Positive" + suffix
             self.assertEqual(
@@ -653,7 +653,7 @@ class PositiveNetPnlContractCases(TestCase):
                 [("true_daily_universal_mintrade_fullcycle_netpnl_full_list_ndcg_pairwise",
                   "C136" if suffix else "C135")])
             daily_key = name + "::Daily"
-            expected_arms = ["C134"] if suffix else []
+            expected_arms = []  # P16 Daily Direct/Exact were retired.
             self.assertEqual(
                 [arm for (target, _profile), arm in bindings.items() if target == daily_key],
                 expected_arms,

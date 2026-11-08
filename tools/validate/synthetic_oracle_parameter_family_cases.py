@@ -29,7 +29,7 @@ def definition():
 
 
 class OracleParameterFamilyCases(TestCase):
-    def test_event_netpnl_daily_p18_does_not_reactivate_legacy_p16(self):
+    def test_retired_direct_arms_preserve_p18_oracle_truth_without_reactivation(self):
         from config import research_summary as roster
         from core.research_summary import (
             get_research_summary_rows, get_research_summary_strategy_arm_ids,
@@ -38,66 +38,89 @@ class OracleParameterFamilyCases(TestCase):
         from core.strategy_compare_policy import get_strategy_comparison_settings
         from core.strategy_compare_registry import STRATEGY_COMPARE_ARMS
 
-        assert_roster = get_research_summary_rows()
-        by_arm = {binding["arm_id"]: group
-                  for group in assert_roster
+        by_arm = {binding["arm_id"]: group for group in get_research_summary_rows()
                   for binding in group.get("bindings", ()) if binding.get("arm_id")}
         archived = {binding["arm_id"]: group
                     for group in roster.RESEARCH_SUMMARY_ROWS
                     if not group.get("enabled", True)
                     for binding in group.get("bindings", ()) if binding.get("arm_id")}
+        retired = {"C134", "C138", "C146", "C163"}
+        remaining = {"C160", "C161", "C164", "C165"}
+        self.assertTrue(retired.issubset(archived))
+        self.assertTrue(remaining.issubset(get_research_summary_strategy_arm_ids()))
+        self.assertTrue(retired.isdisjoint(get_research_summary_strategy_arm_ids()))
+        self.assertTrue({"C123", "C124", "C159", "C162"}.issubset(archived))
+
         d = definition()
-        current = {r.get("strategy_arm_id"): r
-                   for r in resolve_current_oracle_comparisons(d.source)}
-        self.assertTrue({"C163", "C164"}.issubset(current))
-        self.assertTrue({"C162", "C159"}.isdisjoint(current))
-        self.assertIn("C162", archived)
-        self.assertTrue({"C123", "C124"}.isdisjoint(get_research_summary_strategy_arm_ids()))
+        current = {row.get("strategy_arm_id"): row
+                   for row in resolve_current_oracle_comparisons(d.source)}
         settings = get_strategy_comparison_settings("broker_cash_dl_conversion_rolling")
         active = {arm.arm_id for arm in settings.enabled_arms}
-        self.assertTrue({"C163", "C164"}.issubset(active))
-        self.assertTrue({"C162", "C159"}.isdisjoint(active))
-        self.assertTrue({"C123", "C124"}.isdisjoint(active))
-        for arm_id, historical, selector in (("C163", "C124", "direct"),):
-            with self.subTest(arm=arm_id):
-                new = by_arm[arm_id]["oracle"]
-                frozen = archived[historical]["oracle"]
-                self.assertEqual({k: new.get(k) for k in ("target", "selector", "score", "provider",
-                                                            "horizon_mode", "score_source")},
-                                 {k: frozen.get(k) for k in ("target", "selector", "score", "provider",
-                                                                "horizon_mode", "score_source")})
-                self.assertEqual(new["strategy_arm_id"], arm_id)
-                self.assertEqual((new["strategy"], new["parameter_family"]), ("Daily", "daily_min"))
-                self.assertEqual(new["selector"], selector)
-                self.assertEqual(oracle_comparison_key(new),
-                                 f'{new["target"]}::Daily::Daily_min')
-                arm = STRATEGY_COMPARE_ARMS[arm_id]
-                self.assertEqual((arm["dl_id"], arm["entry_strategy"], arm["param_source"]),
-                                 ("CONT13CO_ROLL", "Daily", "daily_min_best_broker_cash_rolling_experiment"))
-                self.assertEqual(arm["replay_contract_version"], 1)
-                self.assertNotIn("positive_dl_id", arm.get("dl_runtime_options", {}))
-        producers = {row["target"]: row for row in get_research_summary_oracle_source_catalog()}
-        self.assertEqual(producers["DailyUniversal_MinTrade_NetPnL"]["score"],
+        self.assertTrue(retired.isdisjoint(current))
+        self.assertTrue(retired.isdisjoint(active))
+        self.assertTrue(remaining.issubset(active))
+        self.assertTrue({"C160", "C164", "C165"}.issubset(current))
+        self.assertTrue(all(contrast.left not in retired and contrast.right not in retired
+                            for contrast in settings.enabled_contrasts))
+
+        for current_arm, historical in (("C160", "C146"),
+                                        ("C164", "C134"),
+                                        ("C165", "C138")):
+            with self.subTest(current=current_arm, template=historical):
+                live, original = by_arm[current_arm]["oracle"], archived[historical]["oracle"]
+                self.assertEqual(
+                    {key: live.get(key) for key in
+                     ("target", "selector", "score", "provider", "horizon_mode", "score_source")},
+                    {key: original.get(key) for key in
+                     ("target", "selector", "score", "provider", "horizon_mode", "score_source")},
+                )
+                self.assertEqual((live["strategy_arm_id"], live["strategy"],
+                                  live["parameter_family"]),
+                                 (current_arm, "Daily", "daily_min"))
+                self.assertEqual(STRATEGY_COMPARE_ARMS[current_arm]["entry_strategy"], "Daily")
+                self.assertEqual(STRATEGY_COMPARE_ARMS[current_arm]["replay_contract_version"], 1)
+
+        self.assertEqual(by_arm["C164"]["bindings"][0]["positive_model"][0], "MR-13CT")
+        self.assertNotIn("positive_model", by_arm["C165"]["bindings"][0])
+        source_catalog = {row["target"]: row for row in get_research_summary_oracle_source_catalog()}
+        self.assertEqual(source_catalog["DailyUniversal_MinTrade_NetPnL"]["score"],
                          archived["C123"]["oracle"]["score"])
+        self.assertEqual(source_catalog["TrueDailyUniversal_MinTrade_NetPnL_Positive"]["score"],
+                         archived["C133"]["oracle"]["score"])
+        self.assertEqual(source_catalog["TrueDailyUniversal_MinTrade_NetPnL_Positive"]["selector"], "exact")
+
         scope = next(sc for name, sc in oracle._oracle_strategy_scopes(d)
                      if name == "Daily::Daily_min")
         plan = oracle._oracle_comparison_plan(scope)
-        self.assertEqual(plan["daily_recipes"]["DailyUniversal_MinTrade_NetPnL"],
-                         ("daily_trade_path_net_pnl", "daily_trade40_profile", None))
-        self.assertEqual(plan["aliases"]["DailyUniversal_MinTrade_NetPnL_Direct"],
-                         "DailyUniversal_MinTrade_NetPnL")
-        self.assertTrue({"C163-C161", "C164-C161", "C164-C134"}.issubset(
-            {contrast.contrast_id for contrast in settings.enabled_contrasts}))
-        # Same old Breakout/min receipt key can never become current again.
-        with self.assertRaisesRegex(ValueError, "Historical-only Oracle target"):
-            resolve_current_oracle_comparisons({**d.source,
-                "oracle_comparisons": (*d.source["oracle_comparisons"],
-                                      dict(archived["C123"]["oracle"]))})
-        # Even a frozen historical template may not re-open its original Min family.
-        modified = tuple({**row, "parameter_family": "min"}
-                         if row.get("oracle_template_arm_id") == "C123" else row
-                         for row in roster.RESEARCH_SUMMARY_ROWS)
-        with patch.object(roster, "RESEARCH_SUMMARY_ROWS", modified):
+        self.assertNotIn("DailyUniversal_MinTrade_NetPnL_Direct", plan["aliases"])
+        self.assertEqual(plan["aliases"]["TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct"],
+                         "TrueDailyUniversal_MinTrade_NetPnL_Positive")
+        historical_keys = d.source["historical_only_oracle_targets"]
+        for key in ("T40_Direct::Daily",
+                    "TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct::Daily",
+                    "TrueDailyUniversal_MinTrade_NetPnL_Direct::Daily",
+                    "DailyUniversal_MinTrade_NetPnL_Direct::Daily::Daily_min"):
+            self.assertIn(key, historical_keys)
+
+        # Historical treatment metadata is retained and cannot be reactivated.
+        for arm_id in ("C134", "C138", "C146"):
+            with self.subTest(reactivation=arm_id):
+                with self.assertRaisesRegex(ValueError, "Historical-only Oracle target"):
+                    resolve_current_oracle_comparisons({**d.source, "oracle_comparisons": (
+                        *d.source["oracle_comparisons"], dict(archived[arm_id]["oracle"])
+                    )})
+        with patch.object(roster, "RESEARCH_SUMMARY_ROWS", tuple(
+                {**row, "enabled": True} if row.get("oracle_template_arm_id") == "C124"
+                else row for row in roster.RESEARCH_SUMMARY_ROWS)):
+            from core.research_summary import get_research_summary_oracle_comparisons
+            with self.assertRaisesRegex(ValueError, "Historical-only Oracle target"):
+                resolve_current_oracle_comparisons({**d.source,
+                    "oracle_comparisons": get_research_summary_oracle_comparisons()})
+        # A frozen P16 template cannot be reopened under its original family.
+        with patch.object(roster, "RESEARCH_SUMMARY_ROWS", tuple(
+                {**row, "parameter_family": "min"}
+                if row.get("oracle_template_arm_id") == "C123" else row
+                for row in roster.RESEARCH_SUMMARY_ROWS)):
             with self.assertRaisesRegex(ValueError, "Invalid Summary Oracle template"):
                 get_research_summary_rows()
 
@@ -314,18 +337,18 @@ class OracleParameterFamilyCases(TestCase):
         baselines = oracle_baseline_arm_ids(d.source)
         self.assertEqual(baselines, {"min": "C96", "full": "C97", "daily_min": "C161"})
         scopes = oracle._oracle_strategy_scopes(d)
+        by_scope = {}
+        for row in comparisons:
+            family = oracle_parameter_family(row)
+            name = row.get("strategy", "Breakout")
+            name = name if family == "min" else f"{name}::{family.capitalize() if family != 'daily_min' else 'Daily_min'}"
+            by_scope[name] = by_scope.get(name, 0) + 1
         self.assertEqual([(name, scope.source["baseline_arm_id"],
                            len(scope.source["oracle_comparisons"])) for name, scope in scopes],
-                         [("Breakout", "C96", len([row for row in comparisons
-                            if oracle_parameter_family(row) == "min" and
-                            row.get("strategy", "Breakout") == "Breakout"])),
-                          ("Daily", "C96", len([row for row in comparisons
-                            if oracle_parameter_family(row) == "min" and
-                            row.get("strategy", "Breakout") == "Daily"])),
-                          ("Breakout::Full", "C97", len([row for row in comparisons
-                            if oracle_parameter_family(row) == "full"])),
-                          ("Daily::Daily_min", "C161", len([row for row in comparisons
-                            if oracle_parameter_family(row) == "daily_min"]))])
+                         [(name, baselines[family], count)
+                          for name, family in (("Breakout", "min"), ("Daily", "min"),
+                                               ("Breakout::Full", "full"), ("Daily::Daily_min", "daily_min"))
+                          if (count := by_scope.get(name, 0))])
         with TemporaryDirectory() as temp:
             root = Path(temp)
             ledger = root / "doc/scientific_contracts/REPORT_CONTRACT_VERSIONS.json"
@@ -349,15 +372,13 @@ class OracleParameterFamilyCases(TestCase):
         self.assertEqual(set(full_arms), {"C97", "C153", "C154"})
         self.assertTrue(all(metric is None for _target, metric in full_arms.values()))
         p18 = {row["strategy"]: row for row in overview["rows"]
-               if row["strategy"] in {"C160", "C161", "C163", "C164", "C165"}}
-        self.assertEqual(set(p18), {"C160", "C161", "C163", "C164", "C165"})
+               if row["entry_strategy"] == "Daily (Min/P18)"}
+        self.assertEqual(set(p18), {"C160", "C161", "C164", "C165"})
         self.assertEqual(p18["C160"]["target"], "T40")
         self.assertEqual(p18["C164"]["target"], "DailyUniversal_MinTrade_NetPnL_Positive")
         self.assertEqual(p18["C165"]["target"], "DailyUniversal_MinTrade_NetPnL")
         self.assertEqual((p18["C165"]["selector"], p18["C165"]["model"], p18["C165"]["positive_model"]),
                          ("Direct", "MR-13CU", ""))
-        self.assertEqual((p18["C163"]["target"], p18["C163"]["model"]),
-                         ("MinTrade_NetPnL", "MR-13CO"))
         self.assertEqual({p18[arm]["entry_strategy"] for arm in p18}, {"Daily (Min/P18)"})
         self.assertEqual(p18["C161"]["target"], "")
         self.assertEqual(p18["C161"]["selector"], "Default")
@@ -366,8 +387,10 @@ class OracleParameterFamilyCases(TestCase):
     def test_reference_arms_use_full_formal_parameters_and_same_t40_truth(self):
         d = definition()
         scopes = {name: scope for name, scope in oracle._oracle_strategy_scopes(d)}
-        min_scoped, daily_scoped, full_scoped, p18_scoped = (
-            scopes[name] for name in ("Breakout", "Daily", "Breakout::Full", "Daily::Daily_min"))
+        # The retired P16 Daily treatments must not keep an empty scope alive.
+        self.assertNotIn("Daily", scopes)
+        min_scoped, full_scoped, p18_scoped = (
+            scopes[name] for name in ("Breakout", "Breakout::Full", "Daily::Daily_min"))
         settings, min_base, min_exact = oracle._contract(min_scoped)
         _settings, full_base, full_exact = oracle._contract(full_scoped)
         min_direct = oracle._direct_arm(min_scoped, settings, min_base, min_exact)
@@ -383,7 +406,6 @@ class OracleParameterFamilyCases(TestCase):
         for source, name in ((min_plan, "T40"), (full_plan, "T40")):
             self.assertEqual(source["recipes"][name], ("terminal_mae_gate", "pure_mfe40_provider"))
         self.assertEqual(full_plan["aliases"]["T40_Direct"], "T40")
-        self.assertEqual(daily_scoped.source["baseline_arm_id"], "C96")
         self.assertNotEqual(full_scoped.output_subdir, min_scoped.output_subdir)
         _settings, p18_base, p18_exact = oracle._contract(p18_scoped)
         p18_direct = oracle._direct_arm(p18_scoped, settings, p18_base, p18_exact)
