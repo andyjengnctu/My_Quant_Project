@@ -531,8 +531,8 @@ class OracleParameterFamilyCases(TestCase):
                             preview["parameter_plans"]["C97"]["producer_kwargs"])
         self.assertEqual(tuple(row["target"] for row in comparisons if
                                oracle_parameter_family(row) == "full"),
-                         ("T40", "T40_Direct", "FullTrade_NetPnL_Positive",
-                          "FullTrade_NetPnL_Positive_Direct"))
+                         ("T40", "T40_Direct", "FullTrade_NetPnL",
+                          "FullTrade_NetPnL_Direct"))
 
 
 class BaselineRobustnessReuseCases(TestCase):

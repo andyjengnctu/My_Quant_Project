@@ -1,4 +1,4 @@
-"""Independent primitive invariants for the Full/P17 NetPnL Positive capability.
+"""Full/P17 rank-only current contracts and archived Positive identity guards.
 
 Synthetic, temporary, never a live optimizer run or formal Test Suite.
 """
@@ -13,6 +13,9 @@ from unittest.mock import patch
 import pandas as pd
 
 from core.audit_policy import get_reusable_audit_definitions
+from core.research_summary import (
+    get_research_summary_strategy_arm_ids, get_research_summary_model_profiles,
+)
 from config.breakout_quality import BREAKOUT_QUALITY_MODEL_TEST_PROFILES
 from core.breakout_quality_runtime import get_continuous_ranker_training_policy
 from core.strategy_compare_policy import get_strategy_multi_seed_robustness_settings
@@ -38,14 +41,16 @@ from services.research.oracle_artifact_contract import source_calculation_contra
 from tools.validate.synthetic_daily_trade40_oracle_cases import PROFILE, source_fixture
 
 
-class FullTradePositiveContracts(TestCase):
-    def test_independent_rank_positive_and_p17_strategy(self):
+class FullTradeContracts(TestCase):
+    def test_rank_only_current_retains_historical_positive_identities(self):
         models = dict(BREAKOUT_QUALITY_MODEL_TEST_PROFILES)
-        for model in ("MR-13CZ", "MR-13DA"):
-            self.assertIsNotNone(get_breakout_quality_experiment_profile(models[model]))
-        self.assertNotEqual(models["MR-13CZ"], models["MR-13DA"])
+        self.assertIn("MR-13CZ", models)
+        self.assertNotIn("MR-13DA", models)
+        # Historical DA classification profile and strategy identities remain registered,
+        # but neither contributes to current Model, Compare, Robustness or Oracle.
+        from core.breakout_quality_registry import FULLTRADE_NETPNL_POSITIVE_PROFILE
         rank = get_breakout_quality_experiment_profile(models["MR-13CZ"])
-        sign = get_breakout_quality_experiment_profile(models["MR-13DA"])
+        sign = get_breakout_quality_experiment_profile(FULLTRADE_NETPNL_POSITIVE_PROFILE)
         self.assertEqual(rank.continuous_target_id, sign.continuous_target_id)
         self.assertEqual(get_continuous_ranker_training_policy(rank.training_objective).loss_handler,
                          "single_pairwise")
@@ -53,21 +58,42 @@ class FullTradePositiveContracts(TestCase):
         self.assertEqual(policy.loss_handler, "categorical_cross_entropy")
         self.assertEqual(policy.categorical_class_count, 2)
         self.assertEqual(FULL_BASELINE_ARM, "C97")
+        active_ids = set(get_research_summary_strategy_arm_ids())
+        self.assertTrue({"C157", "C158"}.issubset(active_ids))
+        self.assertTrue({"C155", "C156"}.isdisjoint(active_ids))
+        self.assertNotIn("MR-13DA", dict(get_research_summary_model_profiles()))
         s = get_strategy_comparison_settings("broker_cash_dl_conversion_rolling")
-        for cid in ("C155", "C156"):
+        self.assertTrue({"C157", "C158"}.issubset({a.arm_id for a in s.enabled_arms}))
+        self.assertTrue({"C155", "C156"}.isdisjoint({a.arm_id for a in s.enabled_arms}))
+        for cid in ("C155", "C156", "C157", "C158"):
             arm = s.arms[cid]
             self.assertEqual(arm.param_source, s.arms["C97"].param_source)
             self.assertEqual(arm.param_policy, s.arms["C97"].param_policy)
+            self.assertEqual(arm.rule_policy, s.arms["C97"].rule_policy)
+        for cid in ("C157", "C158"):
+            arm = s.arms[cid]
+            self.assertEqual(arm.dl_id, "CONT13CZ_ROLL")
+            self.assertNotIn("positive_dl_id", dict(arm.dl_runtime_options))
+            self.assertNotIn("positive_probability_threshold", dict(arm.dl_runtime_options))
+            self.assertNotIn("positive_score_column", dict(arm.dl_runtime_options))
         robust = get_strategy_multi_seed_robustness_settings(s.profile_id)
         self.assertEqual(len(robust.resolved_seeds), 4)
-        self.assertTrue({"C155", "C156"}.issubset(set(robust.stochastic_arm_ids)))
-        self.assertTrue({"C155", "C156"}.issubset(set(robust.model_seed_sensitive_arm_ids)))
+        self.assertTrue({"C157", "C158"}.issubset(set(robust.stochastic_arm_ids)))
+        self.assertTrue({"C157", "C158"}.issubset(set(robust.model_seed_sensitive_arm_ids)))
+        self.assertTrue({"C155", "C156"}.isdisjoint(set(robust.stochastic_arm_ids)))
         defs = get_reusable_audit_definitions("breakout_quality")
         source = next(d.source for d in defs if d.audit_type == "target_ground_truth_strategy_romd")
         full = [c for c in source["oracle_comparisons"]
-                if str(c["target"]).startswith("FullTrade_NetPnL_Positive")]
+                if str(c["target"]).startswith("FullTrade_NetPnL")]
         self.assertEqual(len(full), 2)
-        self.assertEqual({str(c["strategy_arm_id"]) for c in full}, {"C155", "C156"})
+        self.assertEqual({str(c["strategy_arm_id"]) for c in full}, {"C157", "C158"})
+        self.assertTrue(all(not c.get("positive_output") for c in full))
+        self.assertEqual({"FullTrade_NetPnL_Positive", "FullTrade_NetPnL_Positive_Direct"},
+                         set(source["historical_only_oracle_targets"]).intersection({
+                             "FullTrade_NetPnL_Positive", "FullTrade_NetPnL_Positive_Direct",
+                         }))
+        self.assertTrue(all(c["target"] not in source["historical_only_oracle_targets"]
+                            for c in full))
 
     def test_full_p17_teacher_distinct_from_min_p16(self):
         _, _, _, min_schedule = source_fixture()
@@ -85,11 +111,10 @@ class FullTradePositiveContracts(TestCase):
         self.assertEqual(receipt["origin"], "formal_full_roos_rolling_per_seed")
 
     def test_target_capability_is_registered(self):
-        for name in ("MR-13CZ", "MR-13DA"):
-            profile_id = dict(BREAKOUT_QUALITY_MODEL_TEST_PROFILES)[name]
-            source = registered_trade_path_source(profile_id)
-            self.assertEqual(source.contract_kind, "formal_seed_fulltrade_fullcycle_netpnl")
-            self.assertEqual(len(source.dependencies), 2)
+        profile_id = dict(BREAKOUT_QUALITY_MODEL_TEST_PROFILES)["MR-13CZ"]
+        source = registered_trade_path_source(profile_id)
+        self.assertEqual(source.contract_kind, "formal_seed_fulltrade_fullcycle_netpnl")
+        self.assertEqual(len(source.dependencies), 2)
 
     def test_new_oracle_calculation_has_independent_identity(self):
         self.assertEqual(len(truth_producer_fingerprint()), 64)
@@ -110,17 +135,21 @@ class FullTradePositiveContracts(TestCase):
         settings, _baseline, _exact = oracle._contract(source)
         plan = oracle._oracle_comparison_plan(source)
         bound = oracle._resolve_oracle_target_score_contracts(source, settings, plan)
-        self.assertEqual(bound["FullTrade_NetPnL_Positive"]["reference_arm_id"], "C155")
-        self.assertEqual(bound["FullTrade_NetPnL_Positive_Direct"]["reference_arm_id"], "C156")
-        self.assertEqual(bound["FullTrade_NetPnL_Positive"]["target_id"],
+        self.assertEqual(bound["FullTrade_NetPnL"]["reference_arm_id"], "C157")
+        self.assertEqual(bound["FullTrade_NetPnL_Direct"]["reference_arm_id"], "C158")
+        self.assertNotIn("perfect_positive_output", bound["FullTrade_NetPnL"])
+        self.assertNotIn("perfect_positive_output", bound["FullTrade_NetPnL_Direct"])
+        self.assertEqual(bound["FullTrade_NetPnL"]["target_id"],
+                         bound["FullTrade_NetPnL_Direct"]["target_id"])
+        self.assertEqual(bound["FullTrade_NetPnL"]["target_id"],
                          __import__("core.breakout_quality_runtime", fromlist=["FULLTRADE_FULLCYCLE_NETPNL_TARGET_ID"])
                          .FULLTRADE_FULLCYCLE_NETPNL_TARGET_ID)
         self.assertEqual(bound["T40"]["reference_arm_id"], _exact.arm_id)
         # The economic family cannot be spoofed by pointing a Full treatment at a Min arm.
         bad_settings = __import__("dataclasses", fromlist=["replace"]).replace(settings, arms={
             **settings.arms,
-            "C155": __import__("dataclasses", fromlist=["replace"]).replace(
-                settings.arms["C155"], param_source=settings.arms["C96"].param_source),
+            "C157": __import__("dataclasses", fromlist=["replace"]).replace(
+                settings.arms["C157"], param_source=settings.arms["C96"].param_source),
         })
         with self.assertRaisesRegex(oracle.OracleBlockedError, "strategy differs"):
             oracle._resolve_oracle_target_score_contracts(source, bad_settings, plan)

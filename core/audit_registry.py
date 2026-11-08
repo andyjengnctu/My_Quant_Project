@@ -133,6 +133,8 @@ AUDIT_REUSABLE_REPORTS: dict[str, dict[str, Any]] = {
                     "CG40_EqualRank": "40D MFE + full D40 Safety, 50/50 daily rank",
                     "T40_Positive_Direct": "Retired 2026-11-06: old CJ+CW dual-Model Direct C143; receipt kept historically",
                     "T40_Positive": "Retired 2026-11-07: Default-only C144; historical Exact C142 and Default receipts retained",
+                    "FullTrade_NetPnL_Positive": "Retired 2026-11-08: historical Full/P17 CZ+DA Positive C155 Exact",
+                    "FullTrade_NetPnL_Positive_Direct": "Retired 2026-11-08: historical Full/P17 CZ+DA Positive C156 Direct",
                     "DailyUniversal_MinTrade60_NetR": "LABEL-daily_universal_formal_min_roos_trade60_netr_v1",
                     "DailyUniversal_MinTrade60_NetR_Direct": "LABEL-daily_universal_formal_min_roos_trade60_netr_v1",
                     "DailyUniversal_MinTrade60_NetPnL": "LABEL-daily_universal_formal_min_roos_trade60_netpnl_v1",
