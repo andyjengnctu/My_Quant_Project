@@ -120,9 +120,9 @@ class OracleParallelSeedWorkCases(TestCase):
 
     def _patch_source_validation(self, args):
         prepared = args["prepared"]
-        # The scheduling fixture must expose the same target-key shape as the
-        # canonical price producer. New Positive sources are mocked separately:
-        # this test checks worker orchestration, not market truth arithmetic.
+        # The fixture preserves canonical price-score key shapes. Current
+        # Positive outputs use the daily NetPnL truth pipeline, not a scalar
+        # price-source Positive oracle. Here we test worker orchestration only.
         scored = {("2330", "2021-01-04"): 0.5}
         prices = {name: scored for name in self.targets
                   if name != "C96" and name not in self.plan["daily_sources"]}
@@ -132,7 +132,6 @@ class OracleParallelSeedWorkCases(TestCase):
                 (seed, Path("p16.json")) for seed in self.seeds])),
             patch.object(oracle, "_prepare_oracle_parameters", return_value=(prepared, [])),
             patch.object(oracle, "_load_or_build_oracle_price_scores", return_value=(prices, {})),
-            patch.object(oracle, "_price_positive_output", return_value={("2330", "2021-01-04"): 1.0}),
             patch.object(oracle, "ProcessPoolExecutor", _InstantPool),
             patch.object(oracle, "as_completed", side_effect=lambda futures: tuple(futures)),
         )
@@ -147,22 +146,17 @@ class OracleParallelSeedWorkCases(TestCase):
             args = self._args(Path(tmp), decisions)
             from contextlib import ExitStack
             with ExitStack() as stack:
-                source_patches = {ctx.attribute: stack.enter_context(ctx)
-                                  for ctx in self._patch_source_validation(args)}
+                for ctx in self._patch_source_validation(args):
+                    stack.enter_context(ctx)
                 stack.enter_context(patch.object(oracle, "TARGET_ORACLE_REPLAY_SEED_WORKERS", 2))
                 stack.enter_context(patch.object(oracle, "TARGET_ORACLE_CPU_WORKER_BUDGET", 8))
                 stack.enter_context(patch.object(oracle, "TARGET_ORACLE_MINTRADE_STOCK_WORKERS", 6))
                 result = oracle._execute_oracle_missing_parallel(self.definition, **args)
             self.assertEqual(_InstantPool.max_workers, 2)
-            price_positive_origins = {
-                self.plan["aliases"].get(target, target)
-                for target, _description in self.plan["targets"]
-                if target not in self.plan["daily_sources"] and any(
-                    row["target"] == target and row.get("positive_output")
-                    for row in self.definition.source["oracle_comparisons"])
-            }
-            self.assertEqual(source_patches["_price_positive_output"].call_count,
-                             len(price_positive_origins))
+            self.assertFalse(any(
+                row.get("positive_output") and row["target"] not in self.plan["daily_sources"]
+                for row in self.definition.source["oracle_comparisons"]
+            ), "Current Oracle Positive must use the canonical daily NetPnL truth")
             # Two concurrent seeds + two nested pools of three processes = 8.
             # Seed6, Seed7 and Seed8 are queued without fixed slot affinity.
             self.assertEqual({job["mintrade_stock_workers"]

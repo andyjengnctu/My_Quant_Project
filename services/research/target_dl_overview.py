@@ -587,10 +587,10 @@ def _strategy_bindings(*, target_names: tuple[str, ...],
             continue
         entry_strategy = str(comparison.get("strategy", "Breakout"))
         selector = str(comparison["selector"])
-        desired_mode = (
-            "positive-only-default" if selector == "default"
-            else _DIRECT_MODE if selector == "direct" else _EXACT_MODE
-        )
+        # Historical Default/Positive-only is not in the current Summary.
+        if selector not in {"exact", "direct"}:
+            raise ValueError(f"Unsupported current Oracle selector: {selector}")
+        desired_mode = _DIRECT_MODE if selector == "direct" else _EXACT_MODE
         family = oracle_parameter_family(comparison)
         reference_baseline = STRATEGY_COMPARE_ARMS[baselines[family]]
         declared_arm_id = str(comparison.get("strategy_arm_id") or "")
