@@ -45,6 +45,14 @@ RESEARCH_SUMMARY_ROWS = (
                                   'true_daily_universal_mintrade_fullcycle_netpnl_full_list_ndcg_pairwise'),
                    'positive_model': ('MR-13CT',
                                       'true_daily_universal_mintrade_fullcycle_netpnl_positive_binary')},)},
+    # Same TrueDaily CU continuous Target as C138, but with the independently
+    # Daily-optimized P18 economic parameter lineage and no Positive admission.
+    # C163 is different: it consumes event-driven MR-13CO rather than CU.
+    {'oracle_template_arm_id': 'C138', 'parameter_family': 'daily_min',
+     'strategy': 'Daily',
+     'bindings': ({'arm_id': 'C165',
+                   'rank_model': ('MR-13CU',
+                                  'true_daily_universal_mintrade_fullcycle_netpnl_full_list_ndcg_pairwise')},)},
     {'oracle': {'target': 'MFE40_Control',
                 'description': '40D MFE only (control, not target recommendation)',
                 'score': 'mfe',

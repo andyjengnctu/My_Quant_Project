@@ -579,10 +579,11 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
             (("T40", "Daily (Min/P18)", "Direct", "MR-13CJ"),
              ("", "Daily (Min/P18)", "Default", ""),
              ("MinTrade_NetPnL", "Daily (Min/P18)", "Direct", "MR-13CO"),
-             ("DailyUniversal_MinTrade_NetPnL_Positive", "Daily (Min/P18)", "Direct", "MR-13CU")),
+             ("DailyUniversal_MinTrade_NetPnL_Positive", "Daily (Min/P18)", "Direct", "MR-13CU"),
+             ("DailyUniversal_MinTrade_NetPnL", "Daily (Min/P18)", "Direct", "MR-13CU")),
             tuple((by_arm[arm]["target"], by_arm[arm]["entry_strategy"],
                    by_arm[arm]["selector"], by_arm[arm]["model"])
-                  for arm in ("C160", "C161", "C163", "C164")),
+                  for arm in ("C160", "C161", "C163", "C164", "C165")),
         )
         check_true("summary_no_dl_controls_have_no_target_and_other_targets_preserved",
                    all(by_arm[arm]["target"] == ""

@@ -187,6 +187,7 @@ class PositiveNetPnlContractCases(TestCase):
             ("MinTrade_NetPnL_Positive", "Breakout", "Exact", "C125", "MR-13CO", "MR-13CP"),
             ("MinTrade_NetPnL_Positive", "Breakout", "Direct", "C126", "MR-13CO", "MR-13CP"),
             ("DailyUniversal_MinTrade_NetPnL", "Daily", "Direct", "C138", "MR-13CU", ""),
+            ("DailyUniversal_MinTrade_NetPnL", "Daily (Min/P18)", "Direct", "C165", "MR-13CU", ""),
             ("DailyUniversal_MinTrade_NetPnL_Positive", "Daily", "Direct", "C134", "MR-13CU", "MR-13CT"),
             ("DailyUniversal_MinTrade_NetPnL_Positive", "Daily (Min/P18)", "Direct", "C164", "MR-13CU", "MR-13CT"),
             ("DailyUniversal_MinTrade_NetPnL_Positive", "Breakout", "Exact", "C135", "MR-13CU", "MR-13CT"),
@@ -629,6 +630,7 @@ class PositiveNetPnlContractCases(TestCase):
         self.assertEqual(references[true_daily]["arm_id"], "C135")
         self.assertEqual(references[true_daily + "_Direct::Daily"]["arm_id"], "C134")
         self.assertEqual(references[true_daily + "_Direct::Daily::Daily_min"]["arm_id"], "C164")
+        self.assertEqual(references["TrueDailyUniversal_MinTrade_NetPnL_Direct::Daily::Daily_min"]["arm_id"], "C165")
         self.assertNotEqual(references[true_daily + "_Direct::Daily"]["execution_sha256"],
                             references[true_daily + "_Direct::Daily::Daily_min"]["execution_sha256"])
 
@@ -659,6 +661,9 @@ class PositiveNetPnlContractCases(TestCase):
         self.assertEqual(bindings.get((
             "TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct::Daily::Daily_min",
             "true_daily_universal_mintrade_fullcycle_netpnl_full_list_ndcg_pairwise")), "C164")
+        self.assertEqual(bindings.get((
+            "TrueDailyUniversal_MinTrade_NetPnL_Direct::Daily::Daily_min",
+            "true_daily_universal_mintrade_fullcycle_netpnl_full_list_ndcg_pairwise")), "C165")
 
 
 class IndependentPositiveClassifierCases(TestCase):

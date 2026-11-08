@@ -144,7 +144,7 @@ STRATEGY_COMPARE_SUITES = {
         "arm_ids": (
             "C96", "C97", "C98", "C99", "C100", "C101", "C102", "C103",
             "C105", "C106", "C107", "C108", "C109", "C110",
-            "C111", "C112", "C115", "C116", "C117", "C118", "C119", "C120", "C121", "C122", "C123", "C124", "C125", "C126", "C133", "C134", "C135", "C136", "C137", "C138", "C145", "C146", "C147", "C148", "C153", "C154", "C155", "C156", "C157", "C158", "C159", "C160", "C161", "C162", "C163", "C164",
+            "C111", "C112", "C115", "C116", "C117", "C118", "C119", "C120", "C121", "C122", "C123", "C124", "C125", "C126", "C133", "C134", "C135", "C136", "C137", "C138", "C145", "C146", "C147", "C148", "C153", "C154", "C155", "C156", "C157", "C158", "C159", "C160", "C161", "C162", "C163", "C164", "C165",
         ),
         # A compact connected contrast graph supports each selected model
         # versus C96 plus the matched CK/CJ label contrast. Historical AO/CH
@@ -168,6 +168,7 @@ STRATEGY_COMPARE_SUITES = {
             "C157-C97", "C158-C97", "C157-C158", "C157-C153", "C158-C154",
             "C159-C161", "C160-C161", "C159-C160", "C159-C145", "C160-C146",
             "C162-C161", "C163-C161", "C162-C163", "C162-C159", "C163-C160", "C164-C161", "C164-C134", "C164-C160",
+            "C165-C161", "C165-C164", "C165-C138", "C165-C163",
         ),
         "display_name_bases": {
             "C96": "Min Base-Finalist-Best / Broker-Cash",
@@ -220,6 +221,7 @@ STRATEGY_COMPARE_SUITES = {
             "C162": "MinTrade NetPnL × Daily (Min/P18) Exact K/R0 / Broker-Cash",
             "C163": "MinTrade NetPnL × Daily (Min/P18) Direct No-K No-R0 / Broker-Cash",
             "C164": "DailyUniversal NetPnL Positive × Daily (Min/P18) Direct No-K No-R0 / Broker-Cash",
+            "C165": "DailyUniversal NetPnL × Daily (Min/P18) Direct No-K No-R0 / Broker-Cash",
         },
     },
     "non_dl_c85_same_signal_revalidation_v1": {
@@ -3156,6 +3158,20 @@ STRATEGY_COMPARE_ARMS = {
         },
         "robustness_role": "off", "entry_strategy": "Daily",
     },
+    "C165": {
+        "replay_contract_version": 1,
+        "name": "DailyUniversal NetPnL × Daily (Min/P18) Direct No-K No-R0 / Broker-Cash",
+        "description": "Original PIT MR-13CU TrueDaily stock-day full-cycle NetPnL scores transferred to independently Daily-optimized P18 Min ATR exits; canonical Daily entry, Direct selector and Broker-Cash. No Positive classifier or admission. C161 baseline; C164 same-rank Positive contrast; C138 P16 transfer reference.",
+        "param_source": "daily_min_best_broker_cash_rolling_experiment",
+        "param_policy": "base-finalist-best", "rule_policy": "all_off",
+        "dl_enabled": True, "dl_id": "CONT13CU_ROLL",
+        "dl_runtime_mode": "resource-aware-continuous-score-no-k-no-r0",
+        "dl_runtime_options": {
+            "preserve_k": False, "preserve_r0": False,
+            "selection_order": "model_score_desc_then_canonical_tie_v1", "selection_only": True,
+        },
+        "robustness_role": "off", "entry_strategy": "Daily",
+    },
     "C149": {
         "replay_contract_version": 1,
         "name": "Daily Min MR-13CX T40 Pairwise-Confidence Exact K/R0 / Broker-Cash",
@@ -3589,6 +3605,10 @@ STRATEGY_COMPARE_CONTRASTS = {
     "C164-C161": {"left": "C164", "right": "C161", "description": "Same Daily/P18 economics: CU rank with CT Positive versus no-DL Default"},
     "C164-C134": {"left": "C164", "right": "C134", "description": "Same CU/CT PIT scores and Direct selector: P18 versus P16 Daily parameter family"},
     "C164-C160": {"left": "C164", "right": "C160", "description": "Same P18 Daily Direct economics: CU+CT Positive versus CJ T40; models and Positive admission both differ"},
+    "C165-C161": {"left": "C165", "right": "C161", "description": "Same P18 Daily entry, exits and Direct comparison to unscored Default control"},
+    "C165-C164": {"left": "C165", "right": "C164", "description": "Same CU PIT rank and P18 Daily Direct economics, without versus with CT Positive admission"},
+    "C165-C138": {"left": "C165", "right": "C138", "description": "Same CU PIT rank and Daily Direct selector: P18 independently Daily-optimized ATR versus P16 Breakout-optimized ATR"},
+    "C165-C163": {"left": "C165", "right": "C163", "description": "Same Daily/P18 Direct economics and no Positive: TrueDaily CU versus event-driven CO NetPnL rank"},
     "C162-C161": {"left": "C162", "right": "C161", "description": "Same Daily/P18 economics: CO NetPnL Exact versus no-DL Default"},
     "C163-C161": {"left": "C163", "right": "C161", "description": "Same Daily/P18 economics: CO NetPnL Direct versus no-DL Default"},
     "C162-C163": {"left": "C162", "right": "C163", "description": "Same CO score and Daily/P18 economics: Exact versus Direct"},

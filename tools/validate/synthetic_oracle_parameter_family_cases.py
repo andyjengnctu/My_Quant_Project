@@ -349,10 +349,15 @@ class OracleParameterFamilyCases(TestCase):
         self.assertEqual(set(full_arms), {"C97", "C153", "C154"})
         self.assertTrue(all(metric is None for _target, metric in full_arms.values()))
         p18 = {row["strategy"]: row for row in overview["rows"]
-               if row["strategy"] in {"C160", "C161", "C163", "C164"}}
-        self.assertEqual(set(p18), {"C160", "C161", "C163", "C164"})
+               if row["strategy"] in {"C160", "C161", "C163", "C164", "C165"}}
+        self.assertEqual(set(p18), {"C160", "C161", "C163", "C164", "C165"})
         self.assertEqual(p18["C160"]["target"], "T40")
         self.assertEqual(p18["C164"]["target"], "DailyUniversal_MinTrade_NetPnL_Positive")
+        self.assertEqual(p18["C165"]["target"], "DailyUniversal_MinTrade_NetPnL")
+        self.assertEqual((p18["C165"]["selector"], p18["C165"]["model"], p18["C165"]["positive_model"]),
+                         ("Direct", "MR-13CU", ""))
+        self.assertEqual((p18["C163"]["target"], p18["C163"]["model"]),
+                         ("MinTrade_NetPnL", "MR-13CO"))
         self.assertEqual({p18[arm]["entry_strategy"] for arm in p18}, {"Daily (Min/P18)"})
         self.assertEqual(p18["C161"]["target"], "")
         self.assertEqual(p18["C161"]["selector"], "Default")
