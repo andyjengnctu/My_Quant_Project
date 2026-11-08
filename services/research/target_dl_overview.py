@@ -159,7 +159,8 @@ def _oracle_rows(root: Path, definition, versions: Mapping[str, tuple]):
     for item in comparisons:
         raw = item
         if item.get("score_source"):
-            raw = next((other for other in comparisons if other["target"] == item["score_source"]), {})
+            raw = next((other for other in definition.source["oracle_source_catalog"]
+                        if other["target"] == item["score_source"]), {})
         label = oracle_supervised_target_id(raw)
         # A hindsight-only eligibility intervention is not a deployable DL
         # model or ordinary Direct strategy, even when its score source is

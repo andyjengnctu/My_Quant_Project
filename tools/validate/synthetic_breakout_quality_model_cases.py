@@ -7901,9 +7901,11 @@ def validate_breakout_quality_shared_ah_contract_case(_base_params):
         str(value) for value in breakout_quality_config.BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE
     )
     check_true(
-        "continuous_dl_comparison_membership_keeps_ak_reference_and_injects_current_training_identity",
+        "continuous_dl_comparison_membership_uses_current_summary_and_keeps_ak_as_historical",
         current_training_pair in comparison_pairs
-        and any(model_id == "MR-13AK" for model_id, _profile_name in comparison_pairs)
+        and "MR-13AK" not in {model_id for model_id, _profile_name in comparison_pairs}
+        and "MR-13AH" not in {model_id for model_id, _profile_name in comparison_pairs}
+        and get_continuous_ranker_research_spec(profile.name).model_research_id == "MR-13AK"
         and "MR-13AL" not in {model_id for model_id, _profile_name in comparison_pairs}
         and "MR-13AN" not in {model_id for model_id, _profile_name in comparison_pairs},
     )

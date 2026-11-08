@@ -30,6 +30,48 @@ def get_research_summary_oracle_comparisons() -> tuple[dict[str, Any], ...]:
     return tuple(dict(row["oracle"]) for row in get_research_summary_rows() if "oracle" in row)
 
 
+def get_research_summary_oracle_source_catalog() -> tuple[dict[str, Any], ...]:
+    """Immutable approved score producers, including sources with no active treatment.
+
+    A retired Exact/Direct treatment may still supply the original canonical
+    truth recipe for an independently active alias (e.g. Positive ranking).
+    Only disabled Exact score-producer rows are exposed as source-only entries;
+    they cannot become executable comparisons through this catalog.
+    """
+    from config import research_summary as cfg
+
+    sources = list(get_research_summary_oracle_comparisons())
+    needed_sources = {str(row["score_source"]) for row in sources if row.get("score_source")}
+    active_sources = {str(row["target"]) for row in sources}
+    for group in cfg.RESEARCH_SUMMARY_ROWS:
+        if group.get("enabled", True) or "oracle" not in group:
+            continue
+        oracle = dict(group["oracle"])
+        if (oracle.get("target") in needed_sources - active_sources
+                and oracle.get("selector") == "exact" and oracle.get("score")
+                and oracle.get("provider") and not oracle.get("score_source")):
+            sources.append({**oracle, "source_only": True})
+    targets = [row["target"] for row in sources]
+    if len(targets) != len(set(targets)):
+        # The same Target can serve both Daily and Breakout strategies; a
+        # score-producer catalog needs each immutable Target only once.
+        unique = {}
+        for row in sources:
+            name = row["target"]
+            previous = unique.get(name)
+            if previous is not None and {
+                key: value for key, value in row.items()
+                if key not in ("strategy", "strategy_arm_id", "parameter_family")
+            } != {
+                key: value for key, value in previous.items()
+                if key not in ("strategy", "strategy_arm_id", "parameter_family")
+            }:
+                raise ValueError(f"Oracle producer catalog conflicting target: {name}")
+            unique.setdefault(name, row)
+        return tuple(unique.values())
+    return tuple(sources)
+
+
 def get_research_summary_baseline_arm_ids() -> dict[str, str]:
     result = {}
     for row in get_research_summary_rows():

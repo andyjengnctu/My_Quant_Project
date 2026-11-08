@@ -12,6 +12,7 @@ from typing import Any, Mapping
 from config.market_data import RESEARCH_REQUIRED_CUTOFF
 from core.research_summary import (
     get_research_summary_oracle_comparisons,
+    get_research_summary_oracle_source_catalog,
     get_research_summary_baseline_arm_ids,
 )
 
@@ -135,6 +136,12 @@ AUDIT_REUSABLE_REPORTS: dict[str, dict[str, Any]] = {
                     "T40_Positive": "Retired 2026-11-07: Default-only C144; historical Exact C142 and Default receipts retained",
                     "FullTrade_NetPnL_Positive": "Retired 2026-11-08: historical Full/P17 CZ+DA Positive C155 Exact",
                     "FullTrade_NetPnL_Positive_Direct": "Retired 2026-11-08: historical Full/P17 CZ+DA Positive C156 Direct",
+                    "DailyUniversal_MinTrade40_NetR": "Retired 2026-11-08: Min 40D rank C119 Exact, MR-13CM historical",
+                    "DailyUniversal_MinTrade40_NetR_Direct": "Retired 2026-11-08: Min 40D rank C120 Direct",
+                    "DailyUniversal_MinTrade_NetPnL": "Retired 2026-11-08: non-Positive rank C123 Exact; immutable price truth still supplies Positive",
+                    "DailyUniversal_MinTrade_NetPnL_Direct": "Retired 2026-11-08: non-Positive rank C124 Direct",
+                    "T40-MFE": "Retired 2026-11-08: MR-13CK T40-MFE C108 Exact; historical labels and PIT scores retained",
+                    "T40-MFE_Direct": "Retired 2026-11-08: MR-13CK T40-MFE C110 Direct",
                     "DailyUniversal_MinTrade60_NetR": "LABEL-daily_universal_formal_min_roos_trade60_netr_v1",
                     "DailyUniversal_MinTrade60_NetR_Direct": "LABEL-daily_universal_formal_min_roos_trade60_netr_v1",
                     "DailyUniversal_MinTrade60_NetPnL": "LABEL-daily_universal_formal_min_roos_trade60_netpnl_v1",
@@ -147,6 +154,9 @@ AUDIT_REUSABLE_REPORTS: dict[str, dict[str, Any]] = {
                     if family != "min"
                 },
                 "oracle_comparisons": get_research_summary_oracle_comparisons(),
+                # Non-executable registered Exact truth producers are needed
+                # for currently active aliases; this does not re-enable arms.
+                "oracle_source_catalog": get_research_summary_oracle_source_catalog(),
             },
             "dimensions": {
                 "percentile_method": "average_zero_based",

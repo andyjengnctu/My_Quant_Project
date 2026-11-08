@@ -127,10 +127,12 @@ def get_reusable_audit_definitions(
         if raw.get("report_type") == "target_ground_truth_strategy_romd":
             from core.research_summary import (
                 get_research_summary_oracle_comparisons,
+                get_research_summary_oracle_source_catalog,
                 get_research_summary_baseline_arm_ids,
             )
             baselines = get_research_summary_baseline_arm_ids()
             source["oracle_comparisons"] = get_research_summary_oracle_comparisons()
+            source["oracle_source_catalog"] = get_research_summary_oracle_source_catalog()
             source["baseline_arm_id"] = baselines["min"]
             source["additional_parameter_baselines"] = {
                 family: arm_id for family, arm_id in baselines.items() if family != "min"

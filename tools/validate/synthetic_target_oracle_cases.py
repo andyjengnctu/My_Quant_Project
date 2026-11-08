@@ -373,6 +373,46 @@ class OracleResearchCutoff2026Cases(TestCase):
 
 class OracleScoreParityContractCases(TestCase):
     def setUp(self):
+        # Historical 40D Daily score/portfolio fixtures are isolated from the
+        # live roster.  They still verify immutable raw-label, PIT and signed
+        # Replay behavior without reauthorizing the retired C119/C120 arms.
+        from config import research_summary as summary_cfg
+        retired = {"DailyUniversal_MinTrade40_NetR",
+                   "DailyUniversal_MinTrade40_NetR_Direct"}
+        old = tuple(row["oracle"] for row in summary_cfg.RESEARCH_SUMMARY_ROWS
+                    if not row.get("enabled", True) and row.get("oracle", {}).get("target") in retired)
+        self.assertEqual({row["target"] for row in old}, retired)
+        original = _ACTIVE_ORACLE_DEFINITION
+        historical_source = {
+            **original.source,
+            "historical_only_oracle_targets": {
+                k: v for k, v in original.source["historical_only_oracle_targets"].items()
+                if k not in retired},
+            "oracle_comparisons": (*original.source["oracle_comparisons"], *old),
+        }
+        fixture = replace(original, source=historical_source)
+        from services.audit import oracle_execution_policy as execution_policy
+        registry = execution_policy.AUDIT_REUSABLE_REPORTS
+        archival_registry = {**registry, "breakout_quality": {
+            **registry["breakout_quality"], "target_oracle_romd": {
+                **registry["breakout_quality"]["target_oracle_romd"],
+                "source": historical_source,
+            },
+        }}
+        for obj, attr, value in (
+            (execution_policy, "AUDIT_REUSABLE_REPORTS", archival_registry),
+            (sys.modules[__name__], "_ACTIVE_ORACLE_DEFINITION", fixture),
+            (summary_cfg, "RESEARCH_SUMMARY_ROWS", tuple(
+                {**group, "enabled": True}
+                if group.get("oracle", {}).get("target") in retired else group
+                for group in summary_cfg.RESEARCH_SUMMARY_ROWS)),
+            (oracle, "_ORACLE_DEFAULT_COMPARISONS", (*oracle._ORACLE_DEFAULT_COMPARISONS, *old)),
+            (oracle, "_ORACLE_RETIRED_TARGETS", frozenset(
+                name for name in oracle._ORACLE_RETIRED_TARGETS if name not in retired)),
+        ):
+            handle = patch.object(obj, attr, value)
+            handle.start()
+            self.addCleanup(handle.stop)
         # Preserve the real callable fingerprint before individual tests
         # replace external panel loading. Both input checks see one fixture.
         source = patch.object(oracle, "_price_score_algorithm_sha256",
@@ -769,7 +809,7 @@ class OracleScoreParityContractCases(TestCase):
         self.assertEqual(set(certified.values()), {certified[daily_name]})
         # Price-only comparisons and legitimate Daily-only comparisons do not
         # require unselected providers to exist.
-        for selected in ({"T40", "T40-MFE"}, {daily_name, daily_name+"_Direct"}):
+        for selected in ({"T40", "R40"}, {daily_name, daily_name+"_Direct"}):
             subset = replace(definition, source={**definition.source,
                 "oracle_comparisons": tuple(item for item in definition.source["oracle_comparisons"]
                                             if item["target"] in selected)})
@@ -1173,12 +1213,27 @@ class OracleCanonicalPriceLabelCases(TestCase):
         official = pd.DataFrame(records)
         source = (_historical_cg_price_definition()
                   if _HISTORICAL_CG_COMPARISON["target"] in selected else _ACTIVE_ORACLE_DEFINITION)
+        historical_mfe = {"T40-MFE", "T40-MFE_Direct"} & set(selected)
+        if historical_mfe:
+            # Price-formula regression on the original immutable CK target;
+            # this archival fixture does not add an executable treatment.
+            from config.research_summary import RESEARCH_SUMMARY_ROWS
+            archival = tuple(row["oracle"] for row in RESEARCH_SUMMARY_ROWS
+                             if row.get("oracle", {}).get("target") in historical_mfe)
+            self.assertEqual({row["target"] for row in archival}, historical_mfe)
+            source = replace(source, source={**source.source,
+                "historical_only_oracle_targets": {
+                    k: v for k, v in source.source["historical_only_oracle_targets"].items()
+                    if k not in historical_mfe},
+                "oracle_comparisons": archival})
         definition = replace(source, source={
             **source.source, "oracle_comparisons": tuple(
                 item for item in source.source["oracle_comparisons"]
                 if item["target"] in selected)})
         inputs = [(ticker, Path(ticker + ".csv")) for ticker in ("0050", *frames)]
-        with patch.object(oracle, "_load_truth", return_value=official), \
+        with patch.object(oracle, "_ORACLE_RETIRED_TARGETS",
+                          frozenset(oracle._ORACLE_RETIRED_TARGETS - historical_mfe)), \
+             patch.object(oracle, "_load_truth", return_value=official), \
              patch.object(oracle, "discover_dataset_csv_inputs", return_value=(inputs, [])), \
              patch.object(oracle, "load_dataset_frame", side_effect=lambda path, ticker, **kw: (
                  next(iter(frames.values())) if ticker == "0050" else frames[ticker])):
@@ -1371,7 +1426,7 @@ class OracleAuditContractCases(TestCase):
         self.assertEqual(
             {name for name, _ in LEGACY_ORACLE_TARGETS},
             {"MFE40_Control", "R40", "T40",
-             "T40-MFE", "MFE40_Direct", "R40_Direct", "T40_Direct", "T40-MFE_Direct"},
+             "MFE40_Direct", "R40_Direct", "T40_Direct"},
         )
         self.assertEqual(
             len(oracle._oracle_comparison_plan(self.active_definition)["targets"]),
@@ -2118,8 +2173,9 @@ class OracleAuditContractCases(TestCase):
                     self.assertIn("**" + oracle._oracle_display_name(name) + "**", body)
             self.assertIn("**R40**", body)
             self.assertIn("**T40**", body)
-            self.assertIn("**T40-MFE**", body)
+            self.assertNotIn("**T40-MFE**", body)
             self.assertNotIn("**T40-MFE_Direct**", body)
+            self.assertNotIn("- T40-MFE:", body)
             self.assertIn("Selector", body)
             self.assertNotIn("60D Mature Oracle", body)
             self.assertNotIn("**CH20_EqualRank**", body)
@@ -2503,10 +2559,12 @@ class RemovedMinTrade40OracleComparisonCases(TestCase):
         self.assertEqual(set(retired), {"MinTrade40_NetR", "MinTrade40_NetR_Direct"})
         original = catalog["oracle_comparisons"]
         self.assertTrue(set(retired).isdisjoint({row["target"] for row in original}))
-        existing_daily_exact = next(x for x in original
-                                    if x["target"] == "DailyUniversal_MinTrade40_NetR")
-        existing_daily_direct = next(x for x in original
-                                     if x["target"] == "DailyUniversal_MinTrade40_NetR_Direct")
+        from config.research_summary import RESEARCH_SUMMARY_ROWS
+        archived = {row["oracle"]["target"]: row["oracle"]
+                    for row in RESEARCH_SUMMARY_ROWS if not row.get("enabled", True)
+                    and "oracle" in row}
+        existing_daily_exact = archived["DailyUniversal_MinTrade40_NetR"]
+        existing_daily_direct = archived["DailyUniversal_MinTrade40_NetR_Direct"]
         for old, template in (("MinTrade40_NetR", existing_daily_exact),
                               ("MinTrade40_NetR_Direct", existing_daily_direct)):
             altered = replace(active, source={**active.source, "oracle_comparisons": (
@@ -2520,7 +2578,7 @@ class RemovedMinTrade40OracleComparisonCases(TestCase):
             *original, {"target": "Unrelated_Direct", "description": "bad source",
                         "score_source": "MinTrade40_NetR", "selector": "direct"},
         )})
-        with self.assertRaisesRegex(oracle.OracleBlockedError, "retired Target identity"):
+        with self.assertRaisesRegex(oracle.OracleBlockedError, "retired Target identity|score來源非法"):
             oracle._oracle_comparison_plan(altered)
 
     def test_retired_signal_event_target_is_not_selectable(self):
@@ -2530,8 +2588,11 @@ class RemovedMinTrade40OracleComparisonCases(TestCase):
         self.assertEqual(names, {item["target"] for item in current.source["oracle_comparisons"]})
         self.assertNotIn("MinTrade40_NetR", names)
         self.assertNotIn("MinTrade40_NetR_Direct", names)
-        self.assertIn("DailyUniversal_MinTrade40_NetR", names)
-        self.assertIn("DailyUniversal_MinTrade40_NetR_Direct", names)
+        self.assertNotIn("DailyUniversal_MinTrade40_NetR", names)
+        self.assertNotIn("DailyUniversal_MinTrade40_NetR_Direct", names)
+        self.assertTrue({"DailyUniversal_MinTrade40_NetR",
+                         "DailyUniversal_MinTrade40_NetR_Direct"}.issubset(
+            current.source["historical_only_oracle_targets"]))
         # Previous signal-event recipes must not reappear via ad-hoc config.
         source = {**current.source, "oracle_comparisons": (*current.source["oracle_comparisons"], {
             "target": "MinTrade40_NetR", "description": "retired", "score": "trade_path_realized_net_r",
@@ -6257,6 +6318,52 @@ class OracleInventoryAndSourceIsolationRegressionCases(TestCase):
             resolve_current_oracle_comparisons(source)
         with self.assertRaisesRegex(oracle.OracleBlockedError, "retired Target identity"):
             oracle._oracle_comparison_plan(replace(definition, source=source))
+
+    def test_retired_research_treatments_keep_positive_source_but_never_reactivate(self):
+        from core.audit_registry import resolve_current_oracle_comparisons
+        from core.research_summary import (
+            get_research_summary_model_profiles, get_research_summary_strategy_arm_ids,
+        )
+        definition = _ACTIVE_ORACLE_DEFINITION
+        selected = resolve_current_oracle_comparisons(definition.source)
+        names = {row["target"] for row in selected}
+        retired_targets = {
+            "DailyUniversal_MinTrade40_NetR", "DailyUniversal_MinTrade40_NetR_Direct",
+            "DailyUniversal_MinTrade_NetPnL", "DailyUniversal_MinTrade_NetPnL_Direct",
+            "T40-MFE", "T40-MFE_Direct",
+        }
+        self.assertTrue(retired_targets.isdisjoint(names))
+        self.assertTrue(retired_targets.issubset(
+            definition.source["historical_only_oracle_targets"]))
+        self.assertTrue({"DailyUniversal_MinTrade_NetPnL_Positive",
+                         "DailyUniversal_MinTrade_NetPnL_Positive_Direct"}.issubset(names))
+        self.assertTrue({"MR-13AH", "MR-13AK", "MR-13CM", "MR-13CK"}.isdisjoint(
+            {model for model, _profile in get_research_summary_model_profiles()}))
+        self.assertTrue({"C105", "C115", "C116", "C117", "C119", "C120",
+                         "C123", "C124", "C108", "C110"}.isdisjoint(get_research_summary_strategy_arm_ids()))
+        catalog = definition.source["oracle_source_catalog"]
+        root = next(row for row in catalog if row["target"] ==
+                    "DailyUniversal_MinTrade_NetPnL")
+        self.assertTrue(root["source_only"])
+        self.assertEqual(root["score"], "daily_trade_path_net_pnl")
+        self.assertEqual(root["horizon_mode"], "full_trade_cycle")
+        self.assertFalse(any(row["target"] in {"T40-MFE", "T40-MFE_Direct"}
+                             for row in catalog), "retired MFE truth has no active consumer")
+        plan = oracle._oracle_comparison_plan(definition)
+        self.assertEqual(plan["daily_recipes"][root["target"]],
+                         ("daily_trade_path_net_pnl", "daily_trade40_profile", None))
+        for target in retired_targets:
+            # Non-executable historical identities cannot be revived via the
+            # current inventory, despite the preserved source-only truth.
+            old = next(row["oracle"] for row in __import__(
+                "config.research_summary", fromlist=["RESEARCH_SUMMARY_ROWS"]
+                ).RESEARCH_SUMMARY_ROWS if row.get("oracle", {}).get("target") == target)
+            source = {**definition.source,
+                      "oracle_comparisons": (*definition.source["oracle_comparisons"], old)}
+            with self.assertRaisesRegex(ValueError, "Historical-only Oracle target"):
+                resolve_current_oracle_comparisons(source)
+            with self.assertRaisesRegex(oracle.OracleBlockedError, "retired Target identity"):
+                oracle._oracle_comparison_plan(replace(definition, source=source))
 
     def test_new_unrelated_target_does_not_change_old_price_implementation_sha(self):
         from services.audit.oracle_score_artifacts import oracle_daily_source_fingerprint

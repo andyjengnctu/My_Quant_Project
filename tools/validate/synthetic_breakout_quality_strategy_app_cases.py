@@ -1305,9 +1305,12 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     )
 
 
+    # Current authorization is checked against current membership.  The old
+    # extending suite remains registered for scientific reproducibility, even
+    # when all of its DL conversions have been retired from its active arms.
     enabled_dl_sources = [
         (str(settings.profile_id), str(arm.dl_id), settings.dl_sources[arm.dl_id])
-        for settings in extending_settings_by_mode.values()
+        for settings in (current_rolling_settings,)
         for arm in settings.enabled_arms
         if arm.dl_enabled and arm.dl_id in settings.dl_sources
     ]
@@ -1646,11 +1649,13 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         (int(single_seed_selected["seed"]), str(single_seed_selected["dl_id"])),
     )
 
+    # AI: The historical extending suite can have no current DL arms after
+    # retirement; use the active Rolling suite for normal execution coverage.
     rolling_settings = extending_settings_by_mode["extending_window_rolling"]
     normal_dl = next(
-        rolling_settings.dl_sources[arm.dl_id]
-        for arm in rolling_settings.enabled_arms
-        if arm.dl_enabled and arm.dl_id in rolling_settings.dl_sources
+        current_rolling_settings.dl_sources[arm.dl_id]
+        for arm in current_rolling_settings.enabled_arms
+        if arm.dl_enabled and arm.dl_id in current_rolling_settings.dl_sources
     )
     normal_workflow = get_breakout_quality_workflow_settings(
         experiment_profile=str(normal_dl.experiment_profile)
@@ -1752,13 +1757,20 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         strategy_compare_profile_id=str(rolling_settings.profile_id),
         resume=True,
     )
+    ak_shared_model_target = is_breakout_quality_model_test_profile(str(ak_dl.experiment_profile))
+    # A historical AK conversion remains reproducible, but when retired from
+    # Model Compare its PIT authorization must be limited to the old scoped
+    # single-seed conversion, not generic Rolling training.
+    ak_scope = {"--strategy-compare-profile-id": str(rolling_settings.profile_id),
+                "--strategy-compare-source-id": str(ak_dl.dl_id)}
     check_true(
-        "ak_strategy_conversion_reuses_shared_model_workflow_without_second_scope",
+        "ak_strategy_conversion_scope_tracks_current_model_workflow_authorization",
         ak_command[:3]
         == [training_runtime.sys.executable, "-m", "services.breakout_quality.point_in_time_scores"]
-        and "--strategy-compare-profile-id" not in ak_args
-        and "--strategy-compare-source-id" not in ak_args
-        and ak_workflow.rolling_authorized is True,
+        and ak_workflow.rolling_authorized == ak_shared_model_target
+        and all((flag not in ak_args) if ak_shared_model_target
+                else (flag in ak_args and ak_args[ak_args.index(flag) + 1] == value)
+                for flag, value in ak_scope.items()),
     )
     current_ah_active = any(
         arm.enabled and arm.dl_enabled and str(arm.dl_id or "") == "CONT13AH_ROLL"

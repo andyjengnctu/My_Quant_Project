@@ -875,3 +875,12 @@ Decision：`CURRENT_EIGHT_SEED_REPORT_USER_REPORTED_AVAILABLE / AGGREGATE_ARITHM
 - **效力界線**：此為使用者新決策的 current benchmark 選擇，不改寫 2026-10-30 的八 Seed 市場報表與 2026-11-07 的歷史 cross-workflow 比較紀錄；目前未取得本機四 Seed完整 Replay 與 E13 逐日合法等價認證，正式 RoMD 以重建後通過簽章檢查的結果為準。
 
 Decision：`CURRENT_BENCHMARK_END_TO_END_V1_FOUR_SEEDS / ALL_ORACLE_AND_ROBUSTNESS_CURRENT_4S / HISTORICAL_V2_IMMUTABLE / PER_SEED_CERTIFIED_REUSE_ONLY / CANONICAL_PARAMETER_PRODUCER_AUTOBUILD / NO_EIGHT_SEED_AGGREGATE_REUSE / E13_DAILY_PARITY_PENDING`。
+
+
+### 2026-11-08 — Research 現行清單收斂：MinTrade40 NetR／MinTrade NetPnL／AH／AK／T40-MFE 退役
+
+- **使用者授權**：`DailyUniversal_MinTrade40_NetR`（含 `_Direct`，C119/C120、MR-13CM）、`DailyUniversal_MinTrade_NetPnL` 非 Positive 比較（含 `_Direct`，C123/C124）、`MR-13AH`（C115/C116）、`MR-13AK`（C105/C117）、`T40-MFE`（含 `_Direct`，C108/C110、MR-13CK）退出**現行** Summary／模型比較／策略比較／Oracle 對照與 Robustness。這些歷史 scientific ID、Target／模型規格、Registry 和既有績效仍可追溯，不回收策略編號、不重命名、不刪除歷史 FIT／Replay。
+- **依賴保護**：`MR-13CO` 仍為 Positive C125/C126 的現行 NetPnL 排序模型，`DailyUniversal_MinTrade_NetPnL` 完整週期 Exact 真值來源僅供仍啟用的 Positive Alias 使用，不重新啟用 C123/C124；`T40`、`MR-13CJ`、其 Exact／Direct／Daily／Full 分支保持現行。退役的 T40-MFE 分數沒有現行 source alias，不能再作現行 producer。
+- **科學／執行隔離**：本次只改研究 membership 和必要的 source-only 真值解析；不修改價格／費稅／出場算法、PIT 訓練契約、策略參數、Seed、Oracle Replay 身分或已簽章結果。正式市場 Bundle 尚待本機驗證。
+
+Decision：`USER_AUTHORIZED_CURRENT_RETIREMENT / HISTORICAL_IDENTITIES_RETAINED / SOURCE_ONLY_FOR_ACTIVE_POSITIVE / T40_CJ_UNCHANGED / NO_ARTIFACT_MIGRATION`.

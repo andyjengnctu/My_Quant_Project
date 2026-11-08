@@ -132,7 +132,9 @@ from core.audit_registry import (
 )
 
 _ORACLE_CATALOG_SOURCE = AUDIT_REUSABLE_REPORTS["breakout_quality"]["target_oracle_romd"]["source"]
-_ORACLE_DEFAULT_COMPARISONS = _ORACLE_CATALOG_SOURCE["oracle_comparisons"]
+# A source-only historical Exact producer keeps its original scientific truth
+# for active aliases without making its retired Portfolio treatment executable.
+_ORACLE_DEFAULT_COMPARISONS = _ORACLE_CATALOG_SOURCE["oracle_source_catalog"]
 _ORACLE_RETIRED_TARGETS = frozenset(
     (*_ORACLE_CATALOG_SOURCE["retired_oracle_targets"],
      *_ORACLE_CATALOG_SOURCE.get("historical_only_oracle_targets", ()))
@@ -283,7 +285,7 @@ def _oracle_comparison_plan(definition) -> dict[str, Any]:
             raise OracleBlockedError(f"Oracle comparison name缺少、重複或非法：{name}")
         # Historical identities are owned by the canonical Audit Registry.
         # Removing a row does not free its name for a different recipe.
-        if name in _ORACLE_RETIRED_TARGETS or str(entry.get("score_source") or "") in _ORACLE_RETIRED_TARGETS:
+        if name in _ORACLE_RETIRED_TARGETS:
             raise OracleBlockedError(f"Oracle retired Target identity不得重新啟用或改作其他score：{name}")
         if selector not in {"exact", "direct", "default"}:
             raise OracleBlockedError(f"Oracle comparison selector未支援：{name} {selector}")
@@ -303,7 +305,10 @@ def _oracle_comparison_plan(definition) -> dict[str, Any]:
             )
         if entry.get("score_source"):
             source = str(entry["score_source"])
-            if source in _ORACLE_RETIRED_TARGETS:
+            if source in _ORACLE_RETIRED_TARGETS and not any(
+                row["target"] == source and row.get("source_only")
+                for row in _ORACLE_DEFAULT_COMPARISONS
+            ):
                 raise OracleBlockedError(f"Oracle score來源非法：{name} -> {source}")
             # An Exact/Direct recipient may reuse an approved canonical score;
             # only a score *producer* must be the registered Exact source.
@@ -344,7 +349,9 @@ def _oracle_comparison_plan(definition) -> dict[str, Any]:
             (item for item in _ORACLE_DEFAULT_COMPARISONS
              if item["target"] == source_name), None,
         )
-        if (source_entry is None or source_name in _ORACLE_RETIRED_TARGETS
+        if (source_entry is None
+                or (source_name in _ORACLE_RETIRED_TARGETS
+                    and not source_entry.get("source_only"))
                 or source_entry.get("selector") != "exact"
                 or source_entry.get("score_source")):
             raise OracleBlockedError(
@@ -717,7 +724,7 @@ def _resolve_oracle_target_score_contracts(definition, settings, plan) -> dict[s
             from core.audit_registry import oracle_supervised_target_id
             raw_comparison = (_price_positive_source_recipe(definition, origin)
                               if origin in plan["recipes"] else next(
-                                  (item for item in definition.source["oracle_comparisons"]
+                                  (item for item in definition.source["oracle_source_catalog"]
                                    if item["target"] == origin), None))
             if (raw_comparison is None or
                     primary_profile.continuous_target_id != oracle_supervised_target_id(raw_comparison)):
@@ -2157,7 +2164,6 @@ def _oracle_limitations(*, seed_count: int, baseline_arm: str = "C96") -> list[s
             "No best-target fitting from iterative OOS; multi-target search is exploratory.",
             "R40 is the future 40th session Close return, not Portfolio Replay exit return.",
             "T40 uses full-path nonnegative MAE and clamps to -1R at 1R adverse movement.",
-            "T40-MFE replaces only terminal R40 by full-path MFE40_R; the identical MAE gate remains.",
             "1R is the fixed research Label risk budget, NOT the actual executed ATR stop-loss.",
         ]
 
@@ -4264,9 +4270,13 @@ def render_result(report: Mapping[str, Any], *, target: str) -> str:
         'Ranking: Exact K/R0 or Direct No-K/No-R0; each control uses its own canonical Min/P16 or Full/P17 parameters; future scores are hindsight.',
         'Presentation: ascending RoMD Mean (lowest to highest; Target name breaks ties).',
         'T40: (1 - min(MAE40, 1R)) * R40 - min(MAE40, 1R); MAE40 >= 1R -> T40 = -1R.',
-        'T40-MFE: (1 - min(MAE40, 1R)) * MFE40_R - min(MAE40, 1R); MAE40 >= 1R -> -1R.',
         'CG = equal-rank 50/50 geometry PROXY, not a neural-network model head.',
     ]
+    # Formula notes follow the signed report's content. A retired Target does
+    # not appear in current views, but historical receipts still render fully.
+    if any(str(name).split("::")[0] in {"T40-MFE", "T40-MFE_Direct"}
+           for name in report.get("definitions", {})):
+        intro.insert(-1, 'T40-MFE: (1 - min(MAE40, 1R)) * MFE40_R - min(MAE40, 1R); MAE40 >= 1R -> -1R.')
     if target == "console":
         return "\n\n".join((
             render_title(intro[0]), "\n".join(intro[1:]),

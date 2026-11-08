@@ -66,6 +66,14 @@ class PositiveNetPnlContractCases(TestCase):
         self.assertEqual(len(rows), len({(*oracle_target_semantics(x), oracle_parameter_family(x))
                                         for x in rows}))
         by_legacy = {oracle_comparison_key(x): x for x in rows}
+        # Frozen receipt semantics remain readable when the treatment is no
+        # longer executable in the current Oracle inventory.
+        from config.research_summary import RESEARCH_SUMMARY_ROWS
+        archived = {oracle_comparison_key(group["oracle"]): group["oracle"]
+                    for group in RESEARCH_SUMMARY_ROWS if not group.get("enabled", True)
+                    and "oracle" in group}
+        self.assertTrue(set(archived).isdisjoint(by_legacy))
+        by_legacy.update(archived)
         cases = (
             ("MFE40_Control", "MFE40", "Exact", "Breakout"),
             ("MFE40_Direct", "MFE40", "Direct", "Breakout"),
@@ -176,8 +184,6 @@ class PositiveNetPnlContractCases(TestCase):
         from filters.breakout_quality.strategy_compare_dl_artifacts import resolve_arm_runtime_dl_source_ids
         settings = get_strategy_comparison_settings(STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE)
         cases = (
-            ("MinTrade_NetPnL", "Breakout", "Exact", "C123", "MR-13CO", ""),
-            ("MinTrade_NetPnL", "Breakout", "Direct", "C124", "MR-13CO", ""),
             ("MinTrade_NetPnL_Positive", "Breakout", "Exact", "C125", "MR-13CO", "MR-13CP"),
             ("MinTrade_NetPnL_Positive", "Breakout", "Direct", "C126", "MR-13CO", "MR-13CP"),
             ("DailyUniversal_MinTrade_NetPnL", "Daily", "Exact", "C137", "MR-13CU", ""),
@@ -211,6 +217,8 @@ class PositiveNetPnlContractCases(TestCase):
                                  (rank, classifier) if classifier else (rank,))
         self.assertTrue(all(row['model'] not in {'MR-13CP', 'MR-13CT'}
                             for row in report['rows']))
+        self.assertTrue({'C123', 'C124'}.isdisjoint(
+            {row['strategy'] for row in report['rows']}))
         self.assertEqual(table_contract('research.target_dl_validation_overview',
                                        'comparison', 'target_dl').headers[5:7],
                          ('Rank DL', 'Positive DL'))
@@ -246,7 +254,8 @@ class PositiveNetPnlContractCases(TestCase):
                 _strategy_bindings(target_names=targets,score_targets=labels, definition=definition)
         # Restoring the scientific source restores the same signed bindings.
         restored = _strategy_bindings(target_names=targets,score_targets=labels, definition=definition)
-        self.assertEqual(restored[('DailyUniversal_MinTrade_NetPnL', rank_profile)], 'C123')
+        self.assertEqual(restored[(target, rank_profile)], 'C125')
+        self.assertNotIn(('DailyUniversal_MinTrade_NetPnL', rank_profile), restored)
 
     def test_no_filter_on_original_netpnl_and_positive_filter_fail_closed(self):
         rank = {'available': True,'score':0.70,'score_date':'2024-10-01',
@@ -452,7 +461,7 @@ class PositiveNetPnlContractCases(TestCase):
             self.assertEqual(info["seeds"], tuple(seeds))
             self.assertEqual(values["C96"]["oracle_romd"], 9.17)
             self.assertEqual(values["MFE40_Control"]["oracle_romd"], 24.62)
-            self.assertEqual(values["DailyUniversal_MinTrade_NetPnL_Direct"]["oracle_romd"], 24.62)
+            self.assertNotIn("DailyUniversal_MinTrade_NetPnL_Direct", values)
             self.assertEqual(set(values), legacy_keys)
             self.assertNotIn(positive_exact, values)  # Never backfill a new Target.
             self.assertNotIn(positive_direct, values)  # Old raw Gate != formal dual-head.
@@ -621,13 +630,12 @@ class PositiveNetPnlContractCases(TestCase):
         targets,_,score_targets,_,_=_oracle_rows(ROOT,definition,{})
         bindings=_strategy_bindings(target_names=targets,score_targets=score_targets,definition=definition)
         expected={
-            ('DailyUniversal_MinTrade_NetPnL','daily_universal_formal_mintrade_fullcycle_netpnl_per_seed_full_list_ndcg_pairwise'):'C123',
-            ('DailyUniversal_MinTrade_NetPnL_Direct','daily_universal_formal_mintrade_fullcycle_netpnl_per_seed_full_list_ndcg_pairwise'):'C124',
             ('DailyUniversal_MinTrade_NetPnL_Positive','daily_universal_formal_mintrade_fullcycle_netpnl_per_seed_full_list_ndcg_pairwise'):'C125',
             ('DailyUniversal_MinTrade_NetPnL_Positive_Direct','daily_universal_formal_mintrade_fullcycle_netpnl_per_seed_full_list_ndcg_pairwise'):'C126',
         }
         for key,value in expected.items():
             self.assertEqual(bindings.get(key),value)
+        self.assertFalse(any(arm in {'C123', 'C124'} for arm in bindings.values()))
         # All four TrueDaily arms use the CU ranker and independent CT admission.
         for suffix in ("", "_Direct"):
             name = "TrueDailyUniversal_MinTrade_NetPnL_Positive" + suffix

@@ -507,6 +507,8 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     import shutil
 
     original_rows = get_research_summary_rows()
+    # AI: Keep disabled historical source recipes when overriding the current roster.
+    registered_rows = tuple(summary_cfg.RESEARCH_SUMMARY_ROWS)
     pairs = get_research_summary_model_profiles()
     arms = set(get_research_summary_strategy_arm_ids())
     selected_profiles = {profile for _name, profile in pairs}
@@ -533,7 +535,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         # A model-only addition belongs in Summary and all model comparisons;
         # it does not invent an Oracle, strategy arm, or execution permission.
         with patch.object(summary_cfg, "RESEARCH_SUMMARY_ROWS", (
-                *original_rows, {"bindings": ({"rank_model": extra_pair},)},
+                *registered_rows, {"bindings": ({"rank_model": extra_pair},)},
         )):
             extra_report = target_dl_overview.collect_target_dl_overview(root)
             check_true("summary_model_only_addition_is_shared_without_inventing_strategy_or_oracle",
@@ -557,7 +559,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         removed = [group for group in original_rows if any(
             binding.get("rank_model", (None, None))[1] == removable
             for binding in group.get("bindings", ()))]
-        remaining = tuple(group for group in original_rows if group not in removed)
+        remaining = tuple(group for group in registered_rows if group not in removed)
         removed_arms = {binding["arm_id"] for group in removed for binding in group.get("bindings", ())}
         with patch.object(summary_cfg, "RESEARCH_SUMMARY_ROWS", remaining):
             current_definition = oracle_application.get_formal_oracle_definition("breakout_quality")
