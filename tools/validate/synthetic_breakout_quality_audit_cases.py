@@ -388,7 +388,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     # to the overview is not authorization to FIT, build P16, or run Replay.
     from services.research import target_dl_overview
     overview_console = io.StringIO()
-    with patch("builtins.input", side_effect=["", "0"]) as overview_input, \
+    with patch("builtins.input", side_effect=["", "11", "0", "0"]) as overview_input, \
          patch.object(target_dl_overview, "collect_target_dl_overview", return_value={"rows": []}) as collector, \
          patch.object(target_dl_overview, "render_target_dl_overview", return_value="SYNTHETIC_OVERVIEW") as renderer, \
          patch.object(research_app, "_run_reusable_audit_method", side_effect=AssertionError("Unexpected Oracle")) as oracle_entry, \
@@ -398,14 +398,68 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         overview_rc = research_app._interactive_menu()
     check_true(
         "summary_root_is_read_only_and_returns_to_research",
-        overview_rc == 0 and overview_input.call_count == 2
-        and collector.call_count == 1 and renderer.call_count == 1
+        overview_rc == 0 and overview_input.call_count == 4
+        and collector.call_count == 1 and renderer.call_count == 2
         and collector.call_args.args == (research_app.PROJECT_ROOT,)
-        and renderer.call_args.args == ({"rows": []},)
-        and overview_console.getvalue().count("SYNTHETIC_OVERVIEW") == 1
+        and all(call.args == ({"rows": []},) for call in renderer.call_args_list)
+        and [call.kwargs.get("sort_by") for call in renderer.call_args_list]
+            == ["oracle_romd", "rolling_romd"]
+        and overview_console.getvalue().count("SYNTHETIC_OVERVIEW") == 2
+        and any("[1]" in line and "[2]" in line
+                for line in overview_console.getvalue().splitlines())
+        and "Mean Romd" in overview_console.getvalue()
         and "Summary" in overview_console.getvalue()
         and oracle_entry.call_count == 0
         and producer.call_count == 0 and replay.call_count == 0,
+    )
+
+    # A requested sort remains the primary key; the approved Mean Romd is
+    # the secondary key for every other column, including text and missing.
+    from core.report_metrics import weighted_rolling_robustness_romd
+    synthetic_sort_rows = [
+        {"target": "A", "oracle_romd": 9.0, "rolling_romd": 5.0,
+         "rolling_robustness_mean_romd": -3.0},
+        {"target": "B", "oracle_romd": 9.0, "rolling_romd": 5.0,
+         "rolling_robustness_mean_romd": 4.0},
+        {"target": "C", "oracle_romd": 9.0, "rolling_romd": 5.0,
+         "rolling_robustness_mean_romd": None},
+        {"target": "D", "oracle_romd": 10.0, "rolling_romd": None,
+         "rolling_robustness_mean_romd": 5.0},
+    ]
+    ordered = lambda column: [row["target"] for row in
+                            target_dl_overview.sort_target_dl_overview_rows(
+                                synthetic_sort_rows, column_key=column)]
+    check_true(
+        "summary_selected_primary_then_mean_romd_descending_and_missing_last",
+        ordered("oracle_romd") == ["D", "B", "A", "C"]
+        and ordered("rolling_romd") == ["B", "A", "C", "D"]
+        and ordered("rolling_robustness_mean_romd") == ["D", "B", "A", "C"]
+        and ordered("target") == ["D", "C", "B", "A"]
+        and all(
+            len(target_dl_overview.sort_target_dl_overview_rows(
+                synthetic_sort_rows, column_key=column.key)) == 4
+            for column in target_dl_overview.table_contract(
+                target_dl_overview.REPORT_ID, "comparison", "target_dl").columns
+        ),
+    )
+    check_true(
+        "summary_mean_romd_one_rolling_and_actual_seed_count",
+        weighted_rolling_robustness_romd(4.0, 5.0, 4) == 4.8
+        and abs(weighted_rolling_robustness_romd(4.0, 5.0, 8) - 44/9) < 1e-12
+        and weighted_rolling_robustness_romd(4.0, None, 0) == 4.0
+        and weighted_rolling_robustness_romd(None, 5.0, 4) is None,
+    )
+    compact = target_dl_overview.render_target_dl_overview({
+        "rows": [], "oracle": {"benchmark": "", "seeds": (), "period": "", "path": None},
+    })
+    check_true(
+        "summary_no_legacy_footer_or_duplicate_mean_label",
+        "Mean Romd" in compact
+        and "Rolling/Robustness 均值" not in compact
+        and "Model Robustness:" not in compact
+        and "Strategy Robustness:" not in compact
+        and "Source: Oracle audit.json" not in compact
+        and "Only Rolling =>" not in compact,
     )
 
     # The roster, rather than artifact availability or a second model list,

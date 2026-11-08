@@ -978,9 +978,15 @@ def sort_target_dl_overview_rows(
         def sort_value(row: Mapping[str, Any]) -> tuple[bool, float]:
             value = _number(row.get(column_key))
             return (value is not None, value if value is not None else -math.inf)
-    # Keep the previous Oracle-default tie-breaker (Target ascending). The
-    # second stable sort applies the selected column's descending order.
+    # Stable priorities: selected column DESC, Mean Romd DESC, Target ASC.
+    # A missing primary or secondary value always follows a certified value;
+    # neither missing metric nor a negative result is converted to zero.
     by_target = sorted(rows, key=lambda row: str(row.get("target") or ""))
+    if column_key != "rolling_robustness_mean_romd":
+        def mean_sort_value(row: Mapping[str, Any]) -> tuple[bool, float]:
+            value = _number(row.get("rolling_robustness_mean_romd"))
+            return (value is not None, value if value is not None else -math.inf)
+        by_target = sorted(by_target, key=mean_sort_value, reverse=True)
     return sorted(by_target, key=sort_value, reverse=True)
 
 
@@ -1160,7 +1166,9 @@ def render_target_dl_overview(
     ))
     rows = sort_target_dl_overview_rows(list(report["rows"]), column_key=sort_by)
     sort_column = next(column for column in table.columns if column.key == sort_by)
-    header.append(f"排序：{sort_column.label}（遞減，缺值最後）")
+    sort_description = ("Mean Romd ↓（缺值最後）" if sort_by == "rolling_robustness_mean_romd"
+                        else f"{sort_column.label} ↓ → Mean Romd ↓（缺值最後）")
+    header.append(f"排序：{sort_description}")
     # Use the canonical per-column metric preference and best/worst signal owner.
     # Robustness is comparable only within the same actual seed set/benchmark;
     # repeated Exact/Direct rows may receive the same signal for their shared ρ.
@@ -1222,25 +1230,6 @@ def render_target_dl_overview(
             cells.append(cell)
         formatted.append(cells)
     header.append(render_table(table.headers, formatted, alignments=table.alignments))
-    model_seeds = sorted({len(row["rho_seeds"]) for row in rows if row["robustness_rho"] is not None})
-    strategy_evidence = sorted({(row["romd_benchmark"], len(row["romd_seeds"]))
-                                for row in rows if row["robustness_romd"] is not None})
-    header.append("Model Robustness: " + (
-        ", ".join(f"N={n}" for n in model_seeds) if model_seeds else "no validated report"
-    ))
-    header.append("Strategy Robustness: " + (
-        ", ".join(f"{benchmark or 'unknown benchmark'} N={n}" for benchmark, n in strategy_evidence)
-        if strategy_evidence else "no validated report"
-    ))
-    header.extend((
-        "Source: Oracle audit.json / Model Standard SOP / Strategy Standard SOP (read-only)",
-        "Missing/incompatible evidence = blank; Forward values never substitute Rolling.",
-        "Exact/Direct share a target label but never share a strategy RoMD.",
-        "Configured research without a matching Oracle remains visible with blank Oracle metrics.",
-        "Robustness values show actual seed count; separate benchmarks are not pooled.",
-        "Rolling/Robustness 均值 = (Rolling RoMD + N x Robustness RoMD) / (N + 1); N = certified strategy seeds.",
-        "Only Rolling => same Rolling RoMD; missing Rolling => blank. Different seed cohorts are not pooled for color ranking.",
-    ))
     return "\n".join(header)
 
 

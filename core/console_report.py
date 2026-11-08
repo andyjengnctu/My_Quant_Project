@@ -56,6 +56,26 @@ def render_menu_item(index: int, label: object, *, default: bool = False) -> str
     return f"[{number}]  {text}"
 
 
+def render_menu_inline(items: Iterable[str], *, max_width: int = 110) -> str:
+    """Render menu options horizontally and wrap by actual terminal display width."""
+
+    if int(max_width) <= 0:
+        raise ValueError("menu width must be positive")
+    separator = "   "
+    lines: list[str] = []
+    current = ""
+    for item in items:
+        text = str(item)
+        if current and _display_width(current) + _display_width(separator) + _display_width(text) > max_width:
+            lines.append(current)
+            current = text
+        else:
+            current = current + separator + text if current else text
+    if current:
+        lines.append(current)
+    return "\n".join(lines)
+
+
 def render_section(title: str, *, number: int | None = None) -> str:
     label = f"{int(number)}. {title}" if number is not None else str(title)
     return f"\n{label}\n{'-' * _display_width(label)}"
@@ -252,7 +272,7 @@ __all__ = [
     "paint",
     "project_relative_display_path",
     "render_title",
-    "render_menu_item",
+    "render_menu_item", "render_menu_inline",
     "render_section",
     "render_key_values",
     "render_table",

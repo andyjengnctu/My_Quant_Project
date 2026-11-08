@@ -25,7 +25,7 @@ from core.strategy_compare_policy import (
     get_strategy_rolling_test_modes,
     get_strategy_runtime_integration_settings,
 )
-from core.console_report import render_menu_item
+from core.console_report import render_menu_item, render_menu_inline
 from core.strategy_promotion import (
     approve_current_strategy_rule, current_strategy_rules,
     get_approved_rule, load_promotion_approvals,
@@ -429,10 +429,12 @@ def _show_research_summary(*, sortable: bool = False) -> int:
         print("\n" + render_target_dl_overview(report, sort_by=sort_key))
         if not sortable:
             return 0
-        print("\n=== Summary 排序（所有欄位由大到小；文字欄位 Z→A）===")
-        for index, column in enumerate(columns, start=1):
-            print(render_menu_item(index, column.label, default=column.key == DEFAULT_SORT_COLUMN))
-        print(render_menu_item(0, "返回 Research"))
+        print("\n=== Summary 排序（主欄位遞減；第二順位 Mean Romd 遞減）===")
+        choices = [
+            render_menu_item(index, column.label, default=column.key == DEFAULT_SORT_COLUMN)
+            for index, column in enumerate(columns, start=1)
+        ]
+        print(render_menu_inline((*choices, render_menu_item(0, "返回 Research"))))
         try:
             choice = input("👉 選擇排序欄位（Enter：Oracle RoMD；0：返回）：").strip().lower()
         except EOFError:
