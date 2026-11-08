@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from contextlib import ExitStack
-from core.portfolio_entry_policy import portfolio_entry_policy_context
+from core.portfolio_entry_policy import portfolio_entry_policy_context, daily_execution_contract_from_params
 import json
 from pathlib import Path
 from typing import Any
@@ -118,6 +118,10 @@ def _run_scenario(
         stack.enter_context(portfolio_entry_policy_context(
             entry_strategy, score_keys=entry_score_keys,
             unscored=(entry_strategy == "Daily" and entry_score_keys is None),
+            daily_execution_contract=(
+                daily_execution_contract_from_params(params)
+                if entry_strategy == "Daily" else "legacy_daily_close_v1"
+            ),
         ))
         if ranking_source:
             stack.enter_context(breakout_quality_ranking_source_context(**ranking_source))

@@ -38,6 +38,7 @@ from core.active_param_ensemble import (
 from filters.breakout_quality import runtime as _breakout_quality_runtime_adapter
 
 from core.portfolio_engine import run_portfolio_timeline
+from core.portfolio_entry_policy import current_daily_execution_contract
 from core.portfolio_run_result import append_portfolio_replay_profile
 from core.portfolio_fast_data import (
     build_normal_setup_index,
@@ -89,12 +90,14 @@ def _replay_preparation_key(
     universe_boundary = coerce_raw_universe_required_min_rows(
         raw_universe_required_min_rows, allow_none=True,
     )
-    return (
+    key = (
         "portfolio-prep-session-v1", str(Path(data_dir).resolve()),
         tuple(schedule), universe_boundary,
         bool(keep_trade_logs), bool(use_cache), bool(write_cache),
         None if raw_data_loader is None else id(raw_data_loader),
     )
+    mode = current_daily_execution_contract()
+    return key if mode == "legacy_daily_close_v1" else (*key, mode)
 
 
 def _load_session_replay_preparation(session_cache, key, build):
@@ -468,6 +471,9 @@ def _build_portfolio_prepared_cache_paths(data_dir, csv_inputs, params, *, inclu
         "include_trade_logs": bool(include_trade_logs),
         "raw_universe_required_min_rows": coerce_raw_universe_required_min_rows(raw_universe_required_min_rows, allow_none=True),
     }
+    mode = current_daily_execution_contract()
+    if mode != "legacy_daily_close_v1":
+        combined_payload["daily_execution_contract"] = mode
     combined = json.dumps(combined_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     cache_key = hashlib.sha256(combined.encode("utf-8")).hexdigest()[:24]
     cache_dir = Path(OUTPUT_DIR) / "prepared_cache"
@@ -499,6 +505,7 @@ def _load_portfolio_prepared_cache(cache_paths):
         "params_signature",
         "include_trade_logs",
         "raw_universe_required_min_rows",
+        *(("daily_execution_contract",) if "daily_execution_contract" in expected_meta else ()),
     ):
         if str(meta.get(key, "")) != str(expected_meta.get(key, "")):
             return None
@@ -629,9 +636,22 @@ def _load_portfolio_market_context_sequential(data_dir, params, *, verbose=True,
                     f"(異常OHLCV={invalid_row_count}, 重複日期={duplicate_date_count})"
                 )
 
-            prep_df, logs = prep_stock_data_and_trades(df, params)
-            master_dates.update(prep_df.index)
-            all_dfs_fast[ticker] = pack_prepared_stock_data(prep_df)
+            if current_daily_execution_contract() == "daily_atr_limit_common_filters_v2":
+                # Daily Full's is_setup is a daily eligibility mask, not a
+                # Breakout entry. Reuse the canonical dynamic-signal producer
+                # instead of inventing standalone Breakout trade history.
+                dynamic, logs, _ = prep_optimizer_stock_data_bundle(
+                    df, params, ticker=ticker, include_trade_logs=True,
+                    include_pit_stats_index=False,
+                )
+                all_dfs_fast[ticker] = merge_static_market_with_dynamic(
+                    pack_static_market_data(df), dynamic,
+                )
+                master_dates.update(df.index)
+            else:
+                prep_df, logs = prep_stock_data_and_trades(df, params)
+                master_dates.update(prep_df.index)
+                all_dfs_fast[ticker] = pack_prepared_stock_data(prep_df)
             all_trade_logs[ticker] = logs
 
         except (OSError, pd.errors.EmptyDataError, pd.errors.ParserError, ValueError, KeyError, IndexError, TypeError, RuntimeError) as e:

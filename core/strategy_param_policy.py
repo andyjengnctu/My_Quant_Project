@@ -102,6 +102,7 @@ class StrategyParamTrainingProfile:
     registered_scientific_fingerprint_sha256: str | None
     fee_accounting_policy: str
     candidate_consensus_contract: str | None
+    daily_search_profile: str | None
 
 
 @dataclass(frozen=True)
@@ -394,6 +395,15 @@ def get_strategy_param_training_profile(profile_id: str) -> StrategyParamTrainin
     fee_accounting_policy = raw_fee_policy.strip()
     if fee_accounting_policy not in {"frozen_research_rebate_v1", "broker_cash_v1"}:
         raise ValueError(f"不支援的fee_accounting_policy: {key} -> {fee_accounting_policy!r}")
+    daily_search_profile = str(raw.get("daily_search_profile") or "").strip() or None
+    if daily_search_profile is not None:
+        if values["strategy_id"] != "daily":
+            raise ValueError("daily_search_profile requires a Daily strategy")
+        from strategies.daily.search_space import resolve_daily_search_profile
+        resolved = resolve_daily_search_profile(daily_search_profile)
+        expected_family = "full" if "common_filters" in daily_search_profile else "min"
+        if values["filter_profile"] != expected_family:
+            raise ValueError("Daily search profile / filter family mismatch")
     return StrategyParamTrainingProfile(
         profile_id=key,
         label=values["label"],
@@ -418,6 +428,7 @@ def get_strategy_param_training_profile(profile_id: str) -> StrategyParamTrainin
         candidate_consensus_contract=(
             str(raw.get("candidate_consensus_contract") or "").strip() or None
         ),
+        daily_search_profile=daily_search_profile,
     )
 
 

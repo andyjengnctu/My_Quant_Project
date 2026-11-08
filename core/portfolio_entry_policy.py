@@ -20,6 +20,30 @@ from core.portfolio_fast_access import get_fast_pos
 ENTRY_BREAKOUT = "breakout"
 ENTRY_DAILY = "daily"
 DAILY_ENTRY_CONTRACT = "daily_stockday_close_limit_next_exchange_session_v1"
+DAILY_ATR_ENTRY_CONTRACT = "daily_stockday_atr_limit_next_exchange_session_v1"
+DAILY_EXECUTION_LEGACY = "legacy_daily_close_v1"
+DAILY_EXECUTION_ATR_LIMIT = "daily_atr_limit_v2"
+DAILY_EXECUTION_FULL_FILTERS = "daily_atr_limit_common_filters_v2"
+_DAILY_EXECUTION_CONTRACTS = frozenset({
+    DAILY_EXECUTION_LEGACY, DAILY_EXECUTION_ATR_LIMIT, DAILY_EXECUTION_FULL_FILTERS,
+})
+
+
+def resolve_daily_execution_contract(raw: str | None) -> str:
+    contract = str(raw or DAILY_EXECUTION_LEGACY)
+    if contract not in _DAILY_EXECUTION_CONTRACTS:
+        raise ValueError(f"Unregistered Daily execution contract: {contract!r}")
+    return contract
+
+
+def daily_execution_contract_from_params(params) -> str:
+    """Consumption-time replay semantics travel with the published param artifact."""
+    if not isinstance(params, Mapping):
+        return DAILY_EXECUTION_LEGACY
+    adaptation = params.get("breakout_quality_param_adaptation") or {}
+    if not isinstance(adaptation, Mapping):
+        raise ValueError("Invalid strategy param adaptation contract")
+    return resolve_daily_execution_contract(adaptation.get("daily_execution_contract"))
 
 
 class DailyEntrySource:
@@ -111,15 +135,40 @@ class UnscoredDailyEntrySource(DailyEntrySource):
 _ACTIVE_ENTRY: ContextVar[DailyEntrySource | None] = ContextVar(
     "portfolio_scored_daily_entry_source", default=None,
 )
+# Signal preparation can run on a separate thread or spawned process. Workers
+# receive the contract explicitly rather than relying on context inheritance.
+_SIGNAL_DAILY_EXECUTION: ContextVar[str | None] = ContextVar(
+    "portfolio_daily_signal_execution_contract", default=None,
+)
+
+
+@contextmanager
+def daily_signal_execution_context(execution_contract: str) -> Iterator[None]:
+    token = _SIGNAL_DAILY_EXECUTION.set(resolve_daily_execution_contract(execution_contract))
+    try:
+        yield
+    finally:
+        _SIGNAL_DAILY_EXECUTION.reset(token)
 
 
 def current_daily_entry_source() -> DailyEntrySource | None:
     return _ACTIVE_ENTRY.get()
 
 
+def current_daily_execution_contract() -> str:
+    explicit_worker_contract = _SIGNAL_DAILY_EXECUTION.get()
+    if explicit_worker_contract is not None:
+        return explicit_worker_contract
+    source = _ACTIVE_ENTRY.get()
+    return resolve_daily_execution_contract(
+        getattr(source, "daily_execution_contract", None) if source is not None else None
+    )
+
+
 @contextmanager
 def portfolio_entry_policy_context(
     strategy: str, score_keys=None, *, unscored: bool = False,
+    daily_execution_contract: str = DAILY_EXECUTION_LEGACY,
 ) -> Iterator[None]:
     """Select one mutually exclusive Daily scored/unscored or Breakout entry.
 
@@ -136,6 +185,7 @@ def portfolio_entry_policy_context(
     if _ACTIVE_ENTRY.get() is not None:
         raise RuntimeError("Nested Daily Entry source is prohibited")
     source = UnscoredDailyEntrySource() if unscored else DailyEntrySource(score_keys)
+    source.daily_execution_contract = resolve_daily_execution_contract(daily_execution_contract)
     token = _ACTIVE_ENTRY.set(source)
     try:
         yield
@@ -151,5 +201,9 @@ def optimizer_unscored_daily_entry_context() -> Iterator[None]:
     strategy = get_active_scientific_section("strategy") or {}
     if strategy.get("strategy_id") != ENTRY_DAILY:
         raise ValueError("Unscored Daily Optimizer requires strategy_id=daily")
-    with portfolio_entry_policy_context("Daily", unscored=True):
+    param_generation = get_active_scientific_section("parameter_generation") or {}
+    execution = resolve_daily_execution_contract(
+        param_generation.get("daily_execution_contract")
+    )
+    with portfolio_entry_policy_context("Daily", unscored=True, daily_execution_contract=execution):
         yield

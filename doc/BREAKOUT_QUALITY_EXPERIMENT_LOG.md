@@ -5367,6 +5367,12 @@ Assessment: `USER_REPORTED_ROLLING_RESULT_AVAILABLE / FULL_HORIZON_MAE_SMALL_PAI
 
 - **2026-11-08 subsequent user retirement decision (Daily Direct):** Retire `C134` (CU+CT Positive / P16 Daily Direct), `C138` (CU / P16 Daily Direct), `C146` (CJ T40 / P16 Daily Direct) and `C163` (CO NetPnL / P18 Daily Direct) from all current Research Summary, Target Oracle and Strategy Compare/OOS/Robustness inventories. Retain their immutable strategy IDs, original signed research results, model FITs and Replay definitions; this is a membership decision, not a judgement of scientific significance or a change to the underlying Target. The user-provided 2026-11-08 Summary showed Mean RoMD `4.10 / 4.38 / 2.96 / 6.29`, respectively (iterative research evidence; not independently re-replayed here). Current P18 treatments are `C160/C161/C164/C165`. Inactive P16 C134/C138/C146 Oracle recipes remain approved immutable templates for current independent P18 treatments C164/C165/C160, respectively; no cross-family replay/Oracle reuse and no FIT/Replay/report schema version change. No new performance metric or Trading promotion is claimed.
 
+### 2026-11-09 — P19/P20 Daily 參數家族與 T40 Direct：新研究授權（尚無市場結果）
+
+- **對照**：P18 3D Daily Min 暫不退役。P19 4D Daily Min、P20 19D Daily Full 僅改變參數搜尋與下游 Daily 買入限價／非突破通用濾網；T40 的合法 PIT rank 仍使用 `MR-13CJ`。新增 `C167`／`C169` Direct 各以相同家族的 `C166`／`C168` No-DL Default 為控制組。
+- **執行定義**：同一 Broker-Cash、同一資訊日與下一交易日成交規則；P19/P20 的買入上限為資訊日 `Close + ATR × atr_buy_tol`，P20 依 PIT 資訊日 BB／量能／EMA／當日報酬／ATR% 判斷候選與 KC 原出場語意；不使用 Breakout 新高、原訊號延續或停損再進場。P18 三維固定舊收盤限價契約與已登錄參數指紋不變。
+- **後續驗證**：本輪無市場資料下合法六 Fold 300 Trials 實際搜尋及多 Seed Replay，因此 **P19/P20 Oracle、Rolling、Robustness RoMD 皆為未完成**，不得以 P18 舊結果補值或宣稱已完成 E13 等價；新的兩家族皆由既有 Optimizer 前置建立並依科學完整簽章驗證 REUSE。
+
 ## 6. 後續新增規則
 
 **只有新科學證據或舊科學證據有效性更正才能增加本文件內容。** 記錄必須有實驗／Target 身分、期間／Seed、控制變數、原始結果、負結果與決策，並指向正式證據。沒有市場／模型結果的工程測試、提交紀錄、打包、格式調整或一次性 Audit 清理，不可追加研究章節。本文件不再生成封存副本或研究待辦。

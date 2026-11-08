@@ -130,18 +130,14 @@ MIN_ROOS_SEARCH_FIELDS = (
     "atr_times_init",
     "atr_times_trail",
 )
-DAILY_MIN_ROOS_SEARCH_FIELDS = (
-    "atr_len",
-    "atr_times_init",
-    "atr_times_trail",
-)
-
-
-def _min_roos_search_fields(strategy_id: str) -> tuple[str, ...]:
+def _min_roos_search_fields(strategy_id: str, daily_search_profile: str | None = None) -> tuple[str, ...]:
     if strategy_id == "breakout":
+        if daily_search_profile is not None:
+            raise ValueError("Breakout Optimizer cannot select Daily search profile")
         return MIN_ROOS_SEARCH_FIELDS
     if strategy_id == "daily":
-        return DAILY_MIN_ROOS_SEARCH_FIELDS
+        from strategies.daily.search_space import resolve_daily_search_profile
+        return tuple(resolve_daily_search_profile(daily_search_profile)["fields"])
     raise ValueError(f"未知Min Optimizer策略: {strategy_id!r}")
 def _full_roos_trainable_fields() -> tuple[str, ...]:
     """Return optimizer fields that can actually vary under the current Full policy."""
@@ -183,8 +179,9 @@ EXTENDING_FULL_ROOS_RELATIVE_DIR = Path(
 
 def _min_roos_adaptation_contract(
     *, arm_id: str, training_dl_enabled: bool, strategy_id: str = "breakout",
+    daily_search_profile: str | None = None,
 ) -> dict[str, Any]:
-    fields = _min_roos_search_fields(strategy_id)
+    fields = _min_roos_search_fields(strategy_id, daily_search_profile)
     payload = {
         "mode": "min_roos_training",
         "parameter_set": str(arm_id),
@@ -195,6 +192,10 @@ def _min_roos_adaptation_contract(
     if strategy_id == "daily":
         payload["entry_strategy"] = "Daily"
         payload["entry_universe"] = "unscored_all_adjacent_quote_stockdays_v1"
+        if daily_search_profile is not None:
+            from strategies.daily.search_space import resolve_daily_search_profile
+            payload["daily_execution_contract"] = resolve_daily_search_profile(daily_search_profile)["execution_contract"]
+            payload["fixed_rule_contract"] = "daily_common_filters_search_v2" if "common_filters" in daily_search_profile else "all_rule_filters_off"
     return payload
 EXPERIMENT_RELATIVE_DIR = Path(
     "models/research/breakout_quality/binary_dl_filter_param_adaptation/risk_only_rolling"
@@ -391,7 +392,7 @@ def _build_min_roos_fixed_overrides(*, args, training_dl_enabled: bool) -> dict[
     """Freeze every optimizer dimension except the canonical five Min ROOS fields."""
 
     strategy_id = str(getattr(args, "strategy_id", "breakout"))
-    search_fields = _min_roos_search_fields(strategy_id)
+    search_fields = _min_roos_search_fields(strategy_id, getattr(args, "daily_search_profile", None))
     fixed: dict[str, Any] = {
         field_name: spec["default"]
         for field_name, spec in BREAKOUT_PARAM_SPECS.items()
@@ -659,7 +660,7 @@ def _runtime_contract(*, root, args, baseline_contract, fold_overrides, model_ar
         },
         "rolling_policy": {key: baseline_contract["meta"][key] for key in ("window_mode", "first_oos_date", "last_oos_date", "train_window_months", "oos_horizon_months")},
         "trials_per_fold": int(args.trials_per_fold),
-        "search_fields": list(_min_roos_search_fields(str(getattr(args, "strategy_id", "breakout")))),
+        "search_fields": list(_min_roos_search_fields(str(getattr(args, "strategy_id", "breakout")), getattr(args, "daily_search_profile", None))),
         "fixed_overrides_by_effective_date": fold_overrides,
         "binary_runtime": (
             None
@@ -744,7 +745,7 @@ def _validate_min_roos_params(*, path, baseline_contract, fold_overrides, args, 
                     raise ValueError(
                         f"{arm_id}固定契約未落入active params: date={effective_date}, field={field_name}, actual={actual!r}, expected={expected!r}"
                     )
-            for field_name in _min_roos_search_fields(str(getattr(args, "strategy_id", "breakout"))):
+            for field_name in _min_roos_search_fields(str(getattr(args, "strategy_id", "breakout")), getattr(args, "daily_search_profile", None)):
                 if field_name not in params:
                     raise ValueError(f"{arm_id}缺少Min ROOS搜尋欄位: {effective_date}/{field_name}")
     seed_ensemble_policy = dict(getattr(args, "seed_ensemble_policy_override", None) or {})
@@ -773,6 +774,7 @@ def _validate_min_roos_params(*, path, baseline_contract, fold_overrides, args, 
         arm_id=str(arm_id),
         training_dl_enabled=bool(training_dl_enabled),
         strategy_id=str(getattr(args, "strategy_id", "breakout")),
+        daily_search_profile=getattr(args, "daily_search_profile", None),
     )
     if existing_adaptation and existing_adaptation != expected_adaptation:
         raise ValueError(
@@ -945,7 +947,7 @@ def _run_optimizer_arm(*, root, args, settings, baseline_contract, model_artifac
         runtime_scientific_contract = build_strategy_param_runtime_scientific_contract(
             root,
             strategy_id=strategy_id,
-            filter_profile=(canonical_family or "min"),
+            filter_profile=("full" if getattr(args, "daily_search_profile", None) == "full_common_filters_v2" else (canonical_family or "min")),
             parameter_policy=str(args.param_policy),
             dataset_profile=str(args.dataset),
             schedule_start_date=str(baseline_contract["meta"]["first_oos_date"]),
@@ -961,6 +963,7 @@ def _run_optimizer_arm(*, root, args, settings, baseline_contract, model_artifac
                 "trials_per_seed": int(args.trials_per_fold),
             },
             validation={"enabled": False},
+            daily_search_profile=getattr(args, "daily_search_profile", None),
             execution_overrides={
                 "max_positions": int(args.max_positions),
                 "rotation": str(args.rotation),
@@ -1068,7 +1071,7 @@ def _run_optimizer_arm(*, root, args, settings, baseline_contract, model_artifac
         "parameter_set": arm_id,
         "training_dl_enabled": bool(training_dl_enabled),
         "status": "COMPLETED",
-        "search_fields": list(_min_roos_search_fields(str(getattr(args, "strategy_id", "breakout")))),
+        "search_fields": list(_min_roos_search_fields(str(getattr(args, "strategy_id", "breakout")), getattr(args, "daily_search_profile", None))),
         "folds": int(dict(params_payload.get("summary") or {}).get("folds", 0) or 0),
         "trials_per_fold": int(args.trials_per_fold),
         "optimizer_search_reused": bool(reusable),
@@ -1320,6 +1323,7 @@ def prepare_selection_historical_p2_params(
     seed_ensemble_policy_override: dict | None = None,
     oos_end_cap_date: str | None = None,
     strategy_id: str = "breakout",
+    daily_search_profile: str | None = None,
 ):
     """Build/reuse Selection Min ROOS with one canonical rolling optimization.
 
@@ -1334,7 +1338,7 @@ def prepare_selection_historical_p2_params(
     """
 
     root = Path(project_root).resolve()
-    search_fields = _min_roos_search_fields(str(strategy_id))
+    search_fields = _min_roos_search_fields(str(strategy_id), daily_search_profile)
     if strategy_id == "daily" and recover_completed_strategy_compare:
         raise ValueError("Daily Min cannot recover Breakout-only completed Strategy Compare artifacts")
     if not isinstance(recover_completed_strategy_compare, bool):
@@ -1388,6 +1392,9 @@ def prepare_selection_historical_p2_params(
             "entry_universe": "unscored_all_adjacent_quote_stockdays_v1",
             "breakout_required": False,
         })
+        if daily_search_profile is not None:
+            from strategies.daily.search_space import resolve_daily_search_profile
+            reference["daily_execution_contract"] = resolve_daily_search_profile(daily_search_profile)["execution_contract"]
         schedule_contract = {
             **schedule_contract,
             "sha256": _canonical_hash(reference),
@@ -1415,6 +1422,7 @@ def prepare_selection_historical_p2_params(
             None if seed_ensemble_policy_override is None else dict(seed_ensemble_policy_override)
         ),
         strategy_id=str(strategy_id),
+        daily_search_profile=daily_search_profile,
     )
     settings = SimpleNamespace(seed=int(optimizer_seed))
     if not quiet:

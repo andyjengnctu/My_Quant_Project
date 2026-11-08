@@ -71,23 +71,31 @@ def _build_breakout_parameter_generation_contract() -> dict[str, Any]:
     }
 
 
-def _build_parameter_generation_contract(strategy_id: str) -> dict[str, Any]:
+def _build_parameter_generation_contract(strategy_id: str, *, daily_search_profile: str | None = None) -> dict[str, Any]:
     key = str(strategy_id or "").strip().lower()
     if key == "breakout":
         return _build_breakout_parameter_generation_contract()
     if key == "daily":
-        from core.portfolio_entry_policy import DAILY_ENTRY_CONTRACT
+        from core.portfolio_entry_policy import DAILY_ENTRY_CONTRACT, DAILY_ATR_ENTRY_CONTRACT
         # Search primitives and schema are shared with the canonical Optimizer;
         # this new contract freezes all Breakout-only dimensions and declares
         # an independent stock-day selection/replay objective.
-        return {
+        from strategies.daily.search_space import resolve_daily_search_profile
+        daily_spec = resolve_daily_search_profile(daily_search_profile)
+        contract = {
             **_build_breakout_parameter_generation_contract(),
             "strategy_id": "daily",
-            "entry_contract": DAILY_ENTRY_CONTRACT,
+            "entry_contract": (DAILY_ENTRY_CONTRACT if daily_search_profile is None
+                               else DAILY_ATR_ENTRY_CONTRACT),
             "entry_universe": "unscored_all_adjacent_quote_stockdays_v1",
-            "search_fields": ["atr_len", "atr_times_init", "atr_times_trail"],
+            "search_fields": list(daily_spec["fields"]),
             "breakout_signals_required": False,
         }
+        # Do not change the registered P18 bytes/identity: only new contracts
+        # declare a distinct replay execution policy.
+        if daily_search_profile is not None:
+            contract["daily_execution_contract"] = daily_spec["execution_contract"]
+        return contract
     raise ValueError(f"尚未登記strategy parameter scientific contract builder: {strategy_id!r}")
 
 
@@ -166,6 +174,7 @@ def build_strategy_param_runtime_scientific_contract(
     validation: Mapping[str, Any],
     score_policy_overrides: Mapping[str, Any] | None = None,
     execution_overrides: Mapping[str, Any] | None = None,
+    daily_search_profile: str | None = None,
     dataset_generation_identity_override: Mapping[str, Any] | None = None,
     references: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -200,7 +209,7 @@ def build_strategy_param_runtime_scientific_contract(
             "train_window_months": int(train_window_months),
             "oos_horizon_months": int(oos_horizon_months),
         },
-        "parameter_generation": _build_parameter_generation_contract(strategy_id),
+        "parameter_generation": _build_parameter_generation_contract(strategy_id, daily_search_profile=daily_search_profile),
         "score": _build_score_contract(score_policy_overrides),
         "hard_gates": build_training_threshold_snapshot(),
         "selection_and_anti_overfit": {
@@ -271,6 +280,7 @@ def build_strategy_param_scientific_contract(
         validation=validation,
         score_policy_overrides=profile.score_policy_overrides,
         execution_overrides=resolved_execution_overrides,
+        daily_search_profile=profile.daily_search_profile,
         references=references,
     )
     if profile.candidate_consensus_contract is not None:

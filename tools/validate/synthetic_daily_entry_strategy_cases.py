@@ -649,5 +649,191 @@ class DailyEntryStrategyCases(TestCase):
             oracle._oracle_target_strategy(corrupted, "R40")
 
 
+    def test_daily_parameter_profiles_reuse_original_full_bounds_and_keep_p18(self):
+        from pathlib import Path
+        from config.strategy_params import STRATEGY_PARAM_PROFILES
+        from core.strategy_param_scientific_contract import (
+            build_strategy_param_scientific_contract,
+        )
+        from strategies.daily.search_space import resolve_daily_search_profile
+        from strategies.breakout.search_space import BREAKOUT_OPTIMIZER_SEARCH_SPACE
+        from services.optimizer.strategy_param_training import _min_roos_search_fields
+
+        cases = (
+            ("broker_cash_daily_min_best_seed42_current", None, 3, "PARAM-P18"),
+            ("broker_cash_daily_min_four_seed42_current", "min_atr_limit_v2", 4, "PARAM-P19"),
+            ("broker_cash_daily_full_nineteen_seed42_current", "full_common_filters_v2", 19, "PARAM-P20"),
+        )
+        fingerprints = set()
+        for profile_id, profile_name, count, identity in cases:
+            with self.subTest(profile=profile_id):
+                profile = STRATEGY_PARAM_PROFILES[profile_id]
+                self.assertEqual(profile["parameter_set_identity"], identity)
+                self.assertEqual(profile.get("daily_search_profile"), profile_name)
+                search = _min_roos_search_fields("daily", profile_name)
+                self.assertEqual(len(search), count)
+                self.assertEqual(set(search), set(resolve_daily_search_profile(profile_name)["fields"]))
+                for field in search:
+                    self.assertIn(field, BREAKOUT_OPTIMIZER_SEARCH_SPACE)
+                evidence = build_strategy_param_scientific_contract(Path(__file__).resolve().parents[2], profile_id)
+                fingerprint = evidence["scientific_fingerprint_sha256"]
+                self.assertEqual(fingerprint, profile["registered_scientific_fingerprint_sha256"])
+                fingerprints.add(fingerprint)
+        self.assertEqual(len(fingerprints), 3)
+        self.assertEqual(_min_roos_search_fields("daily", "min_atr_limit_v2"),
+                         ("atr_len", "atr_buy_tol", "atr_times_init", "atr_times_trail"))
+
+    def test_daily_full_only_searches_live_filters_and_no_breakout_signals(self):
+        from types import SimpleNamespace
+        from config.strategy_params import STRATEGY_PARAM_PROFILES
+        from services.optimizer.strategy_param_training import (
+            _build_min_roos_fixed_overrides, _min_roos_search_fields,
+        )
+        entries = (
+            ("broker_cash_daily_min_best_seed42_current", 3),
+            ("broker_cash_daily_min_four_seed42_current", 4),
+            ("broker_cash_daily_full_nineteen_seed42_current", 19),
+        )
+        for profile_id, count in entries:
+            spec = STRATEGY_PARAM_PROFILES[profile_id]
+            args = SimpleNamespace(
+                strategy_id="daily", daily_search_profile=spec.get("daily_search_profile"),
+                filter_id="breakout_quality_v1", fixed_risk=0.01,
+                max_position_cap_pct=1.0,
+            )
+            overrides = _build_min_roos_fixed_overrides(args=args, training_dl_enabled=False)
+            search = _min_roos_search_fields("daily", args.daily_search_profile)
+            self.assertEqual(len(search), count)
+            self.assertFalse(overrides["use_breakout_buy"])
+            self.assertFalse(overrides["use_breakout_reclaim_reentry"])
+            self.assertNotIn("high_len", search)
+            self.assertTrue(all(field not in overrides for field in search))
+            if count == 3:
+                self.assertIn("atr_buy_tol", overrides)
+            elif count == 4:
+                self.assertFalse(overrides["use_bb"])
+                self.assertFalse(overrides["use_vol"])
+            else:
+                switches = {"use_bb", "use_kc", "use_vol", "use_breakout_ema_filter",
+                            "use_breakout_return_filter", "use_breakout_false_filter"}
+                self.assertTrue(switches.issubset(search))
+                self.assertTrue(switches.isdisjoint(overrides))
+
+    def test_daily_full_signal_filters_are_real_and_other_modes_preserved(self):
+        from dataclasses import replace
+        import numpy as np
+        from tools.validate.synthetic_daily_trade40_cases import fixture
+        from core.signal_utils import generate_signals, unpack_precomputed_signals
+        from core.portfolio_entry_policy import (
+            DAILY_EXECUTION_FULL_FILTERS, DAILY_EXECUTION_ATR_LIMIT,
+            DAILY_EXECUTION_LEGACY, daily_signal_execution_context,
+            current_daily_execution_contract,
+        )
+        _, frame, params, _ = fixture(count=160)
+        params = replace(params, use_breakout_buy=False)
+        def count(contract, cfg):
+            with daily_signal_execution_context(contract):
+                _, setup, _, _ = unpack_precomputed_signals(generate_signals(frame, cfg))
+                return int(np.count_nonzero(setup))
+        self.assertEqual(count(DAILY_EXECUTION_LEGACY, params), 0)
+        self.assertEqual(count(DAILY_EXECUTION_ATR_LIMIT, params), 0)
+        self.assertGreater(count(DAILY_EXECUTION_FULL_FILTERS, params), 0)
+        vol_gate = replace(params, use_vol=True, vol_long_len=5, vol_breakout_mult=1.5)
+        self.assertEqual(count(DAILY_EXECUTION_FULL_FILTERS, vol_gate), 0)
+        self.assertEqual(current_daily_execution_contract(), DAILY_EXECUTION_LEGACY)
+
+    def test_daily_new_limit_and_full_candidate_gate_are_replay_effective(self):
+        from types import SimpleNamespace
+        from core.portfolio_entry_policy import (
+            DAILY_EXECUTION_FULL_FILTERS, DAILY_EXECUTION_ATR_LIMIT,
+            portfolio_entry_policy_context,
+        )
+        info, session = pd.Timestamp("2021-01-04"), pd.Timestamp("2021-01-05")
+        values = {info: {"buy_limit": 110.0, "ATR": 3.0, "Close": 100.0,
+                         "is_setup": True},
+                  session: {"buy_limit": 111.0, "ATR": 3.0, "Close": 101.0,
+                            "is_setup": True}}
+        kwargs = dict(
+            ticker="2330", y_pos=0, portfolio={}, sold_today=set(),
+            all_dfs_fast={"2330": values}, active_extended_signals={},
+            pit_stats_index={"2330": []}, pit_stats_cursor={}, today=session,
+            params=SimpleNamespace(atr_buy_tol=1.5), profile_stats=None,
+            entry_policy="daily",
+        )
+        with portfolio_entry_policy_context("Daily", unscored=True):
+            self.assertEqual(_resolve_qualified_normal_setup(**kwargs)[0], 100.0)
+        for mode in (DAILY_EXECUTION_ATR_LIMIT, DAILY_EXECUTION_FULL_FILTERS):
+            with portfolio_entry_policy_context("Daily", unscored=True,
+                                                daily_execution_contract=mode):
+                actual = _resolve_qualified_normal_setup(**kwargs)
+                self.assertEqual(actual[0], 104.5)
+        values[info]["is_setup"] = False
+        with portfolio_entry_policy_context("Daily", unscored=True,
+                                            daily_execution_contract=DAILY_EXECUTION_FULL_FILTERS):
+            self.assertIsNone(_resolve_qualified_normal_setup(**kwargs))
+        with portfolio_entry_policy_context("Daily", unscored=True,
+                                            daily_execution_contract=DAILY_EXECUTION_ATR_LIMIT):
+            self.assertIsNotNone(_resolve_qualified_normal_setup(**kwargs))
+
+    def test_daily_signal_contract_is_explicit_in_worker_and_replay_caches(self):
+        from concurrent.futures import ThreadPoolExecutor
+        from dataclasses import replace
+        import numpy as np
+        from tools.validate.synthetic_daily_trade40_cases import fixture
+        from services.optimizer.trial_inputs import worker_prep_data
+        from services.portfolio_replay import _replay_preparation_key
+        from core.portfolio_entry_policy import (
+            DAILY_EXECUTION_FULL_FILTERS, DAILY_EXECUTION_LEGACY,
+            daily_signal_execution_context,
+        )
+        _, frame, params, _ = fixture(count=160)
+        params = replace(params, use_breakout_buy=False)
+        def prepare(contract):
+            return worker_prep_data("2330", frame, params, include_trade_logs=False,
+                                    include_pit_stats_index=False, profile_enabled=False,
+                                    daily_execution_contract=contract)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            old, new = list(pool.map(prepare, (DAILY_EXECUTION_LEGACY, DAILY_EXECUTION_FULL_FILTERS)))
+        self.assertTrue(old["ok"] and new["ok"])
+        self.assertFalse(np.any(old["dynamic"]["is_setup"]))
+        self.assertTrue(np.any(new["dynamic"]["is_setup"]))
+        record = {"effective_date_text": "2021-01-01", "effective_end_date_text": "2021-12-31",
+                  "params_signature": "signed"}
+        kw = dict(ensemble=False, raw_universe_required_min_rows=None,
+                  keep_trade_logs=False, use_prepared_cache=False, write_prepared_cache=False)
+        before = _replay_preparation_key(".", [record], **kw)
+        with daily_signal_execution_context(DAILY_EXECUTION_FULL_FILTERS):
+            after = _replay_preparation_key(".", [record], **kw)
+        self.assertNotEqual(before, after)
+        self.assertEqual(after[-1], DAILY_EXECUTION_FULL_FILTERS)
+
+    def test_new_daily_direct_arms_have_separate_control_and_oracle_truth(self):
+        from core.strategy_compare_registry import STRATEGY_COMPARE_ARMS
+        live = {
+            "C166": ("daily_min_four_best_broker_cash_rolling_experiment", False),
+            "C167": ("daily_min_four_best_broker_cash_rolling_experiment", True),
+            "C168": ("daily_full_nineteen_best_broker_cash_rolling_experiment", False),
+            "C169": ("daily_full_nineteen_best_broker_cash_rolling_experiment", True),
+        }
+        for arm_id, (param_source, dl_enabled) in live.items():
+            arm = STRATEGY_COMPARE_ARMS[arm_id]
+            self.assertEqual(arm["param_source"], param_source)
+            self.assertEqual(arm["entry_strategy"], "Daily")
+            self.assertEqual(arm["dl_enabled"], dl_enabled)
+            self.assertEqual(arm["dl_id"], "CONT13CJ_ROLL" if dl_enabled else None)
+            if dl_enabled:
+                self.assertIn("no-k-no-r0", arm["dl_runtime_mode"])
+        # Witness registrations are immutable but never enter current execution.
+        # Current inventory is generated from the same canonical registry.
+        from config.research_summary import RESEARCH_SUMMARY_ROWS
+        bindings = str(RESEARCH_SUMMARY_ROWS)
+        for name in ("C166", "C167", "C168", "C169"):
+            self.assertIn(name, bindings)
+        self.assertNotIn("C170", bindings)
+        self.assertNotIn("C171", bindings)
+        self.assertEqual(STRATEGY_COMPARE_ARMS["C160"]["param_source"],
+                         "daily_min_best_broker_cash_rolling_experiment")
+
+
 if __name__ == "__main__":
     main()

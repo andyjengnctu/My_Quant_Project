@@ -175,7 +175,11 @@ def prep_optimizer_stock_data_bundle(df, params, profile_stats=None, ticker=None
 
     t0 = time.perf_counter() if profile_stats is not None else None
     _atr_main, buy_condition, _sell_condition, _buy_limits = unpack_precomputed_signals(precomputed_signals)
-    has_executable_setup = bool(np.any(np.asarray(buy_condition, dtype=bool)[:-1]))
+    from core.portfolio_entry_policy import DAILY_EXECUTION_FULL_FILTERS, current_daily_execution_contract
+    has_executable_setup = (
+        current_daily_execution_contract() != DAILY_EXECUTION_FULL_FILTERS
+        and bool(np.any(np.asarray(buy_condition, dtype=bool)[:-1]))
+    )
     if not include_trade_logs and not include_pit_stats_index:
         # Optimizer fast path: when neither standalone logs nor PIT history stats
         # are observable outputs, the standalone backtest has no consumer.

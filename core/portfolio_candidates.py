@@ -42,6 +42,7 @@ from core.extended_signals import (
 )
 from core.order_lot_policy import TAIWAN_BOARD_LOT_SHARES
 from core.price_utils import (
+    adjust_long_buy_limit,
     _NATIVE_BROKER_FEE_PPM,
     _NATIVE_BROKER_MIN_FEE_MILLI,
     build_position_sizing_capital_context,
@@ -60,6 +61,11 @@ _NATIVE_EXTENDED_CANDIDATE_CORE_ENABLED = bool(
 _NATIVE_EXTENDED_CANDIDATE_BATCH_SIZED_ENABLED = bool(
     _native_resolve_live_extended_candidate_batch_sized is not None
     and is_optimizer_native_hotpath_kernels_enabled()
+)
+from core.portfolio_fast_access import get_fast_value
+from core.portfolio_entry_policy import (
+    DAILY_EXECUTION_ATR_LIMIT, DAILY_EXECUTION_FULL_FILTERS,
+    current_daily_execution_contract,
 )
 from core.portfolio_fast_data import (
     get_fast_extended_day_market_values,
@@ -461,13 +467,25 @@ def _resolve_qualified_normal_setup(
     y_buy_limit, y_atr, y_close, signal_date = get_fast_normal_signal_values(
         fast_df, y_pos
     )
+    security_profile = get_fast_security_profile(fast_df)
     if entry_policy == "daily":
-        # The information-date close, not Breakout buy_limit, is the next-day
-        # order limit.  This is the same first-order reference as the Target.
-        y_buy_limit = y_close
+        execution = current_daily_execution_contract()
+        if execution == DAILY_EXECUTION_FULL_FILTERS and not get_fast_value(
+            fast_df, "is_setup", pos=y_pos, date=signal_date
+        ):
+            return None
+        if execution in {DAILY_EXECUTION_ATR_LIMIT, DAILY_EXECUTION_FULL_FILTERS}:
+            # Use the same canonical tick-adjusted price-cap rule as Breakout;
+            # no extension of the order beyond the next exchange session.
+            y_buy_limit = adjust_long_buy_limit(
+                y_close + y_atr * float(params.atr_buy_tol),
+                ticker=ticker, security_profile=security_profile,
+            )
+        else:
+            # Historical P18 remains exactly close-limited.
+            y_buy_limit = y_close
     elif entry_policy != "breakout":
         raise ValueError("Unknown portfolio entry policy")
-    security_profile = get_fast_security_profile(fast_df)
 
     pit_started = time.perf_counter() if profile_stats is not None else None
     if entry_policy == "daily":

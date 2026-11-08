@@ -899,3 +899,14 @@ Decision：`CURRENT_BENCHMARK_END_TO_END_V1_FOUR_SEEDS / ALL_ORACLE_AND_ROBUSTNE
 - **科學／執行隔離**：本次只改研究 membership 和必要的 source-only 真值解析；不修改價格／費稅／出場算法、PIT 訓練契約、策略參數、Seed、Oracle Replay 身分或已簽章結果。正式市場 Bundle 尚待本機驗證。
 
 Decision：`USER_AUTHORIZED_CURRENT_RETIREMENT / HISTORICAL_IDENTITIES_RETAINED / SOURCE_ONLY_FOR_ACTIVE_POSITIVE / T40_CJ_UNCHANGED / NO_ARTIFACT_MIGRATION`.
+
+
+### 2026-11-09 — Daily Full/Min 參數搜尋的修正授權：保留 P18，新增 P19／P20
+
+- **當前研究決策**：現行 `PARAM-P18`（Daily Min，三個 ATR 維度，次日以前收限價）**繼續啟用**；先前尚未套用的「P19 三維 Daily Full」工程補丁不成立，沒有歷史身分或績效可供 REUSE。新增 `PARAM-P19`（Daily Min／四維）和 `PARAM-P20`（Daily Full／十九維）；對兩者分別建立獨立 canonical Optimizer、Rolling/Forward/Robustness/Oracle 參數 lineage，絕不挪用 P18 或 P17 參數工件／Replay 成績。
+- **P19 四維**：`atr_len`、`atr_buy_tol`、`atr_times_init`、`atr_times_trail`。Daily 每個資訊日依當日合法市場日／PIT 分數判斷，僅在下一交易日以 `Close + ATR × atr_buy_tol` 為最高願付限價；使用既有 tick adjustment、撮合、資金、費稅，未成交不續掛。所有參數完全沿用原 Breakout Full 搜尋範圍，特別是不修改 `atr_buy_tol` 下限。
+- **P20 十九維**：P19 四維，加 BB（`use_bb`, `bb_len`, `bb_mult`）、KC（`use_kc`, `kc_len`, `kc_mult`）、量能（`use_vol`, `vol_long_len`, `vol_breakout_mult`）、EMA（`use_breakout_ema_filter`, `breakout_ema_len`）、每日漲幅（`use_breakout_return_filter`, `breakout_return_min`）、波動率上限（`use_breakout_false_filter`, `breakout_false_filter_atr_pct_min`）。六組通用濾網／出場條件重用既有指標公式，移除 Breakout 新高、價格交叉、假突破事件、延續候選及 Reclaim 依賴；`high_len` 不搜尋。欄位歷史名稱含 `breakout` 不代表策略仍要求突破訊號。開關關閉的子參數依 canonical optimizer conditional-search 規則處理。
+- **新策略**：`C166` P19 No-DL Default、`C167` P19 T40／`MR-13CJ` Direct、`C168` P20 No-DL Default、`C169` P20 T40／`MR-13CJ` Direct。`C170`／`C171` 僅為 Oracle 解析已核准 Exact 真值配方的非啟用參照，不能進入現行策略比較／Summary／RUN。`C160/C161/C164/C165`（P18）繼續啟用，原版本與結果身分不變。
+- **證據界線**：本輪為新 science/執行契約與合成回歸測試；沒有實際市場上 P19/P20 的 300-trial/Fold 最佳化、Rolling/Robustness 回放或四 Seed Oracle 等價驗收。CJ FIT/PIT 模型可依現行完整 scientific identity REUSE，不宣稱是 P19/P20 標籤重新訓練，也不宣稱任何新 RoMD 或 Trading promotion。
+
+Decision：`P18_RETAINED / P19_DAILY_MIN_4D / P20_DAILY_FULL_19D / NO_BREAKOUT_ENTRY / SAME_FULL_PARAM_RANGES / TWO_DIRECT_CJ_ARMS_AND_NO_DL_CONTROLS / ISOLATED_PARAMETER_AND_REPLAY_IDS / P19_P20_REAL_MARKET_VALIDATION_PENDING`。

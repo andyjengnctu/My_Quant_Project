@@ -16,6 +16,19 @@ RESEARCH_SUMMARY_ROWS = (
     # P18 is an independent economic parameter family. The No-DL C161
     # control and its T40 treatments are declared together in this roster.
     {'arm_id': 'C161', 'oracle_parameter_family': 'daily_min'},
+    # P18 remains active and unchanged. New Daily scientific parameter lineages
+    # reuse the approved T40 perfect-score recipe, never the P16/P18 Replay.
+    {'arm_id': 'C166', 'oracle_parameter_family': 'daily_min_p19'},
+    {'oracle_template_arm_id': 'C146', 'parameter_family': 'daily_min_p19',
+     'strategy': 'Daily',
+     'bindings': ({'arm_id': 'C167',
+                   'rank_model': ('MR-13CJ', 'daily_universal_terminal_mae_gated_t40_full_list_ndcg_pairwise')},)},
+    {'arm_id': 'C168', 'oracle_parameter_family': 'daily_full_p20'},
+    {'oracle_template_arm_id': 'C146', 'parameter_family': 'daily_full_p20',
+     'strategy': 'Daily',
+     'bindings': ({'arm_id': 'C169',
+                   'rank_model': ('MR-13CJ', 'daily_universal_terminal_mae_gated_t40_full_list_ndcg_pairwise')},)},
+
     # Reuse the existing approved T40 Daily Oracle truth/score recipes; only
     # the formal execution arm and parameter lineage change (P16 -> P18).
     {'enabled': False, 'oracle_template_arm_id': 'C145', 'parameter_family': 'daily_min',

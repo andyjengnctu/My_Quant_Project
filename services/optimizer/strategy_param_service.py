@@ -3235,13 +3235,15 @@ def ensure_fixed_multiseed_strategy_parameter_artifact(
         build_context_label=f"{contract['parameter_set']} Registered Optimizer",
         optimizer_output_title=f"Optimizer {contract['parameter_set']} 工作工件（非production）",
     )
-    if str(contract["family"]) == "min":
+    active_profile = get_strategy_param_training_profile(training_profile_id)
+    if str(contract["family"]) == "min" or active_profile.strategy_id == "daily":
         result = prepare_selection_historical_p2_params(
             **common_train,
             recover_completed_strategy_compare=False,
             parameter_set_identity=str(contract["parameter_set"]),
             seed_ensemble_policy_override=dict(contract["seed_ensemble_policy"]),
-            strategy_id=str(get_strategy_param_training_profile(training_profile_id).strategy_id),
+            strategy_id=str(active_profile.strategy_id),
+            daily_search_profile=active_profile.daily_search_profile,
         )
     else:
         result = prepare_selection_historical_full_roos_params(
@@ -3899,13 +3901,15 @@ def ensure_fixed_multiseed_robustness_strategy_parameter_artifact(
             f"Optimizer {contract['parameter_set']} robustness工作工件（非production）"
         ),
     )
-    if str(contract["family"]) == "min":
+    active_profile = get_strategy_param_training_profile(training_profile_id)
+    if str(contract["family"]) == "min" or active_profile.strategy_id == "daily":
         result = prepare_selection_historical_p2_params(
             **common_train,
             recover_completed_strategy_compare=False,
             parameter_set_identity=str(contract["parameter_set"]),
             seed_ensemble_policy_override=dict(contract["seed_ensemble_policy"]),
-            strategy_id=str(get_strategy_param_training_profile(training_profile_id).strategy_id),
+            strategy_id=str(active_profile.strategy_id),
+            daily_search_profile=active_profile.daily_search_profile,
         )
     else:
         result = prepare_selection_historical_full_roos_params(
