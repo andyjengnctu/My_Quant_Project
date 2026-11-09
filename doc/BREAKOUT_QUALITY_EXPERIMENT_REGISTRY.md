@@ -926,3 +926,5 @@ Decision：`P18_RETAINED / P19_DAILY_MIN_4D / P20_DAILY_FULL_19D / NO_BREAKOUT_E
 | `C168` / `C169` | Existing Daily (Full/P20) No DL / CJ T40 Direct (reported Rolling RoMD 6.29 / 3.71) | ACTIVE, unchanged |
 
 `DailyUniversal_FullTrade_NetPnL` truth is NOT `FullTrade_NetPnL` P17 CZ/DA (Breakout Full), and NOT `DailyUniversal_MinTrade_NetPnL` P18 CU/CT. New model FIT artifacts must be built from the canonical P20 economic teacher, never aliased. No model or strategy is automatically promoted to Trading.
+
+Current user-facing Target labels (2026-11-10): `Daily_FullTrade_NetPnL` and `Daily_FullTrade_NetPnL_Positive` replace the two former `DailyUniversal_FullTrade_NetPnL` labels for C173/C172 in Summary and Oracle. This is a presentation-only alias in the canonical Oracle display owner; the original `TrueDailyUniversal_FullTrade_NetPnL*` signed receipt/source keys, DB/DC training Target and profiles, Replay IDs, FIT identity, outcomes and historical records remain unchanged. No artifact rename or recomputation is implied.

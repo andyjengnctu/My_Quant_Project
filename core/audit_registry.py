@@ -262,6 +262,14 @@ def oracle_positive_output_for_recipe(recipe: str) -> str | None:
     return _ORACLE_POSITIVE_OUTPUT_BY_RECIPE.get(str(recipe))
 
 
+# Current Target wording is a presentation projection only.  These aliases
+# must never be used as Oracle receipt, FIT, Replay or source Target IDs.
+_ORACLE_TARGET_PRESENTATION_ALIASES = {
+    "DailyUniversal_FullTrade_NetPnL": "Daily_FullTrade_NetPnL",
+    "DailyUniversal_FullTrade_NetPnL_Positive": "Daily_FullTrade_NetPnL_Positive",
+}
+
+
 def oracle_scientific_target_name(legacy_receipt_key: str) -> str:
     """One-way normalization of historical Replay IDs into scientific Target names.
 
@@ -279,7 +287,7 @@ def oracle_scientific_target_name(legacy_receipt_key: str) -> str:
         name = "DailyUniversal_" + name[len("TrueDailyUniversal_"):]
     elif name.startswith("DailyUniversal_"):
         name = name[len("DailyUniversal_"):]
-    return name
+    return _ORACLE_TARGET_PRESENTATION_ALIASES.get(name, name)
 
 
 def oracle_target_semantics(row: Mapping[str, Any]) -> tuple[str, str, str]:

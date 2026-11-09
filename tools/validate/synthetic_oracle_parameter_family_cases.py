@@ -382,8 +382,8 @@ class OracleParameterFamilyCases(TestCase):
                if row["entry_strategy"] == "Daily (Full/P20)"}
         self.assertEqual(set(p20), {"C168", "C169", "C172", "C173"})
         self.assertEqual(p20["C169"]["target"], "T40")
-        self.assertEqual(p20["C172"]["target"], "DailyUniversal_FullTrade_NetPnL_Positive")
-        self.assertEqual(p20["C173"]["target"], "DailyUniversal_FullTrade_NetPnL")
+        self.assertEqual(p20["C172"]["target"], "Daily_FullTrade_NetPnL_Positive")
+        self.assertEqual(p20["C173"]["target"], "Daily_FullTrade_NetPnL")
         self.assertEqual(p20["C168"]["target"], "")
         self.assertEqual(p20["C168"]["selector"], "Default")
         self.assertTrue(all(row["oracle_romd"] is None for row in p20.values()))

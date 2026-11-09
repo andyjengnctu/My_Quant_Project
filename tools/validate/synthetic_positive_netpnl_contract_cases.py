@@ -91,6 +91,11 @@ class PositiveNetPnlContractCases(TestCase):
             ("TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct::Daily", "DailyUniversal_MinTrade_NetPnL_Positive", "Direct", "Daily"),
             ("TrueDailyUniversal_MinTrade_NetPnL::Daily", "DailyUniversal_MinTrade_NetPnL", "Exact", "Daily"),
             ("TrueDailyUniversal_MinTrade_NetPnL_Direct::Daily", "DailyUniversal_MinTrade_NetPnL", "Direct", "Daily"),
+            # The P20 Target labels are shortened without changing the
+            # immutable source/receipt identities (including retired Exact).
+            ("TrueDailyUniversal_FullTrade_NetPnL::Daily::Daily_full_p20", "Daily_FullTrade_NetPnL", "Exact", "Daily"),
+            ("TrueDailyUniversal_FullTrade_NetPnL_Direct::Daily::Daily_full_p20", "Daily_FullTrade_NetPnL", "Direct", "Daily"),
+            ("TrueDailyUniversal_FullTrade_NetPnL_Positive_Direct::Daily::Daily_full_p20", "Daily_FullTrade_NetPnL_Positive", "Direct", "Daily"),
         )
         for receipt, target, selector, strategy in cases:
             with self.subTest(receipt=receipt):
@@ -220,8 +225,8 @@ class PositiveNetPnlContractCases(TestCase):
         cases = (
             ("MinTrade_NetPnL_Positive", "Breakout", "Exact", "C125", "MR-13CO", "MR-13CP"),
             ("MinTrade_NetPnL_Positive", "Breakout", "Direct", "C126", "MR-13CO", "MR-13CP"),
-            ("DailyUniversal_FullTrade_NetPnL", "Daily (Full/P20)", "Direct", "C173", "MR-13DB", ""),
-            ("DailyUniversal_FullTrade_NetPnL_Positive", "Daily (Full/P20)", "Direct", "C172", "MR-13DB", "MR-13DC"),
+            ("Daily_FullTrade_NetPnL", "Daily (Full/P20)", "Direct", "C173", "MR-13DB", ""),
+            ("Daily_FullTrade_NetPnL_Positive", "Daily (Full/P20)", "Direct", "C172", "MR-13DB", "MR-13DC"),
         )
         published = {arm_id: float(i + 1) for i, (*_, arm_id, rank, classifier) in enumerate(cases)}
         with patch('services.research.target_dl_overview._strategy_rolling_metrics', return_value=published):
