@@ -18,6 +18,7 @@ from core.file_integrity import compute_file_sha256, canonical_json_sha256
 from filters.breakout_quality.daily_full_p20_target import (
     compute_daily_full_p20_batch,
 )
+from services.breakout_quality.daily_full_p20_source_identity import SOURCE_ID
 from services.breakout_quality.formal_mintrade40_pit_source import (
     FormalMinTrade40PITBlocked,
     FormalMinTrade40PITLabels,
@@ -48,7 +49,6 @@ def materialize_daily_full_p20_pit_labels(
     # Keep the P20 economic source distinct while reusing the ORIGINAL
     # canonical Full schedule/maturity verifier without modifying its signed
     # implementation (which would invalidate legacy Full/P17 and Min/P16).
-    from services.breakout_quality.daily_full_p20_training_source import SOURCE_ID
     if source.source_id != SOURCE_ID or any(
         period.source_id != SOURCE_ID for period in source.schedule
     ):

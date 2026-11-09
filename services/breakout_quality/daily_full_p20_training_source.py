@@ -37,6 +37,7 @@ from filters.breakout_quality.trade_path_label import (
     TRADE_PATH_SELECTION_BASELINE_FIRST_OOS_DATE,
     TRADE_PATH_SELECTION_BASELINE_LAST_OOS_DATE,
 )
+from services.breakout_quality.daily_full_p20_source_identity import SOURCE_ID
 from services.breakout_quality.formal_mintrade40_pit_source import (
     FormalMinTrade40PITBlocked, FormalMinTrade40PITSource,
 )
@@ -52,7 +53,6 @@ from services.optimizer.strategy_param_training import (
 from strategies.daily.search_space import resolve_daily_search_profile
 
 HISTORY_ID = "DAILY_FULL_P20_LABEL_HISTORY_V1"
-SOURCE_ID = "daily_full_p20_seed42"
 PROFILE = "full_common_filters_v2"
 BASELINE_ARM = "C168"
 TEACHER_SEED = int(RESEARCH_SINGLE_SEED)
