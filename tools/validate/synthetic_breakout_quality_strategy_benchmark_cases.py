@@ -647,7 +647,12 @@ def append_robustness_benchmark_plan_checks(
     check_true(
         "robustness_first_rolling_plan_inspects_each_model_seed_without_workspace_artifacts",
         bool(expected_model_inspections)
-        and len(observed_model_inspections) == len(expected_model_inspections)
+        # A known comparison period permits an extra *read-only* model-score
+        # inspection even while an unrelated upstream Target is pending.
+        # The result is still PREPARABLE until the canonical teacher is READY.
+        and len(observed_model_inspections) == len(expected_model_inspections) * (
+            1 + bool(isolated_plan_status.get("comparison_period"))
+        )
         and set(observed_model_inspections) == expected_model_inspections
         and all(
             Path(call.kwargs["project_root"]) == Path(isolated_root)

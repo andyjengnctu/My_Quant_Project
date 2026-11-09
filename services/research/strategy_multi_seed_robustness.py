@@ -1854,17 +1854,21 @@ def _render_robustness_execution_plan(
     upstream_rows, upstream_blockers = _model_upstream_rows(status)
     blockers = [*param_blockers, *upstream_blockers]
     upstream_pending = any(row[0] in {"BUILD", "REBUILD", "RESUME"} for row in upstream_rows)
-    if upstream_pending and not upstream_blockers:
-        start = end = None
-        period_text = "待自動補建canonical Dataset／Target後解析"
+    # A missing optimizer Target teacher cannot erase an independently known
+    # comparison period.  The shared Strategy preparation owner has already
+    # resolved that period from verified PIT scores or canonical Dataset truth.
+    # Keep the preparable upstream action, but inspect historic arm/seed results
+    # by their own scientific identities before requesting any new optimizer.
+    try:
+        start, end = _comparison_period_from_status(status)
+        period_text = f"{start} ～ {end}"
         period_error = None
-    else:
-        try:
-            start, end = _comparison_period_from_status(status)
-            period_text = f"{start} ～ {end}"
+    except (FileNotFoundError, RuntimeError, ValueError, KeyError, TypeError) as exc:
+        start = end = None
+        if upstream_pending and not upstream_blockers:
+            period_text = "待自動補建canonical Dataset／Target後解析"
             period_error = None
-        except (FileNotFoundError, RuntimeError, ValueError, KeyError, TypeError) as exc:
-            start = end = None
+        else:
             period_text = f"BLOCKED: {type(exc).__name__}: {exc}"
             period_error = str(exc)
             blockers.append(str(exc))
@@ -1910,10 +1914,43 @@ def _render_robustness_execution_plan(
     }
     robustness_contract: dict[str, Any] | None = None
     resolved_bindings: dict[tuple[str, int], dict[str, Any]] = {}
+    # The signed scientific observations are scoped per arm/seed. A new P19
+    # teacher may be pending while all *older* benchmark parameters and Dataset
+    # evidence are verified. In that case compute a read-only result contract
+    # for discovering unaffected observations; never start replay or declare
+    # the complete workflow READY until the teacher producer finishes.
+    # Missing Dataset truth blocks model-sensitive inspection. Pending arm/seed
+    # parameter bindings are excluded individually from the read-only view.
+    dataset_ready = not any(
+        action != "REUSE" and str(key).endswith(":dataset_core")
+        for action, key, _description in upstream_rows
+    )
+    # Do not let an *unbuilt new arm* suppress signed old arm/seed evidence.
+    # Project only certified current parameter bindings onto the read-only
+    # contract. An absent SHA makes scientific_unit_signature return None,
+    # so an unbuilt P19 arm is never misreported as a reusable result.
+    reusable_benchmark_bindings = {
+        unit: item for unit, item in benchmark_bindings.items()
+        if str(item.get("plan_action") or "") in {"REUSE", "RESULT_REUSE"}
+    }
+    # Historical non-benchmark robustness has no per-seed parameter bindings;
+    # retain its original READY-only path. Benchmark mode must never create an
+    # executable READY plan with a partial signed arm/seed inventory.
+    if cfg.benchmark_id is not None and overall == "READY":
+        expected_units = {
+            (arm.arm_id, int(seed)) for arm in stochastic_arms
+            for seed in cfg.resolved_seeds
+        }
+        if set(reusable_benchmark_bindings) != expected_units:
+            blockers.append("Benchmark robustness READY state缺少完整且合格的arm×seed參數身分")
+            overall = "BLOCKED"
+    can_inspect_benchmark_results = (
+        (overall == "READY") if cfg.benchmark_id is None
+        else bool(reusable_benchmark_bindings)
+    )
     if (
-        overall == "READY"
-        and start is not None
-        and end is not None
+        start is not None and end is not None and not blockers
+        and dataset_ready and can_inspect_benchmark_results
     ):
         try:
             resolved_bindings: dict[tuple[str, int], dict[str, Any]] = {}
@@ -1924,7 +1961,7 @@ def _render_robustness_execution_plan(
                 tuple[Path, Path, str, str, str],
                 tuple[dict[str, Any], tuple[tuple, tuple]],
             ] = {}
-            for unit, item in benchmark_bindings.items():
+            for unit, item in reusable_benchmark_bindings.items():
                 path = Path(item["path"])
                 manifest_path = Path(item["manifest_path"])
                 reused = registered_scientific_reuse.get(unit)

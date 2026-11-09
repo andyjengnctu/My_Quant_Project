@@ -65,6 +65,144 @@ def _registered_fixture():
 
 
 class StrategyRobustnessUnitCases(unittest.TestCase):
+    def test_pending_new_teacher_keeps_known_period_and_old_unit_reuse(self):
+        """A new Target cannot hide an independently verified old arm/seed.
+
+        This does not permit a partial run or make an invalid P19 teacher READY.
+        Historic model-sensitive evidence is inspected only with verified
+        benchmark parameter and Dataset sources; no FIT/training is started.
+        """
+        from services.research import strategy_multi_seed_robustness as robust
+
+        settings, cfg, arms, seeds, _fixture_contract = _registered_fixture()
+        fixed, stochastic = robust._robustness_arms(settings, cfg)
+        seed = int(seeds[0])
+        old_model = next(arm for arm in stochastic if arm.dl_enabled)
+        with tempfile.TemporaryDirectory(prefix="pending_teacher_old_reuse_") as td:
+            root = Path(td)
+            parameter_path = root / "signed_parameters.json"
+            parameter_manifest_path = root / "signed_parameter_manifest.json"
+            parameter_path.write_text('{}', encoding='utf-8')
+            parameter_manifest_path.write_text('{}', encoding='utf-8')
+            binding = {
+                "path": str(parameter_path),
+                "manifest_path": str(parameter_manifest_path),
+                "family": "min", "evaluation_mode": "rolling",
+                "param_policy": "base-finalist-best", "plan_action": "REUSE",
+            }
+            dataset = SimpleNamespace(
+                action="REUSE", artifact_key="model-upstream:source:dataset_core",
+                description="Signed Dataset READY",
+            )
+            teacher = SimpleNamespace(
+                action="RESUME", artifact_key="model-upstream:new_target:historical_teacher",
+                description="Independent historical teacher still missing",
+            )
+            known_period = {"start": "2021-01-01", "end": "2026-03-02"}
+            status = {
+                "preparation_plan": SimpleNamespace(actions=(dataset, teacher)),
+                "comparison_period": known_period, "artifact_identities": {},
+            }
+            current_contract = {
+                "fingerprint": "synthetic_read_only_preparation",
+                "comparison_period": known_period,
+                "resolved_seeds": list(seeds),
+            }
+            original_observation = {
+                (old_model.arm_id, seed): {"source_run_root": root},
+            }
+            # A newly registered model's parameter truth may still be absent;
+            # that cannot prevent inspection of the older signed unit.
+            new_model = next(arm for arm in reversed(stochastic)
+                             if arm.dl_enabled and arm.arm_id != old_model.arm_id)
+            missing_new_binding = {
+                **binding,
+                "path": str(root / "new_target_unbuilt.json"),
+                "manifest_path": str(root / "new_target_unbuilt_manifest.json"),
+                "plan_action": "BUILD",
+                "producer_variant": "canonical_schedule_v1",
+                "training_profile_id": "",
+            }
+            with (
+                patch.object(robust, 'PROJECT_ROOT', root),
+                patch.object(robust, '_discover_registered_strategy_only_scientific_reuse',
+                             side_effect=lambda **_kwargs: {}) as strategy_discovery,
+                patch.object(robust, '_benchmark_parameter_plan_rows',
+                             return_value=([('BUILD', 'new_teacher_parameter', 'pending')], [], {
+                                 (old_model.arm_id, seed): binding,
+                                 (new_model.arm_id, seed): missing_new_binding,
+                             })),
+                patch.object(robust, 'compute_strategy_param_scientific_sha256',
+                             return_value='a' * 64),
+                patch.object(robust, 'resolve_strategy_param_evaluation_identity_sha256',
+                             return_value='b' * 64),
+                patch.object(robust, 'build_multi_seed_robustness_contract',
+                             return_value=current_contract) as contract_builder,
+                patch.object(robust, '_discover_registered_model_scientific_reuse',
+                             return_value=original_observation) as model_discovery,
+                patch.object(robust, '_resolve_existing_scientific_unit_states',
+                             return_value=(None, None, {})),
+                patch.object(robust, '_run_root', return_value=root / 'old_evidence'),
+                patch.object(robust, 'inspect_reusable_model_research_rolling_score',
+                             return_value=(None, 'no current model score')),
+            ):
+                text, plan = robust._render_robustness_execution_plan(
+                    cfg=cfg, settings=settings, status=status,
+                    fixed_arms=fixed, stochastic_arms=stochastic,
+                )
+                self.assertEqual(plan['overall_status'], 'PREPARABLE')
+                self.assertEqual(plan['comparison_period'], known_period)
+                self.assertIsNone(plan['work_plan'])
+                self.assertEqual(plan['robustness_unit_states'][(old_model.arm_id, seed)]['action'],
+                                 'REUSE')
+                self.assertIn('scientific result REUSE=1/', text)
+                self.assertIn('策略結果REUSE略過=1', text)
+                self.assertTrue(contract_builder.called and model_discovery.called)
+                signed_param_identities = contract_builder.call_args.kwargs[
+                    'benchmark_parameter_identities'
+                ]
+                self.assertEqual(set(signed_param_identities),
+                                 {f'{old_model.arm_id}:seed={seed}'})
+                self.assertNotIn((new_model.arm_id, seed), plan['robustness_unit_states'])
+                self.assertEqual(strategy_discovery.call_args.kwargs['comparison_start'],
+                                 known_period['start'])
+
+                # Dataset missing / period unresolved cannot create a false
+                # matching historical result nor an execution permit.
+                no_period = {**status, "comparison_period": None}
+                pending_text, pending_plan = robust._render_robustness_execution_plan(
+                    cfg=cfg, settings=settings, status=no_period,
+                    fixed_arms=fixed, stochastic_arms=stochastic,
+                )
+                self.assertEqual(pending_plan['overall_status'], 'PREPARABLE')
+                self.assertIsNone(pending_plan['comparison_period'])
+                self.assertFalse(pending_plan['robustness_unit_states'])
+                self.assertIn('scientific result REUSE=0/', pending_text)
+                self.assertEqual(model_discovery.call_count, 1)
+                self.assertEqual(contract_builder.call_count, 1)
+
+                dataset_missing = SimpleNamespace(
+                    action="BUILD", artifact_key=dataset.artifact_key,
+                    description="Dataset not ready",
+                )
+                incomplete_dataset = {
+                    **status,
+                    "preparation_plan": SimpleNamespace(actions=(dataset_missing, teacher)),
+                }
+                _, no_dataset_plan = robust._render_robustness_execution_plan(
+                    cfg=cfg, settings=settings, status=incomplete_dataset,
+                    fixed_arms=fixed, stochastic_arms=stochastic,
+                )
+                self.assertEqual(no_dataset_plan['overall_status'], 'PREPARABLE')
+                # Read-only strategy-only registration may still report its
+                # independent signed seed/arm; no model-sensitive result may
+                # be certified from missing Dataset truth.
+                self.assertNotIn((old_model.arm_id, seed),
+                                 no_dataset_plan['robustness_unit_states'])
+                self.assertIsNone(no_dataset_plan['work_plan'])
+                self.assertEqual(model_discovery.call_count, 1)
+                self.assertEqual(contract_builder.call_count, 1)
+
     def test_membership_order_display_and_seed_extensions_preserve_old_units(self):
         _, _, arms, seeds, contract = _registered_fixture()
         new_scored_ids = set(tuple(a.arm_id for a in arms if a.dl_enabled)[-2:])

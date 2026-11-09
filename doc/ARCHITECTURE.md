@@ -194,6 +194,7 @@ project/
 ## 主要資料夾、持久來源與相容邊界
 
 - Strategy Robustness：比較清單是結果視圖，不是完成單元的身分。設定的 Robustness output root 下 `scientific_units/` 原子保存逐策略/Seed 收據與原始交易證據參照；舊格式結果經原契約驗證後匯入，不改寫原始績效或分數證據。計畫與執行共用一份凍結的 REUSE/Replay 集合，只對待執行單元解析模型依賴；每單元完成即提交，不依賴整份報表完成。來源證據損毀或同身分矛盾不得當成快取未命中而重算覆寫。
+- Robustness 依賴未就緒時的唯讀 REUSE 預檢：若共用 Strategy preparation 已由已驗證的 PIT 或 Dataset 合法解析比較期間，單一新 Target 的歷史 Optimizer teacher `BUILD/RESUME` 不得使其餘舊 arm/seed 的比較期間消失。參數、Dataset 可驗證的舊單元仍依其原始 scientific-unit signature 匯入既有 signed observation；缺參數 SHA 的新單元不得 REUSE。這只影響 `PREPARABLE` 計畫及原有結果的唯讀辨識，不允許在 Target teacher 尚未 READY 時執行、越過 Optimizer 的 No Finalist gate，或冒充整份 Robustness READY。
 - Robustness 模型工作區：在原設定 model work root 下依單一來源契約/Seed定位，不受其他模型或策略清單影響。來源寫入鎖涵蓋生成、回放與清理；未完成 Fold 仍由 canonical FIT producer 判定 RESUME，consumer 不刪除既有工件以強制重訓。正式報表、模型 FIT identity 與統計仍由原有 owner 持有。
 - `models/strategy_params/canonical/run_best_params.json`：研究 canonical 策略參數來源；models root不再放current策略JSON。正式測試使用獨立的 `formal_primary_params.json` 和 `V16_RUN_BEST_PARAMS_PATH` override，不覆寫研究正式參數。
 - `core/runtime_domains.py` 管理 Research／Trading 的 data／models／outputs／state 實體分區；`core/output_paths.py`、`core/output_retention.py` 管理輸出與保留規則。

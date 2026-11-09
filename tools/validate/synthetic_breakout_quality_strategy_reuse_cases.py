@@ -2167,10 +2167,29 @@ def append_model_robustness_pit_strategy_reuse_contract_checks(*, results, case_
         }
         fixed_arms, strategy_arms = robust._robustness_arms(settings, cfg)
         ready_contract = {"fingerprint": "synthetic", "resolved_seeds": cfg.resolved_seeds}
+        # The READY contract must have one verified benchmark parameter per
+        # declared arm/seed, even when the test is focused only on model scores.
+        # Do not bypass the production inventory guard with an empty fixture.
+        signed_params = root / "signed_params.json"
+        signed_manifest = root / "signed_manifest.json"
+        signed_params.write_text("{}", encoding="utf-8")
+        signed_manifest.write_text("{}", encoding="utf-8")
+        verified_params = {
+            (arm.arm_id, int(seed)): {
+                "path": str(signed_params), "manifest_path": str(signed_manifest),
+                "family": "min", "evaluation_mode": "rolling",
+                "param_policy": "base-finalist-best", "plan_action": "REUSE",
+            }
+            for arm in strategy_arms for seed in cfg.resolved_seeds
+        }
         with patch.object(
             robust, "_discover_registered_strategy_only_scientific_reuse", return_value={}
         ), patch.object(
-            robust, "_benchmark_parameter_plan_rows", return_value=([], [], {})
+            robust, "_benchmark_parameter_plan_rows", return_value=([], [], verified_params)
+        ), patch.object(
+            robust, "compute_strategy_param_scientific_sha256", return_value="a" * 64
+        ), patch.object(
+            robust, "resolve_strategy_param_evaluation_identity_sha256", return_value="b" * 64
         ), patch.object(
             robust, "build_multi_seed_robustness_contract", return_value=ready_contract
         ), patch.object(
