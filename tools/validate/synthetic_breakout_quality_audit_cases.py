@@ -785,6 +785,9 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         with patch.object(summary_cfg, "RESEARCH_SUMMARY_ROWS", remaining):
             current_definition = oracle_application.get_formal_oracle_definition("breakout_quality")
             updated = target_dl_overview.collect_target_dl_overview(root)
+            updated_arms = {row["strategy"] for row in updated["rows"] if row["strategy"]}
+            check_true("summary_unscored_controls_survive_removal_of_all_family_oracles",
+                       set(get_research_summary_baseline_arm_ids().values()) <= updated_arms)
             check_true("summary_removal_updates_target_model_and_both_strategy_modes",
                        removable not in {profile for _name, profile
                                          in get_breakout_quality_model_test_settings().model_profiles}

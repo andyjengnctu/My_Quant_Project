@@ -443,10 +443,17 @@ def validate_strategy_compare_settings_validation_stages_contract_case(_base_par
     )
     off_arm = next(arm for arm in settings.arms.values() if not arm.dl_enabled)
     duplicate_id = "SYNTHETIC_EXTRA_DL_OFF_BASELINE"
-    bad_group = replace(
+    # A retired duplicate is legitimate historical compatibility.  Only an
+    # *enabled* extra DL-off control violates the active comparison group.
+    retired_group = replace(
         settings,
         arms={**dict(settings.arms), duplicate_id: replace(off_arm, arm_id=duplicate_id, enabled=False)},
     )
+    bad_group = replace(
+        settings,
+        arms={**dict(settings.arms), duplicate_id: replace(off_arm, arm_id=duplicate_id, enabled=True)},
+    )
+    check("retired_group_duplicate_dl_off_allowed", None, error_message(retired_group))
 
     # Two faults together must yield the earlier canonical stage's first error.
     precedence = (

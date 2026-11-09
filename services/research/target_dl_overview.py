@@ -1174,7 +1174,13 @@ def collect_target_dl_overview(project_root: Path) -> dict[str, Any]:
     # AI: All configured research belongs in Summary. Some real model/strategy
     # contracts have no approved matching Oracle; never borrow another Target's
     # perfect-score result to fill these rows.
-    baseline_ids = set(oracle_baseline_arm_ids(definition.source).values())
+    # Oracle only emits a no-DL control while its family has an active
+    # hindsight treatment.  Summary membership is independent: after a model
+    # is retired, its still-enabled control remains visible as a normal
+    # (unscored) strategy row.  Skip only controls already emitted above.
+    emitted_oracle_controls = set(targets).intersection(
+        oracle_baseline_arm_ids(definition.source).values()
+    )
     for group in groups:
         if "oracle" in group:
             continue
@@ -1182,7 +1188,7 @@ def collect_target_dl_overview(project_root: Path) -> dict[str, Any]:
         items.extend(group.get("bindings", ()))
         for binding in items:
             arm_id = str(binding.get("arm_id") or "")
-            if arm_id in baseline_ids:
+            if arm_id in emitted_oracle_controls:
                 continue
             arm = STRATEGY_COMPARE_ARMS.get(arm_id, {})
             pair = binding.get("rank_model")
