@@ -23,6 +23,7 @@ from config.execution_policy import (
 )
 from core.breakout_quality_runtime import (
     FULLTRADE_FULLCYCLE_NETPNL_TARGET_ID,
+    DAILY_FULL_P20_FULLCYCLE_NETPNL_TARGET_ID,
     PREDICTED_UPSIDE_CONDITIONAL_LOW_ADVERSE_TARGET_ID,
     PREDICTED_SAFETY_CONDITIONAL_MFE_TARGET_ID,
     PREDICTED_SAFETY_CONTEXT_PURE_MFE_TARGET_ID,
@@ -410,6 +411,8 @@ DAILY_UNIVERSAL_JOINT_MFE_D40_QUADRANT_PROFILE = "daily_universal_joint_mfe_d40_
 DAILY_UNIVERSAL_NETPNL_POSITIVE_BINARY_PROFILE = "daily_universal_formal_mintrade_fullcycle_netpnl_positive_binary"
 FULLTRADE_NETPNL_POSITIVE_PROFILE = "daily_universal_formal_fulltrade_fullcycle_netpnl_positive_binary"
 FULLTRADE_NETPNL_RANK_PROFILE = "daily_universal_formal_fulltrade_fullcycle_netpnl_full_list_ndcg_pairwise"
+DAILY_FULL_P20_NETPNL_RANK_PROFILE = "daily_universal_full_p20_fulltrade_netpnl_full_list_ndcg_pairwise"
+DAILY_FULL_P20_NETPNL_POSITIVE_PROFILE = "daily_universal_full_p20_fulltrade_netpnl_positive_binary"
 TRUE_DAILY_MINTRADE_NETPNL_POSITIVE_PROFILE = "true_daily_universal_mintrade_fullcycle_netpnl_positive_binary"
 TRUE_DAILY_MINTRADE_NETPNL_PAIRWISE_PROFILE = "true_daily_universal_mintrade_fullcycle_netpnl_full_list_ndcg_pairwise"
 DAILY_UNIVERSAL_DIRECT_U40_HUBER_PROFILE = "daily_universal_full_horizon_mfe_minus_d40_huber"
@@ -1774,6 +1777,29 @@ _EXPERIMENT_PROFILES = {
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
         model_architecture="inception_time_v1",
         fit_contract_version=3,
+    ),
+    DAILY_FULL_P20_NETPNL_RANK_PROFILE: BreakoutQualityExperimentProfile(
+        name=DAILY_FULL_P20_NETPNL_RANK_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
+        continuous_target_id=DAILY_FULL_P20_FULLCYCLE_NETPNL_TARGET_ID,
+        loss_name="pairwise_logistic", epoch_selection_metric="mean_daily_spearman",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+        model_architecture="inception_time_v1",
+    ),
+    DAILY_FULL_P20_NETPNL_POSITIVE_PROFILE: BreakoutQualityExperimentProfile(
+        name=DAILY_FULL_P20_NETPNL_POSITIVE_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_NETPNL_POSITIVE_BINARY,
+        continuous_target_id=DAILY_FULL_P20_FULLCYCLE_NETPNL_TARGET_ID,
+        loss_name="netpnl_positive_cross_entropy",
+        epoch_selection_metric="positive_validation_cross_entropy",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+        model_architecture="inception_time_v1", fit_contract_version=1,
     ),
     FULLTRADE_NETPNL_RANK_PROFILE: BreakoutQualityExperimentProfile(
         name=FULLTRADE_NETPNL_RANK_PROFILE,
@@ -3562,6 +3588,29 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         score_semantic_id="daily_formal_mintrade_fullcycle_netpnl_positive_probability",
         selection_pit_authorized=True,
         current_time_validation_authorized=True,
+    ),
+    DAILY_FULL_P20_NETPNL_RANK_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=DAILY_FULL_P20_NETPNL_RANK_PROFILE,
+        model_research_id="MR-13DB",
+        experiment_name="MR-13DB Daily Full/P20 broker NetPnL ranker",
+        phase="13DB", trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description="Every eligible Daily stock-day under the PIT P20 19D Full execution parameter schedule: realized broker NetPnL at natural exit, NULL for unfilled, excluded or unmatured outcomes.",
+        objective_description="Independent 300x10 full-list Delta-NDCG pairwise Rank FIT against P20 Daily Full outcomes; P17 CZ and P18 CU labels are not interchangeable.",
+        metric_scope="all_stock_days_daily_full_p20_fullcycle_netpnl",
+        score_semantic_id="daily_full_p20_fullcycle_netpnl_rank",
+        pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        selection_pit_authorized=True, current_time_validation_authorized=True,
+    ),
+    DAILY_FULL_P20_NETPNL_POSITIVE_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=DAILY_FULL_P20_NETPNL_POSITIVE_PROFILE,
+        model_research_id="MR-13DC",
+        experiment_name="MR-13DC Daily Full/P20 NetPnL>0 classifier",
+        phase="13DC", trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description="Identical PIT P20 full-cycle raw broker NetPnL as MR-13DB; positive iff settled NetPnL>0; no-fill/unmatured=NULL.",
+        objective_description="Independent two-class cross-entropy P(NetPnL>0) FIT; score used only for Positive admission at 0.5, never as Rank.",
+        metric_scope="all_stock_days_daily_full_p20_fullcycle_netpnl_positive_binary",
+        score_semantic_id="daily_full_p20_fullcycle_netpnl_positive_probability",
+        selection_pit_authorized=True, current_time_validation_authorized=True,
     ),
     FULLTRADE_NETPNL_RANK_PROFILE: ContinuousRankerResearchSpec(
         profile_name=FULLTRADE_NETPNL_RANK_PROFILE,

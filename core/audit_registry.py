@@ -243,6 +243,7 @@ _ORACLE_POSITIVE_OUTPUT_BY_RECIPE = {
     "daily_trade_path_net_pnl": "netpnl_positive_probability_v1",
     "daily_trade_path_true_net_pnl": "netpnl_positive_probability_v1",
     "daily_trade_path_full_net_pnl": "netpnl_positive_probability_v1",
+    "daily_trade_path_daily_full_p20_net_pnl": "netpnl_positive_probability_v1",
 }
 
 
@@ -621,6 +622,7 @@ def oracle_supervised_target_id(comparison):
         DAILY_FORMAL_MINTRADE_FULLCYCLE_NETPNL_TARGET_ID,
         TRUE_DAILY_MINTRADE_FULLCYCLE_NETPNL_TARGET_ID,
         FULLTRADE_FULLCYCLE_NETPNL_TARGET_ID,
+        DAILY_FULL_P20_FULLCYCLE_NETPNL_TARGET_ID,
     )
     recipe = comparison.get("score")
     if comparison.get("horizon_mode") == "full_trade_cycle":
@@ -629,6 +631,7 @@ def oracle_supervised_target_id(comparison):
             "daily_trade_path_net_pnl": DAILY_FORMAL_MINTRADE_FULLCYCLE_NETPNL_TARGET_ID,
             "daily_trade_path_true_net_pnl": TRUE_DAILY_MINTRADE_FULLCYCLE_NETPNL_TARGET_ID,
             "daily_trade_path_full_net_pnl": FULLTRADE_FULLCYCLE_NETPNL_TARGET_ID,
+            "daily_trade_path_daily_full_p20_net_pnl": DAILY_FULL_P20_FULLCYCLE_NETPNL_TARGET_ID,
         }.get(recipe)
     if recipe == "daily_trade_path_net_r":
         return (DAILY_FORMAL_MINTRADE40_NETR_TARGET_ID

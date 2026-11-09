@@ -1119,7 +1119,9 @@ class DailyEntryStrategyCases(TestCase):
                 selected, base_arm=base, exact_arm=exact)
         self.assertNotIn("daily_execution_contract", names["C96"])
         self.assertNotIn("daily_execution_contract", names["C161"])
-        self.assertEqual(names["C166"]["daily_execution_contract"], DAILY_EXECUTION_ATR_LIMIT)
+        # P19 C166/C167 are retired; the active P20 oracle still uses the
+        # independently registered full-filter execution policy.
+        self.assertNotIn("C166", names)
         self.assertEqual(names["C168"]["daily_execution_contract"], DAILY_EXECUTION_FULL_FILTERS)
 
     def test_daily_full_signal_filters_are_real_and_other_modes_preserved(self):
@@ -1214,28 +1216,33 @@ class DailyEntryStrategyCases(TestCase):
 
     def test_new_daily_direct_arms_have_separate_control_and_oracle_truth(self):
         from core.strategy_compare_registry import STRATEGY_COMPARE_ARMS
-        live = {
-            "C166": ("daily_min_four_best_broker_cash_rolling_experiment", False),
-            "C167": ("daily_min_four_best_broker_cash_rolling_experiment", True),
-            "C168": ("daily_full_nineteen_best_broker_cash_rolling_experiment", False),
-            "C169": ("daily_full_nineteen_best_broker_cash_rolling_experiment", True),
+        from core.research_summary import get_research_summary_strategy_arm_ids
+        active = set(get_research_summary_strategy_arm_ids())
+        for retired in ("C166", "C167"):
+            self.assertNotIn(retired, active)
+            self.assertIn(retired, STRATEGY_COMPARE_ARMS)  # immutable history
+        expectations = {
+            "C168": ("daily_full_nineteen_best_broker_cash_rolling_experiment", None),
+            "C169": ("daily_full_nineteen_best_broker_cash_rolling_experiment", "CONT13CJ_ROLL"),
+            "C172": ("daily_full_nineteen_best_broker_cash_rolling_experiment", "CONT13DB_ROLL"),
+            "C173": ("daily_full_nineteen_best_broker_cash_rolling_experiment", "CONT13DB_ROLL"),
         }
-        for arm_id, (param_source, dl_enabled) in live.items():
+        for arm_id, (param_source, model) in expectations.items():
+            self.assertIn(arm_id, active)
             arm = STRATEGY_COMPARE_ARMS[arm_id]
             self.assertEqual(arm["param_source"], param_source)
             self.assertEqual(arm["entry_strategy"], "Daily")
-            self.assertEqual(arm["dl_enabled"], dl_enabled)
-            self.assertEqual(arm["dl_id"], "CONT13CJ_ROLL" if dl_enabled else None)
-            if dl_enabled:
+            self.assertEqual(arm["dl_id"], model)
+            self.assertEqual(bool(arm["dl_enabled"]), model is not None)
+            if model is not None:
                 self.assertIn("no-k-no-r0", arm["dl_runtime_mode"])
-        # Witness registrations are immutable but never enter current execution.
-        # Current inventory is generated from the same canonical registry.
-        from config.research_summary import RESEARCH_SUMMARY_ROWS
-        bindings = str(RESEARCH_SUMMARY_ROWS)
-        for name in ("C166", "C167", "C168", "C169"):
-            self.assertIn(name, bindings)
-        self.assertNotIn("C170", bindings)
-        self.assertNotIn("C171", bindings)
+        positive = STRATEGY_COMPARE_ARMS["C172"]["dl_runtime_options"]
+        self.assertEqual(positive["positive_dl_id"], "CONT13DC_ROLL")
+        self.assertEqual(positive["positive_probability_threshold"], 0.5)
+        self.assertNotIn("positive_dl_id", STRATEGY_COMPARE_ARMS["C173"]["dl_runtime_options"])
+        # C170/C171 stay inactive, registered Oracle-only witnesses.
+        self.assertNotIn("C170", active)
+        self.assertNotIn("C171", active)
         self.assertEqual(STRATEGY_COMPARE_ARMS["C160"]["param_source"],
                          "daily_min_best_broker_cash_rolling_experiment")
 

@@ -910,3 +910,17 @@ Decision：`USER_AUTHORIZED_CURRENT_RETIREMENT / HISTORICAL_IDENTITIES_RETAINED 
 - **證據界線**：本輪為新 science/執行契約與合成回歸測試；沒有實際市場上 P19/P20 的 300-trial/Fold 最佳化、Rolling/Robustness 回放或四 Seed Oracle 等價驗收。CJ FIT/PIT 模型可依現行完整 scientific identity REUSE，不宣稱是 P19/P20 標籤重新訓練，也不宣稱任何新 RoMD 或 Trading promotion。
 
 Decision：`P18_RETAINED / P19_DAILY_MIN_4D / P20_DAILY_FULL_19D / NO_BREAKOUT_ENTRY / SAME_FULL_PARAM_RANGES / TWO_DIRECT_CJ_ARMS_AND_NO_DL_CONTROLS / ISOLATED_PARAMETER_AND_REPLAY_IDS / P19_P20_REAL_MARKET_VALIDATION_PENDING`。
+
+
+### 2026-11-09 — Corrected P20 FullTrade DL and Strategy identities
+
+| Identity | Immutable scientific meaning | Current status |
+|---|---|---|
+| `MR-13DB` / `DL-CONT13DB-ROLL` | Daily Full/P20 19D all-eligible-stock-day natural-exit broker NetPnL continuous Rank; separate PIT history+current Daily Full P20 Optimizer teacher seed42; independent FIT | NEW / FIT_PENDING |
+| `MR-13DC` / `DL-CONT13DC-ROLL` | Same P20 economic target, independent categorical cross-entropy `P(NetPnL>0)`, unfilled/unmatured NULL | NEW / FIT_PENDING |
+| `C172` | Daily (Full/P20) Direct; DB Rank + DC Positive 0.5; control C168 | NEW / REPLAY_PENDING |
+| `C173` | Daily (Full/P20) Direct; DB Rank alone; control C168 | NEW / REPLAY_PENDING |
+| `C166` / `C167` | Old Daily (Min/P19) No DL / T40 Direct (reported Rolling RoMD 1.07 / 4.11) | RETIRED, historical immutable |
+| `C168` / `C169` | Existing Daily (Full/P20) No DL / CJ T40 Direct (reported Rolling RoMD 6.29 / 3.71) | ACTIVE, unchanged |
+
+`DailyUniversal_FullTrade_NetPnL` truth is NOT `FullTrade_NetPnL` P17 CZ/DA (Breakout Full), and NOT `DailyUniversal_MinTrade_NetPnL` P18 CU/CT. New model FIT artifacts must be built from the canonical P20 economic teacher, never aliased. No model or strategy is automatically promoted to Trading.

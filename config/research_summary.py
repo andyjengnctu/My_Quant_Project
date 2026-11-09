@@ -18,12 +18,37 @@ RESEARCH_SUMMARY_ROWS = (
     {'arm_id': 'C161', 'oracle_parameter_family': 'daily_min'},
     # P18 remains active and unchanged. New Daily scientific parameter lineages
     # reuse the approved T40 perfect-score recipe, never the P16/P18 Replay.
-    {'arm_id': 'C166', 'oracle_parameter_family': 'daily_min_p19'},
-    {'oracle_template_arm_id': 'C146', 'parameter_family': 'daily_min_p19',
-     'strategy': 'Daily',
-     'bindings': ({'arm_id': 'C167',
-                   'rank_model': ('MR-13CJ', 'daily_universal_terminal_mae_gated_t40_full_list_ndcg_pairwise')},)},
+    # P19 C166/C167 are retired; original research results remain in the
+    # Experiment Log/Registry and are never reused by P20 training.
     {'arm_id': 'C168', 'oracle_parameter_family': 'daily_full_p20'},
+    # New economic target and TWO independently trained DLs for P20.
+    # Neither Breakout Full/P17 CZ/DA nor Daily Min/P18 CU/CT matches this
+    # 19D Daily Full execution geometry. Only Direct is an active treatment.
+    # Invisible canonical Exact recipe for two Direct P20 treatments; this
+    # registers a truth source only and does NOT reactivate an Exact strategy.
+    {'enabled': False,
+     'oracle': {'target': 'TrueDailyUniversal_FullTrade_NetPnL',
+                'description': 'Signed 19D P20 full-cycle next-session Daily broker NetPnL truth',
+                'score': 'daily_trade_path_daily_full_p20_net_pnl',
+                'provider': 'daily_trade40_profile',
+                'horizon_mode': 'full_trade_cycle', 'selector': 'exact',
+                'strategy': 'Daily', 'parameter_family': 'daily_full_p20'}},
+    {'oracle': {'target': 'TrueDailyUniversal_FullTrade_NetPnL_Direct',
+                'description': 'P20 FullTrade NetPnL rank, independent MR-13DB, Direct',
+                'score_source': 'TrueDailyUniversal_FullTrade_NetPnL',
+                'selector': 'direct', 'strategy_arm_id': 'C173',
+                'strategy': 'Daily', 'parameter_family': 'daily_full_p20'},
+     'bindings': ({'arm_id': 'C173',
+                   'rank_model': ('MR-13DB', 'daily_universal_full_p20_fulltrade_netpnl_full_list_ndcg_pairwise')},)},
+    {'oracle': {'target': 'TrueDailyUniversal_FullTrade_NetPnL_Positive_Direct',
+                'description': 'Same P20 FullTrade NetPnL rank plus independent MR-13DC Positive head, Direct',
+                'score_source': 'TrueDailyUniversal_FullTrade_NetPnL',
+                'selector': 'direct', 'positive_output': 'netpnl_positive_probability_v1',
+                'strategy_arm_id': 'C172', 'strategy': 'Daily',
+                'parameter_family': 'daily_full_p20'},
+     'bindings': ({'arm_id': 'C172',
+                   'rank_model': ('MR-13DB', 'daily_universal_full_p20_fulltrade_netpnl_full_list_ndcg_pairwise'),
+                   'positive_model': ('MR-13DC', 'daily_universal_full_p20_fulltrade_netpnl_positive_binary')},)},
     {'oracle_template_arm_id': 'C146', 'parameter_family': 'daily_full_p20',
      'strategy': 'Daily',
      'bindings': ({'arm_id': 'C169',

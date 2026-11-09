@@ -110,6 +110,29 @@ _NON_EXECUTABLE_MODEL_WORKFLOW_PREFIXES = (
 _ORACLE_PRICE_CONFIGURATION_SHA256 = (
     "e82d7ac8fe0d9c9879a0e9afa5991c448b0a0d119a5de2e84493cf3615c8f82f"
 )
+# The latest accepted price-score closure before adding Daily Full/P20 DB/DC.
+# Its four effective price providers and complete price/config source policy
+# are independently attested below.  Only *declarative* model/Target
+# registration files are scoped; any shared price/feature implementation or
+# changed effective provider/configuration keeps a physical, invalidating SHA.
+# This prevents adding an unrelated model from wiping existing Oracle REUSE.
+_PRE_P20_PRICE_PROVIDER_CONTRACT_SHA256 = (
+    "f1fe046e94ab5e9c4dd3e9621b12c27067ea5128a4d605dc19dad3b08a136b10"
+)
+_PRE_P20_PRICE_CONFIGURATION_SHA256 = (
+    "35b86753d5a97c9bd48f9b7ac707872c5e9ef6ad56c4acda381f35cc53c8a9da"
+)
+_PRE_P20_DECLARATIVE_SOURCE_SHA256 = {
+    "core/breakout_quality_registry.py":
+        "4c6affdd79c23c2edea29bd57faa821144aa1b5da86b7c78eba2563eb6c01857",
+    "core/breakout_quality_runtime.py":
+        "7b33729c8f47545cd555af0c206357c7e5041e1a71df9dd8b617633ddf39f9f2",
+    # Only non-executable model-selection declarations in this configuration
+    # are excluded by the _oracle_price_configuration_sha256 projection.
+    "config/breakout_quality.py":
+        "d39ea7ae6d35d5a124f3defa85bffa5962474cf3c0a15becb3feb135adc3a381",
+}
+
 _LEGACY_PRICE_REGISTRY_SOURCE_SHA256 = {
     "core/breakout_quality_registry.py": "538a9508b0522566e4944f727f09edd6015eaf8cb63a80454355710c8a62d4a3",
     "core/breakout_quality_runtime.py": "84c8bbf9aa3fe35f9a9552e6881fee6b859a60ce5eee71932c536fda44372749",
@@ -195,6 +218,23 @@ def oracle_daily_source_fingerprint(root: Path | None = None) -> str:
             )
         except (ValueError, KeyError, TypeError):
             attested = False
+    # A second, scope-certified equivalence is needed for new unrelated
+    # research identities. Unlike a source-SHA whitelist it checks the
+    # *effective* Oracle price-provider and configuration contracts every
+    # invocation, and has no exemption for executable market/feature code.
+    # The recorded digests are those of the immediately previous, live
+    # producer; therefore no existing valid receipt changes identity.
+    pre_p20_attested = False
+    if root.resolve() == code_root.resolve():
+        try:
+            pre_p20_attested = (
+                _oracle_price_provider_contract_sha256()
+                == _PRE_P20_PRICE_PROVIDER_CONTRACT_SHA256
+                and _oracle_price_configuration_sha256()
+                == _PRE_P20_PRICE_CONFIGURATION_SHA256
+            )
+        except (ValueError, KeyError, TypeError):
+            pre_p20_attested = False
     source_digest = sha256()
     for relative in _DAILY_SCORE_SOURCE_MODULES:
         source_file = root / relative
@@ -209,6 +249,8 @@ def oracle_daily_source_fingerprint(root: Path | None = None) -> str:
         source_sha = physical_sha
         if attested and relative in _LEGACY_PRICE_REGISTRY_SOURCE_SHA256:
             source_sha = _LEGACY_PRICE_REGISTRY_SOURCE_SHA256[relative]
+        elif pre_p20_attested and relative in _PRE_P20_DECLARATIVE_SOURCE_SHA256:
+            source_sha = _PRE_P20_DECLARATIVE_SOURCE_SHA256[relative]
         elif (attested and relative == "filters/breakout_quality/daily_ranker_data.py"
               and physical_sha in {
                   _AUDITED_NETPNL_DIAGNOSTIC_ONLY_REVISION[0],

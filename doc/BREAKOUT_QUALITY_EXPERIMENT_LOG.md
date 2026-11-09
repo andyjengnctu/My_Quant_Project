@@ -5372,7 +5372,9 @@ Assessment: `USER_REPORTED_ROLLING_RESULT_AVAILABLE / FULL_HORIZON_MAE_SMALL_PAI
 - **對照**：P18 3D Daily Min 暫不退役。P19 4D Daily Min、P20 19D Daily Full 僅改變參數搜尋與下游 Daily 買入限價／非突破通用濾網；T40 的合法 PIT rank 仍使用 `MR-13CJ`。新增 `C167`／`C169` Direct 各以相同家族的 `C166`／`C168` No-DL Default 為控制組。
 - **執行定義**：同一 Broker-Cash、同一資訊日與下一交易日成交規則；P19/P20 的買入上限為資訊日 `Close + ATR × atr_buy_tol`，P20 依 PIT 資訊日 BB／量能／EMA／當日報酬／ATR% 判斷候選與 KC 原出場語意；不使用 Breakout 新高、原訊號延續或停損再進場。P18 三維固定舊收盤限價契約與已登錄參數指紋不變。
 - **後續驗證**：本輪無市場資料下合法六 Fold 300 Trials 實際搜尋及多 Seed Replay，因此 **P19/P20 Oracle、Rolling、Robustness RoMD 皆為未完成**，不得以 P18 舊結果補值或宣稱已完成 E13 等價；新的兩家族皆由既有 Optimizer 前置建立並依科學完整簽章驗證 REUSE。
+- **2026-11-09 使用者結果登錄與新科學身分修正：** 使用者提供的迭代 Rolling RoMD 為 C166=1.07、C167=4.11、C168=6.29、C169=3.71；僅為 User-Reported OOS，非本輪重新回放。C166/C167 退出現行研究清單，歷史身分及成果保留；C168/C169 與 P18 均保留。新 `C172` 是 `DailyUniversal_FullTrade_NetPnL_Positive × Daily (Full/P20) Direct`，使用新 `MR-13DB` Rank 與獨立 `MR-13DC` Positive；新 `C173` 是同一 P20 FullTrade 目標的 DB-only Direct。DB/DC 共享 19D P20 獨立歷史與現行 Optimizer teacher、合法成熟的 Full-cycle Broker-Cash NetPnL，不能重用 P17 CZ/DA 或 P18 CU/CT 的 FIT/真值；Oracle 和新 Replay 結果未完成，任何 RoMD 必須保持缺值。
 
 ## 6. 後續新增規則
 
 **只有新科學證據或舊科學證據有效性更正才能增加本文件內容。** 記錄必須有實驗／Target 身分、期間／Seed、控制變數、原始結果、負結果與決策，並指向正式證據。沒有市場／模型結果的工程測試、提交紀錄、打包、格式調整或一次性 Audit 清理，不可追加研究章節。本文件不再生成封存副本或研究待辦。
+

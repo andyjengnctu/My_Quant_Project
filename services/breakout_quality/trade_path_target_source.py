@@ -149,7 +149,43 @@ def _full_history_execute(*, project_root: str | Path, seed: int):
     return prepare_full_history(project_root=project_root, seed=seed, authorized=True)
 
 
+def _daily_full_p20_loader(*, project_root: str | Path, seed: int, authorized_build: bool):
+    from services.breakout_quality.daily_full_p20_training_source import resolve_loader_kwargs
+    return resolve_loader_kwargs(project_root=project_root, seed=seed,
+                                 authorized_build=authorized_build)
+
+
+def _daily_full_p20_history_inspect(*, project_root: str | Path, seed: int):
+    from services.breakout_quality.daily_full_p20_training_source import inspect_history
+    return inspect_history(project_root=project_root, seed=seed)
+
+
+def _daily_full_p20_history_execute(*, project_root: str | Path, seed: int):
+    from services.breakout_quality.daily_full_p20_training_source import execute_history
+    return execute_history(project_root=project_root, seed=seed)
+
+
+def _daily_full_p20_current_inspect(*, project_root: str | Path, seed: int):
+    from services.breakout_quality.daily_full_p20_training_source import inspect_current
+    return inspect_current(project_root=project_root, seed=seed)
+
+
+def _daily_full_p20_current_execute(*, project_root: str | Path, seed: int):
+    from services.breakout_quality.daily_full_p20_training_source import execute_current
+    return execute_current(project_root=project_root, seed=seed)
+
+
 _TRADE_PATH_SOURCES: dict[str, TradePathSource] = {
+    "daily_full_p20_seed42_fullcycle_netpnl": TradePathSource(
+        contract_kind="daily_full_p20_seed42_fullcycle_netpnl",
+        loader=_daily_full_p20_loader,
+        dependencies=(
+            TeacherDependency("daily_full_p20_historical_teacher", "optimizer_daily_full_p20_historical_teacher", 30,
+                              _daily_full_p20_history_inspect, _daily_full_p20_history_execute),
+            TeacherDependency("daily_full_p20_current_teacher", "optimizer_daily_full_p20_current_teacher", 40,
+                              _daily_full_p20_current_inspect, _daily_full_p20_current_execute),
+        ),
+    ),
     "formal_seed_mintrade40_netr": TradePathSource(
         contract_kind="formal_seed_mintrade40_netr",
         loader=_min40_loader,
