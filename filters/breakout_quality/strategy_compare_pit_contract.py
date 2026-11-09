@@ -89,6 +89,15 @@ def _is_auto_contract_date(value: Any) -> bool:
     return str(value or "").strip().lower() == "auto"
 
 
+class StrategyComparePITPeriodMismatch(ValueError):
+    """Valid but different explicit score interval; FIT may still be shared.
+
+    Only an explicitly requested interval versus a published PIT interval is
+    eligible for isolation. An internally inconsistent auto-resolution remains
+    a hard contract failure, not a fallback trigger.
+    """
+
+
 def validate_selection_pit_score_period(
     manifest: dict[str, Any],
     *,
@@ -119,7 +128,7 @@ def validate_selection_pit_score_period(
         else:
             required_start = _normalize_contract_date(comparison_start)
             if actual_start != required_start:
-                raise ValueError(
+                raise StrategyComparePITPeriodMismatch(
                     "Strategy Compare PIT比較起始日不一致: "
                     f"expected={required_start}, actual={actual_start}"
                 )
@@ -139,7 +148,7 @@ def validate_selection_pit_score_period(
         else:
             required_end = _normalize_contract_date(comparison_end)
             if actual_end != required_end:
-                raise ValueError(
+                raise StrategyComparePITPeriodMismatch(
                     "Strategy Compare PIT比較結束日不一致: "
                     f"expected={required_end}, actual={actual_end}"
                 )
@@ -260,6 +269,7 @@ __all__ = [
     "load_validated_selection_pit_strategy_compare_contract",
     "resolve_strategy_compare_selection_pit_bundle_dir",
     "resolve_strategy_compare_selection_pit_contract_override",
+    "StrategyComparePITPeriodMismatch",
     "validate_selection_pit_score_period",
     "validate_selection_pit_fold_anchor_identity",
 ]

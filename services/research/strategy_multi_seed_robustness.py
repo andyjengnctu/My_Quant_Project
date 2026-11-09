@@ -2,8 +2,9 @@
 
 The user-facing entry lives under Strategy Compare, while model fitting is still
 performed by the canonical continuous-ranker trainer in an isolated subprocess.
-Only aggregate seed metrics are persistent by default; per-seed model/score/replay
-artifacts are temporary work products and are removed after their metrics are stored.
+Strategy-local replay/score workspaces are transient by default. Authorized
+Rolling Model Robustness seeds instead publish to the canonical Model Research
+FIT/SCORE/Audit owner, where [3] and [5] can independently verify/reuse them.
 """
 
 from __future__ import annotations
@@ -146,6 +147,9 @@ from filters.breakout_quality.strategy_result_state import (
     resolve_strategy_result_state,
 )
 from filters.breakout_quality.strategy_compare_contracts import COMPARISON_MODE_SCORE_RANKING
+from filters.breakout_quality.strategy_compare_pit_contract import (
+    StrategyComparePITPeriodMismatch,
+)
 from services.research.strategy_compare_replay import (
     _load_reusable_no_filter_baseline,
 )
@@ -159,6 +163,7 @@ from filters.breakout_quality.strategy_compare_dl_artifacts import (
 from filters.breakout_quality.strategy_rule_policies import ALL_RULE_FILTERS_OFF_OVERRIDES
 from services.research.strategy_compare_training import (
     inspect_reusable_model_research_rolling_score,
+    resolve_shared_model_rolling_robustness_dirs,
     run_strategy_compare_training_unit,
     validate_strategy_compare_training_artifacts,
 )
@@ -4234,13 +4239,14 @@ def _resolved_period(settings, status: dict[str, Any]) -> tuple[str, str]:
 
 
 def _train_one_unit(job: dict[str, Any]) -> dict[str, Any]:
-    """Run one robustness seed through the shared single/multi training lifecycle."""
+    """Train/reuse a seed, sharing only identical Rolling robustness scores.
+
+    A strategy with a different explicit evaluation interval uses its isolated
+    SCORE/Audit publication, while the PIT owner still imports matching FIT.
+    """
 
     settings = job["settings"]
     seed = int(job["seed"])
-    model_dir = Path(job["model_dir"]).resolve()
-    research_dir = Path(job["research_dir"]).resolve()
-    train_log_path = research_dir / "train.log"
     dl_id = str(job["dl_id"])
     dl = settings.dl_sources[dl_id]
     workflow = get_breakout_quality_workflow_settings(
@@ -4252,14 +4258,51 @@ def _train_one_unit(job: dict[str, Any]) -> dict[str, Any]:
         if job.get("checkpoint_cache_root") in (None, "")
         else Path(str(job["checkpoint_cache_root"])).resolve()
     )
-    started = time.perf_counter()
-    artifacts = None
-    candidates = [(model_dir, research_dir)]
+    canonical = bool(job.get("canonical_model_rolling_robustness"))
+    model_dir = Path(job["model_dir"]).resolve()
+    research_dir = Path(job["research_dir"]).resolve()
+    local_model_dir = Path(str(job.get("transient_model_dir") or model_dir)).resolve()
+    local_research_dir = Path(str(job.get("transient_research_dir") or research_dir)).resolve()
     legacy_model = job.get("legacy_model_dir")
-    if legacy_model and Path(legacy_model).resolve() != model_dir:
-        candidates.append((Path(legacy_model).resolve(), research_dir))
-    for candidate_model, candidate_research in candidates:
-        if not bool(job.get("reuse_completed")) or not candidate_model.is_dir():
+    started = time.perf_counter()
+
+    def isolated_score_namespace() -> None:
+        nonlocal canonical, model_dir, research_dir
+        if not canonical:
+            return
+        if model_dir == local_model_dir:
+            raise RuntimeError("Robustness evaluation period differs but isolated score namespace is absent")
+        canonical = False
+        model_dir = local_model_dir
+        research_dir = local_research_dir
+
+    # The FIT version owner must decide whether an existing publication can be
+    # consumed. Explicit upgrades are rebuilt by the producer, never treated
+    # as a completed reusable score; same-version corruption remains BLOCKED.
+    if is_selection_pit:
+        from services.breakout_quality.fitted_model_artifacts import (
+            published_fit_contract_version_state,
+        )
+        version_state, version_reason = published_fit_contract_version_state(
+            experiment_profile=str(dl.experiment_profile),
+            publication_dir=model_dir, rolling=True,
+        )
+        if version_state == "BLOCKED":
+            raise RuntimeError(
+                f"Existing model source failed FIT version contract: {dl_id}/seed={seed}: "
+                f"{version_reason}"
+            )
+    else:
+        version_state = "CURRENT"
+
+    artifacts = None
+    canonical_period_mismatch = False
+    candidate_dirs = [(model_dir, research_dir)]
+    if legacy_model and not canonical and Path(legacy_model).resolve() != model_dir:
+        candidate_dirs.append((Path(legacy_model).resolve(), research_dir))
+    for candidate_model, candidate_research in candidate_dirs:
+        if (not bool(job.get("reuse_completed")) or version_state == "UPGRADE_REQUIRED"
+                or not candidate_model.is_dir()):
             continue
         if not is_selection_pit and not candidate_research.is_dir():
             continue
@@ -4271,9 +4314,19 @@ def _train_one_unit(job: dict[str, Any]) -> dict[str, Any]:
                 comparison_end=str(job["comparison_end"]),
                 point_in_time_dir_override=(candidate_model if is_selection_pit else None),
             )
+        except StrategyComparePITPeriodMismatch as exc:
+            if not canonical:
+                raise RuntimeError(
+                    f"Existing isolated model SCORE period differs: {dl_id}/seed={seed}"
+                ) from exc
+            # Research [3] scores are valid for their own interval. Do not
+            # overwrite/crop them for this Strategy Compare interval.
+            job["model_reuse_miss_reason"] = str(exc)
+            canonical_period_mismatch = True
+            isolated_score_namespace()
+            break
         except FileNotFoundError as exc:
-            # Missing aggregates can be resumed by the canonical fold producer.
-            # The consumer never resets the existing partial workspace.
+            # Missing score or SOP is resumable by the same canonical owner.
             job["model_reuse_miss_reason"] = str(exc)
             continue
         except ValueError as exc:
@@ -4282,17 +4335,45 @@ def _train_one_unit(job: dict[str, Any]) -> dict[str, Any]:
                 "no artifact was deleted and no replacement FIT was started"
             ) from exc
         break
-    if artifacts is None and bool(job.get("reuse_completed")) and is_selection_pit:
+
+    if (artifacts is None and bool(job.get("reuse_completed")) and is_selection_pit
+            and version_state != "UPGRADE_REQUIRED" and not canonical_period_mismatch):
         artifacts, reuse_reason = inspect_reusable_model_research_rolling_score(
-            project_root=PROJECT_ROOT,
-            source=dl,
-            workflow=workflow,
-            seed=seed,
+            project_root=PROJECT_ROOT, source=dl, workflow=workflow, seed=seed,
             comparison_start=str(job["comparison_start"]),
             comparison_end=str(job["comparison_end"]),
         )
         if artifacts is None:
             job["model_reuse_miss_reason"] = reuse_reason
+
+    # A differently bounded canonical Research score cannot be consumed as
+    # Strategy score, but an already completed *isolated* Strategy score can.
+    if (artifacts is None and canonical_period_mismatch
+            and bool(job.get("reuse_completed")) and local_model_dir.is_dir()):
+        local_version, local_reason = published_fit_contract_version_state(
+            experiment_profile=str(dl.experiment_profile),
+            publication_dir=local_model_dir, rolling=True,
+        )
+        if local_version == "BLOCKED":
+            raise RuntimeError(
+                f"Existing isolated SCORE FIT version contract failed: {local_reason}"
+            )
+        if local_version == "CURRENT":
+            try:
+                artifacts = validate_strategy_compare_training_artifacts(
+                    project_root=PROJECT_ROOT, source=dl, workflow=workflow, seed=seed,
+                    model_dir=local_model_dir, research_dir=local_research_dir,
+                    comparison_start=str(job["comparison_start"]),
+                    comparison_end=str(job["comparison_end"]),
+                    point_in_time_dir_override=local_model_dir,
+                )
+            except FileNotFoundError as exc:
+                job["model_reuse_miss_reason"] = str(exc)
+            except ValueError as exc:
+                raise RuntimeError(
+                    f"Existing isolated SCORE failed identity/integrity validation: "
+                    f"{dl_id}/seed={seed}"
+                ) from exc
     if artifacts is not None:
         artifacts["current_training_elapsed_sec"] = 0.0
         artifacts["model_prediction_metrics"] = (
@@ -4304,42 +4385,55 @@ def _train_one_unit(job: dict[str, Any]) -> dict[str, Any]:
             "wall_elapsed_sec": round(time.perf_counter() - started, 3),
         }
 
-    # The shared Dataset is seed-agnostic, but actual MinTrade targets require
-    # one verified 2014-2020 historical Optimizer teacher for *this* benchmark
-    # seed.  A missing teacher is prepared only after model-score REUSE has
-    # failed, and before touching any resumable PIT score or checkpoint.
+    # Dataset is shared, but MinTrade/FullTrade targets require the verified
+    # historical per-seed Optimizer teacher before any new PIT score builds.
     _prepare_trade_path_teacher_for_model(
         experiment_profile=str(dl.experiment_profile), seed=seed,
         authorized=bool(settings.preparation.auto_prepare),
     )
 
-    # The canonical producer owns partial-fold reconciliation and integrity.
-    # The consumer never unlinks an aggregate/manifest or resets a model tree.
-    model_dir.mkdir(parents=True, exist_ok=True)
-    research_dir.mkdir(parents=True, exist_ok=True)
+    def produce_in_current_namespace() -> dict[str, Any]:
+        model_dir.mkdir(parents=True, exist_ok=True)
+        research_dir.mkdir(parents=True, exist_ok=True)
+        return run_strategy_compare_training_unit(
+            project_root=PROJECT_ROOT,
+            source=dl,
+            workflow=workflow,
+            seed=seed,
+            model_dir=model_dir,
+            research_dir=research_dir,
+            log_path=research_dir / "train.log",
+            comparison_start=str(job["comparison_start"]),
+            comparison_end=str(job["comparison_end"]),
+            point_in_time_dir_override=(model_dir if is_selection_pit else None),
+            checkpoint_cache_root=checkpoint_cache_root,
+            model_output_dir=(model_dir if not is_selection_pit else None),
+            research_output_dir=(research_dir if not is_selection_pit else None),
+            registry=job["trainer_registry"],
+            registry_lock=job["trainer_registry_lock"],
+            registry_key=str(job["trainer_key"]),
+            failure_prefix=(
+                f"multi-seed模型訓練失敗: dl_id={dl_id}, seed_index={job['seed_order']}"
+            ),
+            resume=True,
+            canonical_model_rolling_robustness=canonical,
+            fit_source_pit_dirs=(
+                (Path(str(legacy_model)).resolve(),)
+                if canonical and legacy_model else ()
+            ),
+        )
 
-    trained = run_strategy_compare_training_unit(
-        project_root=PROJECT_ROOT,
-        source=dl,
-        workflow=workflow,
-        seed=seed,
-        model_dir=model_dir,
-        research_dir=research_dir,
-        log_path=train_log_path,
-        comparison_start=str(job["comparison_start"]),
-        comparison_end=str(job["comparison_end"]),
-        point_in_time_dir_override=(model_dir if is_selection_pit else None),
-        checkpoint_cache_root=checkpoint_cache_root,
-        model_output_dir=(model_dir if not is_selection_pit else None),
-        research_output_dir=(research_dir if not is_selection_pit else None),
-        registry=job["trainer_registry"],
-        registry_lock=job["trainer_registry_lock"],
-        registry_key=str(job["trainer_key"]),
-        failure_prefix=(
-            f"multi-seed模型訓練失敗: dl_id={dl_id}, seed_index={job['seed_order']}"
-        ),
-        resume=True,
-    )
+    try:
+        trained = produce_in_current_namespace()
+    except StrategyComparePITPeriodMismatch:
+        if not canonical:
+            raise
+        # Auto-resolved canonical score is complete, but its period differs
+        # from the strategy's explicit interval. Keep it for [3] and produce
+        # the separate [5] score using only the shared fitting cache.
+        isolated_score_namespace()
+        trained = produce_in_current_namespace()
+
     artifacts = dict(trained["artifacts"])
     artifacts["current_training_elapsed_sec"] = float(trained.get("elapsed_sec", 0.0) or 0.0)
     artifacts["model_prediction_metrics"] = (
@@ -4397,6 +4491,19 @@ def _training_units(
             source_root = model_root
             if contract is not None:
                 source_root = _model_source_work_root(contract, str(dl_id))
+            local_model_dir = source_root / source_unit / "model"
+            local_research_dir = run_root / "work" / "training" / source_unit
+            shared_dirs = resolve_shared_model_rolling_robustness_dirs(
+                project_root=PROJECT_ROOT, source=settings.dl_sources[str(dl_id)],
+                workflow=get_breakout_quality_workflow_settings(
+                    experiment_profile=str(settings.dl_sources[str(dl_id)].experiment_profile),
+                ), seed=int(seed), benchmark_id=benchmark_id,
+                comparison_start=str(comparison_start),
+            )
+            model_dir, research_dir = (
+                shared_dirs if shared_dirs is not None
+                else (local_model_dir, local_research_dir)
+            )
             units.append({
                 "arm": representative_arm,
                 "replay_arms": replay_entries,
@@ -4406,9 +4513,13 @@ def _training_units(
                 "settings": settings,
                 "seed": int(seed),
                 "seed_order": int(seed_order),
-                "model_dir": str(source_root / source_unit / "model"),
-                "legacy_model_dir": str(model_root / source_unit / "model"),
-                "research_dir": str(run_root / "work" / "training" / source_unit),
+                "model_dir": str(model_dir),
+                "legacy_model_dir": str(local_model_dir if shared_dirs is not None
+                                        else model_root / source_unit / "model"),
+                "research_dir": str(research_dir),
+                "transient_model_dir": str(local_model_dir),
+                "transient_research_dir": str(local_research_dir),
+                "canonical_model_rolling_robustness": shared_dirs is not None,
                 "comparison_start": str(comparison_start),
                 "comparison_end": str(comparison_end),
                 "reuse_completed": bool(reuse_completed),
@@ -6417,9 +6528,12 @@ def _execute_robustness_under_lock(
             meta["trainer_registry_lock"] = active_trainers_lock
             meta["trainer_key"] = _unit_key(str(meta["dl_id"]), int(meta["seed"]))
             remaining_trainings.append(meta)
+            # Retention belongs to the canonical Model Robustness owner. Only
+            # the Strategy-specific transient namespace is governed by [5]'s
+            # keep_scores/keep_checkpoints cleanup flags.
             training_cleanup_targets.append({
-                "model_dir": Path(str(meta["model_dir"])),
-                "research_dir": Path(str(meta["research_dir"])),
+                "model_dir": Path(str(meta.get("transient_model_dir") or meta["model_dir"])),
+                "research_dir": Path(str(meta.get("transient_research_dir") or meta["research_dir"])),
                 "score_source": str(settings.dl_sources[str(meta["dl_id"])].score_source),
             })
             continue

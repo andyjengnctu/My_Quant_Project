@@ -2227,9 +2227,260 @@ def append_model_robustness_pit_strategy_reuse_contract_checks(*, results, case_
             and "Research模型score REUSE=0" in missing_plan,
         )
 
+    append_bidirectional_model_robustness_score_reuse_checks(results=results, case_id=case_id)
     append_model_unit_cross_run_scientific_reuse_checks(results=results, case_id=case_id)
     from tools.validate.synthetic_strategy_robustness_unit_cases import append_strategy_robustness_unit_checks
     append_strategy_robustness_unit_checks(results=results, case_id=case_id)
+
+
+
+def append_bidirectional_model_robustness_score_reuse_checks(*, results, case_id: str) -> None:
+    """[5] Rolling Robustness publishes the exact [3] model evidence namespace.
+
+    A different period, source or benchmark cannot share scores, although the
+    FIT owner may still import an identical fold checkpoint. No real trainer,
+    optimizer or score calculation is invoked by these isolated cases.
+    """
+    from core.breakout_quality_policy import get_breakout_quality_workflow_settings
+    from core.strategy_compare_policy import (
+        get_strategy_comparison_settings, get_strategy_multi_seed_robustness_settings,
+    )
+    from filters.breakout_quality.paths import resolve_model_research_robustness_seed_dirs
+    from filters.breakout_quality.strategy_compare_pit_contract import (
+        StrategyComparePITPeriodMismatch,
+        validate_selection_pit_score_period,
+    )
+    from services.breakout_quality import fitted_model_artifacts
+    from services.research import strategy_compare_training as trainer
+    from services.research import strategy_multi_seed_robustness as robust
+
+    settings = get_strategy_comparison_settings("broker_cash_dl_conversion_rolling")
+    cfg = get_strategy_multi_seed_robustness_settings("broker_cash_dl_conversion_rolling")
+    arms = tuple(arm for arm in settings.enabled_arms if arm.dl_enabled)
+    source = next(
+        settings.dl_sources[arm.dl_id] for arm in arms
+        if trainer.resolve_shared_model_rolling_robustness_dirs(
+            project_root=Path.cwd(), source=settings.dl_sources[arm.dl_id],
+            workflow=get_breakout_quality_workflow_settings(
+                experiment_profile=settings.dl_sources[arm.dl_id].experiment_profile,
+            ), seed=int(cfg.resolved_seeds[0]), benchmark_id=cfg.benchmark_id,
+            comparison_start="2021-01-01",
+        ) is not None
+    )
+    source_arms = tuple(arm for arm in arms if arm.dl_id == source.dl_id)
+    workflow = get_breakout_quality_workflow_settings(
+        experiment_profile=source.experiment_profile,
+    )
+    seed = int(cfg.resolved_seeds[0])
+    with tempfile.TemporaryDirectory(prefix="bidirectional_robustness_reuse_") as td:
+        root = Path(td)
+        canonical = resolve_model_research_robustness_seed_dirs(
+            root, source.filter_id, source.model_architecture,
+            source.experiment_profile, seed=seed, rolling=True,
+        )
+        with patch.object(robust, "PROJECT_ROOT", root):
+            units = robust._training_units(
+                seeds=(seed,), stochastic_arms=source_arms,
+                settings=settings, completed=set(),
+                model_root=root / "strategy_models", run_root=root / "strategy_outputs",
+                comparison_start="2021-01-01", comparison_end="2026-03-02",
+                reuse_completed=True, benchmark_id=cfg.benchmark_id,
+                checkpoint_cache_root=None,
+            )
+        unit = units[0]
+        add_check(results, "synthetic_breakout_quality", case_id,
+                  "strategy_robustness_publishes_into_model_robustness_canonical_seed_root",
+                  True, len(units) == 1
+                  and unit["canonical_model_rolling_robustness"] is True
+                  and Path(unit["model_dir"]) == canonical[0]
+                  and Path(unit["research_dir"]) == canonical[1]
+                  and Path(unit["transient_model_dir"]) != canonical[0],
+        )
+        rejected = trainer.resolve_shared_model_rolling_robustness_dirs(
+            project_root=root, source=source, workflow=workflow, seed=seed,
+            benchmark_id="another_benchmark", comparison_start="2021-01-01",
+        )
+        unlisted = trainer.resolve_shared_model_rolling_robustness_dirs(
+            project_root=root, source=source, workflow=workflow,
+            seed=1234567, benchmark_id=cfg.benchmark_id,
+            comparison_start="2021-01-01",
+        )
+        from dataclasses import replace as dc_replace
+        forward = dc_replace(source, point_in_time_single_score_block=True)
+        unshared_forward = trainer.resolve_shared_model_rolling_robustness_dirs(
+            project_root=root, source=forward, workflow=workflow, seed=seed,
+            benchmark_id=cfg.benchmark_id, comparison_start="2021-01-01",
+        )
+        add_check(results, "synthetic_breakout_quality", case_id,
+                  "canonical_model_score_sharing_rejects_wrong_benchmark_seed_and_forward",
+                  True, rejected is None and unlisted is None and unshared_forward is None)
+
+        canonical[0].mkdir(parents=True)
+        canonical[1].mkdir(parents=True)
+        local_dir = Path(unit["transient_model_dir"])
+        local_research = Path(unit["transient_research_dir"])
+        local_dir.mkdir(parents=True)
+        local_research.mkdir(parents=True)
+        (canonical[0] / "shared_evidence.bin").write_bytes(b"CANONICAL")
+        (local_dir / "transient_score.bin").write_bytes(b"ISOLATED")
+        robust._cleanup_unit_artifacts(
+            model_dir=local_dir, research_dir=local_research,
+            keep_checkpoints=False, keep_scores=False,
+            score_source=str(source.score_source),
+        )
+        add_check(results, "synthetic_breakout_quality", case_id,
+                  "strategy_transient_cleanup_preserves_published_model_robustness",
+                  True, (canonical[0] / "shared_evidence.bin").read_bytes() == b"CANONICAL"
+                  and not local_dir.exists(),
+        )
+
+        mismatch_manifest = {"score_period": {"start": "2021-01-01", "end": "2026-04-01"}}
+        try:
+            validate_selection_pit_score_period(
+                mismatch_manifest, comparison_start="2021-01-01",
+                comparison_end="2026-03-02",
+            )
+        except StrategyComparePITPeriodMismatch:
+            typed_mismatch = True
+        else:
+            typed_mismatch = False
+        try:
+            validate_selection_pit_score_period(
+                {**mismatch_manifest,
+                 "evaluation_policy": {"score_end_resolution": "manual"},
+                 "available_history_period": {"end": "2026-04-01"}},
+                comparison_start="2021-01-01", comparison_end="auto",
+            )
+        except StrategyComparePITPeriodMismatch:
+            auto_resolution_isolated = True
+        except ValueError:
+            auto_resolution_isolated = False
+        else:
+            auto_resolution_isolated = True
+        add_check(results, "synthetic_breakout_quality", case_id,
+                  "explicit_period_mismatch_is_isolatable_but_corrupt_auto_resolution_is_not",
+                  True, typed_mismatch and not auto_resolution_isolated)
+
+        ready = {"score": "verified", "fold_count": 2, "score_sha256": "sha"}
+        job = {
+            **unit, "trainer_registry": {}, "trainer_registry_lock": None,
+            "trainer_key": "synthetic", "seed_order": 1,
+        }
+        with patch.object(fitted_model_artifacts, "published_fit_contract_version_state", return_value=("CURRENT", "OK")), patch.object(
+            robust, "validate_strategy_compare_training_artifacts", return_value=dict(ready)
+        ) as validator, patch.object(
+            robust, "run_strategy_compare_training_unit", side_effect=AssertionError("must reuse")
+        ) as fit, patch.object(
+            robust, "_prepare_trade_path_teacher_for_model", side_effect=AssertionError("must reuse")
+        ) as upstream:
+            reused = robust._train_one_unit(job)
+        add_check(results, "synthetic_breakout_quality", case_id,
+                  "strategy_robustness_reuses_completed_canonical_model_score_without_refit",
+                  True, reused["reused"] is True
+                  and validator.call_args.kwargs["model_dir"] == canonical[0]
+                  and not fit.called and not upstream.called)
+
+        # Missing canonical score is published by the same official PIT producer,
+        # without modifying the comparison or DL scientific identity.
+        with patch.object(fitted_model_artifacts, "published_fit_contract_version_state", return_value=("MISSING", "absent")), patch.object(
+            robust, "validate_strategy_compare_training_artifacts", side_effect=FileNotFoundError("score not built")
+        ), patch.object(
+            robust, "inspect_reusable_model_research_rolling_score", return_value=(None, "not built")
+        ), patch.object(
+            robust, "_prepare_trade_path_teacher_for_model"
+        ) as upstream, patch.object(
+            robust, "run_strategy_compare_training_unit", return_value={"artifacts": dict(ready), "elapsed_sec": 0}
+        ) as fit:
+            published = robust._train_one_unit(job)
+        add_check(results, "synthetic_breakout_quality", case_id,
+                  "new_strategy_robustness_score_is_published_with_model_mode_and_same_seed",
+                  True, published["reused"] is False
+                  and fit.call_args.kwargs["canonical_model_rolling_robustness"] is True
+                  and fit.call_args.kwargs["model_dir"] == canonical[0]
+                  and fit.call_args.kwargs["seed"] == seed
+                  and upstream.called)
+
+        # An existing full Research score with different explicit end must
+        # remain untouched; a separately published Strategy score is legal.
+        local_dir.mkdir(parents=True, exist_ok=True)
+        validation_calls = []
+        def validate_mismatch_then_local(**kwargs):
+            validation_calls.append(kwargs["model_dir"])
+            if kwargs["model_dir"] == canonical[0]:
+                raise StrategyComparePITPeriodMismatch("explicit end differs")
+            return dict(ready)
+        with patch.object(fitted_model_artifacts, "published_fit_contract_version_state", return_value=("CURRENT", "OK")), patch.object(
+            robust, "validate_strategy_compare_training_artifacts", side_effect=validate_mismatch_then_local
+        ), patch.object(
+            robust, "run_strategy_compare_training_unit", side_effect=AssertionError("no new training")
+        ) as fit:
+            local_reuse = robust._train_one_unit(job)
+        add_check(results, "synthetic_breakout_quality", case_id,
+                  "different_score_period_reuses_strategy_local_score_not_research_score",
+                  True, local_reuse["reused"] is True and not fit.called
+                  and validation_calls == [canonical[0], local_dir],
+        )
+
+        for child in list(local_dir.iterdir()):
+            if child.is_file():
+                child.unlink()
+        local_dir.rmdir()
+        with patch.object(fitted_model_artifacts, "published_fit_contract_version_state", return_value=("CURRENT", "OK")), patch.object(
+            robust, "validate_strategy_compare_training_artifacts", side_effect=validate_mismatch_then_local
+        ), patch.object(
+            robust, "_prepare_trade_path_teacher_for_model"
+        ), patch.object(
+            robust, "run_strategy_compare_training_unit", return_value={"artifacts": dict(ready), "elapsed_sec": 0}
+        ) as fit:
+            local_build = robust._train_one_unit(job)
+        add_check(results, "synthetic_breakout_quality", case_id,
+                  "different_score_period_builds_only_separate_score_publication",
+                  True, local_build["reused"] is False
+                  and fit.call_args.kwargs["model_dir"] == local_dir
+                  and fit.call_args.kwargs["canonical_model_rolling_robustness"] is False,
+        )
+
+        # An auto-resolved model score may diverge from Strategy's explicit
+        # period only after the Producer completes. Preserve Research source
+        # and rerun the Strategy evaluation in its private score namespace.
+        def fake_train(**kwargs):
+            if kwargs["canonical_model_rolling_robustness"]:
+                raise StrategyComparePITPeriodMismatch("actual end differs")
+            return {"artifacts": dict(ready), "elapsed_sec": 0}
+        with patch.object(fitted_model_artifacts, "published_fit_contract_version_state", return_value=("MISSING", "new")), patch.object(
+            robust, "validate_strategy_compare_training_artifacts", side_effect=FileNotFoundError("not ready")
+        ), patch.object(
+            robust, "inspect_reusable_model_research_rolling_score", return_value=(None, "not ready")
+        ), patch.object(
+            robust, "_prepare_trade_path_teacher_for_model"
+        ), patch.object(
+            robust, "run_strategy_compare_training_unit", side_effect=fake_train
+        ) as fit:
+            late_fallback = robust._train_one_unit(job)
+        add_check(results, "synthetic_breakout_quality", case_id,
+                  "auto_model_score_period_difference_falls_back_without_overwriting_research",
+                  True, late_fallback["reused"] is False
+                  and fit.call_count == 2
+                  and fit.call_args_list[0].kwargs["model_dir"] == canonical[0]
+                  and fit.call_args_list[1].kwargs["model_dir"] == local_dir,
+        )
+
+        with patch.object(fitted_model_artifacts, "published_fit_contract_version_state", return_value=("CURRENT", "OK")), patch.object(
+            robust, "validate_strategy_compare_training_artifacts", side_effect=ValueError("score SHA corrupted")
+        ), patch.object(
+            robust, "run_strategy_compare_training_unit", side_effect=AssertionError("must BLOCK")
+        ) as fit:
+            try:
+                robust._train_one_unit(job)
+            except RuntimeError as exc:
+                blocked = "identity/integrity" in str(exc)
+            else:
+                blocked = False
+        add_check(results, "synthetic_breakout_quality", case_id,
+                  "corrupt_same_identity_canonical_robustness_score_blocks_and_preserves_source",
+                  True, blocked and not fit.called
+                  and (canonical[0] / "shared_evidence.bin").read_bytes() == b"CANONICAL",
+        )
 
 
 def append_model_unit_cross_run_scientific_reuse_checks(*, results, case_id: str) -> None:

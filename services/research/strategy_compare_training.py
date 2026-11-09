@@ -51,6 +51,53 @@ from filters.breakout_quality.strategy_compare_pit_contract import (
 from services.breakout_quality.fit_repair_transaction import superseded_fit_publication_guard
 from services.research.training_process import run_logged_training_process
 
+
+def resolve_shared_model_rolling_robustness_dirs(
+    *, project_root: str | Path, source: Any, workflow: Any,
+    seed: int, benchmark_id: str | None, comparison_start: str,
+) -> tuple[Path, Path] | None:
+    """Return the model owner's publication only for the *same* Rolling contract.
+
+    Strategy Robustness and Model Robustness may publish one per-seed
+    FIT/SCORE/Audit only when their benchmark, authorization and complete PIT
+    evaluation schedule agree.  Forward single-block scores are intentionally
+    excluded: Research Forward Robustness is a different score producer.
+    """
+    from config.robustness_benchmark import MODEL_STRATEGY_ROBUSTNESS_BENCHMARK_ID
+    from core.training_policy import get_robustness_benchmark_policy_snapshot
+
+    if benchmark_id != MODEL_STRATEGY_ROBUSTNESS_BENCHMARK_ID:
+        return None
+    benchmark = get_robustness_benchmark_policy_snapshot(benchmark_id)
+    if int(seed) not in tuple(int(x) for x in benchmark["resolved_seeds"]):
+        return None
+    if (
+        str(source.score_source) != SCORE_SOURCE_SELECTION_POINT_IN_TIME
+        or not is_breakout_quality_model_test_profile(str(source.experiment_profile))
+    ):
+        return None
+    mode = get_breakout_quality_rolling_test_mode("rolling")
+    expected_months = int(
+        source.point_in_time_fold_months
+        if source.point_in_time_fold_months is not None
+        else workflow.point_in_time_fold_months
+    )
+    if any((
+        bool(source.point_in_time_single_score_block) != bool(mode.single_score_block),
+        expected_months != int(mode.fold_months),
+        (source.point_in_time_fold_anchor_date or None) != mode.fold_anchor_date,
+        (source.point_in_time_dirname or None) != mode.point_in_time_dirname,
+        str(source.point_in_time_score_start_date) != str(mode.score_start_date),
+        (source.point_in_time_score_end_date or None) != mode.score_end_date,
+        str(comparison_start) != str(mode.score_start_date),
+    )):
+        return None
+    return resolve_model_research_robustness_seed_dirs(
+        project_root, str(source.filter_id), str(source.model_architecture),
+        str(source.experiment_profile), seed=int(seed), rolling=True,
+    )
+
+
 STRATEGY_COMPARE_TRAINER_LOG_TAIL_CHARS = 5000
 STRATEGY_COMPARE_TRAINER_ENV: Mapping[str, str] = {
     COMPACT_CONSOLE_ENV: "0",
@@ -181,6 +228,9 @@ def build_strategy_compare_trainer_command(
         args.append("--single-score-block")
     if resolved_end is not None:
         args.extend(["--score-end-date", resolved_end])
+    train_window = getattr(workflow, "point_in_time_train_window_months", None)
+    if train_window is not None:
+        args.extend(["--train-window-months", str(int(train_window))])
     if point_in_time_dir_override is not None:
         args.extend([
             "--point-in-time-dir-override",
@@ -471,6 +521,7 @@ def run_strategy_compare_training_unit(
     strategy_compare_profile_id: str | None = None,
     failure_prefix: str = "Strategy Compare模型訓練失敗",
     resume: bool = True,
+    canonical_model_rolling_robustness: bool = False,
 ) -> dict[str, Any]:
     """Execute one canonical Strategy Compare training unit through READY.
 
@@ -509,15 +560,26 @@ def run_strategy_compare_training_unit(
             source=source,
             workflow=workflow,
             seed=int(seed),
-            score_start_date=(None if comparison_start in (None, "") else str(comparison_start)),
-            score_end_date=(None if comparison_end in (None, "") else str(comparison_end)),
+            score_start_date=(
+                str(source.point_in_time_score_start_date)
+                if canonical_model_rolling_robustness
+                else (None if comparison_start in (None, "") else str(comparison_start))
+            ),
+            score_end_date=(
+                source.point_in_time_score_end_date
+                if canonical_model_rolling_robustness
+                else (None if comparison_end in (None, "") else str(comparison_end))
+            ),
             point_in_time_dir_override=point_in_time_dir_override,
             checkpoint_cache_root=checkpoint_cache_root,
             fit_source_pit_dirs=(
-                resolve_strategy_compare_fit_source_dirs(
-                    project_root=root, source=source, seed=int(seed),
-                    target_dir=point_in_time_dir_override or model_dir,
-                ) if (
+                tuple(dict.fromkeys((
+                    *resolve_strategy_compare_fit_source_dirs(
+                        project_root=root, source=source, seed=int(seed),
+                        target_dir=point_in_time_dir_override or model_dir,
+                    ),
+                    *(Path(value).resolve() for value in fit_source_pit_dirs),
+                ))) if (
                     str(source.score_source) == SCORE_SOURCE_SELECTION_POINT_IN_TIME
                     and version_rebuild_dir is None
                 ) else ()
@@ -613,5 +675,6 @@ __all__ = [
     "build_strategy_compare_trainer_command",
     "run_strategy_compare_training_unit",
     "validate_strategy_compare_training_artifacts",
+    "resolve_shared_model_rolling_robustness_dirs",
     "inspect_reusable_model_research_rolling_score",
 ]
