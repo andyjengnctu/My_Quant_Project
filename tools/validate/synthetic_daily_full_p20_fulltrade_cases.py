@@ -55,6 +55,67 @@ def _fixture_source():
 
 
 class DailyFullP20NetPnLContractCases(TestCase):
+    def test_current_oracle_source_catalog_has_registered_calculation_capabilities(self):
+        """Active Summary recipes must resolve at the canonical source owner."""
+        from core.audit_policy import get_reusable_audit_definitions
+        from services.audit import target_oracle_romd as oracle
+        from services.research.oracle_artifact_contract import source_calculation_contract
+
+        definition = next(item for item in get_reusable_audit_definitions("breakout_quality")
+                          if item.audit_type == oracle.SUPPORTED_AUDIT_TYPE)
+        plan = oracle._oracle_comparison_plan(definition)
+        source_recipes = (*plan["recipes"].values(), *plan["daily_recipes"].values())
+        for recipe, provider, *horizon in source_recipes:
+            with self.subTest(recipe=recipe):
+                contract = source_calculation_contract(
+                    recipe=recipe, profile_id=str(definition.source[provider]),
+                    horizon=horizon[0] if horizon else None,
+                    model_architecture=str(definition.source["model_architecture"]),
+                )
+                self.assertEqual(contract["recipe"], recipe)
+                self.assertEqual(len(contract["implementation_sha256"]), 64)
+                self.assertGreater(contract["calculation_revision"], 0)
+
+    def test_p20_oracle_uses_its_actual_entry_and_truth_not_legacy_min_path(self):
+        from services.research.oracle_artifact_contract import (
+            source_calculation_contract, source_implementation_sha256,
+        )
+        recipe = "daily_trade_path_daily_full_p20_net_pnl"
+        contract = source_calculation_contract(recipe=recipe, profile_id=RANK_PROFILE)
+        self.assertEqual(contract["calculation_revision"], 1)
+        self.assertIsNone(contract["horizon_sessions"])
+        self.assertEqual(contract["score_mapping"], "canonical_daily_truth_percentile_v2")
+        self.assertEqual(contract["implementation_sha256"],
+                         source_implementation_sha256(recipe, RANK_PROFILE))
+        self.assertNotEqual(contract["implementation_sha256"],
+                            source_implementation_sha256("daily_trade_path_net_pnl", RANK_PROFILE))
+
+    def test_p20_source_fingerprint_changes_without_invalidating_legacy_recipes(self):
+        from services.research import oracle_artifact_contract as contracts
+        recipe = "daily_trade_path_daily_full_p20_net_pnl"
+        before = {key: contracts.source_implementation_sha256(key, RANK_PROFILE)
+                  for key in (recipe, "daily_trade_path_net_pnl",
+                              "daily_trade_path_true_net_pnl", "daily_trade_path_full_net_pnl")}
+        original = contracts.calculation_source
+        for relative, name in (
+            ("core/daily_common_entry_filters.py", "daily_common_filter_signals"),
+            ("filters/breakout_quality/daily_full_p20_target.py", "compute_daily_full_p20_batch"),
+            ("services/audit/daily_full_p20_oracle_truth.py", "build_daily_full_p20_oracle_scores"),
+        ):
+            def edited(path, function, **kwargs):
+                result = original(path, function, **kwargs)
+                return "f" * 64 if (path, function) == (relative, name) else result
+
+            contracts.source_implementation_sha256.cache_clear()
+            with self.subTest(capability=name), patch.object(contracts, "calculation_source",
+                                                      side_effect=edited):
+                changed = {key: contracts.source_implementation_sha256(key, RANK_PROFILE)
+                           for key in before}
+            self.assertNotEqual(changed[recipe], before[recipe])
+            self.assertEqual({key: value for key, value in changed.items() if key != recipe},
+                             {key: value for key, value in before.items() if key != recipe})
+        contracts.source_implementation_sha256.cache_clear()
+
     def test_new_rank_and_binary_head_share_p20_economic_truth_not_old_models(self):
         rank = get_continuous_ranker_research_spec(RANK_PROFILE)
         positive = get_continuous_ranker_research_spec(POS_PROFILE)
