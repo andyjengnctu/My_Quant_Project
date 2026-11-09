@@ -811,11 +811,11 @@ STRATEGY_CONSISTENCY_METRIC_KEYS = (
     "expected_value_r", "avg_exposure_pct", "high_mfe_high_safety_pct", "high_mfe_total_pct",
 )
 
-# v12: restore the existing Oracle RoMD metric as the final visible column.
+# v13: restore certified Oracle Round-Trip Win Rate as the final visible column.
 # Preserve the eight sort choices and all scientific/artifact identities.
 TARGET_DL_VALIDATION_OVERVIEW_REPORT = PersistentReportContract(
     report_id="research.target_dl_validation_overview",
-    version=12,
+    version=13,
     role="read_only_local_completed_report_summary",
     menu_path=("Research", "Summary"),
     sections=(
@@ -834,6 +834,7 @@ TARGET_DL_VALIDATION_OVERVIEW_REPORT = PersistentReportContract(
                 C("rolling_robustness_mean_romd", "Mean RoMD", 2,
                   preference="higher", format_kind="number"),
                 C("oracle_romd", "Oracle RoMD", 2, preference="higher", format_kind="number"),
+                C("win_rate_pct", "Win Rate", 2, "%", "higher", "pct"),
             )),
         )),
     ),
@@ -841,9 +842,10 @@ TARGET_DL_VALIDATION_OVERVIEW_REPORT = PersistentReportContract(
 
 
 # The existing four excluded columns remain non-interactive sort choices.
-# With Oracle RoMD visible, the eight choices derive directly from the table.
+# The two Oracle metrics are visible; Win Rate is display-only, not a ninth sort choice.
 _TARGET_DL_SUMMARY_EXCLUDED_SORT_KEYS = frozenset((
     "strategy", "robustness_rho", "rolling_romd", "robustness_romd",
+    "win_rate_pct",
 ))
 
 
