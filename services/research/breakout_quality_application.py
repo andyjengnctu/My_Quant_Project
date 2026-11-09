@@ -4039,37 +4039,6 @@ def _prepare_strategy_compare_model_artifacts(
         + f" | dataset={comparison.dataset} | GPU workers={worker_count}"
     )
 
-    # Upstream production is a separate Research dependency phase. Model-only
-    # execution must not build Dataset/Target as a side effect, otherwise the
-    # shared ordering (upstream -> params -> models) is bypassed.
-    pending_upstream: list[str] = []
-    seen_upstream: set[tuple[str, str, str]] = set()
-    for _dl_id, source in sources:
-        upstream_identity = (
-            str(source.filter_id),
-            str(source.model_architecture),
-            str(source.experiment_profile),
-        )
-        if upstream_identity in seen_upstream:
-            continue
-        seen_upstream.add(upstream_identity)
-        plan = collect_model_upstream_preparation_plan(
-            PROJECT_ROOT,
-            filter_id=upstream_identity[0],
-            model_architecture=upstream_identity[1],
-            experiment_profile=upstream_identity[2],
-            dataset=str(comparison.dataset),
-            max_tickers=0,
-        )
-        pending_upstream.extend(
-            item.artifact_key for item in plan.actions if item.action != "REUSE"
-        )
-    if pending_upstream:
-        raise RuntimeError(
-            "Strategy Compare model phase開始前canonical upstream尚未READY: "
-            + ", ".join(sorted(set(pending_upstream)))
-        )
-
     jobs: deque[dict[str, object]] = deque()
     legacy_reuse: list[str] = []
     with tempfile.TemporaryDirectory(prefix="strategy_compare_model_training_") as temp_dir:
@@ -4182,6 +4151,43 @@ def _prepare_strategy_compare_model_artifacts(
             }
             jobs.append(job)
 
+        # Only not-READY models need upstream production. Completed models with
+        # independently validated PIT evidence can REUSE without regenerating an
+        # optimizer teacher removed by an authorized artifact cleaner.
+        # Upstream production is a separate Research dependency phase. Model-only
+        # execution must not build Dataset/Target as a side effect, otherwise the
+        # shared ordering (upstream -> params -> models) is bypassed.
+        pending_upstream: list[str] = []
+        seen_upstream: set[tuple[str, str, str]] = set()
+        for job in jobs:
+            source = job["source"]
+            upstream_identity = (
+                str(source.filter_id),
+                str(source.model_architecture),
+                str(source.experiment_profile),
+            )
+            if upstream_identity in seen_upstream:
+                continue
+            seen_upstream.add(upstream_identity)
+            # [5]'s model-only phase must honor the full canonical input graph,
+            # including optimizer teachers for real trade-path Targets.  Dataset-only
+            # readiness would permit a PIT worker to fail on a missing signed P19
+            # history after entering training.
+            workflow = get_breakout_quality_workflow_settings(
+                experiment_profile=upstream_identity[2]
+            )
+            plan = _collect_continuous_research_input_plan(
+                workflow, dataset_profile=str(comparison.dataset), max_tickers=0,
+                seed=int(workflow.seed),
+            )
+            pending_upstream.extend(
+                item.artifact_key for item in plan.actions if item.action != "REUSE"
+            )
+        if pending_upstream:
+            raise RuntimeError(
+                "Strategy Compare model phase開始前canonical upstream尚未READY: "
+                + ", ".join(sorted(set(pending_upstream)))
+            )
         for dl_id in legacy_reuse:
             print(
                 styled_workflow_status("[REUSE]")

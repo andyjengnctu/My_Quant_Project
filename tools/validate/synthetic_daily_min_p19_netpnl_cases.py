@@ -70,6 +70,200 @@ class DailyMinP19NetPnLCases(TestCase):
         self.assertEqual(STRATEGY_COMPARE_ARMS['C176']['dl_runtime_options']['positive_dl_id'],
                          'CONT13DE_ROLL')
 
+    def test_compare_plan_lists_signed_p19_teachers_before_training(self):
+        from filters.breakout_quality import strategy_compare_dl_artifacts as dl
+        from filters.breakout_quality.artifact_dependency_registry import ArtifactReadiness
+        from services.breakout_quality import daily_min_p19_training_source as teacher
+
+        settings = get_strategy_comparison_settings('broker_cash_dl_conversion_rolling')
+        source = settings.dl_sources['CONT13DD_ROLL']
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dataset = root / 'outputs' / 'dataset_summary.json'
+            status = ArtifactReadiness(
+                artifact_type='dataset_core', ready=True, status='READY', path=dataset,
+                dependencies=(), producer_work_type='model_training', description='Dataset READY',
+            )
+            def history(*, project_root, seed):
+                self.assertEqual(seed, 42)
+                return {'action': 'BUILD', 'path': historical_params_path(project_root),
+                        'reason': 'Independent P19 history required'}
+            def current(*, project_root, seed):
+                self.assertEqual(seed, 42)
+                return {'action': 'REUSE', 'path': root / 'current.json',
+                        'reason': 'Verified P19 current teacher'}
+            actions = []
+            with patch.object(dl, 'collect_model_upstream_readiness', return_value=(status,)), \
+                 patch.object(teacher, 'inspect_history', side_effect=history), \
+                 patch.object(teacher, 'inspect_current', side_effect=current), \
+                 patch.object(teacher, 'execute_history', side_effect=AssertionError('Plan must be read-only')):
+                keys = dl._collect_model_upstream_dependencies(
+                    root=root, settings=settings, source=source, artifact_identities={},
+                    actions=actions, cache={},
+                )
+                teacher_keys = dl._collect_trade_path_teacher_dependencies(
+                    root=root, settings=settings, source=source, actions=actions,
+                    cache={}, dataset_dependencies=keys,
+                )
+            self.assertEqual(len(keys), 1)
+            self.assertEqual(len(teacher_keys), 2)
+            self.assertTrue(any(':daily_min_p19_historical_teacher:seed_42' in key for key in teacher_keys))
+            self.assertTrue(any(':daily_min_p19_current_teacher:seed_42' in key for key in teacher_keys))
+            by_key = {item.artifact_key: item for item in actions}
+            history_node = next(row for row in actions if 'historical_teacher' in row.artifact_key)
+            current_node = next(row for row in actions if 'current_teacher' in row.artifact_key)
+            self.assertEqual(history_node.action, 'BUILD')
+            self.assertEqual(history_node.builder_type, 'canonical_model_upstream')
+            self.assertEqual(history_node.producer_work_type, 'model_training')
+            self.assertEqual(history_node.dependencies, (keys[0],))
+            self.assertEqual(current_node.action, 'REUSE')
+            self.assertEqual(current_node.builder_type, None)
+            self.assertEqual(len(by_key), len(actions))
+            self.assertFalse((root / 'outputs' / 'optimizer').exists())
+
+    def test_compare_teacher_identity_invalid_blocks_instead_of_rebuilding(self):
+        from filters.breakout_quality import strategy_compare_dl_artifacts as dl
+        from filters.breakout_quality.artifact_dependency_registry import ArtifactReadiness
+        from services.breakout_quality import daily_min_p19_training_source as teacher
+        settings = get_strategy_comparison_settings('broker_cash_dl_conversion_rolling')
+        source = settings.dl_sources['CONT13DE_ROLL']
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dataset = ArtifactReadiness(
+                artifact_type='dataset_core', ready=True, status='READY',
+                path=root / 'dataset.json', dependencies=(),
+                producer_work_type='model_training', description='READY',
+            )
+            def state(action):
+                return {'action': action, 'path': root / 'teacher.json',
+                        'reason': 'Signed teacher mismatch' if action == 'BLOCKED' else 'READY'}
+            for expected, actual in (('BLOCKED', 'BLOCKED'), ('REUSE', 'REUSE')):
+                actions = []
+                with patch.object(dl, 'collect_model_upstream_readiness', return_value=(dataset,)), \
+                     patch.object(teacher, 'inspect_history', return_value=state(actual)), \
+                     patch.object(teacher, 'inspect_current', return_value=state('REUSE')):
+                    keys = dl._collect_model_upstream_dependencies(
+                        root=root, settings=settings, source=source,
+                        artifact_identities={}, actions=actions, cache={},
+                    )
+                    dl._collect_trade_path_teacher_dependencies(
+                        root=root, settings=settings, source=source, actions=actions,
+                        cache={}, dataset_dependencies=keys,
+                    )
+                node = next(item for item in actions if 'historical_teacher' in item.artifact_key)
+                self.assertEqual(node.action, expected)
+                self.assertIsNone(node.builder_type)
+
+    def test_compare_valid_pit_reuse_skips_missing_optimizer_teacher(self):
+        from core.research_orchestration import ResearchArtifactAction
+        from filters.breakout_quality import strategy_compare_dl_artifacts as dl
+        from filters.breakout_quality.artifact_dependency_registry import ArtifactReadiness
+        from services.breakout_quality import daily_min_p19_training_source as teacher
+
+        settings = get_strategy_comparison_settings('broker_cash_dl_conversion_rolling')
+        source = settings.dl_sources['CONT13DD_ROLL']
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dataset = ArtifactReadiness(
+                artifact_type='dataset_core', ready=True, status='READY',
+                path=root / 'dataset.json', dependencies=(),
+                producer_work_type='model_training', description='READY',
+            )
+            def fake_model_status(*, dl_id, actions, source_upstream_dependencies, **kwargs):
+                actions.append(ResearchArtifactAction(
+                    action_id=f'dl:{dl_id}:forward_scores',
+                    artifact_key=f'dl:{dl_id}:forward_scores',
+                    action='REUSE', builder_type=None, description='verified PIT',
+                    path='model.csv', dependencies=source_upstream_dependencies,
+                ))
+                return {'ready': True}, True
+            with patch.object(dl, 'collect_model_upstream_readiness', return_value=(dataset,)), \
+                 patch.object(dl, '_collect_selection_pit_source_status', side_effect=fake_model_status), \
+                 patch.object(teacher, 'inspect_history', side_effect=AssertionError('verified PIT must REUSE')), \
+                 patch.object(teacher, 'inspect_current', side_effect=AssertionError('verified PIT must REUSE')):
+                rows, identities, actions, ready, periods = dl.collect_dl_artifact_status(
+                    root=root, settings=settings, required_dl_sources={'CONT13DD_ROLL'},
+                    runtime_required_dl_sources={'CONT13DD_ROLL'},
+                )
+            self.assertTrue(ready['CONT13DD_ROLL'])
+            self.assertFalse(any('teacher' in item.artifact_key for item in actions))
+            self.assertTrue(all(item.action == 'REUSE' for item in actions))
+
+    def test_compare_replans_teacher_before_model_producer(self):
+        from core.research_orchestration import ResearchArtifactAction, ResearchArtifactPlan
+        from services.research import strategy_compare_preparation as preparation
+        settings = get_strategy_comparison_settings('broker_cash_dl_conversion_rolling')
+        state = {'teacher': False, 'model': False}
+        executions = []
+        def refreshed():
+            teacher_action = 'REUSE' if state['teacher'] else 'BUILD'
+            model_action = 'REUSE' if state['model'] else 'BUILD'
+            plan = ResearchArtifactPlan.from_actions((
+                ResearchArtifactAction('dataset', 'model-upstream:dataset', 'REUSE',
+                                       None, 'READY', 'dataset.json'),
+                ResearchArtifactAction('teacher', 'model-upstream:p19_teacher',
+                                       teacher_action,
+                                       None if state['teacher'] else 'canonical_model_upstream',
+                                       'signed teacher', 'teacher.json',
+                                       dependencies=('model-upstream:dataset',),
+                                       producer_work_type=(
+                                           'existing_artifact' if state['teacher'] else 'model_training'
+                                       ), execution_priority=30),
+                ResearchArtifactAction('scores', 'dl:CONT13DD_ROLL:forward_scores',
+                                       model_action,
+                                       None if state['model'] else 'canonical_model_artifacts',
+                                       'P19 model', 'scores.csv',
+                                       dependencies=('model-upstream:p19_teacher',),
+                                       producer_work_type=(
+                                           'existing_artifact' if state['model'] else 'model_training'
+                                       ), execution_priority=100),
+            ))
+            return {'preparation_plan': plan, 'dl_sources': {'CONT13DD_ROLL': {}}}
+        def producer(action):
+            executions.append(action.builder_type)
+            if action.builder_type == 'canonical_model_upstream':
+                self.assertFalse(state['model'])
+                state['teacher'] = True
+            elif action.builder_type == 'canonical_model_artifacts':
+                self.assertTrue(state['teacher'])
+                state['model'] = True
+            else:
+                self.fail('unexpected producer')
+            return 0
+        with TemporaryDirectory() as tmp:
+            outcome = preparation._run_preparation_plan(
+                project_root=Path(tmp), settings=settings,
+                status=refreshed(), status_refresher=refreshed,
+                required_artifact_keys=None, failure_prefix='P19 prerequisite',
+                producer_handlers={'model_training': producer},
+            )
+        self.assertEqual(executions, ['canonical_model_upstream', 'canonical_model_artifacts'])
+        self.assertEqual(outcome['preparation_plan'].overall_status, 'READY')
+
+    def test_compare_model_worker_requires_optimizer_teacher_ready(self):
+        from core.research_orchestration import ResearchArtifactAction, ResearchArtifactPlan
+        from services.research import breakout_quality_application as app
+        settings = get_strategy_comparison_settings('broker_cash_dl_conversion_rolling')
+        source = settings.dl_sources['CONT13DD_ROLL']
+        graph = ResearchArtifactPlan.from_actions((
+            ResearchArtifactAction('dataset', 'model-upstream:dataset_core', 'REUSE',
+                                   None, 'Dataset READY', 'dataset.json'),
+            ResearchArtifactAction('p19', 'model-upstream:daily_min_p19_historical_teacher_seed_42',
+                                   'BUILD', 'optimizer_daily_min_p19_historical_teacher',
+                                   'P19 history missing', 'missing.json',
+                                   dependencies=('model-upstream:dataset_core',)),
+        ))
+        with patch.object(app, '_strategy_compare_required_model_sources',
+                          return_value=((settings,), (('CONT13DD_ROLL', source),))), \
+             patch.object(app, '_collect_continuous_research_input_plan', return_value=graph) as lookup, \
+             patch.object(app, '_run_strategy_compare_model_build_subprocess',
+                          side_effect=AssertionError('No worker may start')):
+            with self.assertRaisesRegex(RuntimeError, 'upstream尚未READY'):
+                app._prepare_strategy_compare_model_artifacts('synthetic',
+                    profile_ids=(settings.profile_id,))
+        self.assertEqual(lookup.call_count, 1)
+        self.assertEqual(lookup.call_args.kwargs['seed'], 42)
+
     def test_p19_teacher_is_four_dimensional_and_independent(self):
         self.assertEqual((PROFILE, BASELINE_ARM, TEACHER_SEED), ('min_atr_limit_v2', 'C166', 42))
         self.assertTrue(any(profile == RANK and name == 'MR-13DD'
