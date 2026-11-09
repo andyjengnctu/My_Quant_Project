@@ -14,6 +14,7 @@ from unittest.mock import patch
 import numpy as np
 import pandas as pd
 
+from core.file_integrity import canonical_json_sha256
 from core.breakout_quality_registry import get_continuous_ranker_research_spec
 from core.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
 from core.portfolio_param_runtime import build_portfolio_params_signature
@@ -22,7 +23,12 @@ from core.strategy_compare_registry import STRATEGY_COMPARE_ARMS
 from filters.breakout_quality.daily_trade40_target import ExecutableMinPeriod
 from filters.breakout_quality.daily_full_p20_target import compute_daily_full_p20_batch
 from services.breakout_quality.daily_full_p20_pit_source import materialize_daily_full_p20_pit_labels
-from services.breakout_quality.daily_full_p20_training_source import SOURCE_ID, inspect_history
+from services.breakout_quality.daily_full_p20_training_source import (
+    SOURCE_ID, inspect_history, execute_history, historical_params_path,
+)
+from services.optimizer.optimizer_workspace_recovery import (
+    adopt_nested_optimizer_workspace, inspect_nested_optimizer_workspace,
+)
 from services.breakout_quality.formal_mintrade40_pit_source import (
     FormalMinTrade40PITBlocked, FormalMinTrade40PITSource,
 )
@@ -127,6 +133,118 @@ class DailyFullP20NetPnLContractCases(TestCase):
             path.write_text("{}", encoding="utf-8")
             state = inspect_history(project_root=tmp, seed=42)
             self.assertEqual(state["action"], "BLOCKED")
+
+    @staticmethod
+    def _nested_history_fixture(root: Path, *, completed: bool = True):
+        canonical_path = historical_params_path(root)
+        nested = canonical_path.parent.parent / "p2_dl_off_trained"
+        nested.mkdir(parents=True, exist_ok=True)
+        contract = {"test_scientific_identity": "original_p20_seed42"}
+        identity = canonical_json_sha256(contract)
+        import json
+        (nested / "rolling_preflight.json").write_text(json.dumps({
+            **contract, "runtime_identity_sha256": identity,
+            "status": "DAILY_FULL_P20_LABEL_HISTORY_V1_PREFLIGHT_PASS",
+        }), encoding="utf-8")
+        (nested / "optimizer_runtime").mkdir()
+        (nested / "optimizer_runtime" / "original_study.sqlite").write_bytes(b"study-bytes")
+        if completed:
+            (nested / "active_params").mkdir()
+            (nested / "active_params" / canonical_path.name).write_bytes(b"signed-params-bytes")
+            (nested / "rolling_optimizer_summary.json").write_text(
+                '{"status":"COMPLETED"}', encoding="utf-8",
+            )
+        return canonical_path, nested, identity
+
+    def test_completed_legacy_nested_history_reuses_without_optimizer_trials(self):
+        from services.breakout_quality import daily_full_p20_training_source as owner
+        with TemporaryDirectory() as tmp:
+            canonical, nested, identity = self._nested_history_fixture(Path(tmp))
+            with (patch.object(owner, "_expected_historical_preflight",
+                               return_value={"runtime_identity_sha256": identity}),
+                  patch.object(owner, "_validated_records", return_value=({}, ())),
+                  patch.object(owner, "prepare_selection_historical_p2_params") as optimizer):
+                plan = inspect_history(project_root=tmp, seed=42)
+                self.assertEqual(plan["action"], "RESUME")
+                self.assertFalse(canonical.is_file())  # Read-only planning.
+                result = execute_history(project_root=tmp, seed=42)
+                self.assertEqual(result, canonical)
+                self.assertEqual(canonical.read_bytes(), b"signed-params-bytes")
+                self.assertEqual((canonical.parent.parent / "optimizer_runtime" /
+                                  "original_study.sqlite").read_bytes(), b"study-bytes")
+                self.assertFalse(nested.exists())
+                self.assertEqual(inspect_history(project_root=tmp, seed=42)["action"], "REUSE")
+                optimizer.assert_not_called()
+
+    def test_partial_nested_history_relocates_resumable_study_without_discarding_it(self):
+        with TemporaryDirectory() as tmp:
+            canonical, nested, identity = self._nested_history_fixture(Path(tmp), completed=False)
+            source = inspect_nested_optimizer_workspace(
+                canonical_arm_dir=canonical.parent.parent,
+                expected_runtime_identity_sha256=identity,
+            )
+            self.assertEqual(source, nested)
+            self.assertTrue(adopt_nested_optimizer_workspace(
+                canonical_arm_dir=canonical.parent.parent,
+                expected_runtime_identity_sha256=identity,
+            ))
+            self.assertTrue((canonical.parent.parent / "optimizer_runtime" /
+                             "original_study.sqlite").is_file())
+            self.assertFalse(canonical.is_file())
+            self.assertFalse(nested.exists())
+
+    def test_nested_history_mismatched_signature_and_conflicts_are_blocked(self):
+        from services.breakout_quality import daily_full_p20_training_source as owner
+        with TemporaryDirectory() as tmp:
+            canonical, nested, identity = self._nested_history_fixture(Path(tmp))
+            bad_identity = "f" * 64
+            with patch.object(owner, "_expected_historical_preflight",
+                              return_value={"runtime_identity_sha256": bad_identity}):
+                self.assertEqual(inspect_history(project_root=tmp, seed=42)["action"], "BLOCKED")
+                with self.assertRaises(FormalMinTrade40PITBlocked):
+                    execute_history(project_root=tmp, seed=42)
+            self.assertTrue((nested / "active_params" / canonical.name).is_file())
+            (canonical.parent.parent / "rolling_optimizer_summary.json").write_bytes(
+                b"unrelated-canonical-bytes")
+            with patch.object(owner, "_expected_historical_preflight",
+                              return_value={"runtime_identity_sha256": identity}):
+                self.assertEqual(inspect_history(project_root=tmp, seed=42)["action"], "BLOCKED")
+            self.assertTrue((nested / "active_params" / canonical.name).is_file())
+
+    def test_new_history_uses_optimizer_workspace_root_not_arm_directory(self):
+        from services.breakout_quality import daily_full_p20_training_source as owner
+        with TemporaryDirectory() as tmp:
+            expected = historical_params_path(tmp)
+            with (patch.object(owner, "_canonical_schedule_build_contract",
+                               return_value={"trials_per_fold": 300,
+                                             "train_window_months": 120,
+                                             "oos_horizon_months": 12}),
+                  patch.object(owner, "_validated_records", return_value=({}, ())),
+                  patch.object(owner, "prepare_selection_historical_p2_params",
+                               return_value={"params_path": expected}) as optimizer):
+                self.assertEqual(execute_history(project_root=tmp, seed=42), expected)
+                kwargs = optimizer.call_args.kwargs
+                self.assertEqual(kwargs["output_relative_dir"], expected.parent.parent.parent)
+                self.assertEqual(kwargs["parameter_set_identity"], owner.HISTORY_ID)
+                self.assertEqual(kwargs["strategy_id"], "daily")
+                self.assertEqual(kwargs["daily_search_profile"], owner.PROFILE)
+                self.assertTrue(kwargs["recover_completed_strategy_compare"] is False)
+
+    def test_nested_relocation_interrupted_between_renames_is_resumable(self):
+        with TemporaryDirectory() as tmp:
+            canonical, nested, identity = self._nested_history_fixture(Path(tmp))
+            staged = canonical.parent.parent.parent / ".p2_dl_off_trained.nested_relocation"
+            nested.rename(staged)
+            self.assertEqual(inspect_nested_optimizer_workspace(
+                canonical_arm_dir=canonical.parent.parent,
+                expected_runtime_identity_sha256=identity,
+            ), staged)
+            self.assertTrue(adopt_nested_optimizer_workspace(
+                canonical_arm_dir=canonical.parent.parent,
+                expected_runtime_identity_sha256=identity,
+            ))
+            self.assertEqual(canonical.read_bytes(), b"signed-params-bytes")
+            self.assertFalse(staged.exists())
 
     def test_unrelated_model_registration_keeps_existing_oracle_price_identity(self):
         from services.audit import oracle_score_artifacts as owner

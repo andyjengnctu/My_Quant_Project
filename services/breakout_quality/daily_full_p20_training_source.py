@@ -45,6 +45,10 @@ from services.breakout_quality.formal_mintrade40_training_source import (
     _current_p16_seed_artifact, inspect_formal_mintrade40_p16_teacher,
 )
 from services.optimizer.strategy_param_service import _canonical_schedule_build_contract
+from services.optimizer.optimizer_workspace_recovery import (
+    nested_optimizer_workspace_candidate, inspect_nested_optimizer_workspace,
+    adopt_nested_optimizer_workspace, verify_optimizer_runtime_preflight,
+)
 from services.optimizer.strategy_param_training import (
     prepare_selection_historical_p2_params,
     _build_min_roos_schedule_contract, build_min_roos_fold_overrides,
@@ -111,7 +115,7 @@ def _expected_historical_preflight(root: Path) -> dict[str, object]:
     )
 
 
-def _validated_records(path: Path, *, historical: bool):
+def _validated_records(path: Path, *, historical: bool, project_root: str | Path):
     if not path.is_file():
         raise FormalMinTrade40PITBlocked(f"Missing signed P20 parameter artifact: {path.name}")
     payload = load_json_strict(path)
@@ -128,21 +132,20 @@ def _validated_records(path: Path, *, historical: bool):
                 or adaptation.get("daily_execution_contract") != search["execution_contract"]
                 or tuple(adaptation.get("search_fields") or ()) != tuple(search["fields"])):
             raise FormalMinTrade40PITBlocked("Historical P20 teacher is not independently Daily Full 19D")
-        preflight = load_json_strict(path.parent.parent / "rolling_preflight.json")
+        expected = _expected_historical_preflight(Path(project_root).resolve())
+        preflight = verify_optimizer_runtime_preflight(
+            path.parent.parent / "rolling_preflight.json",
+            expected_runtime_identity_sha256=expected["runtime_identity_sha256"],
+        )
         summary = load_json_strict(path.parent.parent / "rolling_optimizer_summary.json")
-        if not isinstance(preflight, dict) or not isinstance(summary, dict):
+        if not isinstance(summary, dict):
             raise FormalMinTrade40PITBlocked("Missing signed historical P20 Optimizer evidence")
-        expected = _expected_historical_preflight(path.parents[6])
         if (preflight.get("runtime_identity_sha256") != summary.get("runtime_identity_sha256")
                 or preflight.get("runtime_identity_sha256") != expected["runtime_identity_sha256"]
                 or summary.get("status") != "COMPLETED"
                 or preflight.get("arm_id") != HISTORY_ID
                 or preflight.get("training_dl_enabled") is not False):
             raise FormalMinTrade40PITBlocked("Historical P20 provenance/preflight mismatch")
-        unsigned = {k: v for k, v in preflight.items()
-                    if k not in {"created_at", "status", "runtime_identity_sha256", "binary_pit_optimizer_coverage_path"}}
-        if canonical_json_sha256(unsigned) != str(preflight["runtime_identity_sha256"]):
-            raise FormalMinTrade40PITBlocked("Historical P20 preflight hash invalid")
     records = resolve_formal_min_param_records("rolling_active_param_ensemble", payload)
     for row in records:
         members = tuple(row.get("members") or ())
@@ -157,29 +160,69 @@ def _validated_records(path: Path, *, historical: bool):
 
 
 def inspect_history(*, project_root: str | Path, seed: int) -> dict[str, object]:
-    path = historical_params_path(project_root)
+    root = Path(project_root).resolve()
+    path = historical_params_path(root)
     if seed <= 0:
         raise ValueError("DL seed must be positive")
+    try:
+        nested_candidate = nested_optimizer_workspace_candidate(path.parent.parent)
+    except ValueError as exc:
+        return {"path": path, "action": "BLOCKED", "reason": f"P20 nested history invalid: {exc}"}
     if path.is_file():
+        if nested_candidate is not None:
+            return {"path": path, "action": "BLOCKED",
+                    "reason": "Canonical and nested P20 Optimizer artifacts coexist"}
         try:
-            _validated_records(path, historical=True)
+            _validated_records(path, historical=True, project_root=root)
             return {"path": path, "action": "REUSE", "reason": "Verified P20 19D historical teacher"}
         except (ValueError, TypeError, KeyError, OSError) as exc:
             return {"path": path, "action": "BLOCKED", "reason": f"P20 history invalid: {exc}"}
+    # A prior P20 run accidentally supplied the arm directory as the Optimizer
+    # work root, causing an extra p2_dl_off_trained/ level. Inspect it without
+    # side effects; only the canonical Optimizer owner may relocate it on RUN.
+    try:
+        if nested_candidate is not None:
+            expected = _expected_historical_preflight(root)
+            nested = inspect_nested_optimizer_workspace(
+                canonical_arm_dir=path.parent.parent,
+                expected_runtime_identity_sha256=expected["runtime_identity_sha256"],
+            )
+            if nested is None:
+                raise FormalMinTrade40PITBlocked("Nested Optimizer workspace disappeared")
+            legacy_params = nested / "active_params" / path.name
+            if legacy_params.is_file():
+                _validated_records(legacy_params, historical=True, project_root=root)
+            else:
+                summary_path = nested / "rolling_optimizer_summary.json"
+                if summary_path.is_file():
+                    summary = load_json_strict(summary_path)
+                    if not isinstance(summary, dict) or summary.get("status") == "COMPLETED":
+                        raise FormalMinTrade40PITBlocked(
+                            "Completed nested Optimizer summary missing signed parameters"
+                        )
+            return {"path": path, "action": "RESUME",
+                    "reason": "Verified nested P20 Optimizer workspace; relocate without refitting completed folds"}
+    except (ValueError, TypeError, KeyError, OSError) as exc:
+        return {"path": path, "action": "BLOCKED", "reason": f"P20 nested history invalid: {exc}"}
     preflight = path.parent.parent / "rolling_preflight.json"
     if preflight.is_file():
         try:
-            recorded = load_json_strict(preflight)
-            expected = _expected_historical_preflight(Path(project_root).resolve())
-            if (not isinstance(recorded, dict) or
-                    recorded.get("runtime_identity_sha256") != expected["runtime_identity_sha256"]):
-                raise FormalMinTrade40PITBlocked("P20 historical preflight identity incompatible")
+            expected = _expected_historical_preflight(root)
+            verify_optimizer_runtime_preflight(
+                preflight, expected_runtime_identity_sha256=expected["runtime_identity_sha256"],
+            )
+            summary_path = path.parent.parent / "rolling_optimizer_summary.json"
+            if summary_path.is_file():
+                summary = load_json_strict(summary_path)
+                if not isinstance(summary, dict) or summary.get("status") == "COMPLETED":
+                    raise FormalMinTrade40PITBlocked(
+                        "Completed P20 Optimizer summary missing signed parameters"
+                    )
         except (ValueError, TypeError, KeyError, OSError) as exc:
             return {"path": path, "action": "BLOCKED",
                     "reason": f"Interrupted P20 history incompatible: {exc}"}
     return {"path": path, "action": "RESUME" if preflight.is_file() else "BUILD",
             "reason": "Independent P20 historical Daily Full Optimizer teacher required"}
-
 
 def execute_history(*, project_root: str | Path, seed: int):
     root = Path(project_root).resolve()
@@ -188,8 +231,24 @@ def execute_history(*, project_root: str | Path, seed: int):
         raise FormalMinTrade40PITBlocked(str(state["reason"]))
     if state["action"] == "REUSE":
         return Path(state["path"])
-    policy = _canonical_schedule_build_contract(family="full")
     path = historical_params_path(root)
+    # The read-only plan identified a valid legacy nested workspace. Normalize
+    # through the Optimizer's own recovery owner and re-check signed readiness.
+    if nested_optimizer_workspace_candidate(path.parent.parent) is not None:
+        expected = _expected_historical_preflight(root)
+        adopted = adopt_nested_optimizer_workspace(
+            canonical_arm_dir=path.parent.parent,
+            expected_runtime_identity_sha256=expected["runtime_identity_sha256"],
+        )
+    else:
+        adopted = False
+    if adopted:
+        state = inspect_history(project_root=root, seed=seed)
+        if state["action"] == "BLOCKED":
+            raise FormalMinTrade40PITBlocked(str(state["reason"]))
+        if state["action"] == "REUSE":
+            return path
+    policy = _canonical_schedule_build_contract(family="full")
     result = prepare_selection_historical_p2_params(
         project_root=root, dataset="full", param_policy=PARAM_POLICY_BASE_FINALIST_BEST,
         trials_per_fold=int(policy["trials_per_fold"]),
@@ -203,14 +262,14 @@ def execute_history(*, project_root: str | Path, seed: int):
         last_oos_date=TRADE_PATH_SELECTION_BASELINE_LAST_OOS_DATE,
         train_window_months=int(policy["train_window_months"]),
         oos_months=int(policy["oos_horizon_months"]),
-        output_relative_dir=path.parent.parent,
+        output_relative_dir=path.parent.parent.parent,
         parameter_set_identity=HISTORY_ID,
         strategy_id="daily", daily_search_profile=PROFILE,
         build_context_label="Historical Daily Full/P20 PIT label teacher",
     )
     if Path(result["params_path"]).resolve() != path.resolve():
         raise FormalMinTrade40PITBlocked("Canonical optimizer published unexpected P20 teacher")
-    _validated_records(path, historical=True)
+    _validated_records(path, historical=True, project_root=root)
     return path
 
 
@@ -240,7 +299,7 @@ def load_training_source(*, project_root: str | Path, seed: int,
     if authorized_build:
         execute_history(project_root=root, seed=seed)
     history_path = historical_params_path(root)
-    history, historical_records = _validated_records(history_path, historical=True)
+    history, historical_records = _validated_records(history_path, historical=True, project_root=root)
     current, current_sha = load_strategy_param_evaluation_view(
         current_path, evaluation_mode="rolling", start_date=start, end_date=end,
     )
