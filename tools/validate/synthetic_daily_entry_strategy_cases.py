@@ -507,20 +507,17 @@ class DailyEntryStrategyCases(TestCase):
         for name in ("TrueDailyUniversal_MinTrade_NetPnL_Positive",
                      "TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct"):
             pair = [row for row in rows if row["target"] == name]
-            present_strategies = {p.get("strategy", "Breakout") for p in pair}
-            self.assertIn("Breakout", present_strategies)
-            # The former Min/P18 Direct treatment is historical; the surviving
-            # Daily Full/P20 family has a different independent FullTrade Target.
-            self.assertNotIn("Daily", present_strategies)
-            self.assertEqual({tuple(sorted((k, repr(v)) for k,v in p.items()
-                                           if k not in {"strategy", "strategy_arm_id", "parameter_family"})) for p in pair}.__len__(), 1)
+            # Both P16 Breakout treatments and former Daily/P18 treatments
+            # are retired; the independent P20 FullTrade Target remains live.
+            self.assertEqual(pair, [])
         with self.assertRaisesRegex(ValueError, "duplicate Target x Strategy"):
             resolve_current_oracle_comparisons({
                 **definition.source, "oracle_comparisons": (*rows, dict(rows[-1])),
             })
         # The inventory's second dimension is not a new scientific Target ID.
         self.assertNotIn("TrueDailyUniversal_MinTrade_NetPnL_Positive::Daily", keys)
-        self.assertIn("TrueDailyUniversal_MinTrade_NetPnL_Positive", keys)
+        self.assertNotIn("TrueDailyUniversal_MinTrade_NetPnL_Positive", keys)
+        self.assertNotIn("TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct", keys)
         self.assertNotIn("TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct::Daily::Daily_min", keys)
         self.assertIn("TrueDailyUniversal_FullTrade_NetPnL_Positive_Direct::Daily::Daily_full_p20", keys)
 
@@ -576,7 +573,8 @@ class DailyEntryStrategyCases(TestCase):
             self.assertEqual(len(preview["targets"]), len(comparisons))
             self.assertEqual(len(preview["control_dependencies"]), len(baselines))
             self.assertIn(f"Portfolio REUSE {reuse_count} / RUN（需回放）{run_count} / BLOCKED 0", preview["text"])
-            self.assertIn("DailyUniversal_MinTrade_NetPnL_Positive", preview["text"])
+            self.assertIn("MinTrade_NetPnL_Positive", preview["text"])
+            self.assertNotIn("DailyUniversal_MinTrade_NetPnL_Positive", preview["text"])
             self.assertIn("Direct", preview["text"])
             self.assertIn("Daily",preview["text"])
             result = oracle.build_report(
@@ -588,7 +586,8 @@ class DailyEntryStrategyCases(TestCase):
         self.assertEqual(len(result["definitions"]), len({row["target"] for row in comparisons}))
         self.assertEqual(len(result["comparison_inventory"]), len(baselines) + len(comparisons))
         values = {(row["target"],row["strategy"]):row["romd"] for row in result["oracles"]}
-        self.assertEqual(values[("TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct", "Breakout")],25.0)
+        self.assertNotIn(("TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct", "Breakout"), values)
+        self.assertEqual(values[("DailyUniversal_MinTrade_NetPnL_Positive_Direct", "Breakout")],25.0)
         self.assertEqual(values[("TrueDailyUniversal_FullTrade_NetPnL_Positive_Direct", "Daily")],40.0)
         self.assertEqual([c[1] for c in calls], [True] * len(scope_counts) + [False] * len(scope_counts))
         self.assertEqual([(c[0],len(c[2])) for c in calls[-len(scope_counts):]],

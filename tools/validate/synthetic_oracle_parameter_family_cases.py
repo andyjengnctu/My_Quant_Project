@@ -36,7 +36,7 @@ class OracleParameterFamilyCases(TestCase):
         )
         from core.strategy_compare_policy import get_strategy_comparison_settings
 
-        historical = {"C134", "C138", "C146", "C159", "C160", "C161",
+        historical = {"C134", "C135", "C136", "C138", "C146", "C159", "C160", "C161",
                       "C162", "C163", "C164", "C165"}
         archived = {binding["arm_id"]: group
                     for group in roster.RESEARCH_SUMMARY_ROWS
@@ -64,12 +64,14 @@ class OracleParameterFamilyCases(TestCase):
         self.assertNotIn("Daily::Daily_min", dict(oracle._oracle_strategy_scopes(d)))
         source_catalog = {row["target"]: row
                           for row in get_research_summary_oracle_source_catalog()}
-        # Existing truth producers stay immutable for the surviving Breakout
-        # CU/CT consumers, while P20 FullTrade uses its own independent truth.
+        # A live CO/CP consumer still needs the original event-driven source.
+        # C135/C136 are gone, so their independent TrueDaily recipe remains
+        # registered in historical rows but is no longer an active producer.
         self.assertEqual(source_catalog["DailyUniversal_MinTrade_NetPnL"]["score"],
                          archived["C123"]["oracle"]["score"])
-        self.assertEqual(source_catalog["TrueDailyUniversal_MinTrade_NetPnL_Positive"]["score"],
+        self.assertEqual(archived["C135"]["oracle"]["score"],
                          archived["C133"]["oracle"]["score"])
+        self.assertNotIn("TrueDailyUniversal_MinTrade_NetPnL_Positive", source_catalog)
         self.assertIn("TrueDailyUniversal_FullTrade_NetPnL", source_catalog)
 
         historical_keys = d.source["historical_only_oracle_targets"]
@@ -100,7 +102,7 @@ class OracleParameterFamilyCases(TestCase):
                     if not group.get("enabled", True)
                     for b in group.get("bindings", ()) if b.get("arm_id")}
         # P16 historical treatments cannot return under the old family.
-        for arm_id in ("C134", "C138", "C146"):
+        for arm_id in ("C134", "C135", "C136", "C138", "C146"):
             with self.subTest(reactivation=arm_id):
                 with self.assertRaisesRegex(ValueError, "Historical-only Oracle target"):
                     resolve_current_oracle_comparisons({**d.source,

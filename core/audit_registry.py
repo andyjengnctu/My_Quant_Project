@@ -140,8 +140,13 @@ AUDIT_REUSABLE_REPORTS: dict[str, dict[str, Any]] = {
                     "DailyUniversal_MinTrade40_NetR_Direct": "Retired 2026-11-08: Min 40D rank C120 Direct",
                     "DailyUniversal_MinTrade_NetPnL": "Retired 2026-11-08: non-Positive rank C123 Exact; immutable price truth still supplies Positive",
                     "DailyUniversal_MinTrade_NetPnL_Direct": "Retired 2026-11-08: non-Positive rank C124 Direct",
-                    # Historical treatment keys, not globally retired Target
-                    # names: existing Breakout consumers still use the truths.
+                    # Historical treatment keys are permanently reserved;
+                    # these do not imply retirement of shared truth producers
+                    # that may still serve a different current Target family.
+                    # C135/C136 Breakout/P16 CU+CT arms retired 2026-11-09;
+                    # keep their original Target/Strategy receipt keys reserved.
+                    "TrueDailyUniversal_MinTrade_NetPnL_Positive": "Retired 2026-11-09: C135 CU+CT Breakout Exact",
+                    "TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct": "Retired 2026-11-09: C136 CU+CT Breakout Direct",
                     "TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct::Daily": "Retired 2026-11-08: C134 Daily/P16 Positive Direct; retained as P18 C164 template",
                     "TrueDailyUniversal_MinTrade_NetPnL_Direct::Daily": "Retired 2026-11-08: C138 Daily/P16 CU Direct; retained as P18 C165 template",
                     "T40_Direct::Daily": "Retired 2026-11-08: C146 Daily/P16 CJ Direct; retained as P18 C160 template",

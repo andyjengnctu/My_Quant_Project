@@ -276,7 +276,9 @@ RESEARCH_SUMMARY_ROWS = (
                                   'daily_universal_formal_mintrade_fullcycle_netpnl_per_seed_full_list_ndcg_pairwise'),
                    'positive_model': ('MR-13CP',
                                       'daily_universal_formal_mintrade_fullcycle_netpnl_positive_binary')},)},
-    {'oracle': {'target': 'TrueDailyUniversal_MinTrade_NetPnL_Positive',
+    # AI: 2026-11-09: C135/C136 retired from current Breakout comparisons.
+    # Keep historical Oracle recipes and Strategy Registry identities unchanged.
+    {'enabled': False, 'oracle': {'target': 'TrueDailyUniversal_MinTrade_NetPnL_Positive',
                 'description': 'Every feature-eligible stock-day has an independent next-session prior-close limit '
                                'buy attempt; canonical full-cycle Min broker NetPnL, perfect rank plus Positive '
                                'output, Exact K/R0',
@@ -303,7 +305,7 @@ RESEARCH_SUMMARY_ROWS = (
      'bindings': ({'arm_id': 'C133',
                    'rank_model': ('MR-13CU', 'true_daily_universal_mintrade_fullcycle_netpnl_full_list_ndcg_pairwise'),
                    'positive_model': ('MR-13CT', 'true_daily_universal_mintrade_fullcycle_netpnl_positive_binary')},)},
-    {'oracle': {'target': 'TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct',
+    {'enabled': False, 'oracle': {'target': 'TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct',
                 'description': 'Same hypothetical daily entry full-cycle Min truth / Positive output; Direct '
                                'No-K/No-R0',
                 'score_source': 'TrueDailyUniversal_MinTrade_NetPnL_Positive',
