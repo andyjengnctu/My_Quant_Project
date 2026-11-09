@@ -626,28 +626,28 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
                            for arm in control_arms)
                    and by_arm["C98"]["entry_strategy"] == "Breakout (Full)"
                    and by_arm["C103"]["target"] == "D40 Safety + Conditional MFE")
-        corrupted = tuple({**group, "display_target": "T40 × Daily (Min/P18)"}
-                          if any(binding.get("arm_id") == "C160"
+        corrupted = tuple({**group, "display_target": "T40 × Daily (Full/P20)"}
+                          if any(binding.get("arm_id") == "C169"
                                  for binding in group.get("bindings", ())) else group
                           for group in registered_rows)
         with patch.object(summary_cfg, "RESEARCH_SUMMARY_ROWS", corrupted):
             check_true("summary_composite_target_override_rejected_on_roster_load",
                        raises_expected(ValueError, get_research_summary_rows))
         wrong_target = tuple({**group, "display_target": "R40"}
-                             if any(binding.get("arm_id") == "C160"
+                             if any(binding.get("arm_id") == "C169"
                                     for binding in group.get("bindings", ())) else group
                              for group in registered_rows)
         with patch.object(summary_cfg, "RESEARCH_SUMMARY_ROWS", wrong_target):
             check_true("summary_target_must_match_scientific_model_target",
                        raises_expected(ValueError, lambda: target_dl_overview.collect_target_dl_overview(root)))
         invalid_no_dl_target = tuple({**group, "display_target": "T40"}
-                                     if group.get("arm_id") == "C161" else group
+                                     if group.get("arm_id") == "C168" else group
                                      for group in registered_rows)
         with patch.object(summary_cfg, "RESEARCH_SUMMARY_ROWS", invalid_no_dl_target):
             check_true("summary_no_dl_arm_must_not_fabricate_target",
                        raises_expected(ValueError, lambda: target_dl_overview.collect_target_dl_overview(root)))
         from services.research.target_dl_overview import _summary_entry_label
-        daily_arm = STRATEGY_COMPARE_ARMS["C160"]
+        daily_arm = STRATEGY_COMPARE_ARMS["C169"]
         param_source_id = daily_arm["param_source"]
         param_source = STRATEGY_EXPERIMENTAL_PARAM_SOURCES[param_source_id]
         profile_id = param_source["builder"]["options"]["training_profile_id"]
@@ -658,7 +658,6 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
             profile["parameter_set_identity"]
             for key, profile in STRATEGY_PARAM_PROFILES.items()
             if key != profile_id and profile.get("strategy_id") == "daily"
-            and profile.get("filter_profile") == original_profile["filter_profile"]
             and profile.get("parameter_set_identity") != original_profile["parameter_set_identity"]
         )
         with patch.dict(STRATEGY_PARAM_PROFILES, {profile_id: {

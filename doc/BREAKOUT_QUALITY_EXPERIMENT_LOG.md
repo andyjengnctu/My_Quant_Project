@@ -5373,6 +5373,7 @@ Assessment: `USER_REPORTED_ROLLING_RESULT_AVAILABLE / FULL_HORIZON_MAE_SMALL_PAI
 - **執行定義**：同一 Broker-Cash、同一資訊日與下一交易日成交規則；P19/P20 的買入上限為資訊日 `Close + ATR × atr_buy_tol`，P20 依 PIT 資訊日 BB／量能／EMA／當日報酬／ATR% 判斷候選與 KC 原出場語意；不使用 Breakout 新高、原訊號延續或停損再進場。P18 三維固定舊收盤限價契約與已登錄參數指紋不變。
 - **後續驗證**：本輪無市場資料下合法六 Fold 300 Trials 實際搜尋及多 Seed Replay，因此 **P19/P20 Oracle、Rolling、Robustness RoMD 皆為未完成**，不得以 P18 舊結果補值或宣稱已完成 E13 等價；新的兩家族皆由既有 Optimizer 前置建立並依科學完整簽章驗證 REUSE。
 - **2026-11-09 使用者結果登錄與新科學身分修正：** 使用者提供的迭代 Rolling RoMD 為 C166=1.07、C167=4.11、C168=6.29、C169=3.71；僅為 User-Reported OOS，非本輪重新回放。C166/C167 退出現行研究清單，歷史身分及成果保留；C168/C169 與 P18 均保留。新 `C172` 是 `DailyUniversal_FullTrade_NetPnL_Positive × Daily (Full/P20) Direct`，使用新 `MR-13DB` Rank 與獨立 `MR-13DC` Positive；新 `C173` 是同一 P20 FullTrade 目標的 DB-only Direct。DB/DC 共享 19D P20 獨立歷史與現行 Optimizer teacher、合法成熟的 Full-cycle Broker-Cash NetPnL，不能重用 P17 CZ/DA 或 P18 CU/CT 的 FIT/真值；Oracle 和新 Replay 結果未完成，任何 RoMD 必須保持缺值。
+- **2026-11-09 後續使用者退役決策（P18 僅退役策略，不退役參數）**：退役 `C160/C161/C164/C165`，四者退出 current Research Summary、Target Oracle、Forward／Rolling／Robustness 名單。原先回報的迭代 Rolling／Mean RoMD 分別為 C160 `8.57`、C161 `3.07`、C164 `2.13`、C165 `1.61`（使用者提供的歷史 OOS，非本輪市場重播或四 Seed Oracle 驗證）；既有策略編號、Replay 版本、參數及 Oracle 收據僅保留為歷史證據，不能當成現行結果。`PARAM-P18` 仍已註冊、其歷史工件不刪除亦不自動重算；CJ／CU／CT 模型 FIT 不因退役策略而改版。保留 P20 的 C168/C169/C172/C173，不挪用 P18 身分。此為 scope-retirement 決策，不宣稱被退役的模型／策略在所有指標上較差。
 
 ## 6. 後續新增規則
 

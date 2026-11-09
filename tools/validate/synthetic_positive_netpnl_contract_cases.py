@@ -149,7 +149,7 @@ class PositiveNetPnlContractCases(TestCase):
         self.assertNotIn('MR-13CW', {model for model, _ in BREAKOUT_QUALITY_MODEL_TEST_PROFILES})
         settings = get_strategy_comparison_settings(STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE)
         active = {arm.arm_id for arm in settings.enabled_arms}
-        self.assertTrue({'C96', 'C107', 'C109', 'C125', 'C126', 'C135', 'C136', 'C164'}.issubset(active))
+        self.assertTrue({'C96', 'C107', 'C109', 'C125', 'C126', 'C135', 'C136', 'C172', 'C173'}.issubset(active))
         self.assertTrue({'C134', 'C138', 'C146', 'C163'}.isdisjoint(active))
         self.assertTrue({'C142', 'C143', 'C144'}.isdisjoint(active))
         self.assertIn('C144', settings.arms)  # Immutable historical strategy ID.
@@ -187,8 +187,8 @@ class PositiveNetPnlContractCases(TestCase):
         cases = (
             ("MinTrade_NetPnL_Positive", "Breakout", "Exact", "C125", "MR-13CO", "MR-13CP"),
             ("MinTrade_NetPnL_Positive", "Breakout", "Direct", "C126", "MR-13CO", "MR-13CP"),
-            ("DailyUniversal_MinTrade_NetPnL", "Daily (Min/P18)", "Direct", "C165", "MR-13CU", ""),
-            ("DailyUniversal_MinTrade_NetPnL_Positive", "Daily (Min/P18)", "Direct", "C164", "MR-13CU", "MR-13CT"),
+            ("DailyUniversal_FullTrade_NetPnL", "Daily (Full/P20)", "Direct", "C173", "MR-13DB", ""),
+            ("DailyUniversal_FullTrade_NetPnL_Positive", "Daily (Full/P20)", "Direct", "C172", "MR-13DB", "MR-13DC"),
             ("DailyUniversal_MinTrade_NetPnL_Positive", "Breakout", "Exact", "C135", "MR-13CU", "MR-13CT"),
             ("DailyUniversal_MinTrade_NetPnL_Positive", "Breakout", "Direct", "C136", "MR-13CU", "MR-13CT"),
         )
@@ -199,7 +199,7 @@ class PositiveNetPnlContractCases(TestCase):
         group = {keys(row): [] for row in report['rows']}
         for row in report['rows']:
             group[keys(row)].append(row)
-        for retired_arm in ("C134", "C138"):
+        for retired_arm in ("C134", "C138", "C160", "C161", "C164", "C165"):
             self.assertNotIn(retired_arm, {row["strategy"] for row in report["rows"]})
         for target, strategy, selector, arm_id, rank, classifier in cases:
             with self.subTest(arm=arm_id):
@@ -475,9 +475,11 @@ class PositiveNetPnlContractCases(TestCase):
                                  for row in comparisons))
             true_daily = {oracle_comparison_key(row) for row in comparisons
                           if row.get("strategy") == "Daily"
-                          and oracle_parameter_family(row) == "daily_min"}
+                          and oracle_parameter_family(row) == "daily_full_p20"}
             self.assertTrue(true_daily)
             self.assertTrue(true_daily.isdisjoint(values))
+            self.assertFalse(any(oracle_parameter_family(row) == "daily_min"
+                                 for row in comparisons))
             scientific_daily = {oracle_target_semantics(row)[0] for row in comparisons
                                 if row.get("strategy") == "Daily"}
             ledger = Path(temp) / "doc/scientific_contracts/REPORT_CONTRACT_VERSIONS.json"
@@ -629,10 +631,13 @@ class PositiveNetPnlContractCases(TestCase):
         true_daily = "TrueDailyUniversal_MinTrade_NetPnL_Positive"
         self.assertEqual(references[true_daily]["arm_id"], "C135")
         self.assertNotIn(true_daily + "_Direct::Daily", references)
-        self.assertEqual(references[true_daily + "_Direct::Daily::Daily_min"]["arm_id"], "C164")
-        self.assertEqual(references["TrueDailyUniversal_MinTrade_NetPnL_Direct::Daily::Daily_min"]["arm_id"], "C165")
+        self.assertNotIn(true_daily + "_Direct::Daily::Daily_min", references)
+        self.assertNotIn("TrueDailyUniversal_MinTrade_NetPnL_Direct::Daily::Daily_min", references)
         self.assertNotIn("TrueDailyUniversal_MinTrade_NetPnL_Direct::Daily", references)
-        self.assertEqual(references[true_daily + "_Direct::Daily::Daily_min"]["arm_id"], "C164")
+        self.assertEqual(references[
+            "TrueDailyUniversal_FullTrade_NetPnL_Positive_Direct::Daily::Daily_full_p20"]["arm_id"], "C172")
+        self.assertEqual(references[
+            "TrueDailyUniversal_FullTrade_NetPnL_Direct::Daily::Daily_full_p20"]["arm_id"], "C173")
 
     def test_report_resolves_positive_exact_and_direct_without_ambiguity(self):
         definition = get_formal_oracle_definition(get_active_audit_module_id())
@@ -645,7 +650,7 @@ class PositiveNetPnlContractCases(TestCase):
         for key,value in expected.items():
             self.assertEqual(bindings.get(key),value)
         self.assertFalse(any(arm in {'C123', 'C124'} for arm in bindings.values()))
-        # Current Breakout TrueDaily arms and P18 transfer use the shared CU/CT sources.
+        # Breakout TrueDaily arms retain CU/CT; P18 transfers are historical.
         for suffix in ("", "_Direct"):
             name = "TrueDailyUniversal_MinTrade_NetPnL_Positive" + suffix
             self.assertEqual(
@@ -658,12 +663,14 @@ class PositiveNetPnlContractCases(TestCase):
                 [arm for (target, _profile), arm in bindings.items() if target == daily_key],
                 expected_arms,
             )
+        self.assertNotIn("C164", bindings.values())
+        self.assertNotIn("C165", bindings.values())
         self.assertEqual(bindings.get((
-            "TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct::Daily::Daily_min",
-            "true_daily_universal_mintrade_fullcycle_netpnl_full_list_ndcg_pairwise")), "C164")
+            "TrueDailyUniversal_FullTrade_NetPnL_Positive_Direct::Daily::Daily_full_p20",
+            "daily_universal_full_p20_fulltrade_netpnl_full_list_ndcg_pairwise")), "C172")
         self.assertEqual(bindings.get((
-            "TrueDailyUniversal_MinTrade_NetPnL_Direct::Daily::Daily_min",
-            "true_daily_universal_mintrade_fullcycle_netpnl_full_list_ndcg_pairwise")), "C165")
+            "TrueDailyUniversal_FullTrade_NetPnL_Direct::Daily::Daily_full_p20",
+            "daily_universal_full_p20_fulltrade_netpnl_full_list_ndcg_pairwise")), "C173")
 
 
 class IndependentPositiveClassifierCases(TestCase):

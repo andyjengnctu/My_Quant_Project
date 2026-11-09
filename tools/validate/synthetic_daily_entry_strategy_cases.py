@@ -509,8 +509,9 @@ class DailyEntryStrategyCases(TestCase):
             pair = [row for row in rows if row["target"] == name]
             present_strategies = {p.get("strategy", "Breakout") for p in pair}
             self.assertIn("Breakout", present_strategies)
-            if name.endswith("_Direct"):
-                self.assertIn("Daily", present_strategies)
+            # The former Min/P18 Direct treatment is historical; the surviving
+            # Daily Full/P20 family has a different independent FullTrade Target.
+            self.assertNotIn("Daily", present_strategies)
             self.assertEqual({tuple(sorted((k, repr(v)) for k,v in p.items()
                                            if k not in {"strategy", "strategy_arm_id", "parameter_family"})) for p in pair}.__len__(), 1)
         with self.assertRaisesRegex(ValueError, "duplicate Target x Strategy"):
@@ -520,7 +521,8 @@ class DailyEntryStrategyCases(TestCase):
         # The inventory's second dimension is not a new scientific Target ID.
         self.assertNotIn("TrueDailyUniversal_MinTrade_NetPnL_Positive::Daily", keys)
         self.assertIn("TrueDailyUniversal_MinTrade_NetPnL_Positive", keys)
-        self.assertIn("TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct::Daily::Daily_min", keys)
+        self.assertNotIn("TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct::Daily::Daily_min", keys)
+        self.assertIn("TrueDailyUniversal_FullTrade_NetPnL_Positive_Direct::Daily::Daily_full_p20", keys)
 
     def test_one_approval_matrix_and_same_engine_for_declared_treatments(self):
         from core.audit_registry import oracle_baseline_arm_ids, oracle_comparison_key
@@ -585,10 +587,9 @@ class DailyEntryStrategyCases(TestCase):
         self.assertEqual(len(result["oracles"]), len(comparisons))
         self.assertEqual(len(result["definitions"]), len({row["target"] for row in comparisons}))
         self.assertEqual(len(result["comparison_inventory"]), len(baselines) + len(comparisons))
-        target = "TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct"
         values = {(row["target"],row["strategy"]):row["romd"] for row in result["oracles"]}
-        self.assertEqual(values[(target,"Breakout")],25.0)
-        self.assertEqual(values[(target,"Daily")],40.0)
+        self.assertEqual(values[("TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct", "Breakout")],25.0)
+        self.assertEqual(values[("TrueDailyUniversal_FullTrade_NetPnL_Positive_Direct", "Daily")],40.0)
         self.assertEqual([c[1] for c in calls], [True] * len(scope_counts) + [False] * len(scope_counts))
         self.assertEqual([(c[0],len(c[2])) for c in calls[-len(scope_counts):]],
                          [(strategy, len(seeds) * (1 + count)) for strategy, count in scope_counts])
@@ -1118,7 +1119,7 @@ class DailyEntryStrategyCases(TestCase):
             names[base.arm_id] = _canonical_oracle_replay_policy(
                 selected, base_arm=base, exact_arm=exact)
         self.assertNotIn("daily_execution_contract", names["C96"])
-        self.assertNotIn("daily_execution_contract", names["C161"])
+        self.assertNotIn("C161", names)
         # P19 C166/C167 are retired; the active P20 oracle still uses the
         # independently registered full-filter execution policy.
         self.assertNotIn("C166", names)

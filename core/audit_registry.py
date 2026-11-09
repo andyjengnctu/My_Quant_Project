@@ -140,12 +140,18 @@ AUDIT_REUSABLE_REPORTS: dict[str, dict[str, Any]] = {
                     "DailyUniversal_MinTrade40_NetR_Direct": "Retired 2026-11-08: Min 40D rank C120 Direct",
                     "DailyUniversal_MinTrade_NetPnL": "Retired 2026-11-08: non-Positive rank C123 Exact; immutable price truth still supplies Positive",
                     "DailyUniversal_MinTrade_NetPnL_Direct": "Retired 2026-11-08: non-Positive rank C124 Direct",
-                    # Historical P16/P18 treatment keys, not globally retired
-                    # Target names: active P18 transfers still use these truths.
+                    # Historical treatment keys, not globally retired Target
+                    # names: existing Breakout consumers still use the truths.
                     "TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct::Daily": "Retired 2026-11-08: C134 Daily/P16 Positive Direct; retained as P18 C164 template",
                     "TrueDailyUniversal_MinTrade_NetPnL_Direct::Daily": "Retired 2026-11-08: C138 Daily/P16 CU Direct; retained as P18 C165 template",
                     "T40_Direct::Daily": "Retired 2026-11-08: C146 Daily/P16 CJ Direct; retained as P18 C160 template",
                     "DailyUniversal_MinTrade_NetPnL_Direct::Daily::Daily_min": "Retired 2026-11-08: C163 event-driven CO Daily/P18 Direct",
+                    # P18 strategy membership retired on 2026-11-09. These
+                    # complete treatment keys, not globally shared Target
+                    # names, are historical-only. P20 remains independent.
+                    "T40_Direct::Daily::Daily_min": "Retired 2026-11-09: C160 T40 Daily/P18 Direct",
+                    "TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct::Daily::Daily_min": "Retired 2026-11-09: C164 CU+CT Daily/P18 Direct",
+                    "TrueDailyUniversal_MinTrade_NetPnL_Direct::Daily::Daily_min": "Retired 2026-11-09: C165 CU Daily/P18 Direct",
                     "T40-MFE": "Retired 2026-11-08: MR-13CK T40-MFE C108 Exact; historical labels and PIT scores retained",
                     "T40-MFE_Direct": "Retired 2026-11-08: MR-13CK T40-MFE C110 Direct",
                     "DailyUniversal_MinTrade60_NetR": "LABEL-daily_universal_formal_min_roos_trade60_netr_v1",

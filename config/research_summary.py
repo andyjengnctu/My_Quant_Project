@@ -13,11 +13,10 @@ RESEARCH_SUMMARY_ROWS = (
     {'arm_id': 'C96', 'oracle_parameter_family': 'min'},
     {'arm_id': 'C97', 'oracle_parameter_family': 'full'},
     {'arm_id': 'C98', 'parameter_family': 'full'},
-    # P18 is an independent economic parameter family. The No-DL C161
-    # control and its T40 treatments are declared together in this roster.
-    {'arm_id': 'C161', 'oracle_parameter_family': 'daily_min'},
-    # P18 remains active and unchanged. New Daily scientific parameter lineages
-    # reuse the approved T40 perfect-score recipe, never the P16/P18 Replay.
+    # AI: C160/C161/C164/C165 are historical P18 arms, retired from current
+    # Summary/Oracle/Compare (2026-11-09). P18 parameters and signed evidence
+    # remain registered; no model, parameter or Replay identity is rewritten.
+    {'enabled': False, 'arm_id': 'C161', 'oracle_parameter_family': 'daily_min'},
     # P19 C166/C167 are retired; original research results remain in the
     # Experiment Log/Registry and are never reused by P20 training.
     {'arm_id': 'C168', 'oracle_parameter_family': 'daily_full_p20'},
@@ -54,12 +53,12 @@ RESEARCH_SUMMARY_ROWS = (
      'bindings': ({'arm_id': 'C169',
                    'rank_model': ('MR-13CJ', 'daily_universal_terminal_mae_gated_t40_full_list_ndcg_pairwise')},)},
 
-    # Reuse the existing approved T40 Daily Oracle truth/score recipes; only
-    # the formal execution arm and parameter lineage change (P16 -> P18).
+    # AI: Historical P18 templates remain disabled for audit provenance.
+    # The approved score recipe and original Replay identities are immutable.
     {'enabled': False, 'oracle_template_arm_id': 'C145', 'parameter_family': 'daily_min',
      'bindings': ({'arm_id': 'C159',
                    'rank_model': ('MR-13CJ', 'daily_universal_terminal_mae_gated_t40_full_list_ndcg_pairwise')},)},
-    {'oracle_template_arm_id': 'C146', 'parameter_family': 'daily_min',
+    {'enabled': False, 'oracle_template_arm_id': 'C146', 'parameter_family': 'daily_min',
      'bindings': ({'arm_id': 'C160',
                    'rank_model': ('MR-13CJ', 'daily_universal_terminal_mae_gated_t40_full_list_ndcg_pairwise')},)},
     # Keep C123/C124 retired in Breakout/P16.  Only reuse their immutable
@@ -74,19 +73,18 @@ RESEARCH_SUMMARY_ROWS = (
      'bindings': ({'arm_id': 'C163',
                    'rank_model': ('MR-13CO',
                                   'daily_universal_formal_mintrade_fullcycle_netpnl_per_seed_full_list_ndcg_pairwise')},)},
-    # Existing independent CU/CT PIT scores transfer to P18; C134 is the
-    # approved TrueDaily Positive Direct score recipe, not the Replay source.
-    {'oracle_template_arm_id': 'C134', 'parameter_family': 'daily_min',
+    # AI: Archived P18 CU/CT transfer; C134 keeps the original approved
+    # TrueDaily Positive score recipe, not an executable Replay source.
+    {'enabled': False, 'oracle_template_arm_id': 'C134', 'parameter_family': 'daily_min',
      'strategy': 'Daily',
      'bindings': ({'arm_id': 'C164',
                    'rank_model': ('MR-13CU',
                                   'true_daily_universal_mintrade_fullcycle_netpnl_full_list_ndcg_pairwise'),
                    'positive_model': ('MR-13CT',
                                       'true_daily_universal_mintrade_fullcycle_netpnl_positive_binary')},)},
-    # Same TrueDaily CU continuous Target as C138, but with the independently
-    # Daily-optimized P18 economic parameter lineage and no Positive admission.
-    # C163 is different: it consumes event-driven MR-13CO rather than CU.
-    {'oracle_template_arm_id': 'C138', 'parameter_family': 'daily_min',
+    # AI: Archived P18 rank-only CU transfer, distinct from event-driven CO.
+    # C138 supplies historical truth semantics only; neither arm is active.
+    {'enabled': False, 'oracle_template_arm_id': 'C138', 'parameter_family': 'daily_min',
      'strategy': 'Daily',
      'bindings': ({'arm_id': 'C165',
                    'rank_model': ('MR-13CU',
