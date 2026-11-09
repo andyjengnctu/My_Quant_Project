@@ -1457,7 +1457,7 @@ def _validate_strategy_comparison_groups(settings: StrategyComparisonSettings) -
         tuple[str, str, str],
         dict[str, StrategyComparisonArm | dict[tuple[str, str, str], StrategyComparisonArm] | None],
     ] = {}
-    for arm in settings.arms.values():
+    for arm in settings.enabled_arms:
         arm_param_policy = resolve_strategy_comparison_arm_param_policy(settings, arm)
         group = groups.setdefault(
             (arm.param_source, arm_param_policy, arm.rule_policy),

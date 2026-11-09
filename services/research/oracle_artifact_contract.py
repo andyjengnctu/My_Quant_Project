@@ -36,6 +36,7 @@ DAILY_CALCULATION_REVISIONS = {
     "daily_trade_path_net_pnl": 1,
     "daily_trade_path_true_net_pnl": 2,
     "daily_trade_path_full_net_pnl": 1,
+    "daily_trade_path_daily_min_p19_net_pnl": 1,
     "daily_trade_path_daily_full_p20_net_pnl": 1,
 }
 FEATURE_UNIVERSE_CALCULATION_REVISION = 1
@@ -408,7 +409,31 @@ def portfolio_candidate_execution_sha256(*, daily_execution_contract: str | None
 def source_implementation_sha256(recipe: str, profile_id: str) -> str:
     parts = {"daily_percentile": calculation_source(
         "filters/breakout_quality/continuous_ranker_data.py", "build_same_date_percentile_targets")}
-    if recipe == "daily_trade_path_daily_full_p20_net_pnl":
+    if recipe == "daily_trade_path_daily_min_p19_net_pnl":
+        # P19 is a 4D ATR-limit/no-setup Daily primitive. Both the wrapper
+        # and the reused canonical broker simulation are signed; no P18
+        # source/teacher is permitted as an alias.
+        parts.update({
+            "p19_entry": calculation_source(
+                "filters/breakout_quality/daily_min_p19_target.py", "compute_daily_min_p19_batch"),
+            "shared_next_session_broker": calculation_source(
+                "filters/breakout_quality/daily_full_p20_target.py", "compute_daily_full_p20_batch"),
+            "daily_atr_limit": calculation_source(
+                "core/daily_common_entry_filters.py", "daily_common_filter_signals"),
+            "stock_outcomes": calculation_source(
+                "services/audit/daily_min_p19_oracle_truth.py", "_stock_outcome"),
+            "truth_cohort": calculation_source(
+                "services/audit/daily_min_p19_oracle_truth.py", "build_daily_min_p19_oracle_scores"),
+            "rank_outcomes": calculation_source(
+                "filters/breakout_quality/daily_trade40_target.py", "rank_trade40_outcome_frame"),
+            "schedule": calculation_source(
+                "filters/breakout_quality/daily_trade40_target.py", "build_formal_min_execution_schedule"),
+            "active_period": calculation_source(
+                "filters/breakout_quality/daily_trade40_target.py", "resolve_historical_min_period"),
+            "broker_path": calculation_source(
+                "filters/breakout_quality/trade_path_label.py", "simulate_realized_trade_path_label"),
+        })
+    elif recipe == "daily_trade_path_daily_full_p20_net_pnl":
         # P20 uses a separate stock-day entry/filter/buy-limit decision. It
         # shares canonical broker/period/ranking primitives with Min, but the
         # original event-driven and TrueDaily source hashes must not change.

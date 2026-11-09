@@ -35,6 +35,7 @@ DAILY_FORMAL_MINTRADE_FULLCYCLE_NETR_TARGET_ID = "daily_formal_mintrade_fullcycl
 DAILY_FORMAL_MINTRADE_FULLCYCLE_NETPNL_TARGET_ID = "daily_formal_mintrade_fullcycle_netpnl_per_seed_v1"
 FULLTRADE_FULLCYCLE_NETPNL_TARGET_ID = "daily_formal_fulltrade_fullcycle_netpnl_per_seed_v1"
 TRUE_DAILY_MINTRADE_FULLCYCLE_NETPNL_TARGET_ID = "true_daily_universal_mintrade_fulltrade_netpnl_v1"
+DAILY_MIN_P19_FULLCYCLE_NETPNL_TARGET_ID = "daily_universal_min_p19_fullcycle_netpnl_seed42_v1"
 DAILY_FULL_P20_FULLCYCLE_NETPNL_TARGET_ID = "daily_universal_full_p20_fullcycle_netpnl_seed42_v1"
 DAILY_FIRST_RISK_BREACH_PURE_MFE_TARGET_ID = "daily_first_risk_breach_pure_mfe_r_v1"
 DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID = "daily_full_horizon_low_adverse_r_v1"
@@ -1345,6 +1346,10 @@ def _continuous_ranker_target_policies() -> dict[str, ContinuousRankerTargetPoli
         FULLTRADE_FULLCYCLE_NETPNL_TARGET_ID: ContinuousRankerTargetPolicy(
             materialization_mode=CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH,
             contract_kind="formal_seed_fulltrade_fullcycle_netpnl",
+        ),
+        DAILY_MIN_P19_FULLCYCLE_NETPNL_TARGET_ID: ContinuousRankerTargetPolicy(
+            materialization_mode=CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH,
+            contract_kind="daily_min_p19_seed42_fullcycle_netpnl",
         ),
         DAILY_FULL_P20_FULLCYCLE_NETPNL_TARGET_ID: ContinuousRankerTargetPolicy(
             materialization_mode=CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH,

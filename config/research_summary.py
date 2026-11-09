@@ -19,6 +19,33 @@ RESEARCH_SUMMARY_ROWS = (
     {'enabled': False, 'arm_id': 'C161', 'oracle_parameter_family': 'daily_min'},
     # P19 C166/C167 are retired; original research results remain in the
     # Experiment Log/Registry and are never reused by P20 training.
+    # Independent P19 4D ATR-limit Daily economics. Its original C166/C167
+    # comparison receipts are retired and NEVER recycled.  C174 is an unscored
+    # baseline (Default): a Direct selector is defined only for scored arms.
+    {'arm_id': 'C174', 'oracle_parameter_family': 'daily_min_p19'},
+    {'enabled': False,
+     'oracle': {'target': 'TrueDailyUniversal_MinTrade_P19_NetPnL',
+                'description': 'Signed P19 4D ATR-limit Daily Min natural-exit NetPnL truth',
+                'score': 'daily_trade_path_daily_min_p19_net_pnl',
+                'provider': 'daily_trade40_profile',
+                'horizon_mode': 'full_trade_cycle', 'selector': 'exact',
+                'strategy': 'Daily', 'parameter_family': 'daily_min_p19'}},
+    {'oracle': {'target': 'TrueDailyUniversal_MinTrade_P19_NetPnL_Direct',
+                'description': 'Independent P19 MinTrade broker NetPnL rank, Direct',
+                'score_source': 'TrueDailyUniversal_MinTrade_P19_NetPnL',
+                'selector': 'direct', 'strategy_arm_id': 'C175',
+                'strategy': 'Daily', 'parameter_family': 'daily_min_p19'},
+     'bindings': ({'arm_id': 'C175',
+                   'rank_model': ('MR-13DD', 'daily_universal_min_p19_mintrade_netpnl_full_list_ndcg_pairwise')},)},
+    {'oracle': {'target': 'TrueDailyUniversal_MinTrade_P19_NetPnL_Positive_Direct',
+                'description': 'Same P19 MinTrade Rank with independent Positive classifier',
+                'score_source': 'TrueDailyUniversal_MinTrade_P19_NetPnL',
+                'selector': 'direct', 'positive_output': 'netpnl_positive_probability_v1',
+                'strategy_arm_id': 'C176', 'strategy': 'Daily',
+                'parameter_family': 'daily_min_p19'},
+     'bindings': ({'arm_id': 'C176',
+                   'rank_model': ('MR-13DD', 'daily_universal_min_p19_mintrade_netpnl_full_list_ndcg_pairwise'),
+                   'positive_model': ('MR-13DE', 'daily_universal_min_p19_mintrade_netpnl_positive_binary')},)},
     {'arm_id': 'C168', 'oracle_parameter_family': 'daily_full_p20'},
     # New economic target and TWO independently trained DLs for P20.
     # Neither Breakout Full/P17 CZ/DA nor Daily Min/P18 CU/CT matches this

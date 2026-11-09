@@ -149,6 +149,32 @@ def _full_history_execute(*, project_root: str | Path, seed: int):
     return prepare_full_history(project_root=project_root, seed=seed, authorized=True)
 
 
+def _daily_min_p19_loader(*, project_root: str | Path, seed: int, authorized_build: bool):
+    from services.breakout_quality.daily_min_p19_training_source import resolve_loader_kwargs
+    return resolve_loader_kwargs(project_root=project_root, seed=seed,
+                                 authorized_build=authorized_build)
+
+
+def _daily_min_p19_history_inspect(*, project_root: str | Path, seed: int):
+    from services.breakout_quality.daily_min_p19_training_source import inspect_history
+    return inspect_history(project_root=project_root, seed=seed)
+
+
+def _daily_min_p19_history_execute(*, project_root: str | Path, seed: int):
+    from services.breakout_quality.daily_min_p19_training_source import execute_history
+    return execute_history(project_root=project_root, seed=seed)
+
+
+def _daily_min_p19_current_inspect(*, project_root: str | Path, seed: int):
+    from services.breakout_quality.daily_min_p19_training_source import inspect_current
+    return inspect_current(project_root=project_root, seed=seed)
+
+
+def _daily_min_p19_current_execute(*, project_root: str | Path, seed: int):
+    from services.breakout_quality.daily_min_p19_training_source import execute_current
+    return execute_current(project_root=project_root, seed=seed)
+
+
 def _daily_full_p20_loader(*, project_root: str | Path, seed: int, authorized_build: bool):
     from services.breakout_quality.daily_full_p20_training_source import resolve_loader_kwargs
     return resolve_loader_kwargs(project_root=project_root, seed=seed,
@@ -176,6 +202,16 @@ def _daily_full_p20_current_execute(*, project_root: str | Path, seed: int):
 
 
 _TRADE_PATH_SOURCES: dict[str, TradePathSource] = {
+    "daily_min_p19_seed42_fullcycle_netpnl": TradePathSource(
+        contract_kind="daily_min_p19_seed42_fullcycle_netpnl",
+        loader=_daily_min_p19_loader,
+        dependencies=(
+            TeacherDependency("daily_min_p19_historical_teacher", "optimizer_daily_min_p19_historical_teacher", 30,
+                              _daily_min_p19_history_inspect, _daily_min_p19_history_execute),
+            TeacherDependency("daily_min_p19_current_teacher", "optimizer_daily_min_p19_current_teacher", 40,
+                              _daily_min_p19_current_inspect, _daily_min_p19_current_execute),
+        ),
+    ),
     "daily_full_p20_seed42_fullcycle_netpnl": TradePathSource(
         contract_kind="daily_full_p20_seed42_fullcycle_netpnl",
         loader=_daily_full_p20_loader,

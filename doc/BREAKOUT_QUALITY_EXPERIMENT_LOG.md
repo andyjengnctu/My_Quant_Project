@@ -5378,6 +5378,8 @@ Assessment: `USER_REPORTED_ROLLING_RESULT_AVAILABLE / FULL_HORIZON_MAE_SMALL_PAI
 
 - **2026-11-09 使用者退役決策（C135/C136）**：將 CU rank + CT Positive 的 Breakout Exact `C135` 與 Breakout Direct `C136` 從現行 Research Summary、Target Oracle、Strategy Compare（Forward／Rolling）、Strategy Robustness 與 Target × DL 驗證移除。兩策略歷史 ID、Strategy Registry、Replay v2、原始簽章工件及既有績效仍保留，不視為現行結果；同一項已核准 TrueDaily 真值及其歷史 Oracle recipe 不刪改。`MR-13CU` 與 `MR-13CT` 模型 FIT／規格仍保留，無 FIT／Replay／Report contract 升版，亦不修改 C125/C126 或 P20 C168/C169/C172/C173。由於目前沒有其他啟用 CU／CT 策略 consumer，`[3]` 當前 Compare/Test 名單會依 Summary SSOT 自動不再列 CU／CT，但這不等於刪除或退役其模型研究身分及既有 FIT。上述屬使用者指定的研究 membership 縮減，非模型效能不佳的實證結論；原先迭代 OOS 報表保持歷史可追溯。
 
+- **2026-11-10 使用者新增獨立 P19 Target／策略（績效待驗）**：現行新增 `C174` Daily (Min/P19) 無 DL Default 對照、`C175` Daily (Min/P19) × `Daily_MinTrade_NetPnL` Direct（`MR-13DD` Rank）、`C176` Daily (Min/P19) × `Daily_MinTrade_NetPnL_Positive` Direct（`MR-13DD` Rank + 獨立 `MR-13DE` Binary）。使用者要求兩個 Target **必須是真正 P19 四維歷史＋當期合法參數**，不能借 P18 三維或原 CU／CT 真值。C166/C167 保留退役及原 OOS 歷史；C172/C173 P20 不動。無模型分數的 C174 依原引擎只可能 Default，不能在報表冒充 Direct。P19 Oracle、DL FIT、Rolling／Robustness 尚無本機正式實測收據；本次僅是新研究身分及獨立生產鏈，沒有新的市場 RoMD／Win Rate 可宣稱。
+
 ## 6. 後續新增規則
 
 **只有新科學證據或舊科學證據有效性更正才能增加本文件內容。** 記錄必須有實驗／Target 身分、期間／Seed、控制變數、原始結果、負結果與決策，並指向正式證據。沒有市場／模型結果的工程測試、提交紀錄、打包、格式調整或一次性 Audit 清理，不可追加研究章節。本文件不再生成封存副本或研究待辦。
