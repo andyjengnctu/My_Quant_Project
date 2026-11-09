@@ -475,6 +475,60 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         and "Win Rate" in no_oracle_example
         and "CONTROL" in no_oracle_example,
     )
+    # AI: 2026-11-09 console regression. The earlier Summary highlighted the
+    # rolling-only subgroup's 6.29 and 3.28 although they were neither the
+    # highest nor the lowest visible Mean RoMD. Keep subgroup scientific
+    # eligibility, but never add a second colored pair within one column.
+    mean_color_rows = []
+    for arm_id, mean, robust, oracle, win_rate in (
+        ("C106", 11.34, 12.17, 21.92, 50.49),
+        ("C112", 2.64, 2.73, 98.76, 59.61),
+        ("C168", 6.29, None, None, None),
+        ("C172", 3.28, None, 2450.16, 100.0),
+        ("C169", 3.71, None, 6087.97, 88.38),
+        ("C153", 7.64, 6.22, 9.83, 43.25),
+    ):
+        comparable = robust is not None
+        mean_color_rows.append({
+            "strategy": arm_id, "entry_strategy": "Synthetic",
+            "selector": "Direct", "target": "", "model": "",
+            "positive_model": "", "rolling_rho": None,
+            "robustness_rho": None, "rho_seeds": (),
+            "rolling_romd": mean, "robustness_romd": robust,
+            "romd_seeds": (1, 2, 3, 4) if comparable else (),
+            "romd_benchmark": "end_to_end_v1" if comparable else "",
+            "rolling_robustness_mean_romd": mean,
+            "oracle_romd": oracle, "win_rate_pct": win_rate,
+        })
+    with patch.object(
+        target_dl_overview, "styled_signal",
+        side_effect=lambda value, signal, **kwargs: f"<{signal}>{value}</{signal}>",
+    ):
+        color_report = target_dl_overview.render_target_dl_overview({
+            "rows": mean_color_rows,
+            "oracle": {"benchmark": "end_to_end_v1", "seeds": (1, 2, 3, 4),
+                       "period": "2021-2026", "path": "synthetic"},
+        }, sort_by="rolling_robustness_mean_romd")
+    colored_by_arm = {
+        row.split()[0]: row for row in color_report.splitlines()
+        if row.startswith(tuple(r["strategy"] for r in mean_color_rows))
+    }
+    check_true(
+        "summary_only_global_extrema_colored_not_rolling_only_subgroup_extrema",
+        len(colored_by_arm) == len(mean_color_rows)
+        and "<positive>11.34</positive>" in colored_by_arm["C106"]
+        and "<negative>2.64</negative>" in colored_by_arm["C112"]
+        and "6.29" in colored_by_arm["C168"]
+        and "3.28" in colored_by_arm["C172"]
+        and "<positive>6.29</positive>" not in colored_by_arm["C168"]
+        and "<negative>3.28</negative>" not in colored_by_arm["C172"]
+        and "<positive>6087.97</positive>" in colored_by_arm["C169"]
+        and "<negative>9.83</negative>" in colored_by_arm["C153"]
+        and "2450.16" in colored_by_arm["C172"]
+        and "<positive>2450.16</positive>" not in colored_by_arm["C172"]
+        and "<positive>100.00%</positive>" in colored_by_arm["C172"],
+    )
+
     # A requested sort remains the primary key; the approved Mean RoMD is
     # the secondary key for every other column, including text and missing.
     from core.report_metrics import weighted_rolling_robustness_romd

@@ -240,6 +240,28 @@ def best_worst_signals(
     return signals
 
 
+def full_column_extrema_only(
+    cohort_signals: dict[str, str],
+    column_values_by_id: dict[str, Any],
+    *,
+    preference: str,
+) -> dict[str, str]:
+    """Suppress subgroup extrema that are not also extrema of the displayed column.
+
+    This is a presentation-only guard: an extreme from a non-comparable cohort
+    is *not* promoted to a signal unless that cohort had a valid signal first.
+    In particular, a rolling-only Mean RoMD group cannot create an extra pair
+    of colored values alongside the certified multi-seed Mean RoMD group.
+    """
+
+    visible_extrema = best_worst_signals(column_values_by_id, preference=preference)
+    return {
+        row_id: signal
+        for row_id, signal in cohort_signals.items()
+        if visible_extrema.get(row_id) == signal
+    }
+
+
 def signal_label(signal: str) -> str:
     """Return the plain semantic judgment word, without any icon."""
 
@@ -332,6 +354,7 @@ __all__ = [
     "signal_for_ratio",
     "signal_for_auc",
     "best_worst_signals",
+    "full_column_extrema_only",
     "signal_label",
     "tone_for_signal",
     "terminal_color_for_signal",

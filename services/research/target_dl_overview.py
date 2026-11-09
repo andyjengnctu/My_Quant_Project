@@ -51,7 +51,7 @@ from core.research_report_contract import (
 )
 from core.report_metrics import weighted_rolling_robustness_romd
 from core.console_report import render_table, render_title
-from core.report_style import best_worst_signals, styled_signal
+from core.report_style import best_worst_signals, full_column_extrema_only, styled_signal
 from core.strategy_compare_policy import (
     get_strategy_comparison_settings,
     get_strategy_compare_suite,
@@ -1259,13 +1259,22 @@ def render_target_dl_overview(
             else:
                 cohort = ("same_column",)
             cohorts.setdefault(cohort, {})[str(i)] = value
-        column_signals[column.key] = {
+        # Each valid evidence cohort may have different extrema.  A Summary
+        # column, however, must never color intermediate visible values simply
+        # because they are best/worst *within* a smaller cohort.  Preserve the
+        # cohort comparability checks while suppressing extra colored pairs.
+        cohort_signals = {
             row_id: signal
             for cohort_values in cohorts.values()
             for row_id, signal in best_worst_signals(
                 cohort_values, preference=column.preference,
             ).items()
         }
+        column_signals[column.key] = full_column_extrema_only(
+            cohort_signals,
+            {str(i): row.get(column.key) for i, row in enumerate(rows)},
+            preference=column.preference,
+        )
     formatted: list[list[str]] = []
     for i, row in enumerate(rows):
         cells = []
