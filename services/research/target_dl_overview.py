@@ -334,6 +334,7 @@ def _oracle_rows(root: Path, definition, versions: Mapping[str, tuple]):
 def _shares_oracle_scalar_truth(profile: str, target_id: str) -> bool:
     # Different DL tasks can share the SAME mature NetPnL truth.  This check
     # proves the input truth only; it does not identify the consumer as a ranker.
+    from services.breakout_quality.trade_path_target_source import registered_trade_path_source
     registered = get_breakout_quality_experiment_profile(profile)
     recipe = get_continuous_ranker_execution_recipe(profile)
     policy = recipe.target_policy
@@ -343,15 +344,7 @@ def _shares_oracle_scalar_truth(profile: str, target_id: str) -> bool:
         and (
             policy.component_target_id == target_id
             or (policy.materialization_mode == CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH
-                and policy.contract_kind in {
-                    "formal_seed_mintrade40_netr",
-                    "formal_seed_mintrade_fullcycle_netr",
-                    "formal_seed_mintrade_fullcycle_netpnl",
-                    "formal_seed_fulltrade_fullcycle_netpnl",
-                    "daily_min_p19_seed42_fullcycle_netpnl",
-                    "daily_full_p20_seed42_fullcycle_netpnl",
-                    "true_daily_seed_mintrade_fullcycle_netpnl",
-                })
+                and registered_trade_path_source(profile) is not None)
         )
         and policy.postprocess == CONTINUOUS_RANKER_TARGET_POSTPROCESS_NONE
         and policy.context_transform == CONTINUOUS_RANKER_TARGET_CONTEXT_TRANSFORM_NONE

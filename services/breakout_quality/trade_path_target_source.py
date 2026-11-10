@@ -11,11 +11,14 @@ training entry points.  Historical model/Target identities are not rewritten.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import partial
+from importlib import import_module
 from pathlib import Path
 from typing import Callable, Any
 
 from core.breakout_quality_runtime import (
     CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH,
+    DAILY_MIN_P18_TRADE_PATH_KIND,
 )
 from core.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
 
@@ -201,7 +204,24 @@ def _daily_full_p20_current_execute(*, project_root: str | Path, seed: int):
     return execute_current(project_root=project_root, seed=seed)
 
 
+def _teacher_callback(module: str, method: str, **kwargs):
+    """Resolve a declared teacher capability without model-name dispatch."""
+    return getattr(import_module(module), method)(**kwargs)
+
+
 _TRADE_PATH_SOURCES: dict[str, TradePathSource] = {
+    DAILY_MIN_P18_TRADE_PATH_KIND: TradePathSource(
+        contract_kind=DAILY_MIN_P18_TRADE_PATH_KIND,
+        loader=partial(_teacher_callback, "services.breakout_quality.daily_min_p18_training_source", "resolve_loader_kwargs"),
+        dependencies=(
+            TeacherDependency("daily_min_p18_historical_teacher", "optimizer_daily_min_p18_historical_teacher", 30,
+                partial(_teacher_callback, "services.breakout_quality.daily_min_p18_training_source", "inspect_history"),
+                partial(_teacher_callback, "services.breakout_quality.daily_min_p18_training_source", "execute_history")),
+            TeacherDependency("daily_min_p18_current_teacher", "optimizer_daily_min_p18_current_teacher", 40,
+                partial(_teacher_callback, "services.breakout_quality.daily_min_p18_training_source", "inspect_current"),
+                partial(_teacher_callback, "services.breakout_quality.daily_min_p18_training_source", "execute_current")),
+        ),
+    ),
     "daily_min_p19_seed42_fullcycle_netpnl": TradePathSource(
         contract_kind="daily_min_p19_seed42_fullcycle_netpnl",
         loader=_daily_min_p19_loader,

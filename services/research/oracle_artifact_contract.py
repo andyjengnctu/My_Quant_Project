@@ -24,6 +24,8 @@ from core.file_integrity import (
 )
 from core.research_execution_equivalence import reviewed_calculation_sha256
 
+from core.daily_trade_path_capabilities import DAILY_TRUTH_CAPABILITIES, daily_truth_capability
+
 # Engineering calculation revisions, not scientific Target/model identities.
 # Change only the affected capability after a result-affecting fix. Existing
 # recipes are stable when a new recipe is registered alongside them.
@@ -39,6 +41,8 @@ DAILY_CALCULATION_REVISIONS = {
     "daily_trade_path_daily_min_p19_net_pnl": 1,
     "daily_trade_path_daily_full_p20_net_pnl": 1,
 }
+DAILY_CALCULATION_REVISIONS.update({recipe: spec["calculation_revision"]
+                                    for recipe, spec in DAILY_TRUTH_CAPABILITIES.items()})
 FEATURE_UNIVERSE_CALCULATION_REVISION = 1
 REPLAY_CALCULATION_REVISION = 1
 _SCHEMA = 1
@@ -409,7 +413,11 @@ def portfolio_candidate_execution_sha256(*, daily_execution_contract: str | None
 def source_implementation_sha256(recipe: str, profile_id: str) -> str:
     parts = {"daily_percentile": calculation_source(
         "filters/breakout_quality/continuous_ranker_data.py", "build_same_date_percentile_targets")}
-    if recipe == "daily_trade_path_daily_min_p19_net_pnl":
+    capability = daily_truth_capability(recipe)
+    if capability is not None:
+        parts.update({key: calculation_source(relative, name)
+                      for key, relative, name in capability["calculation_owners"]})
+    elif recipe == "daily_trade_path_daily_min_p19_net_pnl":
         # P19 is a 4D ATR-limit/no-setup Daily primitive. Both the wrapper
         # and the reused canonical broker simulation are signed; no P18
         # source/teacher is permitted as an alias.

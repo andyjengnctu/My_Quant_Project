@@ -160,7 +160,6 @@ AUDIT_REUSABLE_REPORTS: dict[str, dict[str, Any]] = {
                     # P18 strategy membership retired on 2026-11-09. These
                     # complete treatment keys, not globally shared Target
                     # names, are historical-only. P20 remains independent.
-                    "T40_Direct::Daily::Daily_min": "Retired 2026-11-09: C160 T40 Daily/P18 Direct",
                     "TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct::Daily::Daily_min": "Retired 2026-11-09: C164 CU+CT Daily/P18 Direct",
                     "TrueDailyUniversal_MinTrade_NetPnL_Direct::Daily::Daily_min": "Retired 2026-11-09: C165 CU Daily/P18 Direct",
                     "T40-MFE": "Retired 2026-11-08: MR-13CK T40-MFE C108 Exact; historical labels and PIT scores retained",
@@ -266,12 +265,16 @@ _ORACLE_POSITIVE_OUTPUT_BY_RECIPE = {
 
 
 def oracle_positive_output_for_recipe(recipe: str) -> str | None:
-    return _ORACLE_POSITIVE_OUTPUT_BY_RECIPE.get(str(recipe))
+    from core.daily_trade_path_capabilities import daily_truth_capability
+    spec = daily_truth_capability(recipe)
+    return spec["positive_output"] if spec is not None else _ORACLE_POSITIVE_OUTPUT_BY_RECIPE.get(str(recipe))
 
 
 # Current Target wording is a presentation projection only.  These aliases
 # must never be used as Oracle receipt, FIT, Replay or source Target IDs.
 _ORACLE_TARGET_PRESENTATION_ALIASES = {
+    "DailyUniversal_MinTrade_P18_NetPnL": "Daily_MinTrade_NetPnL",
+    "DailyUniversal_MinTrade_P18_NetPnL_Positive": "Daily_MinTrade_NetPnL_Positive",
     "DailyUniversal_MinTrade_P19_NetPnL": "Daily_MinTrade_NetPnL",
     "DailyUniversal_MinTrade_P19_NetPnL_Positive": "Daily_MinTrade_NetPnL_Positive",
     "DailyUniversal_FullTrade_NetPnL": "Daily_FullTrade_NetPnL",
@@ -654,6 +657,10 @@ def oracle_supervised_target_id(comparison):
         DAILY_FULL_P20_FULLCYCLE_NETPNL_TARGET_ID,
     )
     recipe = comparison.get("score")
+    from core.daily_trade_path_capabilities import daily_truth_capability
+    capability = daily_truth_capability(recipe)
+    if capability is not None:
+        return capability["target_id"] if comparison.get("horizon_mode") == "full_trade_cycle" else None
     if comparison.get("horizon_mode") == "full_trade_cycle":
         return {
             "daily_trade_path_net_r": DAILY_FORMAL_MINTRADE_FULLCYCLE_NETR_TARGET_ID,

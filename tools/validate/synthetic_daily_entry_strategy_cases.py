@@ -1118,7 +1118,8 @@ class DailyEntryStrategyCases(TestCase):
             names[base.arm_id] = _canonical_oracle_replay_policy(
                 selected, base_arm=base, exact_arm=exact)
         self.assertNotIn("daily_execution_contract", names["C96"])
-        self.assertNotIn("C161", names)
+        self.assertIn("C161", names)
+        self.assertNotIn("daily_execution_contract", names["C161"])
         # P19 C166/C167 are retired; the active P20 oracle still uses the
         # independently registered full-filter execution policy.
         self.assertNotIn("C166", names)

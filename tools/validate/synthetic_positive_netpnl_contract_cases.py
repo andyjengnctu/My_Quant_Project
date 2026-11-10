@@ -223,6 +223,8 @@ class PositiveNetPnlContractCases(TestCase):
         from filters.breakout_quality.strategy_compare_dl_artifacts import resolve_arm_runtime_dl_source_ids
         settings = get_strategy_comparison_settings(STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE)
         cases = (
+            ("Daily_MinTrade_NetPnL", "Daily (Min/P18)", "Direct", "C177", "MR-13DF", ""),
+            ("Daily_MinTrade_NetPnL_Positive", "Daily (Min/P18)", "Direct", "C178", "MR-13DF", "MR-13DG"),
             ("MinTrade_NetPnL_Positive", "Breakout", "Exact", "C125", "MR-13CO", "MR-13CP"),
             ("MinTrade_NetPnL_Positive", "Breakout", "Direct", "C126", "MR-13CO", "MR-13CP"),
             ("Daily_FullTrade_NetPnL", "Daily (Full/P20)", "Direct", "C173", "MR-13DB", ""),
@@ -235,7 +237,7 @@ class PositiveNetPnlContractCases(TestCase):
         group = {keys(row): [] for row in report['rows']}
         for row in report['rows']:
             group[keys(row)].append(row)
-        for retired_arm in ("C134", "C135", "C136", "C138", "C160", "C161", "C164", "C165"):
+        for retired_arm in ("C134", "C135", "C136", "C138", "C164", "C165"):
             self.assertNotIn(retired_arm, {row["strategy"] for row in report["rows"]})
         for target, strategy, selector, arm_id, rank, classifier in cases:
             with self.subTest(arm=arm_id):
@@ -514,8 +516,10 @@ class PositiveNetPnlContractCases(TestCase):
                           and oracle_parameter_family(row) == "daily_full_p20"}
             self.assertTrue(true_daily)
             self.assertTrue(true_daily.isdisjoint(values))
-            self.assertFalse(any(oracle_parameter_family(row) == "daily_min"
-                                 for row in comparisons))
+            p18_keys = {oracle_comparison_key(row) for row in comparisons
+                        if oracle_parameter_family(row) == "daily_min"}
+            self.assertTrue(p18_keys)
+            self.assertTrue(p18_keys.isdisjoint(values))  # Never borrow old P16 receipts.
             scientific_daily = {oracle_target_semantics(row)[0] for row in comparisons
                                 if row.get("strategy") == "Daily"}
             ledger = Path(temp) / "doc/scientific_contracts/REPORT_CONTRACT_VERSIONS.json"

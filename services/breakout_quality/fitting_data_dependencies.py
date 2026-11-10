@@ -39,6 +39,9 @@ from filters.breakout_quality.paths import (
 from filters.breakout_quality.predicted_context_artifact import maybe_predicted_context_artifact_spec
 
 
+from core.daily_trade_path_capabilities import daily_fit_capability
+
+
 FORMAL_MIN_REALIZED_TARGET_KINDS = frozenset({
     'formal_seed_mintrade40_broker_net_r',
     'formal_seed_mintrade_fullcycle_broker_net_r',
@@ -49,7 +52,8 @@ FORMAL_MIN_REALIZED_TARGET_KINDS = frozenset({
 
 def is_formal_min_realized_target_contract(contract: Any) -> bool:
     return (isinstance(contract, Mapping)
-            and contract.get('target_kind') in FORMAL_MIN_REALIZED_TARGET_KINDS)
+            and (contract.get('target_kind') in FORMAL_MIN_REALIZED_TARGET_KINDS
+                 or daily_fit_capability(contract) is not None))
 
 
 def mintrade40_fit_sample_sha256(bundle: Any, ordered_group_ids: Any) -> str | None:
@@ -123,7 +127,10 @@ class FitDataDependencies:
             raise ValueError('MinTrade40 FIT identity requires explicit information cutoff')
         lineage = dict(original.get('teacher_lineage') or {})
         source_contract = str(lineage.get('contract') or '')
-        if source_contract != 'formal_mintrade40_seed_historical_plus_p16_v1':
+        capability = daily_fit_capability(original)
+        expected_contract = (capability['teacher_contract'] if capability is not None
+                             else 'formal_mintrade40_seed_historical_plus_p16_v1')
+        if source_contract != expected_contract:
             raise ValueError('MinTrade FIT lineage contract missing')
         records = target.get('formal_mintrade40_teacher_periods')
         if not isinstance(records, list) or not records:

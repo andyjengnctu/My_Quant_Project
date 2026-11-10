@@ -13,10 +13,10 @@ RESEARCH_SUMMARY_ROWS = (
     {'arm_id': 'C96', 'oracle_parameter_family': 'min'},
     {'arm_id': 'C97', 'oracle_parameter_family': 'full'},
     {'arm_id': 'C98', 'parameter_family': 'full'},
-    # AI: C160/C161/C164/C165 are historical P18 arms, retired from current
-    # Summary/Oracle/Compare (2026-11-09). P18 parameters and signed evidence
-    # remain registered; no model, parameter or Replay identity is rewritten.
-    {'enabled': False, 'arm_id': 'C161', 'oracle_parameter_family': 'daily_min'},
+    # AI: Restore P18 C160/C161 controls. C164/C165 remain historical P16-FIT
+    # transfers; C177/C178 below use independently supervised P18 DF/DG FIT.
+    {'arm_id': 'C161', 'oracle_parameter_family': 'daily_min'},
+    # P18 DF/DG below use new PIT supervision; the hidden Exact row is source-only.
     # P19 C166/C167 are retired; original research results remain in the
     # Experiment Log/Registry and are never reused by P20 training.
     # AI: 2026-11-10 user-directed P19 research retirement. Retain all original
@@ -25,6 +25,28 @@ RESEARCH_SUMMARY_ROWS = (
     # C166/C167 were retired earlier; C174 No-DL, C175 Rank, C176 Rank+Positive
     # are now retired as well. PARAM-P19 and MR-13DD/DE identities remain stored.
     {'enabled': False, 'arm_id': 'C174', 'oracle_parameter_family': 'daily_min_p19'},
+    {'enabled': False, 'oracle': {'target': 'TrueDailyUniversal_MinTrade_P18_NetPnL',
+                'description': 'Signed P18 3D prior-close-limit Daily Min natural-exit NetPnL truth',
+                'score': 'daily_trade_path_daily_min_p18_net_pnl',
+                'provider': 'daily_trade40_profile',
+                'horizon_mode': 'full_trade_cycle', 'selector': 'exact',
+                'strategy': 'Daily', 'parameter_family': 'daily_min'}},
+    {'oracle': {'target': 'TrueDailyUniversal_MinTrade_P18_NetPnL_Direct',
+                'description': 'Independent P18 MinTrade broker NetPnL rank, Direct',
+                'score_source': 'TrueDailyUniversal_MinTrade_P18_NetPnL',
+                'selector': 'direct', 'strategy_arm_id': 'C177',
+                'strategy': 'Daily', 'parameter_family': 'daily_min'},
+     'bindings': ({'arm_id': 'C177',
+                   'rank_model': ('MR-13DF', 'daily_universal_min_p18_mintrade_netpnl_full_list_ndcg_pairwise')},)},
+    {'oracle': {'target': 'TrueDailyUniversal_MinTrade_P18_NetPnL_Positive_Direct',
+                'description': 'Same P18 MinTrade Rank with independent Positive classifier',
+                'score_source': 'TrueDailyUniversal_MinTrade_P18_NetPnL',
+                'selector': 'direct', 'positive_output': 'netpnl_positive_probability_v1',
+                'strategy_arm_id': 'C178', 'strategy': 'Daily',
+                'parameter_family': 'daily_min'},
+     'bindings': ({'arm_id': 'C178',
+                   'rank_model': ('MR-13DF', 'daily_universal_min_p18_mintrade_netpnl_full_list_ndcg_pairwise'),
+                   'positive_model': ('MR-13DG', 'daily_universal_min_p18_mintrade_netpnl_positive_binary')},)},
     {'enabled': False,
      'oracle': {'target': 'TrueDailyUniversal_MinTrade_P19_NetPnL',
                 'description': 'Signed P19 4D ATR-limit Daily Min natural-exit NetPnL truth',
@@ -84,12 +106,12 @@ RESEARCH_SUMMARY_ROWS = (
      'bindings': ({'arm_id': 'C169',
                    'rank_model': ('MR-13CJ', 'daily_universal_terminal_mae_gated_t40_full_list_ndcg_pairwise')},)},
 
-    # AI: Historical P18 templates remain disabled for audit provenance.
-    # The approved score recipe and original Replay identities are immutable.
+    # AI: Restore the original P18 T40 Direct control only. Other historical
+    # P18 templates stay disabled; new P18 economic models are registered above.
     {'enabled': False, 'oracle_template_arm_id': 'C145', 'parameter_family': 'daily_min',
      'bindings': ({'arm_id': 'C159',
                    'rank_model': ('MR-13CJ', 'daily_universal_terminal_mae_gated_t40_full_list_ndcg_pairwise')},)},
-    {'enabled': False, 'oracle_template_arm_id': 'C146', 'parameter_family': 'daily_min',
+    {'oracle_template_arm_id': 'C146', 'parameter_family': 'daily_min',
      'bindings': ({'arm_id': 'C160',
                    'rank_model': ('MR-13CJ', 'daily_universal_terminal_mae_gated_t40_full_list_ndcg_pairwise')},)},
     # Keep C123/C124 retired in Breakout/P16.  Only reuse their immutable
