@@ -38,7 +38,7 @@ from services.optimizer.strategy_param_service import (
     inspect_fixed_multiseed_strategy_parameter_artifact,
     ensure_fixed_multiseed_strategy_parameter_artifact,
 )
-from services.research.strategy_compare_preparation_status import resolve_param_source_path
+from filters.breakout_quality.strategy_compare_sources import resolve_param_source_path
 
 
 # Matches the one existing Broker-Cash / P16 Min baseline consumed by the

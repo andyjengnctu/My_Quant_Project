@@ -8,6 +8,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+from core.strategy_comparison import StrategyComparisonSettings
 from core.active_param_ensemble import (
     ACTIVE_PARAM_ENSEMBLE_MODE_STATIC,
     get_active_param_ensemble_date_range,
@@ -79,6 +80,41 @@ OPTIONAL_ENTRY_FILTER_FIELDS = (
     "use_breakout_return_filter",
     "use_breakout_false_filter",
 )
+
+
+def resolve_param_source_path(
+    root: Path,
+    settings: StrategyComparisonSettings,
+    source_id: str,
+    *,
+    param_policy: str | None = None,
+) -> Path:
+    source = settings.parameter_sources[source_id]
+    resolved_policy = str(param_policy or settings.param_policy).strip()
+    if resolved_policy not in PARAM_POLICY_SPECS:
+        raise ValueError(f"不支援的Strategy Compare param policy: {resolved_policy!r}")
+    if source.canonical_family and source.canonical_evaluation_mode:
+        return resolve_strategy_param_artifact_path(
+            root,
+            family=source.canonical_family,
+            evaluation_mode=source.canonical_evaluation_mode,
+            policy=resolved_policy,
+        ).resolve()
+    if source.path_template in (None, ""):
+        return _resolve_params_path(
+            root=root,
+            params_path=None,
+            param_policy=resolved_policy,
+            allow_static_diagnostic=False,
+        ).resolve()
+    filename = str(PARAM_POLICY_SPECS[resolved_policy]["filename"])
+    try:
+        rendered = str(source.path_template).format(param_filename=filename)
+    except (KeyError, ValueError) as exc:
+        raise ValueError(
+            f"parameter source {source_id}路徑模板只支援{{param_filename}}"
+        ) from exc
+    return resolve_project_relative_path(root, rendered)
 
 
 def _assert_controlled_param_pair(no_filter_params, quality_params, *, comparison_mode=COMPARISON_MODE_HARD_FILTER) -> None:

@@ -9,7 +9,6 @@ from __future__ import annotations
 from core.research_orchestration import ResearchArtifactAction
 
 from pathlib import Path
-from dataclasses import replace
 from typing import Any
 
 from core.breakout_quality_fit_contract_version import current_fit_contract_artifact_identity
@@ -320,82 +319,6 @@ def _collect_model_upstream_dependencies(
 
     cache[upstream_identity] = tuple(upstream_keys)
     return cache[upstream_identity]
-
-
-
-def _collect_trade_path_teacher_dependencies(
-    *, root: Path, settings: StrategyComparisonSettings, source: Any,
-    actions: list[ResearchArtifactAction],
-    cache: dict[tuple[str, str, str], tuple[str, ...]],
-    dataset_dependencies: tuple[str, ...],
-) -> tuple[str, ...]:
-    identity = (str(source.filter_id), str(source.model_architecture),
-                str(source.experiment_profile))
-    if identity in cache:
-        return cache[identity]
-    teacher_keys: list[str] = []
-    # Only non-reusable PIT model sources need upstream optimizer teachers.
-    # Real-execution-path labels consume optimizer-owned historical/current
-    # teachers in addition to the Dataset.  The same registered capability is
-    # already used by [3]'s canonical model-input plan; [5] must declare these
-    # nodes *before* launching any PIT model worker, not discover missing truth
-    # as an exception inside the read-only target loader.
-    from core.research_policy import get_research_artifact_preparation_policy
-    from services.breakout_quality.trade_path_target_source import registered_trade_path_source
-
-    trade_source = registered_trade_path_source(str(source.experiment_profile))
-    if trade_source is not None:
-        workflow = get_breakout_quality_workflow_settings(
-            experiment_profile=str(source.experiment_profile)
-        )
-        model_seed = int(workflow.seed)
-        research_policy = get_research_artifact_preparation_policy()
-        dataset_key = next((key for key in dataset_dependencies if key.endswith(':dataset_core')), None)
-        for requirement in trade_source.dependencies:
-            teacher_key = (
-                f"model-upstream:{source.filter_id}:{source.model_architecture}:"
-                f"{source.experiment_profile}:{requirement.name}:seed_{model_seed}"
-            )
-            try:
-                state = requirement.inspect(project_root=root, seed=model_seed)
-                action = str(state['action']).strip().upper()
-                teacher_path = Path(state['path'])
-                reason = str(state['reason'])
-                if action not in {'REUSE', 'BUILD', 'REBUILD', 'RESUME', 'BLOCKED'}:
-                    raise ValueError(f"Unknown teacher readiness action: {action}")
-            except (OSError, ValueError, KeyError, TypeError) as exc:
-                action = 'BLOCKED'
-                teacher_path = root / 'outputs' / 'optimizer'
-                reason = f"Optimizer teacher inspection failed: {type(exc).__name__}: {exc}"
-            if action != 'BLOCKED':
-                if not (bool(settings.preparation.auto_prepare)
-                        and bool(research_policy.auto_prepare)) and action != 'REUSE':
-                    action = 'BLOCKED'
-                elif action == 'REUSE' and not bool(settings.preparation.reuse_ready_artifacts):
-                    action = 'BLOCKED'
-            actions.append(build_strategy_preparation_action(
-                action_id=teacher_key,
-                artifact_key=teacher_key,
-                action=action,
-                builder_type=(
-                    'canonical_model_upstream'
-                    if action in {'BUILD', 'REBUILD', 'RESUME'} else None
-                ),
-                description=reason,
-                path=project_relative_display_path(teacher_path, project_root=root),
-                dependencies=(dataset_key,) if dataset_key else (),
-                producer_work_type=(
-                    PRODUCER_EXISTING_ARTIFACT if action == 'REUSE' else 'model_training'
-                ),
-                execution_priority=int(requirement.priority),
-            ))
-            # The verified teacher is already captured in the resulting model's
-            # PIT source lineage.  Do not insert another unrelated key into the
-            # Strategy Replay fingerprint or invalidate historical pair caches.
-            teacher_keys.append(teacher_key)
-    cache[identity] = tuple(teacher_keys)
-    return cache[identity]
-
 
 
 
@@ -892,7 +815,6 @@ def collect_dl_artifact_status(
     dl_model_ready: dict[str, bool] = {}
     runtime_periods: dict[str, tuple[str, str]] = {}
     upstream_cache: dict[tuple[str, str, str], tuple[str, ...]] = {}
-    teacher_cache: dict[tuple[str, str, str], tuple[str, ...]] = {}
 
     for dl_id in settings.dl_sources:
         if dl_id not in required_dl_sources:
@@ -935,31 +857,6 @@ def collect_dl_artifact_status(
                 artifacts=artifacts,
                 **common,
             )
-        # A completed, independently validated PIT publication is REUSE even
-        # if its upstream optimizer workspace has since been cleaned. Only a
-        # pending model build must depend on the teacher producer.
-        needs_model_producer = any(
-            item.artifact_key.startswith(f'dl:{dl_id}:')
-            and item.action in {'BUILD', 'REBUILD', 'RESUME'}
-            and item.producer_work_type == 'model_training'
-            for item in actions
-        )
-        if needs_model_producer:
-            teacher_dependencies = _collect_trade_path_teacher_dependencies(
-                root=root, settings=settings, source=source, actions=actions,
-                cache=teacher_cache, dataset_dependencies=source_upstream_dependencies,
-            )
-            if teacher_dependencies:
-                for index, item in enumerate(actions):
-                    if (item.artifact_key.startswith(f'dl:{dl_id}:')
-                            and item.action in {'BUILD', 'REBUILD', 'RESUME'}
-                            and item.artifact_key.rsplit(':', 1)[-1]
-                            in {'forward_scores', 'manifest', 'model'}):
-                        actions[index] = replace(
-                            item, dependencies=tuple(dict.fromkeys(
-                                (*item.dependencies, *teacher_dependencies)
-                            ))
-                        )
         dl_rows[dl_id] = row
         dl_model_ready[dl_id] = model_ready
 

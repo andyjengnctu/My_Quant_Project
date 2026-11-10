@@ -10,6 +10,7 @@ from core.research_orchestration import ResearchArtifactAction, ResearchArtifact
 from core.file_integrity import load_json_object_or_none as _read_json
 
 from pathlib import Path
+from dataclasses import replace
 from typing import Any, Mapping
 
 import pandas as pd
@@ -46,7 +47,6 @@ from core.dataset_profiles import build_dataset_generation_identity, get_dataset
 from core.research_orchestration import resolve_research_artifact_action
 from core.strategy_param_artifacts import (
     compute_strategy_param_scientific_sha256,
-    resolve_strategy_param_artifact_path,
     resolve_strategy_param_manifest_path,
 )
 from core.strategy_param_policy import (
@@ -87,10 +87,10 @@ from filters.breakout_quality.strategy_compare_dl_artifacts import (
 )
 from filters.breakout_quality.strategy_compare_contracts import build_strategy_preparation_action
 from filters.breakout_quality.strategy_compare_sources import (
+    resolve_param_source_path,
     resolve_project_relative_path as _resolve_relative_path,
     PARAM_POLICY_SPECS,
     _load_param_source,
-    _resolve_params_path,
     _validate_requested_param_policy,
     resolve_strategy_param_evaluation_identity_sha256,
 )
@@ -109,41 +109,6 @@ from services.research.raw_price_strategy_param import (
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-
-
-def resolve_param_source_path(
-    root: Path,
-    settings: StrategyComparisonSettings,
-    source_id: str,
-    *,
-    param_policy: str | None = None,
-) -> Path:
-    source = settings.parameter_sources[source_id]
-    resolved_policy = str(param_policy or settings.param_policy).strip()
-    if resolved_policy not in PARAM_POLICY_SPECS:
-        raise ValueError(f"不支援的Strategy Compare param policy: {resolved_policy!r}")
-    if source.canonical_family and source.canonical_evaluation_mode:
-        return resolve_strategy_param_artifact_path(
-            root,
-            family=source.canonical_family,
-            evaluation_mode=source.canonical_evaluation_mode,
-            policy=resolved_policy,
-        ).resolve()
-    if source.path_template in (None, ""):
-        return _resolve_params_path(
-            root=root,
-            params_path=None,
-            param_policy=resolved_policy,
-            allow_static_diagnostic=False,
-        ).resolve()
-    filename = str(PARAM_POLICY_SPECS[resolved_policy]["filename"])
-    try:
-        rendered = str(source.path_template).format(param_filename=filename)
-    except (KeyError, ValueError) as exc:
-        raise ValueError(
-            f"parameter source {source_id}路徑模板只支援{{param_filename}}"
-        ) from exc
-    return _resolve_relative_path(root, rendered)
 
 
 def resolve_required_param_policies_for_source(
@@ -1252,6 +1217,140 @@ def resolve_arm_parameter_evaluation_identities(
     return resolved
 
 
+def _collect_trade_path_teacher_dependencies(
+    *, root: Path, settings: StrategyComparisonSettings, source: Any,
+    actions: list[ResearchArtifactAction],
+    cache: dict[tuple[str, str, str], tuple[str, ...]],
+    dataset_dependencies: tuple[str, ...],
+) -> tuple[str, ...]:
+    identity = (str(source.filter_id), str(source.model_architecture),
+                str(source.experiment_profile))
+    if identity in cache:
+        return cache[identity]
+    teacher_keys: list[str] = []
+    # Only non-reusable PIT model sources need upstream optimizer teachers.
+    # Real-execution-path labels consume optimizer-owned historical/current
+    # teachers in addition to the Dataset.  The same registered capability is
+    # already used by [3]'s canonical model-input plan; [5] must declare these
+    # nodes *before* launching any PIT model worker, not discover missing truth
+    # as an exception inside the read-only target loader.
+    from core.research_policy import get_research_artifact_preparation_policy
+    from services.breakout_quality.trade_path_target_source import registered_trade_path_source
+
+    trade_source = registered_trade_path_source(str(source.experiment_profile))
+    if trade_source is not None:
+        workflow = get_breakout_quality_workflow_settings(
+            experiment_profile=str(source.experiment_profile)
+        )
+        model_seed = int(workflow.seed)
+        research_policy = get_research_artifact_preparation_policy()
+        dataset_key = next((key for key in dataset_dependencies if key.endswith(':dataset_core')), None)
+        for requirement in trade_source.dependencies:
+            teacher_key = (
+                f"model-upstream:{source.filter_id}:{source.model_architecture}:"
+                f"{source.experiment_profile}:{requirement.name}:seed_{model_seed}"
+            )
+            try:
+                state = requirement.inspect(project_root=root, seed=model_seed)
+                action = str(state['action']).strip().upper()
+                teacher_path = Path(state['path'])
+                reason = str(state['reason'])
+                if action not in {'REUSE', 'BUILD', 'REBUILD', 'RESUME', 'BLOCKED'}:
+                    raise ValueError(f"Unknown teacher readiness action: {action}")
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                action = 'BLOCKED'
+                teacher_path = root / 'outputs' / 'optimizer'
+                reason = f"Optimizer teacher inspection failed: {type(exc).__name__}: {exc}"
+            if action != 'BLOCKED':
+                if not (bool(settings.preparation.auto_prepare)
+                        and bool(research_policy.auto_prepare)) and action != 'REUSE':
+                    action = 'BLOCKED'
+                elif action == 'REUSE' and not bool(settings.preparation.reuse_ready_artifacts):
+                    action = 'BLOCKED'
+            actions.append(build_strategy_preparation_action(
+                action_id=teacher_key,
+                artifact_key=teacher_key,
+                action=action,
+                builder_type=(
+                    'canonical_model_upstream'
+                    if action in {'BUILD', 'REBUILD', 'RESUME'} else None
+                ),
+                description=reason,
+                path=project_relative_display_path(teacher_path, project_root=root),
+                dependencies=(dataset_key,) if dataset_key else (),
+                producer_work_type=(
+                    PRODUCER_EXISTING_ARTIFACT if action == 'REUSE' else 'model_training'
+                ),
+                execution_priority=int(requirement.priority),
+            ))
+            # The verified teacher is already captured in the resulting model's
+            # PIT source lineage.  Do not insert another unrelated key into the
+            # Strategy Replay fingerprint or invalidate historical pair caches.
+            teacher_keys.append(teacher_key)
+    cache[identity] = tuple(teacher_keys)
+    return cache[identity]
+
+
+
+
+def _attach_trade_path_teacher_dependencies(
+    *, root: Path, settings: StrategyComparisonSettings,
+    required_dl_sources: set[str], actions: list[ResearchArtifactAction],
+) -> list[ResearchArtifactAction]:
+    """Join registered teacher prerequisites to only pending model producers.
+
+    The lower-layer DL validator must not import the service-owned Target
+    producer registry. Existing verified PIT publications stay REUSE even
+    when their source Optimizer workspace was subsequently cleaned.
+    """
+    teacher_cache: dict[tuple[str, str, str], tuple[str, ...]] = {}
+    for dl_id in settings.dl_sources:
+        if dl_id not in required_dl_sources:
+            continue
+        pending = [
+            item for item in actions
+            if item.artifact_key.startswith(f'dl:{dl_id}:')
+            and item.action in {'BUILD', 'REBUILD', 'RESUME'}
+            and item.producer_work_type == 'model_training'
+        ]
+        if not pending:
+            continue
+        source = settings.dl_sources[dl_id]
+        dataset_dependencies = tuple(dict.fromkeys(
+            dep for item in pending for dep in item.dependencies
+            if dep.endswith(':dataset_core')
+        ))
+        before_count = len(actions)
+        teacher_dependencies = _collect_trade_path_teacher_dependencies(
+            root=root, settings=settings, source=source, actions=actions,
+            cache=teacher_cache, dataset_dependencies=dataset_dependencies,
+        )
+        # Keep the existing per-source REUSE/RUN plan ordering. The canonical
+        # teacher nodes belong immediately after the model score/audit group,
+        # not at the tail of the whole multi-model action list.
+        emitted_teacher_nodes = actions[before_count:]
+        if emitted_teacher_nodes:
+            del actions[before_count:]
+            model_last_index = max(
+                index for index, item in enumerate(actions)
+                if item.artifact_key.startswith(f'dl:{dl_id}:')
+            )
+            actions[model_last_index + 1:model_last_index + 1] = emitted_teacher_nodes
+        if not teacher_dependencies:
+            continue
+        for index, item in enumerate(actions):
+            if (item.artifact_key.startswith(f'dl:{dl_id}:')
+                    and item.action in {'BUILD', 'REBUILD', 'RESUME'}
+                    and item.artifact_key.rsplit(':', 1)[-1]
+                    in {'forward_scores', 'manifest', 'model'}):
+                actions[index] = replace(
+                    item, dependencies=tuple(dict.fromkeys(
+                        (*item.dependencies, *teacher_dependencies)
+                    )),
+                )
+    return actions
+
+
 def collect_preparation_status(
     *,
     project_root: Path = PROJECT_ROOT,
@@ -1278,6 +1377,10 @@ def collect_preparation_status(
         settings=settings,
         required_dl_sources=required_dl_sources,
         runtime_required_dl_sources=runtime_required_dl_sources,
+    )
+    actions = _attach_trade_path_teacher_dependencies(
+        root=root, settings=settings, required_dl_sources=required_dl_sources,
+        actions=actions,
     )
     expected_r_rows = _collect_expected_r_calibration_status(
         root=root,

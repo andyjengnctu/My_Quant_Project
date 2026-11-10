@@ -72,6 +72,7 @@ class DailyMinP19NetPnLCases(TestCase):
 
     def test_compare_plan_lists_signed_p19_teachers_before_training(self):
         from filters.breakout_quality import strategy_compare_dl_artifacts as dl
+        from services.research import strategy_compare_preparation_status as planning
         from filters.breakout_quality.artifact_dependency_registry import ArtifactReadiness
         from services.breakout_quality import daily_min_p19_training_source as teacher
 
@@ -101,7 +102,7 @@ class DailyMinP19NetPnLCases(TestCase):
                     root=root, settings=settings, source=source, artifact_identities={},
                     actions=actions, cache={},
                 )
-                teacher_keys = dl._collect_trade_path_teacher_dependencies(
+                teacher_keys = planning._collect_trade_path_teacher_dependencies(
                     root=root, settings=settings, source=source, actions=actions,
                     cache={}, dataset_dependencies=keys,
                 )
@@ -123,6 +124,7 @@ class DailyMinP19NetPnLCases(TestCase):
 
     def test_compare_teacher_identity_invalid_blocks_instead_of_rebuilding(self):
         from filters.breakout_quality import strategy_compare_dl_artifacts as dl
+        from services.research import strategy_compare_preparation_status as planning
         from filters.breakout_quality.artifact_dependency_registry import ArtifactReadiness
         from services.breakout_quality import daily_min_p19_training_source as teacher
         settings = get_strategy_comparison_settings('broker_cash_dl_conversion_rolling')
@@ -146,7 +148,7 @@ class DailyMinP19NetPnLCases(TestCase):
                         root=root, settings=settings, source=source,
                         artifact_identities={}, actions=actions, cache={},
                     )
-                    dl._collect_trade_path_teacher_dependencies(
+                    planning._collect_trade_path_teacher_dependencies(
                         root=root, settings=settings, source=source, actions=actions,
                         cache={}, dataset_dependencies=keys,
                     )
@@ -157,6 +159,7 @@ class DailyMinP19NetPnLCases(TestCase):
     def test_compare_valid_pit_reuse_skips_missing_optimizer_teacher(self):
         from core.research_orchestration import ResearchArtifactAction
         from filters.breakout_quality import strategy_compare_dl_artifacts as dl
+        from services.research import strategy_compare_preparation_status as planning
         from filters.breakout_quality.artifact_dependency_registry import ArtifactReadiness
         from services.breakout_quality import daily_min_p19_training_source as teacher
 
@@ -185,9 +188,86 @@ class DailyMinP19NetPnLCases(TestCase):
                     root=root, settings=settings, required_dl_sources={'CONT13DD_ROLL'},
                     runtime_required_dl_sources={'CONT13DD_ROLL'},
                 )
+                actions = planning._attach_trade_path_teacher_dependencies(
+                    root=root, settings=settings, required_dl_sources={'CONT13DD_ROLL'},
+                    actions=actions,
+                )
             self.assertTrue(ready['CONT13DD_ROLL'])
             self.assertFalse(any('teacher' in item.artifact_key for item in actions))
             self.assertTrue(all(item.action == 'REUSE' for item in actions))
+
+    def test_service_plan_attaches_teacher_once_after_model_actions(self):
+        from core.research_orchestration import ResearchArtifactAction, ResearchArtifactPlan
+        from services.research import strategy_compare_preparation_status as planning
+        from services.breakout_quality import daily_min_p19_training_source as teacher
+        settings = get_strategy_comparison_settings('broker_cash_dl_conversion_rolling')
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dataset_key = 'model-upstream:fixture:dataset_core'
+            model_key = 'dl:CONT13DD_ROLL:forward_scores'
+            actions = [
+                ResearchArtifactAction(
+                    'dataset', dataset_key, 'REUSE', None, 'Verified dataset',
+                    'dataset.json', producer_work_type='existing_artifact',
+                ),
+                ResearchArtifactAction(
+                    'score', model_key, 'BUILD', 'canonical_model_artifacts',
+                    'Missing PIT score', 'scores.csv', dependencies=(dataset_key,),
+                    producer_work_type='model_training',
+                ),
+            ]
+            with patch.object(teacher, 'inspect_history', return_value={
+                'action': 'BUILD', 'path': root / 'p19_history.json',
+                'reason': 'Signed historical P19 teacher missing',
+            }), patch.object(teacher, 'inspect_current', return_value={
+                'action': 'REUSE', 'path': root / 'p19_current.json',
+                'reason': 'Signed current P19 teacher verified',
+            }):
+                result = planning._attach_trade_path_teacher_dependencies(
+                    root=root, settings=settings, required_dl_sources={'CONT13DD_ROLL'},
+                    actions=actions,
+                )
+            self.assertIs(result, actions)
+            self.assertEqual(len(actions), 4)
+            self.assertEqual(actions[0].artifact_key, dataset_key)
+            self.assertEqual(actions[1].artifact_key, model_key)
+            teacher_keys = tuple(item.artifact_key for item in actions[2:])
+            self.assertTrue(teacher_keys[0].endswith(':daily_min_p19_historical_teacher:seed_42'))
+            self.assertTrue(teacher_keys[1].endswith(':daily_min_p19_current_teacher:seed_42'))
+            self.assertEqual(actions[1].dependencies, (dataset_key, *teacher_keys))
+            self.assertEqual(actions[2].dependencies, (dataset_key,))
+            self.assertEqual(actions[3].dependencies, (dataset_key,))
+            ResearchArtifactPlan.from_actions(actions)
+
+    def test_shared_param_source_resolver_keeps_legacy_callers(self):
+        from filters.breakout_quality.strategy_compare_sources import resolve_param_source_path as owner
+        from services.research.strategy_compare_preparation_status import resolve_param_source_path as facade
+        self.assertIs(owner, facade)
+        settings = get_strategy_comparison_settings('broker_cash_dl_conversion_rolling')
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for source_id in (
+                'min_best_broker_cash_rolling_experiment',
+                'daily_min_four_best_broker_cash_rolling_experiment',
+                'daily_full_nineteen_best_broker_cash_rolling_experiment',
+            ):
+                self.assertEqual(
+                    owner(root, settings, source_id), facade(root, settings, source_id)
+                )
+
+    def test_trade_path_teacher_planning_respects_service_filter_boundary(self):
+        import ast
+        from filters.breakout_quality import strategy_compare_dl_artifacts as dl
+        from services.research import strategy_compare_preparation_status as planning
+        lower_source = Path(dl.__file__).read_text(encoding='utf-8')
+        for item in ast.walk(ast.parse(lower_source)):
+            if isinstance(item, ast.ImportFrom):
+                self.assertFalse((item.module or '').startswith('services.'),
+                                 f'filter must not import service: {item.module}')
+            if isinstance(item, ast.Import):
+                self.assertFalse(any(alias.name.startswith('services.') for alias in item.names))
+        self.assertTrue(hasattr(planning, '_attach_trade_path_teacher_dependencies'))
+        self.assertFalse(hasattr(dl, '_collect_trade_path_teacher_dependencies'))
 
     def test_compare_replans_teacher_before_model_producer(self):
         from core.research_orchestration import ResearchArtifactAction, ResearchArtifactPlan
