@@ -19,10 +19,12 @@ RESEARCH_SUMMARY_ROWS = (
     {'enabled': False, 'arm_id': 'C161', 'oracle_parameter_family': 'daily_min'},
     # P19 C166/C167 are retired; original research results remain in the
     # Experiment Log/Registry and are never reused by P20 training.
-    # Independent P19 4D ATR-limit Daily economics. Its original C166/C167
-    # comparison receipts are retired and NEVER recycled.  C174 is an unscored
-    # baseline (Default): a Direct selector is defined only for scored arms.
-    {'arm_id': 'C174', 'oracle_parameter_family': 'daily_min_p19'},
+    # AI: 2026-11-10 user-directed P19 research retirement. Retain all original
+    # scientific recipes/Replay IDs as historical evidence; remove P19 from
+    # current Summary, Oracle, Model Test/Compare and Strategy/Robustness.
+    # C166/C167 were retired earlier; C174 No-DL, C175 Rank, C176 Rank+Positive
+    # are now retired as well. PARAM-P19 and MR-13DD/DE identities remain stored.
+    {'enabled': False, 'arm_id': 'C174', 'oracle_parameter_family': 'daily_min_p19'},
     {'enabled': False,
      'oracle': {'target': 'TrueDailyUniversal_MinTrade_P19_NetPnL',
                 'description': 'Signed P19 4D ATR-limit Daily Min natural-exit NetPnL truth',
@@ -30,14 +32,16 @@ RESEARCH_SUMMARY_ROWS = (
                 'provider': 'daily_trade40_profile',
                 'horizon_mode': 'full_trade_cycle', 'selector': 'exact',
                 'strategy': 'Daily', 'parameter_family': 'daily_min_p19'}},
-    {'oracle': {'target': 'TrueDailyUniversal_MinTrade_P19_NetPnL_Direct',
+    {'enabled': False,
+     'oracle': {'target': 'TrueDailyUniversal_MinTrade_P19_NetPnL_Direct',
                 'description': 'Independent P19 MinTrade broker NetPnL rank, Direct',
                 'score_source': 'TrueDailyUniversal_MinTrade_P19_NetPnL',
                 'selector': 'direct', 'strategy_arm_id': 'C175',
                 'strategy': 'Daily', 'parameter_family': 'daily_min_p19'},
      'bindings': ({'arm_id': 'C175',
                    'rank_model': ('MR-13DD', 'daily_universal_min_p19_mintrade_netpnl_full_list_ndcg_pairwise')},)},
-    {'oracle': {'target': 'TrueDailyUniversal_MinTrade_P19_NetPnL_Positive_Direct',
+    {'enabled': False,
+     'oracle': {'target': 'TrueDailyUniversal_MinTrade_P19_NetPnL_Positive_Direct',
                 'description': 'Same P19 MinTrade Rank with independent Positive classifier',
                 'score_source': 'TrueDailyUniversal_MinTrade_P19_NetPnL',
                 'selector': 'direct', 'positive_output': 'netpnl_positive_probability_v1',

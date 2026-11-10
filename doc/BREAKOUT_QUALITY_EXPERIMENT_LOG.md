@@ -5380,6 +5380,14 @@ Assessment: `USER_REPORTED_ROLLING_RESULT_AVAILABLE / FULL_HORIZON_MAE_SMALL_PAI
 
 - **2026-11-10 使用者新增獨立 P19 Target／策略（績效待驗）**：現行新增 `C174` Daily (Min/P19) 無 DL Default 對照、`C175` Daily (Min/P19) × `Daily_MinTrade_NetPnL` Direct（`MR-13DD` Rank）、`C176` Daily (Min/P19) × `Daily_MinTrade_NetPnL_Positive` Direct（`MR-13DD` Rank + 獨立 `MR-13DE` Binary）。使用者要求兩個 Target **必須是真正 P19 四維歷史＋當期合法參數**，不能借 P18 三維或原 CU／CT 真值。C166/C167 保留退役及原 OOS 歷史；C172/C173 P20 不動。無模型分數的 C174 依原引擎只可能 Default，不能在報表冒充 Direct。P19 Oracle、DL FIT、Rolling／Robustness 尚無本機正式實測收據；本次僅是新研究身分及獨立生產鏈，沒有新的市場 RoMD／Win Rate 可宣稱。
 
+
+### 2026-11-10 — 使用者決策：P19 暫時退役（300-trial No Finalist）
+
+- **研究身分與實際觀察**：Daily (Min/P19), `PARAM-P19` 四維 ATR limit；新策略 `C174`（無 DL Default）、`C175`（`Daily_MinTrade_NetPnL`，MR-13DD Rank Direct）、`C176`（`Daily_MinTrade_NetPnL_Positive`，MR-13DD Rank + MR-13DE Positive Direct）。使用者觀察 300 次最佳化中多組 N/A 或 0 分、有效解不易出現；這是使用者的定性觀察，未取得全部 trial SQLite 分布，不把多組強行量化為某一比例。既有正式錯誤紀錄：`daily_min_p19_label_history` seed 42，outer rolling 第 5/7 Fold，參數選擇 2008-01～2017-12、OOS 2018-01～2018-12；300 trials，qualified=0、invalid=299、FAIL=1；主要拒絕原因「回撤過大」，重複出現約 83.4%～83.6% MDD，現行門檻 45%，拋出 `NON_RETRYABLE_NO_FINALIST`。此為真實未完成的 Optimizer teacher，**不是**已完成 FIT、有效 Oracle 或可用策略 Robustness；不聲稱當時 300 個分數全部無效或不存在交易。
+- **當輪結論與退役範圍**：暫停 P19 這條研究，退役 `C174/C175/C176` 以及已退役 `C166/C167`，連同 P19 專用的兩個 Target、MR-13DD/DE 現行研究綁定，從 `[1] Summary`、`[2] Target Oracle`、`[3] Model Compare/Test`、`[5] Forward/Rolling/Robustness` 的現行清單移除。原 `PARAM-P19` Optimizer Profile、科學／策略／模型 ID、原始訓練設定、歷史研究結果與可接續失敗工件均保留，不刪除、不覆寫、不當成 P18/P20 工件 REUSE；原 `[4]` 正式 active optimizer 設定與四項固定 work types 均不變。`C168/C169/C172/C173` 與 MR-13DB/DC P20 不受影響。沒有授權把當前 P19 風險門檻提高或跳過 2018 Fold。
+- **之後另行研究（尚未授權修改）**：先使用既有 trial／Optuna 證據評估四維參數對成交、交易數、資金曲線及回撤的實際影響，釐清 N/A／0 分是無成交、無有效樣本、得分為零、績效 gate 或工程數值異常；再評估是否需要受控放寬條件（包含風險 gate 與收益／交易品質限制）、改進入場幾何或重新設計搜尋空間。若真的改變資格、回撤約束或 Target 科學語意，須另行取得新研究授權與身分；不能擅自修補成 PASS。迭代 OOS 結果非 untouched holdout。
+
+
 ## 6. 後續新增規則
 
 **只有新科學證據或舊科學證據有效性更正才能增加本文件內容。** 記錄必須有實驗／Target 身分、期間／Seed、控制變數、原始結果、負結果與決策，並指向正式證據。沒有市場／模型結果的工程測試、提交紀錄、打包、格式調整或一次性 Audit 清理，不可追加研究章節。本文件不再生成封存副本或研究待辦。

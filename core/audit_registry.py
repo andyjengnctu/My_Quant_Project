@@ -151,6 +151,12 @@ AUDIT_REUSABLE_REPORTS: dict[str, dict[str, Any]] = {
                     "TrueDailyUniversal_MinTrade_NetPnL_Direct::Daily": "Retired 2026-11-08: C138 Daily/P16 CU Direct; retained as P18 C165 template",
                     "T40_Direct::Daily": "Retired 2026-11-08: C146 Daily/P16 CJ Direct; retained as P18 C160 template",
                     "DailyUniversal_MinTrade_NetPnL_Direct::Daily::Daily_min": "Retired 2026-11-08: C163 event-driven CO Daily/P18 Direct",
+                    # 2026-11-10 P19 current research retirement: no P19
+                    # Oracle Target/Strategy treatment may silently revive.
+                    # Original science and signed historical receipts survive.
+                    "TrueDailyUniversal_MinTrade_P19_NetPnL::Daily::Daily_min_p19": "P19 canonical Exact truth source: historical-only after C174-C176 retirement",
+                    "TrueDailyUniversal_MinTrade_P19_NetPnL_Direct::Daily::Daily_min_p19": "Retired 2026-11-10: C175 MR-13DD Daily Min/P19 Direct",
+                    "TrueDailyUniversal_MinTrade_P19_NetPnL_Positive_Direct::Daily::Daily_min_p19": "Retired 2026-11-10: C176 MR-13DD+DE Daily Min/P19 Direct",
                     # P18 strategy membership retired on 2026-11-09. These
                     # complete treatment keys, not globally shared Target
                     # names, are historical-only. P20 remains independent.

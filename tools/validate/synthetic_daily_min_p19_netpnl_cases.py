@@ -48,17 +48,48 @@ def _fixture():
 
 
 class DailyMinP19NetPnLCases(TestCase):
-    def test_registry_uses_new_live_ids_and_preserves_historical_arms(self):
+    def test_retired_p19_absent_from_current_research_but_history_preserved(self):
+        from config import research_summary as roster
+        from config.strategy_params import STRATEGY_PARAM_PROFILES, ACTIVE_STRATEGY_PARAM_PROFILE
+        from core.audit_registry import AUDIT_REUSABLE_REPORTS, resolve_current_oracle_comparisons
+        from core.strategy_compare_policy import get_strategy_multi_seed_robustness_settings
+        from services.research.target_dl_overview import collect_target_dl_overview
+
+        p19 = {'C166', 'C167', 'C174', 'C175', 'C176'}
         active = set(get_research_summary_strategy_arm_ids())
-        self.assertTrue({'C174', 'C175', 'C176'}.issubset(active))
-        self.assertTrue({'C166', 'C167'}.isdisjoint(active))
+        self.assertTrue(p19.isdisjoint(active))
         self.assertIn('C166', STRATEGY_COMPARE_ARMS)
-        self.assertEqual(get_research_summary_baseline_arm_ids()['daily_min_p19'], 'C174')
-        settings = get_strategy_comparison_settings('broker_cash_dl_conversion_rolling')
-        self.assertTrue(all(settings.arms[a].enabled for a in ('C174', 'C175', 'C176')))
-        self.assertTrue(all(not settings.arms[a].enabled for a in ('C166', 'C167')))
-        self.assertFalse(settings.arms['C174'].dl_enabled)
-        self.assertTrue(all(settings.arms[a].dl_enabled for a in ('C175', 'C176')))
+        self.assertNotIn('daily_min_p19', get_research_summary_baseline_arm_ids())
+        self.assertTrue(all(row.get('enabled') is False for row in roster.RESEARCH_SUMMARY_ROWS
+                            if row.get('arm_id') in p19 or any(
+                                binding.get('arm_id') in p19
+                                for binding in row.get('bindings', ()))))
+        self.assertTrue(all('P19' not in row['target'] for row in
+                            resolve_current_oracle_comparisons(
+                                AUDIT_REUSABLE_REPORTS['breakout_quality']['target_oracle_romd']['source'])))
+        active_profiles = get_research_summary_model_profiles()
+        self.assertTrue(all(model_id not in {'MR-13DD', 'MR-13DE'}
+                            for model_id, profile in active_profiles))
+        for mode in ('broker_cash_dl_conversion_oos', 'broker_cash_dl_conversion_rolling'):
+            with self.subTest(compare_mode=mode):
+                settings = get_strategy_comparison_settings(mode)
+                self.assertTrue(all(not settings.arms[arm].enabled for arm in p19))
+                robustness = get_strategy_multi_seed_robustness_settings(mode)
+                self.assertTrue(p19.isdisjoint(robustness.benchmark_strategy_arm_ids))
+                self.assertTrue(p19.isdisjoint(robustness.model_seed_sensitive_arm_ids))
+                self.assertTrue(all(c.left not in p19 and c.right not in p19
+                                    for c in settings.enabled_contrasts))
+        self.assertNotEqual(ACTIVE_STRATEGY_PARAM_PROFILE,
+                            'broker_cash_daily_min_four_seed42_current')
+        self.assertEqual(STRATEGY_PARAM_PROFILES[
+            'broker_cash_daily_min_four_seed42_current']['parameter_set_identity'], 'PARAM-P19')
+        # Historical scientific sources and strategy Replay IDs must not be deleted.
+        self.assertFalse(STRATEGY_COMPARE_ARMS['C174']['dl_enabled'])
+        self.assertTrue(all(STRATEGY_COMPARE_ARMS[arm]['dl_enabled'] for arm in ('C175','C176')))
+        for arm in ('C174','C175','C176'):
+            self.assertEqual(STRATEGY_COMPARE_ARMS[arm]['param_source'],
+                             'daily_min_four_best_broker_cash_rolling_experiment')
+            self.assertEqual(STRATEGY_COMPARE_ARMS[arm]['entry_strategy'], 'Daily')
         for arm in ('C174', 'C175', 'C176'):
             self.assertEqual(STRATEGY_COMPARE_ARMS[arm]['param_source'],
                              'daily_min_four_best_broker_cash_rolling_experiment')
@@ -346,10 +377,10 @@ class DailyMinP19NetPnLCases(TestCase):
 
     def test_p19_teacher_is_four_dimensional_and_independent(self):
         self.assertEqual((PROFILE, BASELINE_ARM, TEACHER_SEED), ('min_atr_limit_v2', 'C166', 42))
-        self.assertTrue(any(profile == RANK and name == 'MR-13DD'
-                            for name, profile in get_research_summary_model_profiles()))
-        self.assertTrue(any(profile == POSITIVE and name == 'MR-13DE'
-                            for name, profile in get_research_summary_model_profiles()))
+        self.assertTrue(all(model_id not in {'MR-13DD', 'MR-13DE'}
+                            for model_id, profile in get_research_summary_model_profiles()))
+        self.assertEqual(get_continuous_ranker_research_spec(RANK).model_research_id, 'MR-13DD')
+        self.assertEqual(get_continuous_ranker_research_spec(POSITIVE).model_research_id, 'MR-13DE')
         from strategies.daily.search_space import resolve_daily_search_profile
         fields = tuple(resolve_daily_search_profile(PROFILE)['fields'])
         self.assertEqual(fields, ('atr_len', 'atr_buy_tol', 'atr_times_init', 'atr_times_trail'))
@@ -379,7 +410,25 @@ class DailyMinP19NetPnLCases(TestCase):
         definitions = get_reusable_audit_definitions('breakout_quality')
         d = next(item for item in definitions if item.audit_type == oracle.SUPPORTED_AUDIT_TYPE)
         plan = oracle._oracle_comparison_plan(d)
-        self.assertIn(RECIPE, (row[0] for row in plan['daily_recipes'].values()))
+        # Retired P19 must not be a current Oracle computation, but the
+        # scientific recipe remains addressable for historical evidence.
+        self.assertNotIn(RECIPE, (row[0] for row in plan['daily_recipes'].values()))
+        from core.audit_registry import oracle_comparison_key, resolve_current_oracle_comparisons
+        inactive = d.source['historical_only_oracle_targets']
+        for label in (
+            'TrueDailyUniversal_MinTrade_P19_NetPnL',
+            'TrueDailyUniversal_MinTrade_P19_NetPnL_Direct',
+            'TrueDailyUniversal_MinTrade_P19_NetPnL_Positive_Direct',
+        ):
+            historical = {
+                'target': label, 'selector': 'direct', 'strategy': 'Daily',
+                'parameter_family': 'daily_min_p19'
+            }
+            self.assertIn(oracle_comparison_key(historical), inactive)
+            with self.assertRaisesRegex(ValueError, 'Historical-only'):
+                resolve_current_oracle_comparisons({
+                    **d.source, 'oracle_comparisons': [historical],
+                })
         self.assertEqual(oracle_scientific_target_name(
             'TrueDailyUniversal_MinTrade_P19_NetPnL_Direct'), 'Daily_MinTrade_NetPnL')
         self.assertEqual(oracle_scientific_target_name(
