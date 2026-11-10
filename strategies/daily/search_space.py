@@ -12,6 +12,18 @@ from core.portfolio_entry_policy import (
 )
 
 DAILY_SEARCH_PROFILES = {
+    "min_close_ema_only_v1": {
+        "fields": (
+            "atr_len", "atr_times_init", "atr_times_trail",
+            "breakout_ema_len",
+        ),
+        "execution_contract": DAILY_EXECUTION_CLOSE_FILTERS,
+        "fixed_switches": {
+            "use_vol": False,
+            "use_breakout_ema_filter": True,
+        },
+        "fixed_rule_contract": "daily_min_close_ema_always_on_v1",
+    },
     "min_close_ema_volume_v1": {
         "fields": (
             "atr_len", "atr_times_init", "atr_times_trail",

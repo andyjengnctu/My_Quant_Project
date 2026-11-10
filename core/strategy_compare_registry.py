@@ -144,7 +144,7 @@ STRATEGY_COMPARE_SUITES = {
         "arm_ids": (
             "C96", "C97", "C98", "C99", "C100", "C101", "C102", "C103",
             "C105", "C106", "C107", "C108", "C109", "C110",
-            "C111", "C112", "C115", "C116", "C117", "C118", "C119", "C120", "C121", "C122", "C123", "C124", "C125", "C126", "C133", "C134", "C135", "C136", "C137", "C138", "C145", "C146", "C147", "C148", "C153", "C154", "C155", "C156", "C157", "C158", "C159", "C160", "C161", "C162", "C163", "C164", "C165", "C179",
+            "C111", "C112", "C115", "C116", "C117", "C118", "C119", "C120", "C121", "C122", "C123", "C124", "C125", "C126", "C133", "C134", "C135", "C136", "C137", "C138", "C145", "C146", "C147", "C148", "C153", "C154", "C155", "C156", "C157", "C158", "C159", "C160", "C161", "C162", "C163", "C164", "C165", "C179", "C180",
         ),
         # A compact connected contrast graph supports each selected model
         # versus C96 plus the matched CK/CJ label contrast. Historical AO/CH
@@ -223,6 +223,7 @@ STRATEGY_COMPARE_SUITES = {
             "C164": "DailyUniversal NetPnL Positive × Daily (Min/P18) Direct No-K No-R0 / Broker-Cash",
             "C165": "DailyUniversal NetPnL × Daily (Min/P18) Direct No-K No-R0 / Broker-Cash",
             "C179": "Daily (Min/P21) No DL / Default Selector / Broker-Cash",
+            "C180": "Daily (Min/P22) No DL / Default Selector / Broker-Cash",
         },
     },
     "non_dl_c85_same_signal_revalidation_v1": {
@@ -1606,6 +1607,32 @@ STRATEGY_EXPERIMENTAL_PARAM_SOURCES = {
         }},
         "builder": {"enabled": True, "builder_type": "optimizer_fixed_multiseed_strategy_params",
                     "options": {"training_profile_id": "broker_cash_daily_min_six_seed42_current"}},
+    },
+    "daily_min_ema_four_best_broker_cash_oos_experiment": {
+        "path_template": "models/research/breakout_quality/strategy_params/param_p22_daily_min_best_broker_cash/{param_filename}",
+        "identity_manifest_path": "models/research/breakout_quality/strategy_params/param_p22_daily_min_best_broker_cash/identity_manifest.json",
+        "description": "PARAM-P22 independent 4D close-limit EMA-only Daily Min parameter truth; OOS evaluation view.",
+        "trained_with_dl_id": None,
+        "consumption_evaluation_mode": "oos",
+        "artifact_contract": {"breakout_quality_param_adaptation": {
+            "parameter_set": "PARAM-P22", "training_dl_enabled": False,
+            "optimizer_search_protocol": "fixed_single_seed_v1",
+        }},
+        "builder": {"enabled": True, "builder_type": "optimizer_fixed_multiseed_strategy_params",
+                    "options": {"training_profile_id": "broker_cash_daily_min_ema_four_seed42_current"}},
+    },
+    "daily_min_ema_four_best_broker_cash_rolling_experiment": {
+        "path_template": "models/research/breakout_quality/strategy_params/param_p22_daily_min_best_broker_cash/{param_filename}",
+        "identity_manifest_path": "models/research/breakout_quality/strategy_params/param_p22_daily_min_best_broker_cash/identity_manifest.json",
+        "description": "PARAM-P22 independent 4D close-limit EMA-only Daily Min parameter truth; Rolling evaluation view.",
+        "trained_with_dl_id": None,
+        "consumption_evaluation_mode": "rolling",
+        "artifact_contract": {"breakout_quality_param_adaptation": {
+            "parameter_set": "PARAM-P22", "training_dl_enabled": False,
+            "optimizer_search_protocol": "fixed_single_seed_v1",
+        }},
+        "builder": {"enabled": True, "builder_type": "optimizer_fixed_multiseed_strategy_params",
+                    "options": {"training_profile_id": "broker_cash_daily_min_ema_four_seed42_current"}},
     },
     "daily_full_nineteen_best_broker_cash_oos_experiment": {
         "path_template": "models/research/breakout_quality/strategy_params/param_p20_daily_full_best_broker_cash/{param_filename}",
@@ -3358,6 +3385,15 @@ STRATEGY_COMPARE_ARMS = {
         "name": "Daily (Min/P21) No DL / Default Selector / Broker-Cash",
         "description": "P21 independently Daily-optimized 6D Min close-limit entry with EMA and prior-volume filters always on; no DL scores or Direct selector.",
         "param_source": "daily_min_six_best_broker_cash_rolling_experiment",
+        "param_policy": "base-finalist-best", "rule_policy": "formal",
+        "dl_enabled": False, "dl_id": None, "dl_runtime_mode": None,
+        "robustness_role": "off", "entry_strategy": "Daily",
+    },
+    "C180": {
+        "replay_contract_version": 1,
+        "name": "Daily (Min/P22) No DL / Default Selector / Broker-Cash",
+        "description": "P22 independent Daily-optimized 4D Min close-limit entry with EMA always on and volume filter off; no DL scores or Direct selector.",
+        "param_source": "daily_min_ema_four_best_broker_cash_rolling_experiment",
         "param_policy": "base-finalist-best", "rule_policy": "formal",
         "dl_enabled": False, "dl_id": None, "dl_runtime_mode": None,
         "robustness_role": "off", "entry_strategy": "Daily",

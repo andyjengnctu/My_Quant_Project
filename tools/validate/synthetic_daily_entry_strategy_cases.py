@@ -55,6 +55,95 @@ class DailyEntryStrategyCases(TestCase):
                 for name in search_fields:
                     self.assertNotIn(name, fixed)
 
+    def test_p22_ema_only_control_is_isolated_from_p21_volume_gate(self):
+        """The four-dimensional control changes only the declared volume gate.
+
+        Fixed OFF is not a trainable dimension. Both Daily variants share
+        the prior-close next-session limit; neither uses Breakout events.
+        """
+        from dataclasses import replace
+        from pathlib import Path
+        from types import SimpleNamespace
+        import numpy as np
+        from config.strategy_params import STRATEGY_PARAM_PROFILES
+        from core.daily_common_entry_filters import daily_common_filter_signals
+        from core.portfolio_entry_policy import (
+            DAILY_EXECUTION_CLOSE_FILTERS, daily_signal_execution_context,
+        )
+        from core.strategy_param_scientific_contract import (
+            build_strategy_param_scientific_fingerprint,
+        )
+        from core.strategy_compare_registry import (
+            STRATEGY_COMPARE_ARMS, STRATEGY_EXPERIMENTAL_PARAM_SOURCES,
+        )
+        from core.research_summary import get_research_summary_strategy_arm_ids
+        from services.optimizer.strategy_param_training import (
+            _build_min_roos_fixed_overrides, _min_roos_search_fields,
+        )
+        from strategies.daily.search_space import resolve_daily_search_profile
+        from tools.validate.synthetic_daily_trade40_cases import fixture
+
+        p21 = STRATEGY_PARAM_PROFILES["broker_cash_daily_min_six_seed42_current"]
+        p22 = STRATEGY_PARAM_PROFILES["broker_cash_daily_min_ema_four_seed42_current"]
+        self.assertEqual(p21["parameter_set_identity"], "PARAM-P21")
+        self.assertEqual(p22["parameter_set_identity"], "PARAM-P22")
+        search = resolve_daily_search_profile(p22["daily_search_profile"])
+        self.assertEqual(search["fields"], (
+            "atr_len", "atr_times_init", "atr_times_trail", "breakout_ema_len",
+        ))
+        self.assertEqual(search["fixed_switches"], {
+            "use_vol": False, "use_breakout_ema_filter": True,
+        })
+        self.assertEqual(search["execution_contract"], DAILY_EXECUTION_CLOSE_FILTERS)
+        args = SimpleNamespace(
+            strategy_id="daily", daily_search_profile=p22["daily_search_profile"],
+            filter_id="breakout_quality_v1", fixed_risk=0.01,
+            max_position_cap_pct=0.3,
+        )
+        fixed = _build_min_roos_fixed_overrides(args=args, training_dl_enabled=False)
+        self.assertIs(fixed["use_vol"], False)
+        self.assertIs(fixed["use_breakout_ema_filter"], True)
+        self.assertNotIn("vol_long_len", _min_roos_search_fields("daily", args.daily_search_profile))
+        self.assertNotIn("vol_breakout_mult", _min_roos_search_fields("daily", args.daily_search_profile))
+        self.assertIn("breakout_ema_len", _min_roos_search_fields("daily", args.daily_search_profile))
+        self.assertEqual(p22["registered_scientific_fingerprint_sha256"],
+            build_strategy_param_scientific_fingerprint(Path(__file__).resolve().parents[2],
+                "broker_cash_daily_min_ema_four_seed42_current"))
+        self.assertNotEqual(p21["registered_scientific_fingerprint_sha256"],
+                            p22["registered_scientific_fingerprint_sha256"])
+
+        arm = STRATEGY_COMPARE_ARMS["C180"]
+        self.assertEqual(arm["name"], "Daily (Min/P22) No DL / Default Selector / Broker-Cash")
+        self.assertFalse(arm["dl_enabled"])
+        self.assertEqual(arm["param_source"], "daily_min_ema_four_best_broker_cash_rolling_experiment")
+        self.assertEqual(arm["entry_strategy"], "Daily")
+        self.assertIn("C180", get_research_summary_strategy_arm_ids())
+        self.assertIn("C179", get_research_summary_strategy_arm_ids())
+        for suffix in ("oos", "rolling"):
+            name = f"daily_min_ema_four_best_broker_cash_{suffix}_experiment"
+            self.assertEqual(STRATEGY_EXPERIMENTAL_PARAM_SOURCES[name]["artifact_contract"]
+                             ["breakout_quality_param_adaptation"]["parameter_set"], "PARAM-P22")
+
+        _, frame, original, _ = fixture(count=175)
+        frame["Volume"] = 1_000_000  # Constant positive volume is not a spike.
+        params = replace(
+            original, use_breakout_buy=False, use_vol=False,
+            use_breakout_ema_filter=True, breakout_ema_len=60,
+            use_bb=False, use_kc=False, use_breakout_return_filter=False,
+            use_breakout_false_filter=False,
+        )
+        atr = np.full(len(frame), 2.0)
+        with daily_signal_execution_context(DAILY_EXECUTION_CLOSE_FILTERS):
+            ema_only, buy_limit = daily_common_filter_signals(
+                frame, params, atr_main=atr, ticker="2330")
+            with_volume, _ = daily_common_filter_signals(
+                frame, replace(params, use_vol=True, vol_long_len=10,
+                               vol_breakout_mult=1.0), atr_main=atr, ticker="2330")
+        self.assertGreater(int(np.count_nonzero(ema_only)), 0)
+        self.assertEqual(int(np.count_nonzero(with_volume)), 0)
+        np.testing.assert_allclose(buy_limit[ema_only], frame["Close"].to_numpy()[ema_only])
+        self.assertTrue(np.isnan(buy_limit[~ema_only]).all())
+
     def test_filtered_daily_close_limit_and_atr_limit_share_information_day_admission(self):
         """All enabled filters use information-date observations; the buy
         price, not the EMA/volume candidate universe, varies by entry contract.
