@@ -11,7 +11,7 @@ DEFAULT_PERFORMANCE_STEP_FILES = {
     "chain_checks": ("chain_summary.json", "chain_checks_summary.json"),
     "ml_smoke": ("ml_smoke_summary.json",),
 }
-from tools.local_regression.common import LOCAL_REGRESSION_RUN_DIR_ENV, summarize_blocked_result, summarize_result
+from tools.local_regression.common import LOCAL_REGRESSION_RUN_DIR_ENV, summarize_blocked_result, summarize_result, summarize_timing_budget_result
 
 
 def build_performance_summary(
@@ -124,9 +124,10 @@ def build_performance_summary(
             slowest_duration_sec = round(float(slowest_case.get("duration_sec", 0.0) or 0.0), 6)
             slowest_validator_name = str(slowest_case.get("validator_name") or "")
             results.append(
-                summarize_result(
+                summarize_timing_budget_result(
                     "performance_consistency_synthetic_case_within_budget",
                     slowest_duration_sec <= synthetic_case_budget_sec,
+                    manifest=manifest,
                     detail=(
                         f"slowest={slowest_validator_name or '-'}:{slowest_duration_sec:.3f}s"
                         f" | budget={synthetic_case_budget_sec:.3f}s"
@@ -169,9 +170,10 @@ def build_performance_summary(
             if optimizer_trial_avg_objective_wall_sec is not None:
                 optimizer_budget_sec = float(manifest["performance_optimizer_trial_avg_max_sec"])
                 results.append(
-                    summarize_result(
+                    summarize_timing_budget_result(
                         "performance_optimizer_trial_avg_within_budget",
                         optimizer_trial_avg_objective_wall_sec <= optimizer_budget_sec,
+                        manifest=manifest,
                         detail=f"duration={optimizer_trial_avg_objective_wall_sec:.3f}s | budget={optimizer_budget_sec:.3f}s",
                         extra={"duration_sec": optimizer_trial_avg_objective_wall_sec, "budget_sec": optimizer_budget_sec},
                     )
@@ -182,7 +184,7 @@ def build_performance_summary(
         3,
     )
     return {
-        "ok": all(item["status"] == "PASS" for item in results),
+        "ok": all(item["status"] in {"PASS", "WARN"} for item in results),
         "skipped": False,
         "results": results,
         "step_durations": {},

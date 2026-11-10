@@ -49,6 +49,7 @@ MANIFEST_DEFAULTS: Dict[str, Any] = {
     "performance_ml_smoke_max_sec": 45,
     "performance_meta_quality_max_sec": 30,
     "performance_critical_path_max_sec": 110,
+    "performance_strict_timing_gates": False,  # True only for dedicated idle-host performance benchmarking.
     "performance_optimizer_trial_avg_max_sec": 15,
     "coverage_line_min_percent": 55,
     "coverage_branch_min_percent": 50,
@@ -88,6 +89,7 @@ MANIFEST_INT_FIELDS = {
     "summary_tools_max_age_days",
 }
 MANIFEST_BOOL_FIELDS = {
+    "performance_strict_timing_gates",
     "portfolio_enable_rotation",
     "retention_enabled",
 }
@@ -376,6 +378,30 @@ def summarize_result(name: str, ok: bool, *, detail: str, extra: Optional[Dict[s
     return payload
 
 
+def summarize_timing_budget_result(
+    name: str,
+    within_budget: bool,
+    *,
+    manifest: Dict[str, Any],
+    detail: str,
+    extra: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Preserve measured wall-time while separating advisory latency from formal failures.
+
+    A duration threshold is a repeatable benchmark only on a controlled host.
+    On a shared workstation, a completed, correct test exceeding that threshold
+    is a visible WARN.  Explicit strict mode restores the original hard gate.
+    A real process timeout / failed assertion is still a FAIL in the caller.
+    """
+    payload = summarize_result(name, within_budget, detail=detail, extra=extra)
+    if not within_budget and not bool(manifest.get("performance_strict_timing_gates", False)):
+        payload["status"] = "WARN"
+        payload["timing_gate_mode"] = "advisory"
+    else:
+        payload["timing_gate_mode"] = "strict" if bool(manifest.get("performance_strict_timing_gates", False)) else "advisory"
+    return payload
+
+
 def summarize_blocked_result(
     name: str,
     *,
@@ -407,10 +433,22 @@ def partition_result_statuses(results: List[Dict[str, Any]]) -> Dict[str, List[s
 
     failures = [item["name"] for item in results if item.get("status") == "FAIL"]
     blocked = [item["name"] for item in results if item.get("status") == "BLOCKED"]
-    non_pass = [item["name"] for item in results if item.get("status") != "PASS"]
+    warnings = [
+        item["name"] for item in results
+        if item.get("status") == "WARN" and str(item.get("name", "")).startswith("performance_")
+    ]
+    # Only declared performance telemetry can be advisory; an unrelated WARN
+    # (or any other unknown status) must still fail closed.
+    non_pass = [
+        item["name"] for item in results
+        if item.get("status") != "PASS" and not (
+            item.get("status") == "WARN" and str(item.get("name", "")).startswith("performance_")
+        )
+    ]
     return {
         "failures": failures,
         "blocked": blocked,
+        "warnings": warnings,
         "non_pass": non_pass,
     }
 

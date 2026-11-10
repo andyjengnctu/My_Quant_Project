@@ -518,6 +518,7 @@ def main(argv=None) -> int:
         result_statuses = partition_result_statuses(all_results)
         failures = result_statuses["failures"]
         blocked = result_statuses["blocked"]
+        warnings = result_statuses["warnings"]
         non_pass = result_statuses["non_pass"]
         overall_status = "PASS" if not non_pass else "FAIL"
 
@@ -525,6 +526,8 @@ def main(argv=None) -> int:
             "status": overall_status,
             "failures": failures,
             "fail_count": len(failures),
+            "warnings": warnings,
+            "warning_count": len(warnings),
             "blocked": blocked,
             "blocked_count": len(blocked),
             "coverage": {
@@ -584,6 +587,7 @@ def main(argv=None) -> int:
         f"status        : {overall_status}",
         f"fail_count    : {len(failures)}",
         f"blocked_count : {len(blocked)}",
+        f"warning_count : {len(warnings)}",
         f"coverage_ok   : {coverage_summary['ok']}",
         f"checklist_ok  : {checklist_summary['ok']}",
         f"formal_entry_ok: {formal_entry_summary['ok']}",
@@ -623,6 +627,8 @@ def main(argv=None) -> int:
             else "perf_opt_trial: (missing)"
         ),
     ]
+    if warnings:
+        lines.append("warned_checks : " + ", ".join(warnings))
     if failures:
         lines.append("failed_checks : " + ", ".join(failures))
     if blocked:
@@ -631,6 +637,7 @@ def main(argv=None) -> int:
     print(json.dumps({
         "status": overall_status,
         "fail_count": len(failures),
+        "warning_count": len(warnings),
         "blocked_count": len(blocked),
         "coverage_percent": coverage_summary["totals"]["percent_covered"],
         "checklist_partial_ids": checklist_summary["partial_ids"],

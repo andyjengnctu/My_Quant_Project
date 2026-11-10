@@ -1261,6 +1261,10 @@ def execute_all(
                 prior["status"] = "FAIL"
                 if "parent_wall_time_budget_exceeded" not in prior.setdefault("failure_reasons", []):
                     prior["failure_reasons"].append("parent_wall_time_budget_exceeded")
+        for warned_step_name in parent_wall_summary.get("warned_budget_steps", []):
+            prior = script_summaries_by_name.get(warned_step_name)
+            if prior is not None:
+                prior.setdefault("warnings", []).append("parent_wall_time_budget_exceeded_advisory")
         if not parent_wall_summary.get("ok", False):
             overall_ok = False
 
@@ -1299,6 +1303,10 @@ def execute_all(
             "git_commit": resolve_git_commit(),
             "scripts": script_summaries,
             "formal_wall_time": parent_wall_summary,
+            "timing_warnings": [
+                row["name"] for row in parent_wall_summary.get("results", [])
+                if row.get("status") == "WARN"
+            ],
             "selected_steps": selected_step_names,
             "failures": len(failed_step_names),
             "preflight": step_payloads["preflight"],
@@ -1339,6 +1347,7 @@ def execute_all(
             "bundle_entries": [str(path.relative_to(run_dir)).replace("\\", "/") for path in bundle_paths],
             "scripts": script_summaries,
             "formal_wall_time": parent_wall_summary,
+            "timing_warnings": master_summary["timing_warnings"],
             "step_payloads": step_payloads,
             "failures": master_summary["failures"],
             "retention": {

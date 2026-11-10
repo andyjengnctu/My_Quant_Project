@@ -7,6 +7,7 @@ from tools.local_regression.common import (
     partition_result_statuses,
     read_json_if_exists,
     summarize_result,
+    summarize_timing_budget_result,
     write_json,
     write_text,
 )
@@ -48,23 +49,23 @@ def build_parent_wall_time_summary(
     for step_name, duration_sec in step_durations.items():
         budget_sec = float(manifest[FORMAL_WALL_TIME_MANIFEST_KEYS[step_name]])
         within_budget = duration_sec <= budget_sec
-        if not within_budget:
-            failed_budget_steps.append(step_name)
-        results.append(
-            summarize_result(
-                f"performance_{step_name}_within_budget",
-                within_budget,
-                detail=(
-                    f"parent_wall={duration_sec:.3f}s | budget={budget_sec:.3f}s"
-                    f" | source={FORMAL_WALL_TIME_SOURCE}"
-                ),
-                extra={
-                    "duration_sec": duration_sec,
-                    "budget_sec": budget_sec,
-                    "source": FORMAL_WALL_TIME_SOURCE,
-                },
-            )
+        timing_result = summarize_timing_budget_result(
+            f"performance_{step_name}_within_budget",
+            within_budget,
+            manifest=manifest,
+            detail=(
+                f"parent_wall={duration_sec:.3f}s | budget={budget_sec:.3f}s"
+                f" | source={FORMAL_WALL_TIME_SOURCE}"
+            ),
+            extra={
+                "duration_sec": duration_sec,
+                "budget_sec": budget_sec,
+                "source": FORMAL_WALL_TIME_SOURCE,
+            },
         )
+        if timing_result["status"] == "FAIL":
+            failed_budget_steps.append(step_name)
+        results.append(timing_result)
 
     parallel_duration_sec = max(
         [step_durations[name] for name in selected_formal_steps if name in parallel_steps and name in step_durations],
@@ -79,25 +80,34 @@ def build_parent_wall_time_summary(
     aggregate_step_duration_sec = round(sum(step_durations.values()), 3)
     critical_path_budget_sec = float(manifest["performance_critical_path_max_sec"])
     critical_path_ok = not missing and critical_path_duration_sec <= critical_path_budget_sec
-    results.append(
-        summarize_result(
-            "performance_formal_critical_path_within_budget",
-            critical_path_ok,
-            detail=(
-                f"critical_path={critical_path_duration_sec:.3f}s | budget={critical_path_budget_sec:.3f}s"
-                f" | source={FORMAL_WALL_TIME_SOURCE}"
-            ),
-            extra={
-                "duration_sec": critical_path_duration_sec,
-                "budget_sec": critical_path_budget_sec,
-                "parallel_duration_sec": round(parallel_duration_sec, 3),
-                "serial_duration_sec": round(serial_duration_sec, 3),
-                "source": FORMAL_WALL_TIME_SOURCE,
-            },
-        )
+    critical_path_result = summarize_timing_budget_result(
+        "performance_formal_critical_path_within_budget",
+        critical_path_ok,
+        manifest=manifest,
+        detail=(
+            f"critical_path={critical_path_duration_sec:.3f}s | budget={critical_path_budget_sec:.3f}s"
+            f" | source={FORMAL_WALL_TIME_SOURCE}"
+        ),
+        extra={
+            "duration_sec": critical_path_duration_sec,
+            "budget_sec": critical_path_budget_sec,
+            "parallel_duration_sec": round(parallel_duration_sec, 3),
+            "serial_duration_sec": round(serial_duration_sec, 3),
+            "source": FORMAL_WALL_TIME_SOURCE,
+        },
     )
+    # Missing evidence remains a formal FAIL, regardless of timing mode.
+    if missing:
+        critical_path_result["status"] = "BLOCKED"
+        critical_path_result["blocked_by"] = "performance_parent_wall_timings_missing"
+    results.append(critical_path_result)
+    warned_budget_steps = [
+        name for name in step_durations
+        if any(row.get("name") == f"performance_{name}_within_budget" and row.get("status") == "WARN" for row in results)
+    ]
     return {
-        "ok": all(row.get("status") == "PASS" for row in results),
+        "ok": all(row.get("status") in {"PASS", "WARN"} for row in results),
+        "warned_budget_steps": warned_budget_steps,
         "source": FORMAL_WALL_TIME_SOURCE,
         "results": results,
         "step_durations": step_durations,
@@ -123,17 +133,23 @@ def merge_parent_wall_time_into_meta_quality_summary(run_dir: Path, wall_summary
     statuses = partition_result_statuses(merged_results)
     failures = statuses["failures"]
     blocked = statuses["blocked"]
+    warnings = statuses["warnings"]
     non_pass = statuses["non_pass"]
 
     performance = dict(summary.get("performance", {}))
     performance.update(
         {
-            "ok": bool(performance.get("ok", True)) and bool(wall_summary.get("ok", False)),
+            "ok": bool(wall_summary.get("ok", False)) and all(
+                row.get("status") in {"PASS", "WARN"}
+                for row in merged_results
+                if str(row.get("name", "")).startswith("performance_")
+            ),
             "step_durations": dict(wall_summary.get("step_durations", {})),
             "total_duration_sec": wall_summary.get("aggregate_step_duration_sec"),
             "critical_path_duration_sec": wall_summary.get("critical_path_duration_sec"),
             "aggregate_step_duration_sec": wall_summary.get("aggregate_step_duration_sec"),
             "formal_wall_time_source": wall_summary.get("source"),
+            "timing_warnings": [name for name in warnings if name.startswith("performance_")],
         }
     )
     summary.update(
@@ -141,6 +157,8 @@ def merge_parent_wall_time_into_meta_quality_summary(run_dir: Path, wall_summary
             "status": "PASS" if not non_pass else "FAIL",
             "failures": failures,
             "fail_count": len(failures),
+            "warnings": warnings,
+            "warning_count": len(warnings),
             "blocked": blocked,
             "blocked_count": len(blocked),
             "performance": performance,
@@ -153,11 +171,16 @@ def merge_parent_wall_time_into_meta_quality_summary(run_dir: Path, wall_summary
     if not text_path.exists():
         return
 
-    lines = text_path.read_text(encoding="utf-8").splitlines()
+    # Re-merging a summary must not retain stale timing FAIL/WARN lines.
+    lines = [
+        line for line in text_path.read_text(encoding="utf-8").splitlines()
+        if not line.startswith(("perf_wall_src :", "failed_checks :", "warned_checks :", "blocked_checks:"))
+    ]
     replacements = {
         "status        :": f"status        : {summary['status']}",
         "fail_count    :": f"fail_count    : {len(failures)}",
         "blocked_count :": f"blocked_count : {len(blocked)}",
+        "warning_count :": f"warning_count : {len(warnings)}",
         "performance_ok:": f"performance_ok: {performance['ok']}",
         "perf_critical :": f"perf_critical : {float(wall_summary['critical_path_duration_sec']):.3f}s",
         "perf_aggregate:": f"perf_aggregate: {float(wall_summary['aggregate_step_duration_sec']):.3f}s",
@@ -167,8 +190,17 @@ def merge_parent_wall_time_into_meta_quality_summary(run_dir: Path, wall_summary
             if line.startswith(prefix):
                 lines[index] = replacement
                 break
+    if not any(line.startswith("warning_count :") for line in lines):
+        lines.insert(3, f"warning_count : {len(warnings)}")
     lines.append(f"perf_wall_src : {wall_summary.get('source')}")
 
+    if warnings:
+        warning_line = "warned_checks : " + ", ".join(warnings)
+        existing = next((i for i, line in enumerate(lines) if line.startswith("warned_checks :")), None)
+        if existing is None:
+            lines.append(warning_line)
+        else:
+            lines[existing] = warning_line
     if failures:
         failure_line = "failed_checks : " + ", ".join(failures)
         existing = next((i for i, line in enumerate(lines) if line.startswith("failed_checks :")), None)

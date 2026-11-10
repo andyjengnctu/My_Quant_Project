@@ -1458,8 +1458,79 @@ def validate_meta_quality_performance_memory_contract_case(_base_params):
         check("performance_single_worker_critical_path_counts_every_serial_step", 11.25, serial_wall.get("critical_path_duration_sec"))
         check("performance_parent_wall_time_is_canonical_source", formal_wall_time_module.FORMAL_WALL_TIME_SOURCE, parent_wall.get("source"))
 
+        # Shared-host execution retains accurate parent timings while warning,
+        # not failing, if otherwise-complete validators exceed a soft budget.
+        busy_host_timings = dict(parent_script_summaries)
+        busy_host_timings["consistency"] = {"duration_sec": 82.753}
+        busy_host_timings["meta_quality"] = {"duration_sec": 12.003}
+        busy_host_timings["ml_smoke"] = {"duration_sec": 17.516}
+        busy_host_timings["quick_gate"] = {"duration_sec": 10.907}
+        busy_host_timings["chain_checks"] = {"duration_sec": 2.895}
+        advisory_wall = formal_wall_time_module.build_parent_wall_time_summary(
+            script_summaries_by_name=busy_host_timings,
+            selected_step_names=["quick_gate", "consistency", "chain_checks", "ml_smoke", "meta_quality"],
+            parallel_step_names=run_all_module.PARALLEL_STEP_NAMES,
+            manifest=manifest,
+        )
+        advisory_statuses = {row["name"]: row["status"] for row in advisory_wall["results"]}
+        check("performance_shared_host_consistency_is_warning", "WARN", advisory_statuses.get("performance_consistency_within_budget"))
+        check("performance_shared_host_critical_path_is_warning", "WARN", advisory_statuses.get("performance_formal_critical_path_within_budget"))
+        check("performance_shared_host_keeps_formal_gate_pass", True, advisory_wall.get("ok"))
+        check("performance_shared_host_preserves_parent_timing", 112.272, advisory_wall.get("critical_path_duration_sec"))
+        check("performance_shared_host_does_not_mark_steps_failed", [], advisory_wall.get("failed_budget_steps"))
+        check("performance_shared_host_records_warned_step", ["consistency"], advisory_wall.get("warned_budget_steps"))
+        advisory_merge_dir = run_dir / "advisory_merge"
+        advisory_merge_dir.mkdir()
+        write_json(advisory_merge_dir / "meta_quality_summary.json", {
+            "status": "PASS", "failures": [], "fail_count": 0, "blocked": [], "blocked_count": 0,
+            "performance": {"ok": True},
+            "results": [{"name": "base_meta_check", "status": "PASS", "detail": "ok"}],
+        })
+        formal_wall_time_module.merge_parent_wall_time_into_meta_quality_summary(advisory_merge_dir, advisory_wall)
+        advisory_merged = json.loads((advisory_merge_dir / "meta_quality_summary.json").read_text(encoding="utf-8"))
+        check("performance_shared_host_meta_status_pass", "PASS", advisory_merged.get("status"))
+        check("performance_shared_host_meta_warning_count", 2, advisory_merged.get("warning_count"))
+        check("performance_shared_host_meta_failure_count", 0, advisory_merged.get("fail_count"))
+        check("performance_shared_host_meta_performance_ok", True, advisory_merged.get("performance", {}).get("ok"))
+        check("performance_unknown_status_fails_closed", ["unrecognized"], local_common.partition_result_statuses([{"name": "unrecognized", "status": "OTHER"}])["non_pass"])
+        check("performance_unrelated_warning_fails_closed", ["unrelated"], local_common.partition_result_statuses([{"name": "unrelated", "status": "WARN"}])["non_pass"])
+        check("performance_duplicate_name_real_failure_cannot_be_masked", ["performance_same_name"], local_common.partition_result_statuses([
+            {"name": "performance_same_name", "status": "WARN"},
+            {"name": "performance_same_name", "status": "FAIL"},
+        ])["non_pass"])
+        # The budget change must never suppress a failed test or a missing summary.
+        write_json(advisory_merge_dir / "meta_quality_summary.json", {
+            "status": "FAIL", "failures": ["underlying_assertion"], "fail_count": 1,
+            "performance": {"ok": False},
+            "results": [{"name": "underlying_assertion", "status": "FAIL", "detail": "regression"}],
+        })
+        formal_wall_time_module.merge_parent_wall_time_into_meta_quality_summary(advisory_merge_dir, advisory_wall)
+        failing_merged = json.loads((advisory_merge_dir / "meta_quality_summary.json").read_text(encoding="utf-8"))
+        check("performance_warning_preserves_underlying_failure", "FAIL", failing_merged.get("status"))
+        check("performance_warning_preserves_underlying_failure_name", ["underlying_assertion"], failing_merged.get("failures"))
+        missing_parent = formal_wall_time_module.build_parent_wall_time_summary(
+            script_summaries_by_name={"consistency": {"duration_sec": 82.753}},
+            selected_step_names=["consistency", "meta_quality"],
+            parallel_step_names=set(),
+            manifest=manifest,
+        )
+        check("performance_missing_step_still_fails", False, missing_parent.get("ok"))
+        check("performance_missing_step_not_advisory", "FAIL", next(row for row in missing_parent["results"] if row["name"] == "performance_parent_wall_timings_present")["status"])
+        hard_timeout_dir = run_dir / "hard_timeout"
+        hard_timeout_dir.mkdir()
+        write_json(hard_timeout_dir / "consistency_summary.json", {"status": "PASS", "fail_count": 0})
+        hard_timeout_summary = run_all_module._build_script_summary(
+            run_dir=hard_timeout_dir,
+            name="consistency",
+            summary_name="consistency_summary.json",
+            run_result={"returncode": 0, "duration_sec": 301.0, "timed_out": True},
+        )
+        check("performance_real_subprocess_timeout_still_fails", "FAIL", hard_timeout_summary.get("status"))
+        check("performance_real_subprocess_timeout_reason_preserved", True, "timed_out" in hard_timeout_summary.get("failure_reasons", []))
+
         strict_time_manifest = dict(manifest)
         strict_time_manifest["performance_critical_path_max_sec"] = 5
+        strict_time_manifest["performance_strict_timing_gates"] = True
         strict_parent_wall = formal_wall_time_module.build_parent_wall_time_summary(
             script_summaries_by_name=parent_script_summaries,
             selected_step_names=["quick_gate", "consistency", "chain_checks", "ml_smoke", "meta_quality"],
@@ -1471,6 +1542,7 @@ def validate_meta_quality_performance_memory_contract_case(_base_params):
 
         strict_consistency_manifest = dict(manifest)
         strict_consistency_manifest["performance_consistency_max_sec"] = 1
+        strict_consistency_manifest["performance_strict_timing_gates"] = True
         strict_consistency_wall = formal_wall_time_module.build_parent_wall_time_summary(
             script_summaries_by_name=parent_script_summaries,
             selected_step_names=["quick_gate", "consistency", "chain_checks", "ml_smoke", "meta_quality"],
@@ -1505,8 +1577,21 @@ def validate_meta_quality_performance_memory_contract_case(_base_params):
         check("performance_parent_wall_merge_updates_meta_source", formal_wall_time_module.FORMAL_WALL_TIME_SOURCE, merged_meta.get("performance", {}).get("formal_wall_time_source"))
         check("performance_parent_wall_merge_preserves_failed_step_reason", True, "performance_consistency_within_budget" in merged_meta.get("failures", []))
 
+        advisory_case_manifest = dict(manifest)
+        advisory_case_manifest["performance_synthetic_case_max_sec"] = 0
+        with patch.dict(os.environ, {LOCAL_REGRESSION_RUN_DIR_ENV: str(run_dir)}):
+            advisory_case_perf = build_performance_summary(
+                run_dir, advisory_case_manifest,
+                current_meta_quality_duration_sec=1.25,
+                current_meta_quality_peak_process_memory_mb=40.0,
+            )
+        advisory_case_result = next(row for row in advisory_case_perf.get("results", []) if row.get("name") == "performance_consistency_synthetic_case_within_budget")
+        check("performance_shared_host_synthetic_case_is_warning", "WARN", advisory_case_result.get("status"))
+        check("performance_shared_host_synthetic_case_keeps_ok", True, advisory_case_perf.get("ok"))
+
         strict_case_manifest = dict(manifest)
         strict_case_manifest["performance_synthetic_case_max_sec"] = 0
+        strict_case_manifest["performance_strict_timing_gates"] = True
         with patch.dict(os.environ, {LOCAL_REGRESSION_RUN_DIR_ENV: str(run_dir)}):
             strict_case_perf = build_performance_summary(
                 run_dir,

@@ -290,6 +290,15 @@ def print_test_suite_human_summary(
         else:
             print(f"- {step_labels.get(key, key):<13} {status:<8} {detail}")
 
+    timing_warnings = [
+        row for row in meta.get("results", [])
+        if isinstance(row, dict) and row.get("status") == "WARN" and str(row.get("name", "")).startswith("performance_")
+    ]
+    if timing_warnings:
+        print("\n[效能提醒｜不影響正確性 PASS]")
+        for item in timing_warnings:
+            print(f"- {_safe_display_text(item.get('name'))}: {_safe_display_text(item.get('detail'))}")
+
     print("\n[重點結果]")
     quick_script = script_map.get("quick_gate", {})
     quick_status, quick_detail = _step_overview("quick_gate", quick, quick_script)
