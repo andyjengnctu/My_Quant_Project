@@ -110,29 +110,6 @@ class DailyEntryStrategyCases(TestCase):
             attach.assert_called_once()
             self.assertEqual(default["preparation_plan"].actions, (teacher,))
 
-    def test_robustness_entry_passes_shared_scope_through_the_actual_provider(self):
-        from types import SimpleNamespace
-        from apps import research as entry
-        from services.research import breakout_quality_application as app
-        from core.research_orchestration import ResearchArtifactPlan
-        source = SimpleNamespace(filter_id="fixture", model_architecture="fixture", experiment_profile="fixture")
-        workflow = SimpleNamespace(**vars(source), seed=42)
-        def execute(**kwargs):
-            self.assertEqual(kwargs["model_upstream_preparer"](), 0)
-            return {"done": True}
-        with patch.object(entry, "get_strategy_multi_seed_robustness_settings", return_value=SimpleNamespace(profile_id="fixture", benchmark_id="fixture")), \
-             patch.object(entry, "run_strategy_multi_seed_robustness", side_effect=execute), \
-             patch.object(entry, "_load_provider_handler", return_value=(None, app.prepare_strategy_compare_artifacts)), \
-             patch.object(app, "_strategy_compare_required_model_sources", return_value=([SimpleNamespace(dataset="full")], [("dl", source)])), \
-             patch.object(app, "get_breakout_quality_workflow_settings", return_value=workflow), \
-             patch.object(app, "_collect_continuous_research_input_plan", return_value=ResearchArtifactPlan.from_actions([])) as planner:
-            self.assertEqual(entry._run_current_robustness(robustness_id="fixture", confirm=False), {"done": True})
-            self.assertIs(planner.call_args.kwargs["include_seed_dependencies"], False)
-            entry.get_strategy_multi_seed_robustness_settings.return_value.benchmark_id = None
-            self.assertEqual(entry._run_current_robustness(robustness_id="fixture", confirm=False), {"done": True})
-            self.assertIs(planner.call_args.kwargs["include_seed_dependencies"], True)
-            app.prepare_strategy_compare_artifacts(program_name="fixture", profile_ids=("fixture",), scope="upstream")
-            self.assertIs(planner.call_args.kwargs["include_seed_dependencies"], True)
 
     def test_robustness_replans_shared_status_without_default_seed_teacher(self):
         from types import SimpleNamespace
@@ -171,6 +148,73 @@ class DailyEntryStrategyCases(TestCase):
              patch.object(app, "_execute_resolved_robustness_plan", return_value={"done": True}):
             self.assertEqual(app.run_multi_seed_robustness(
                 robustness_id="fixture", confirm=False, model_upstream_preparer=prepare), {"done": True})
+
+    def test_signed_daily_history_reuses_the_canonical_optimizer_adaptation_contract(self):
+        import json
+        from dataclasses import replace
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+        from core.daily_trade_path_capabilities import DAILY_TRUTH_CAPABILITIES
+        from core.file_integrity import canonical_json_sha256
+        from core.portfolio_param_runtime import build_portfolio_params_signature
+        from services.breakout_quality.daily_full_p20_training_source import teacher_for_kind
+        from services.breakout_quality.formal_mintrade40_pit_source import FormalMinTrade40PITBlocked
+        from services.optimizer.strategy_param_training import _min_roos_adaptation_contract
+        from strategies.daily.search_space import resolve_daily_search_profile
+        from tools.validate.synthetic_daily_full_p20_fulltrade_cases import _fixture_source
+        _, _, fixture = _fixture_source(42)
+        for capability in DAILY_TRUTH_CAPABILITIES.values():
+            if not capability.get("historical_parameter_set"):
+                continue
+            owner = teacher_for_kind(capability["target_kind"])
+            search = resolve_daily_search_profile(owner.PROFILE)
+            params = replace(fixture.schedule[0].params, **{
+                **{name: False for name in owner.spec.get("disabled_filters", ())},
+                **search.get("fixed_switches", {}),
+            })
+            records = [{"members": [{"seed": 42}], "params_obj": params,
+                        "params_signature": build_portfolio_params_signature(params)}]
+            adaptation = _min_roos_adaptation_contract(
+                arm_id=owner.HISTORY_ID, training_dl_enabled=False,
+                strategy_id="daily", daily_search_profile=owner.PROFILE,
+            )
+            with self.subTest(profile=owner.PROFILE), TemporaryDirectory() as tmp:
+                path = owner.historical_params_path(tmp, 42)
+                path.parent.mkdir(parents=True)
+                payload = {"breakout_quality_param_adaptation": adaptation}
+                path.write_text(json.dumps(payload), encoding="utf-8")
+                signed_contract = {"arm_id": owner.HISTORY_ID, "training_dl_enabled": False}
+                identity = canonical_json_sha256(signed_contract)
+                (path.parent.parent / "rolling_preflight.json").write_text(json.dumps({
+                    **signed_contract, "runtime_identity_sha256": identity, "status": "COMPLETED",
+                }), encoding="utf-8")
+                (path.parent.parent / "rolling_optimizer_summary.json").write_text(json.dumps({
+                    "runtime_identity_sha256": identity, "status": "COMPLETED",
+                }), encoding="utf-8")
+                original = path.read_bytes()
+                with patch.object(owner, "_expected_historical_preflight",
+                                  return_value={"runtime_identity_sha256": identity}), \
+                     patch.object(owner, "resolve_formal_min_param_records", return_value=records):
+                    self.assertEqual(owner._validated_records(
+                        path, historical=True, project_root=tmp, seed=42), (payload, records))
+                    self.assertEqual(owner.inspect_history(project_root=tmp, seed=42)["action"], "REUSE")
+                    self.assertEqual(path.read_bytes(), original)
+                    for field, invalid in (
+                        ("fixed_rule_contract", "foreign_fixed_rule_contract"),
+                        ("parameter_set", "foreign_parameter_set"),
+                        ("search_fields", list(reversed(adaptation["search_fields"]))),
+                    ):
+                        path.write_text(json.dumps({"breakout_quality_param_adaptation": {
+                            **adaptation, field: invalid,
+                        }}), encoding="utf-8")
+                        with self.assertRaisesRegex(FormalMinTrade40PITBlocked, "declared Daily search profile"):
+                            owner._validated_records(path, historical=True, project_root=tmp, seed=42)
+                    path.write_bytes(original)
+                    (path.parent.parent / "rolling_preflight.json").write_text(json.dumps({
+                        **signed_contract, "training_dl_enabled": True,
+                        "runtime_identity_sha256": identity,
+                    }), encoding="utf-8")
+                    self.assertEqual(owner.inspect_history(project_root=tmp, seed=42)["action"], "BLOCKED")
 
     def test_declared_daily_capability_needs_no_consumer_identity_registration(self):
         """Another existing-capability composition is resolved by one descriptor."""

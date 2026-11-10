@@ -7,6 +7,7 @@ from copy import deepcopy
 import json
 from pathlib import Path
 import tempfile
+from unittest import TestCase
 from unittest.mock import patch
 
 import pandas as pd
@@ -64,6 +65,12 @@ def validate_strategy_compare_resolved_plan_transition_contract_case(_base_param
 
     case_id = "STRATEGY_COMPARE_RESOLVED_PLAN_TRANSITION"
     results, summary, check, check_true = bind_synthetic_case(case_id, "synthetic_breakout_quality")
+    from .check_result_utils import run_unittest_capability_cases
+    entry_checks, entry_summary = run_unittest_capability_cases(
+        case_id, "synthetic_breakout_quality", (RobustnessEntryPointScopeCases,),
+    )
+    results.extend(entry_checks)
+    summary["robustness_entry_seed_scope"] = entry_summary
 
     base = get_strategy_comparison_settings("forward_oos")
     current_dl_arms = tuple(arm for arm in base.enabled_arms if arm.dl_enabled)
@@ -481,3 +488,30 @@ def validate_strategy_compare_settings_validation_stages_contract_case(_base_par
         )
 
     return results, summary
+
+
+class RobustnessEntryPointScopeCases(TestCase):
+    def test_robustness_entry_passes_shared_scope_through_the_actual_provider(self):
+        from types import SimpleNamespace
+        from apps import research as entry
+        from services.research import breakout_quality_application as app
+        from core.research_orchestration import ResearchArtifactPlan
+        source = SimpleNamespace(filter_id="fixture", model_architecture="fixture", experiment_profile="fixture")
+        workflow = SimpleNamespace(**vars(source), seed=42)
+        def execute(**kwargs):
+            self.assertEqual(kwargs["model_upstream_preparer"](), 0)
+            return {"done": True}
+        with patch.object(entry, "get_strategy_multi_seed_robustness_settings", return_value=SimpleNamespace(profile_id="fixture", benchmark_id="fixture")), \
+             patch.object(entry, "run_strategy_multi_seed_robustness", side_effect=execute), \
+             patch.object(entry, "_load_provider_handler", return_value=(None, app.prepare_strategy_compare_artifacts)), \
+             patch.object(app, "_strategy_compare_required_model_sources", return_value=([SimpleNamespace(dataset="full")], [("dl", source)])), \
+             patch.object(app, "get_breakout_quality_workflow_settings", return_value=workflow), \
+             patch.object(app, "_collect_continuous_research_input_plan", return_value=ResearchArtifactPlan.from_actions([])) as planner:
+            self.assertEqual(entry._run_current_robustness(robustness_id="fixture", confirm=False), {"done": True})
+            self.assertIs(planner.call_args.kwargs["include_seed_dependencies"], False)
+            entry.get_strategy_multi_seed_robustness_settings.return_value.benchmark_id = None
+            self.assertEqual(entry._run_current_robustness(robustness_id="fixture", confirm=False), {"done": True})
+            self.assertIs(planner.call_args.kwargs["include_seed_dependencies"], True)
+            app.prepare_strategy_compare_artifacts(program_name="fixture", profile_ids=("fixture",), scope="upstream")
+            self.assertIs(planner.call_args.kwargs["include_seed_dependencies"], True)
+

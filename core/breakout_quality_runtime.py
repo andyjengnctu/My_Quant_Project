@@ -21,6 +21,16 @@ from typing import Any, Callable
 # Continuous target identity strings are runtime contract values, not Filter implementation.
 STRATEGY_ALIGNED_TARGET_ID = "strategy_aligned_opportunity_r_v1"
 STRATEGY_ALIGNED_NO_TIME_TARGET_ID = "strategy_aligned_opportunity_no_time_r_v1"
+from core.daily_trade_path_capabilities import (
+    DAILY_MIN_P18_TRADE_PATH_KIND,
+    DAILY_MIN_P18_SOURCE_ID,
+    DAILY_MIN_P18_FULLCYCLE_NETPNL_TARGET_ID,
+    DAILY_FULL_P20_FULLCYCLE_NETPNL_TARGET_ID,
+    DAILY_FULL_P20_TRADE_PATH_KIND,
+    DAILY_FULL_P20_SOURCE_ID,
+    DAILY_FULL_P20_TEACHER_CONTRACT,
+)
+
 DAILY_OPPORTUNITY_NO_TIME_TARGET_ID = "daily_opportunity_no_time_r_v1"
 DAILY_FULL_HORIZON_OPPORTUNITY_TARGET_ID = "daily_full_horizon_opportunity_r_v1"
 DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID = "daily_full_horizon_pure_mfe_r_v1"
@@ -35,14 +45,7 @@ DAILY_FORMAL_MINTRADE_FULLCYCLE_NETR_TARGET_ID = "daily_formal_mintrade_fullcycl
 DAILY_FORMAL_MINTRADE_FULLCYCLE_NETPNL_TARGET_ID = "daily_formal_mintrade_fullcycle_netpnl_per_seed_v1"
 FULLTRADE_FULLCYCLE_NETPNL_TARGET_ID = "daily_formal_fulltrade_fullcycle_netpnl_per_seed_v1"
 TRUE_DAILY_MINTRADE_FULLCYCLE_NETPNL_TARGET_ID = "true_daily_universal_mintrade_fulltrade_netpnl_v1"
-DAILY_MIN_P18_TRADE_PATH_KIND = "daily_min_p18_fullcycle_netpnl_per_seed"
-DAILY_MIN_P18_SOURCE_ID = "daily_min_p18_seed"
-DAILY_MIN_P18_FULLCYCLE_NETPNL_TARGET_ID = "daily_universal_min_p18_fullcycle_netpnl_per_seed_v1"
 DAILY_MIN_P19_FULLCYCLE_NETPNL_TARGET_ID = "daily_universal_min_p19_fullcycle_netpnl_seed42_v1"
-DAILY_FULL_P20_FULLCYCLE_NETPNL_TARGET_ID = "daily_universal_full_p20_fullcycle_netpnl_per_seed_v2"
-DAILY_FULL_P20_TRADE_PATH_KIND = "daily_full_p20_fullcycle_netpnl_per_seed"
-DAILY_FULL_P20_SOURCE_ID = "daily_full_p20_roos_seed"
-DAILY_FULL_P20_TEACHER_CONTRACT = "daily_full_p20_historical_plus_current_per_seed_v2"
 DAILY_FIRST_RISK_BREACH_PURE_MFE_TARGET_ID = "daily_first_risk_breach_pure_mfe_r_v1"
 DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID = "daily_full_horizon_low_adverse_r_v1"
 DAILY_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_TARGET_ID = "daily_full_horizon_equal_rank_mfe_low_adverse_v1"

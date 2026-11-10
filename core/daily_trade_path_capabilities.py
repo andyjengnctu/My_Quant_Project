@@ -3,11 +3,13 @@
 Consumers resolve producer, source identity and numerical owners here instead
 of introducing experiment-specific dispatch into every Oracle stage.
 """
-from core.breakout_quality_runtime import (
-    DAILY_MIN_P18_FULLCYCLE_NETPNL_TARGET_ID, DAILY_MIN_P18_SOURCE_ID, DAILY_MIN_P18_TRADE_PATH_KIND,
-    DAILY_FULL_P20_FULLCYCLE_NETPNL_TARGET_ID, DAILY_FULL_P20_SOURCE_ID,
-    DAILY_FULL_P20_TRADE_PATH_KIND, DAILY_FULL_P20_TEACHER_CONTRACT,
-)
+DAILY_MIN_P18_TRADE_PATH_KIND = "daily_min_p18_fullcycle_netpnl_per_seed"
+DAILY_MIN_P18_SOURCE_ID = "daily_min_p18_seed"
+DAILY_MIN_P18_FULLCYCLE_NETPNL_TARGET_ID = "daily_universal_min_p18_fullcycle_netpnl_per_seed_v1"
+DAILY_FULL_P20_FULLCYCLE_NETPNL_TARGET_ID = "daily_universal_full_p20_fullcycle_netpnl_per_seed_v2"
+DAILY_FULL_P20_TRADE_PATH_KIND = "daily_full_p20_fullcycle_netpnl_per_seed"
+DAILY_FULL_P20_SOURCE_ID = "daily_full_p20_roos_seed"
+DAILY_FULL_P20_TEACHER_CONTRACT = "daily_full_p20_historical_plus_current_per_seed_v2"
 
 DAILY_MIN_P21_FULLCYCLE_NETPNL_TARGET_ID = "daily_universal_min_p21_fullcycle_netpnl_per_seed_v1"
 DAILY_MIN_P21_TRADE_PATH_KIND = "daily_min_p21_fullcycle_netpnl_per_seed"

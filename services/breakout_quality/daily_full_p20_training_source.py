@@ -56,7 +56,9 @@ from services.optimizer.strategy_param_training import (
 from strategies.daily.search_space import resolve_daily_search_profile
 from importlib import import_module
 from tempfile import TemporaryDirectory
-from services.optimizer.strategy_param_training import _validate_min_roos_params
+from services.optimizer.strategy_param_training import (
+    _validate_min_roos_params, _min_roos_adaptation_contract,
+)
 
 
 class DailyTradePathTeacher:
@@ -197,6 +199,10 @@ class DailyTradePathTeacher:
         if historical:
             adaptation = dict(payload.get("breakout_quality_param_adaptation") or {})
             search = resolve_daily_search_profile(self.spec["search_profile"])
+            adaptation_contract = _min_roos_adaptation_contract(
+                arm_id=self.HISTORY_ID, training_dl_enabled=False,
+                strategy_id="daily", daily_search_profile=self.PROFILE,
+            )
             if (
                 adaptation.get("mode") != "min_roos_training"
                 or adaptation.get("parameter_set")
@@ -205,7 +211,7 @@ class DailyTradePathTeacher:
                 or (adaptation.get("entry_strategy") != "Daily")
                 or (
                     adaptation.get("fixed_rule_contract")
-                    != "daily_common_filters_search_v2"
+                    != adaptation_contract["fixed_rule_contract"]
                 )
                 or (
                     adaptation.get("daily_execution_contract")
