@@ -14,7 +14,8 @@ RESEARCH_SUMMARY_ROWS = (
     {'arm_id': 'C97', 'oracle_parameter_family': 'full'},
     {'arm_id': 'C98', 'parameter_family': 'full'},
     {'arm_id': 'C179', 'parameter_family': 'daily_min_p21'},
-    {'arm_id': 'C180', 'parameter_family': 'daily_min_p22'},
+    # AI: 2026-11-11 user-directed C180 retirement; retain PARAM-P22/history.
+    {'enabled': False, 'arm_id': 'C180', 'parameter_family': 'daily_min_p22'},
     # AI: 2026-11-10 membership decision: retire P18 C160/C161/C177/C178
     # from all current Research projections. Keep their scientific Registry,
     # parameters, model specs and historical evidence unchanged.

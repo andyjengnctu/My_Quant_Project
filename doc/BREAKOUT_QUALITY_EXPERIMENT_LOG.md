@@ -5398,6 +5398,8 @@ Assessment: `USER_REPORTED_ROLLING_RESULT_AVAILABLE / FULL_HORIZON_MAE_SMALL_PAI
 - **Display contract**: use `Breakout (Min/P16)` / `Breakout (Full/P17)` / `Daily (Full/P20)` and `MinTrade_NetPnL_Positive (P16)` / `FullTrade_NetPnL_Positive (P17)` / `Daily_FullTrade_NetPnL (P20)` consistently across current Summary, Oracle preflight and human-readable Oracle. Derive from the canonical param-set lineage, not a hardcoded arm-to-version alias.
 - **Evidence boundary**: no new FIT/Optimizer/Replay/Oracle OOS measurement or P16/P17/P20 performance value was produced by this scope/display decision. Preserve registered scientific identities and old receipts, without promoting Trading truth or upgrading FIT/Replay versions. The two human report contracts get append-only display versions in `REPORT_CONTRACT_VERSIONS.json`.
 
+- **2026-11-11 使用者後續退役決策**：退役 `SR-C180`（Daily (Min/P22)、No DL／Default Selector、EMA-only）。從同一 Summary SSOT 及其 Forward／Rolling／N=4 Robustness 現行清單移除；C180 本身沒有 DL Target，不新增或挪用 Oracle。原策略編號、Replay v1、`PARAM-P22` 四維參數契約與歷史 Optimizer／Replay 工件保留；不退役 C179/P21，也不變更現行 Optimizer 選擇。本次為研究清單決策，沒有新增市場績效或模型／參數重訓證據。
+
 ## 6. 後續新增規則
 
 **只有新科學證據或舊科學證據有效性更正才能增加本文件內容。** 記錄必須有實驗／Target 身分、期間／Seed、控制變數、原始結果、負結果與決策，並指向正式證據。沒有市場／模型結果的工程測試、提交紀錄、打包、格式調整或一次性 Audit 清理，不可追加研究章節。本文件不再生成封存副本或研究待辦。

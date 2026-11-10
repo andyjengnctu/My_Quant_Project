@@ -117,7 +117,7 @@ class DailyEntryStrategyCases(TestCase):
         self.assertFalse(arm["dl_enabled"])
         self.assertEqual(arm["param_source"], "daily_min_ema_four_best_broker_cash_rolling_experiment")
         self.assertEqual(arm["entry_strategy"], "Daily")
-        self.assertIn("C180", get_research_summary_strategy_arm_ids())
+        self.assertNotIn("C180", get_research_summary_strategy_arm_ids())
         self.assertIn("C179", get_research_summary_strategy_arm_ids())
         for suffix in ("oos", "rolling"):
             name = f"daily_min_ema_four_best_broker_cash_{suffix}_experiment"
