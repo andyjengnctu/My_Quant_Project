@@ -3850,6 +3850,7 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     )
     from services.optimizer.outer_rolling_parallel_progress import (
         PARALLEL_FOLD_PROGRESS_PREFIX,
+        _MirroredLogWriter,
         _ParallelFoldProgressLogFilter,
     )
     progress_log_handle = io.StringIO()
@@ -3862,6 +3863,39 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
             return 123
 
     progress_live_handle = _SyntheticTTYMirror()
+    # Python 3.14's exception formatter probes stderr.isatty().  Both
+    # wrappers must support the probe without obscuring the original error.
+    for stream_type in (_ParallelFoldProgressLogFilter, _MirroredLogWriter):
+        plain_stream = stream_type(io.StringIO())
+        tty_stream = stream_type(io.StringIO(), mirror_handle=_SyntheticTTYMirror())
+        closed_mirror = io.StringIO()
+        closed_mirror.close()
+        closed_stream = stream_type(io.StringIO(), mirror_handle=closed_mirror)
+        check(
+            f"optimizer_log_stream_console_contract_{stream_type.__name__}",
+            True,
+            not plain_stream.isatty()
+            and tty_stream.isatty()
+            and tty_stream.fileno() == 123
+            and not closed_stream.isatty(),
+        )
+    exception_log = io.StringIO()
+    exception_mirror = io.StringIO()
+    exception_stream = _MirroredLogWriter(exception_log, mirror_handle=exception_mirror)
+    with redirect_stderr(exception_stream):
+        import sys
+        import traceback
+        try:
+            raise RuntimeError("synthetic original optimizer error")
+        except RuntimeError:
+            assert not sys.stderr.isatty()
+            traceback.print_exc()
+    check(
+        "optimizer_exception_log_preserves_original_error_and_mirror",
+        True,
+        "RuntimeError: synthetic original optimizer error" in exception_log.getvalue()
+        and exception_log.getvalue() == exception_mirror.getvalue(),
+    )
     progress_filter = _ParallelFoldProgressLogFilter(
         progress_log_handle, mirror_handle=progress_live_handle
     )

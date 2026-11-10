@@ -24,12 +24,8 @@ from services.optimizer.outer_rolling_runtime import _format_exception_summary, 
 PARALLEL_FOLD_LOG_STATUS_MAX_CHARS = 140
 
 
-class _ParallelFoldProgressLogFilter:
-    def __init__(self, handle, *, mirror_handle=None, on_progress_event=None):
-        self.handle = handle
-        self.mirror_handle = mirror_handle
-        self.on_progress_event = on_progress_event
-        self._buffer = ""
+class _MirroredConsoleStream:
+    """Preserve console probes for progress and exception-formatting streams."""
 
     def isatty(self):
         target = self.mirror_handle
@@ -48,6 +44,14 @@ class _ParallelFoldProgressLogFilter:
         if not callable(fileno):
             raise OSError("mirrored console has no file descriptor")
         return fileno()
+
+
+class _ParallelFoldProgressLogFilter(_MirroredConsoleStream):
+    def __init__(self, handle, *, mirror_handle=None, on_progress_event=None):
+        self.handle = handle
+        self.mirror_handle = mirror_handle
+        self.on_progress_event = on_progress_event
+        self._buffer = ""
 
     def _emit_line(self, line: str, *, newline: bool) -> None:
         suffix = "\n" if newline else ""
@@ -80,7 +84,7 @@ class _ParallelFoldProgressLogFilter:
             self.mirror_handle.flush()
 
 
-class _MirroredLogWriter:
+class _MirroredLogWriter(_MirroredConsoleStream):
     """Write stderr to the fold log and optionally mirror it to a live console."""
 
     def __init__(self, handle, *, mirror_handle=None):
