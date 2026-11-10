@@ -36,6 +36,7 @@ from tools.local_regression.common import (
     LOCAL_REGRESSION_RUN_DIR_ENV,
     build_bundle_zip,
     build_python_env,
+    test_cpu_thread_environment,
     cleanup_staging_dir,
     create_staging_run_dir,
     compute_file_sha256,
@@ -59,11 +60,10 @@ from tools.local_regression.shared_prep_cache import (
 SCRIPT_ORDER = list(FORMAL_COMMAND_ORDER)
 SCRIPT_TIMEOUT_GRACE_SEC = 30
 STEP_NAMES = list(FORMAL_STEP_ORDER)
-# AI: Consistency is a long-running coverage workload. Running it alongside
-# ML Smoke increases parent wall-time variance without making it complete any
-# earlier. Run the three short independent checks concurrently first, then
-# Consistency alone; retain actual parent wall-time and the unchanged budgets.
-PARALLEL_STEP_NAMES = {"quick_gate", "chain_checks", "ml_smoke"}
+# AI: Each child has a bounded native CPU pool. Independent checks can overlap
+# without every tiny synthetic tensor operation creating a host-wide pool.
+# Meta quality still waits for all producers, including consistency coverage.
+PARALLEL_STEP_NAMES = {"quick_gate", "consistency", "chain_checks", "ml_smoke"}
 ProgressCallback = Callable[[str, Dict[str, Any]], None]
 
 
@@ -912,6 +912,7 @@ def execute_all(
     shared_prep_cache_dir = run_dir / "_shared_prep_cache"
     formal_primary_param_path = _write_isolated_formal_primary_param_source(run_dir)
     shared_env = build_python_env({
+        **test_cpu_thread_environment(manifest),
         LOCAL_REGRESSION_RUN_DIR_ENV: str(run_dir),
         LOCAL_REGRESSION_SHARED_PREP_CACHE_ENV: str(shared_prep_cache_dir),
         RUN_BEST_PARAMS_PATH_ENV_VAR: str(formal_primary_param_path),

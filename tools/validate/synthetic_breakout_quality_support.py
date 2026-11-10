@@ -18,6 +18,29 @@ from unittest.mock import patch
 import numpy as np
 import pandas as pd
 
+
+def missing_teacher_artifact_fixture(runtime):
+    """Planning-only fixture: keep registered dependencies, supply missing state.
+
+    Teacher inspection/build/PIT contracts have their own behavioral cases.
+    Score-reuse and plan-rendering cases must not repeatedly inspect every
+    physical Optimizer publication simply to represent an absent teacher.
+    The real seed/dependency planner still executes, including deduplication.
+    """
+    resolve = runtime._trade_path_teacher_requirements
+
+    def inspect_missing(*, project_root, seed):
+        return {"action": "BUILD", "reason": f"isolated missing teacher: seed={seed}"}
+
+    def forbid_build(**_kwargs):
+        raise AssertionError("a read-only planning fixture must not build a teacher")
+
+    def requirements(profile):
+        return tuple(replace(item, inspect=inspect_missing, execute=forbid_build)
+                     for item in resolve(profile))
+
+    return patch.object(runtime, "_trade_path_teacher_requirements", side_effect=requirements)
+
 from services.audit.catalog import get_domain_cli_commands
 
 

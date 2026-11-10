@@ -12,6 +12,7 @@ import sys
 import time
 import uuid
 import zipfile
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
@@ -36,6 +37,7 @@ MANIFEST_DEFAULTS: Dict[str, Any] = {
     "benchmark_ticker": "0050",
     "bundle_name": "to_chatgpt_bundle.zip",
     "dataset": "reduced",
+    "test_cpu_threads": 1,
     "detail_tools_keep_last_n": 5,
     "detail_tools_max_age_days": 14,
     "local_regression_keep_last_n": 20,
@@ -64,6 +66,7 @@ MANIFEST_DEFAULTS: Dict[str, Any] = {
     "summary_tools_max_age_days": 30,
 }
 MANIFEST_INT_FIELDS = {
+    "test_cpu_threads",
     "detail_tools_keep_last_n",
     "detail_tools_max_age_days",
     "local_regression_keep_last_n",
@@ -274,6 +277,9 @@ def load_manifest(path: Optional[Path] = None) -> Dict[str, Any]:
         if not isinstance(raw_value, bool):
             raise LocalRegressionError(f"manifest 欄位 {field_name} 需要 bool，收到: {raw_value!r}")
 
+    if merged["test_cpu_threads"] < 1:
+        raise LocalRegressionError("manifest 欄位 test_cpu_threads 需要 >= 1")
+
     for field_name in sorted(MANIFEST_STR_FIELDS):
         raw_value = str(merged[field_name]).strip()
         if raw_value == "":
@@ -287,6 +293,29 @@ def load_manifest(path: Optional[Path] = None) -> Dict[str, Any]:
     merged["dataset"] = dataset
     merged["manifest_path"] = str(manifest_path)
     return merged
+
+
+def test_cpu_thread_environment(manifest: Dict[str, Any]) -> Dict[str, str]:
+    """Bound nested CPU pools in isolated test children, never Research/Trading."""
+    count = str(manifest["test_cpu_threads"])
+    return {name: count for name in (
+        "OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS",
+        "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS",
+    )}
+
+
+@contextmanager
+def synthetic_cpu_thread_budget():
+    """Also cover direct/reused-process synthetic runs and restore on failure."""
+    import torch
+
+    count = int(load_manifest()["test_cpu_threads"])
+    previous = torch.get_num_threads()
+    try:
+        torch.set_num_threads(count)
+        yield
+    finally:
+        torch.set_num_threads(previous)
 
 
 def build_python_env(extra_env: Optional[Dict[str, str]] = None) -> Dict[str, str]:

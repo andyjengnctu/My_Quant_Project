@@ -10,6 +10,7 @@ from .synthetic_breakout_quality_support import (
     redirect_stdout,
     replace,
     tempfile,
+    missing_teacher_artifact_fixture,
 )
 
 
@@ -2184,7 +2185,7 @@ def append_model_robustness_pit_strategy_reuse_contract_checks(*, results, case_
         }
         with patch.object(
             robust, "_discover_registered_strategy_only_scientific_reuse", return_value={}
-        ), patch.object(
+        ), missing_teacher_artifact_fixture(robust), patch.object(
             robust, "_benchmark_parameter_plan_rows", return_value=([], [], verified_params)
         ), patch.object(
             robust, "compute_strategy_param_scientific_sha256", return_value="a" * 64

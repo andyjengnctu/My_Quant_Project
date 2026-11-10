@@ -1088,6 +1088,7 @@ def validate_run_all_dataset_prepare_pass_main_contract_case(_base_params):
 
     manifest = dict(local_common.MANIFEST_DEFAULTS)
     manifest["bundle_name"] = "to_chatgpt_bundle.zip"
+    manifest["test_cpu_threads"] = 2  # Isolated override; do not pin the live knob.
     fixed_now = local_common.taipei_now()
 
     with tempfile.TemporaryDirectory(prefix="run_all_dataset_prepare_pass_") as temp_dir:
@@ -1122,10 +1123,23 @@ def validate_run_all_dataset_prepare_pass_main_contract_case(_base_params):
         summary_name_by_script = {script: summary_name for _name, script, summary_name in run_all_module.SCRIPT_ORDER}
         child_envs = []
         observed_execution_modes = {}
+        from threading import Barrier, Lock
+        producers = {"quick_gate", "consistency", "chain_checks", "ml_smoke"}
+        ready = Barrier(len(producers))
+        finished = set()
+        finished_lock = Lock()
+        meta_saw_all_producers = []
 
         def _fake_run_script(*, name, relative_script, timeout_sec, env, log_path, progress_callback, major_index, major_total, execution_mode="serial"):
             child_envs.append(dict(env))
             observed_execution_modes[name] = execution_mode
+            if name in producers:
+                # This fails if the executor only labels serial work parallel.
+                ready.wait(timeout=5)
+                with finished_lock:
+                    finished.add(name)
+            elif name == "meta_quality":
+                meta_saw_all_producers.append(finished == producers)
             payload = {
                 "status": "PASS",
                 "failures": [],
@@ -1147,6 +1161,7 @@ def validate_run_all_dataset_prepare_pass_main_contract_case(_base_params):
             }
 
         with patch.object(run_all_module, "create_staging_run_dir", return_value=run_dir), \
+             patch.object(run_all_module.os, "cpu_count", return_value=8), \
              patch.object(run_all_module, "load_manifest", return_value=manifest), \
              patch.object(run_all_module, "_run_preflight", side_effect=_fake_run_preflight), \
              patch.object(run_all_module, "ensure_reduced_dataset", return_value=dataset_info), \
@@ -1190,18 +1205,39 @@ def validate_run_all_dataset_prepare_pass_main_contract_case(_base_params):
         )
 
     check("run_all_main_dataset_prepare_pass_return_code", 0, rc)
-    check("run_all_coverage_consistency_runs_without_parallel_resource_competition", "serial", observed_execution_modes.get("consistency"))
-    check("run_all_short_checks_keep_parallel_execution", {"quick_gate", "chain_checks", "ml_smoke"}, {
+    check("run_all_coverage_consistency_overlaps_independent_steps", "parallel", observed_execution_modes.get("consistency"))
+    check("run_all_independent_checks_keep_parallel_execution", {"quick_gate", "consistency", "chain_checks", "ml_smoke"}, {
         name for name, mode in observed_execution_modes.items() if mode == "parallel"
     })
+    check("run_all_meta_waits_for_all_producers", [True], meta_saw_all_producers)
+    check_true("run_all_child_native_pools_follow_manifest", bool(child_envs) and all(
+        all(env.get(key) == value for key, value in local_common.test_cpu_thread_environment(manifest).items())
+        for env in child_envs
+    ))
+    import torch
+    original_threads = torch.get_num_threads()
+    with patch.object(local_common, "load_manifest", return_value=manifest):
+        with local_common.synthetic_cpu_thread_budget():
+            check("synthetic_cpu_pool_follows_manifest", 2, torch.get_num_threads())
+        check("synthetic_cpu_pool_restored_after_success", original_threads, torch.get_num_threads())
+        try:
+            with local_common.synthetic_cpu_thread_budget():
+                raise RuntimeError("synthetic budget failure probe")
+        except RuntimeError as exc:
+            check("synthetic_cpu_pool_does_not_swallow_failure", "synthetic budget failure probe", str(exc))
+        check("synthetic_cpu_pool_restored_after_failure", original_threads, torch.get_num_threads())
+    for cpu_count, expected in ((1, 1), (2, 2), (4, 3), (8, 4)):
+        with patch.object(run_all_module.os, "cpu_count", return_value=cpu_count):
+            check(f"run_all_bounds_parallelism_for_{cpu_count}_cpus", expected,
+                  run_all_module._determine_parallel_worker_count(run_all_module.SCRIPT_ORDER))
     check("run_all_main_dataset_prepare_pass_overall_status", "PASS", master_summary.get("overall_status"))
     check("run_all_main_dataset_prepare_payload_status", "PASS", master_summary.get("dataset_prepare", {}).get("status"))
     check("run_all_main_dataset_prepare_not_run_steps_empty", [], master_summary.get("not_run_step_names", []))
     check("run_all_main_dataset_prepare_selected_steps", list(run_all_module.STEP_NAMES), master_summary.get("selected_steps"))
     check("run_all_parent_wall_time_source_is_persisted", formal_wall_time_module.FORMAL_WALL_TIME_SOURCE, master_summary.get("formal_wall_time", {}).get("source"))
-    check("run_all_parent_wall_time_critical_path_uses_outer_durations", 0.06, master_summary.get("formal_wall_time", {}).get("critical_path_duration_sec"))
+    check("run_all_parent_wall_time_critical_path_uses_outer_durations", 0.04, master_summary.get("formal_wall_time", {}).get("critical_path_duration_sec"))
     check("meta_quality_receives_parent_wall_time_source", formal_wall_time_module.FORMAL_WALL_TIME_SOURCE, meta_quality_summary.get("performance", {}).get("formal_wall_time_source"))
-    check("meta_quality_receives_parent_wall_time_critical_path", 0.06, meta_quality_summary.get("performance", {}).get("critical_path_duration_sec"))
+    check("meta_quality_receives_parent_wall_time_critical_path", 0.04, meta_quality_summary.get("performance", {}).get("critical_path_duration_sec"))
     check("run_all_formal_primary_param_file_exists", True, formal_param_exists)
     check("run_all_formal_primary_param_uses_current_config_defaults", params_to_json_dict(V16StrategyParams()), formal_param_payload)
     check("run_all_all_child_steps_receive_isolated_param_override", [str(formal_param_path)] * len(child_param_paths), child_param_paths)
@@ -1447,7 +1483,7 @@ def validate_meta_quality_performance_memory_contract_case(_base_params):
             parallel_step_names=run_all_module.PARALLEL_STEP_NAMES,
             manifest=manifest,
         )
-        check("performance_isolated_consistency_critical_path_includes_serial_duration", 7.25, parent_wall.get("critical_path_duration_sec"))
+        check("performance_parallel_producers_plus_meta_critical_path", 5.25, parent_wall.get("critical_path_duration_sec"))
         check("performance_parent_aggregate_duration_retained_for_diagnostics", 11.25, parent_wall.get("aggregate_step_duration_sec"))
         serial_wall = formal_wall_time_module.build_parent_wall_time_summary(
             script_summaries_by_name=parent_script_summaries,
@@ -1461,7 +1497,7 @@ def validate_meta_quality_performance_memory_contract_case(_base_params):
         # Shared-host execution retains accurate parent timings while warning,
         # not failing, if otherwise-complete validators exceed a soft budget.
         busy_host_timings = dict(parent_script_summaries)
-        busy_host_timings["consistency"] = {"duration_sec": 82.753}
+        busy_host_timings["consistency"] = {"duration_sec": 100.269}
         busy_host_timings["meta_quality"] = {"duration_sec": 12.003}
         busy_host_timings["ml_smoke"] = {"duration_sec": 17.516}
         busy_host_timings["quick_gate"] = {"duration_sec": 10.907}

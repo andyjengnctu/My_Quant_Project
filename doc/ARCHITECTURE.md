@@ -213,3 +213,5 @@ project/
 ```
 
 - `run_meta_quality.py`：meta quality 工具；負責 formal contract、coverage、摘要與結構一致性檢查。
+- Formal suite 的 `tools/local_regression/manifest.json:test_cpu_threads` 統一限制測試子程序的 native CPU pools（預設 1）；synthetic runner 同時限制已載入的 PyTorch，結束／失敗均恢復原執行緒數。只影響隔離測試，不改 Research／Trading 訓練設定。Quick Gate、Consistency、Chain Checks、ML Smoke 依 CPU 數有界並行，Meta Quality 等待全部 producer 完成後消費本輪 coverage；不重用前輪 PASS、不減少 validator、coverage targets 或門檻。
+- Strategy Compare 的純計畫顯示／score-reuse synthetic 使用隔離的缺少 teacher 工件狀態，保留 registry dependencies 及真實逐 seed planner，避免每個顯示案例重查全部 Optimizer publication。Teacher inspection／build／PIT、授權與 seed 去重仍由原有獨立行為案例驗證。

@@ -749,6 +749,13 @@ def get_synthetic_validators():
 
 
 def run_synthetic_consistency_suite(base_params):
+    from tools.local_regression.common import synthetic_cpu_thread_budget
+
+    with synthetic_cpu_thread_budget():
+        return _run_synthetic_validators(base_params)
+
+
+def _run_synthetic_validators(base_params):
     all_results = []
     summaries = []
     validator_entries = get_synthetic_validator_entries()

@@ -11,6 +11,7 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
+from tools.validate.synthetic_breakout_quality_support import missing_teacher_artifact_fixture
 
 import pandas as pd
 
@@ -125,6 +126,7 @@ class StrategyRobustnessUnitCases(unittest.TestCase):
             }
             with (
                 patch.object(robust, 'PROJECT_ROOT', root),
+                missing_teacher_artifact_fixture(robust),
                 patch.object(robust, '_discover_registered_strategy_only_scientific_reuse',
                              side_effect=lambda **_kwargs: {}) as strategy_discovery,
                 patch.object(robust, '_benchmark_parameter_plan_rows',

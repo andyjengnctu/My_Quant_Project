@@ -7,7 +7,7 @@ it does not register a second test entry or establish scientific identities.
 from __future__ import annotations
 
 from time import perf_counter
-from .synthetic_breakout_quality_support import Path, SimpleNamespace, patch, pd, tempfile
+from .synthetic_breakout_quality_support import Path, SimpleNamespace, patch, pd, tempfile, missing_teacher_artifact_fixture
 
 
 def append_robustness_benchmark_plan_checks(
@@ -553,6 +553,7 @@ def append_robustness_benchmark_plan_checks(
     with (
         tempfile.TemporaryDirectory(prefix="strategy_compare_rolling_plan_") as isolated_root,
         patch.object(robustness_plan_runtime, "PROJECT_ROOT", Path(isolated_root)),
+        missing_teacher_artifact_fixture(robustness_plan_runtime),
         patch.object(
             robustness_plan_runtime,
             "inspect_reusable_model_research_rolling_score",
