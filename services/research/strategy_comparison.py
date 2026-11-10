@@ -185,6 +185,7 @@ def resolve_comparison_plan(
     *,
     project_root: Path = PROJECT_ROOT,
     settings: StrategyComparisonSettings | None = None,
+    include_seed_dependencies: bool = True,
 ) -> ResolvedComparisonPlan:
     """Resolve preparation, reuse, provenance and period exactly once.
 
@@ -195,7 +196,9 @@ def resolve_comparison_plan(
 
     root = Path(project_root).resolve()
     current = settings or get_strategy_comparison_settings()
-    status = collect_preparation_status(project_root=root, settings=current)
+    status = collect_preparation_status(
+        project_root=root, settings=current, include_seed_dependencies=include_seed_dependencies
+    )
     status["config_fingerprint"] = strategy_comparison_fingerprint(
         current,
         artifact_identities=status["artifact_identities"],
@@ -245,12 +248,14 @@ def collect_artifact_status(
     *,
     project_root: Path = PROJECT_ROOT,
     settings: StrategyComparisonSettings | None = None,
+    include_seed_dependencies: bool = True,
 ) -> dict[str, Any]:
     """Compatibility view of the canonical resolved comparison plan."""
 
     return resolve_comparison_plan(
         project_root=project_root,
         settings=settings,
+        include_seed_dependencies=include_seed_dependencies,
     ).status_dict()
 
 

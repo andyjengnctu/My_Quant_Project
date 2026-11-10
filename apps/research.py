@@ -86,7 +86,9 @@ def _strategy_model_artifact_scope(action) -> str:
     return "upstream" if key.startswith("model-upstream:") else "models"
 
 
-def _prepare_strategy_model_artifacts(*, profile_id: str, scope: str) -> int:
+def _prepare_strategy_model_artifacts(
+    *, profile_id: str, scope: str, include_seed_dependencies: bool = True,
+) -> int:
     """Dispatch Strategy Compare model dependencies through one provider contract."""
 
     _, handler = _load_provider_handler("strategy_artifact_handler")
@@ -98,6 +100,7 @@ def _prepare_strategy_model_artifacts(*, profile_id: str, scope: str) -> int:
             program_name=f"apps/research.py compare {normalized_scope}",
             profile_ids=(str(profile_id),),
             scope=normalized_scope,
+            **({} if include_seed_dependencies else {"include_seed_dependencies": False}),
         )
         or 0
     )
@@ -238,7 +241,8 @@ def _run_current_robustness(*, robustness_id: str, confirm: bool) -> dict:
         robustness_id=robustness_id,
         confirm=confirm,
         model_upstream_preparer=lambda: _prepare_strategy_model_artifacts(
-            profile_id=robustness.profile_id, scope="upstream"
+            profile_id=robustness.profile_id, scope="upstream",
+            include_seed_dependencies=robustness.benchmark_id is None
         ),
     )
 

@@ -1356,6 +1356,7 @@ def collect_preparation_status(
     project_root: Path = PROJECT_ROOT,
     settings: StrategyComparisonSettings,
     comparison_period_override: Mapping[str, str] | None = None,
+    include_seed_dependencies: bool = True,
 ) -> dict[str, Any]:
     """Resolve the complete deterministic preparation status for one comparison profile."""
 
@@ -1378,10 +1379,11 @@ def collect_preparation_status(
         required_dl_sources=required_dl_sources,
         runtime_required_dl_sources=runtime_required_dl_sources,
     )
-    actions = _attach_trade_path_teacher_dependencies(
-        root=root, settings=settings, required_dl_sources=required_dl_sources,
-        actions=actions,
-    )
+    if include_seed_dependencies:
+        actions = _attach_trade_path_teacher_dependencies(
+            root=root, settings=settings, required_dl_sources=required_dl_sources,
+            actions=actions,
+        )
     expected_r_rows = _collect_expected_r_calibration_status(
         root=root,
         settings=settings,

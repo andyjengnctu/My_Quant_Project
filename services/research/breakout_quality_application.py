@@ -2742,6 +2742,7 @@ def _collect_continuous_research_input_plan(
     dataset_profile: str | None = None,
     max_tickers: int | None = None,
     seed: int | None = None,
+    include_seed_dependencies: bool = True,
 ):
     resolved_dataset_profile = str(
         INTERACTIVE_DATASET_PROFILE if dataset_profile is None else dataset_profile
@@ -2760,7 +2761,7 @@ def _collect_continuous_research_input_plan(
     # A daily trade-path Target consumes original optimizer-owned parameter
     # evidence, not just the Dataset. Include it in the *same* plan rather than
     # letting data materialization launch an invisible 7-fold Min optimizer.
-    if not _requires_formal_trade_path_inputs(settings):
+    if not include_seed_dependencies or not _requires_formal_trade_path_inputs(settings):
         return base
     from core.research_orchestration import ResearchArtifactAction, ResearchArtifactPlan
     from core.research_policy import get_research_artifact_preparation_policy
@@ -2830,6 +2831,7 @@ def _prepare_continuous_research_inputs(
     dataset_profile: str | None = None,
     max_tickers: int | None = None,
     seed: int | None = None,
+    include_seed_dependencies: bool = True,
     execution_observer: Callable[[bool], None] | None = None,
 ) -> int:
     """Prepare deterministic model inputs through the shared Research orchestrator.
@@ -2855,11 +2857,12 @@ def _prepare_continuous_research_inputs(
             dataset_profile=resolved_dataset_profile,
             max_tickers=resolved_max_tickers,
             seed=model_seed,
+            include_seed_dependencies=include_seed_dependencies,
         )
 
     def _execute(action) -> None:
         from services.breakout_quality.trade_path_target_source import execute_trade_path_dependency
-        if execute_trade_path_dependency(
+        if include_seed_dependencies and execute_trade_path_dependency(
             builder_type=str(action.builder_type), project_root=PROJECT_ROOT,
             seed=model_seed, experiment_profile=str(settings.experiment_profile),
         ):
@@ -3788,11 +3791,13 @@ def _prepare_strategy_compare_model_upstream(
     *,
     workflow,
     dataset_profile: str,
+    include_seed_dependencies: bool = True,
 ) -> int:
     """Prepare canonical Dataset/Target only when the shared registry says they are stale."""
 
     plan = _collect_continuous_research_input_plan(
-        workflow, dataset_profile=str(dataset_profile), max_tickers=0
+        workflow, dataset_profile=str(dataset_profile), max_tickers=0,
+        include_seed_dependencies=include_seed_dependencies,
     )
     color_enabled = console_color_enabled()
     for item in plan.actions:
@@ -3812,6 +3817,7 @@ def _prepare_strategy_compare_model_upstream(
             workflow,
             dataset_profile=str(dataset_profile),
             max_tickers=0,
+            include_seed_dependencies=include_seed_dependencies,
         )
     )
 
@@ -3874,6 +3880,7 @@ def _prepare_strategy_compare_model_upstream_artifacts(
     *,
     program_name: str,
     profile_ids: tuple[str, ...],
+    include_seed_dependencies: bool = True,
 ) -> int:
     """Prepare only canonical Dataset/Target truth required by Strategy Compare.
 
@@ -3916,6 +3923,7 @@ def _prepare_strategy_compare_model_upstream_artifacts(
             program_name,
             workflow=workflow,
             dataset_profile=dataset_profile,
+            include_seed_dependencies=include_seed_dependencies,
         )
         if code != 0:
             return int(code)
@@ -3927,6 +3935,7 @@ def prepare_strategy_compare_artifacts(
     program_name: str,
     profile_ids: tuple[str, ...],
     scope: str,
+    include_seed_dependencies: bool = True,
 ) -> int:
     """Single provider hook for Strategy Compare model-side dependencies."""
 
@@ -3935,7 +3944,8 @@ def prepare_strategy_compare_artifacts(
     if normalized_scope == "upstream":
         return int(
             _prepare_strategy_compare_model_upstream_artifacts(
-                program_name=program_name, profile_ids=selected
+                program_name=program_name, profile_ids=selected,
+                include_seed_dependencies=include_seed_dependencies,
             )
         )
     if normalized_scope == "models":

@@ -21,6 +21,157 @@ from services.audit import target_oracle_romd as oracle
 
 
 class DailyEntryStrategyCases(TestCase):
+    def test_shared_upstream_does_not_inspect_default_seed_teachers(self):
+        from types import SimpleNamespace
+        from pathlib import Path
+        from services.research import breakout_quality_application as app
+        from core.research_orchestration import ResearchArtifactAction, ResearchArtifactPlan
+        from services.breakout_quality.trade_path_target_source import TeacherDependency, TradePathSource
+        workflow = SimpleNamespace(filter_id="fixture", model_architecture="fixture",
+                                   experiment_profile="fixture", seed=42)
+        visited = []
+        def inspect(**kwargs):
+            visited.append(kwargs["seed"])
+            return {"action": "RESUME", "path": Path("history"), "reason": "missing teacher"}
+        source = TradePathSource("fixture", lambda **kw: {}, (
+            TeacherDependency("history", "optimizer_history", 30, inspect, lambda **kw: None),
+        ))
+        dataset = ResearchArtifactAction(
+            action_id="dataset", artifact_key="model-upstream:dataset_core", action="REUSE",
+            builder_type=None, description="fixture", path="dataset", dependencies=(),
+            producer_work_type="existing_artifact", execution_priority=10,
+        )
+        with patch.object(app, "collect_model_upstream_preparation_plan", return_value=ResearchArtifactPlan.from_actions([dataset])), \
+             patch.object(app, "_requires_formal_trade_path_inputs", return_value=True), \
+             patch("services.breakout_quality.trade_path_target_source.registered_trade_path_source", return_value=source):
+            shared = app._collect_continuous_research_input_plan(workflow, include_seed_dependencies=False)
+            self.assertEqual(shared.actions, (dataset,))
+            self.assertEqual(visited, [])
+            default = app._collect_continuous_research_input_plan(workflow)
+            self.assertEqual(visited, [42])
+            self.assertIn("seed_42", default.actions[-1].artifact_key)
+            explicit = app._collect_continuous_research_input_plan(workflow, seed=123)
+            self.assertEqual(visited, [42, 123])
+            self.assertIn("seed_123", explicit.actions[-1].artifact_key)
+
+    def test_shared_upstream_build_and_replan_never_dispatches_teacher(self):
+        from types import SimpleNamespace
+        from services.research import breakout_quality_application as app
+        from core.research_orchestration import ResearchArtifactAction, ResearchArtifactPlan
+        ready = False
+        def plan(*args, **kwargs):
+            return ResearchArtifactPlan.from_actions([ResearchArtifactAction(
+                action_id="dataset", artifact_key="model-upstream:dataset_core",
+                action="REUSE" if ready else "BUILD", builder_type=None if ready else "breakout_quality_dataset",
+                description="fixture", path="dataset", dependencies=(),
+                producer_work_type="dataset", execution_priority=10,
+            )])
+        def build(*args, **kwargs):
+            nonlocal ready
+            ready = True
+            return 0
+        workflow = SimpleNamespace(filter_id="fixture", model_architecture="fixture",
+                                   experiment_profile="fixture", seed=42)
+        with patch.object(app, "collect_model_upstream_preparation_plan", side_effect=plan), \
+             patch.object(app, "_requires_formal_trade_path_inputs", side_effect=AssertionError("shared phase must not inspect teacher")), \
+             patch.object(app, "_dataset_refresh_step", return_value=("rebuild", [], ("prepare-dataset", [], "fixture"))), \
+             patch.object(app, "_run_command", side_effect=build) as builder, \
+             patch.object(app, "get_breakout_quality_experiment_profile", return_value=SimpleNamespace(training_sample_scope="fixture")), \
+             patch("services.breakout_quality.trade_path_target_source.execute_trade_path_dependency", side_effect=AssertionError("shared phase must not dispatch teacher")):
+            self.assertEqual(app._prepare_continuous_research_inputs(
+                "fixture", workflow, include_seed_dependencies=False), 0)
+            builder.assert_called_once()
+            self.assertTrue(ready)
+
+    def test_shared_strategy_status_defers_teachers_but_single_seed_keeps_them(self):
+        from types import SimpleNamespace
+        from pathlib import Path
+        from services.research import strategy_compare_preparation_status as owner
+        from core.research_orchestration import ResearchArtifactAction
+        teacher = ResearchArtifactAction(
+            action_id="teacher", artifact_key="model-upstream:fixture:seed_42", action="RESUME",
+            builder_type="canonical_model_upstream", description="fixture", path="history",
+            dependencies=(), producer_work_type="model_training", execution_priority=30,
+        )
+        with patch.object(owner, "_resolve_required_artifact_sources", return_value=(set(), set(), set())), \
+             patch.object(owner, "_collect_dl_artifact_status", return_value=([], {}, [], {}, {})), \
+             patch.object(owner, "_attach_trade_path_teacher_dependencies", return_value=[teacher]) as attach, \
+             patch.object(owner, "_collect_expected_r_calibration_status", return_value=[]), \
+             patch.object(owner, "_collect_expected_excess_r_calibration_status", return_value=[]), \
+             patch.object(owner, "_collect_parameter_artifact_status", return_value=([], {}, {})), \
+             patch.object(owner, "resolve_arm_parameter_evaluation_identities", return_value={}), \
+             patch.object(owner, "get_dataset_generation_namespace", return_value=None):
+            kwargs = dict(project_root=Path.cwd(), settings=SimpleNamespace(dataset="fixture"),
+                          comparison_period_override={"start": "2021-01-01", "end": "2026-03-02"})
+            shared = owner.collect_preparation_status(**kwargs, include_seed_dependencies=False)
+            attach.assert_not_called()
+            self.assertEqual(shared["preparation_plan"].actions, ())
+            default = owner.collect_preparation_status(**kwargs)
+            attach.assert_called_once()
+            self.assertEqual(default["preparation_plan"].actions, (teacher,))
+
+    def test_robustness_entry_passes_shared_scope_through_the_actual_provider(self):
+        from types import SimpleNamespace
+        from apps import research as entry
+        from services.research import breakout_quality_application as app
+        from core.research_orchestration import ResearchArtifactPlan
+        source = SimpleNamespace(filter_id="fixture", model_architecture="fixture", experiment_profile="fixture")
+        workflow = SimpleNamespace(**vars(source), seed=42)
+        def execute(**kwargs):
+            self.assertEqual(kwargs["model_upstream_preparer"](), 0)
+            return {"done": True}
+        with patch.object(entry, "get_strategy_multi_seed_robustness_settings", return_value=SimpleNamespace(profile_id="fixture", benchmark_id="fixture")), \
+             patch.object(entry, "run_strategy_multi_seed_robustness", side_effect=execute), \
+             patch.object(entry, "_load_provider_handler", return_value=(None, app.prepare_strategy_compare_artifacts)), \
+             patch.object(app, "_strategy_compare_required_model_sources", return_value=([SimpleNamespace(dataset="full")], [("dl", source)])), \
+             patch.object(app, "get_breakout_quality_workflow_settings", return_value=workflow), \
+             patch.object(app, "_collect_continuous_research_input_plan", return_value=ResearchArtifactPlan.from_actions([])) as planner:
+            self.assertEqual(entry._run_current_robustness(robustness_id="fixture", confirm=False), {"done": True})
+            self.assertIs(planner.call_args.kwargs["include_seed_dependencies"], False)
+            entry.get_strategy_multi_seed_robustness_settings.return_value.benchmark_id = None
+            self.assertEqual(entry._run_current_robustness(robustness_id="fixture", confirm=False), {"done": True})
+            self.assertIs(planner.call_args.kwargs["include_seed_dependencies"], True)
+            app.prepare_strategy_compare_artifacts(program_name="fixture", profile_ids=("fixture",), scope="upstream")
+            self.assertIs(planner.call_args.kwargs["include_seed_dependencies"], True)
+
+    def test_robustness_replans_shared_status_without_default_seed_teacher(self):
+        from types import SimpleNamespace
+        from services.research import strategy_multi_seed_robustness as app
+        from core.research_orchestration import ResearchArtifactAction, ResearchArtifactPlan
+        ready = False
+        def status(**kwargs):
+            self.assertIs(kwargs["include_seed_dependencies"], False)
+            return {"preparation_plan": ResearchArtifactPlan.from_actions([ResearchArtifactAction(
+                action_id="dataset", artifact_key="model-upstream:dataset_core", action="REUSE" if ready else "BUILD",
+                builder_type=None if ready else "breakout_quality_dataset", description="fixture", path="dataset",
+                dependencies=(), producer_work_type="dataset", execution_priority=10,
+            )]), "comparison_period": {"start": "2021-01-01", "end": "2026-03-02"},
+                "resolved_arm_parameter_paths": {}}
+        def prepare():
+            nonlocal ready
+            ready = True
+            return 0
+        def prepare_params(**kwargs):
+            return kwargs["status_refresher"]()
+        initial = {"overall_status": "PREPARABLE", "model_upstream_prepare_required": True,
+                   "work_plan": None, "required_param_sources": (), "robustness_unit_states": {}}
+        final = {"work_plan": SimpleNamespace(reuse_units=set())}
+        with patch.object(app, "get_strategy_multi_seed_robustness_settings", return_value=SimpleNamespace(enabled=True, profile_id="fixture", benchmark_id="fixture")), \
+             patch.object(app, "get_strategy_comparison_settings", return_value=SimpleNamespace()), \
+             patch.object(app, "require_approved_report_contract"), \
+             patch.object(app, "_robustness_arms", return_value=((), ())), \
+             patch.object(app, "_model_seed_sensitive_arms", return_value=()), \
+             patch.object(app, "_strategy_only_benchmark_arms", return_value=()), \
+             patch.object(app, "collect_artifact_status", side_effect=status), \
+             patch.object(app, "collect_preparation_status", side_effect=status), \
+             patch.object(app, "_render_robustness_execution_plan", side_effect=[("initial", initial), ("final", final)]), \
+             patch.object(app, "prepare_strategy_parameter_artifacts", side_effect=prepare_params), \
+             patch.object(app, "_discover_registered_strategy_only_scientific_reuse", return_value={}), \
+             patch.object(app, "_prepare_benchmark_strategy_parameter_artifacts", return_value={}), \
+             patch.object(app, "_execute_resolved_robustness_plan", return_value={"done": True}):
+            self.assertEqual(app.run_multi_seed_robustness(
+                robustness_id="fixture", confirm=False, model_upstream_preparer=prepare), {"done": True})
+
     def test_declared_daily_capability_needs_no_consumer_identity_registration(self):
         """Another existing-capability composition is resolved by one descriptor."""
         from copy import deepcopy

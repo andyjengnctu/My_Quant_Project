@@ -5407,7 +5407,7 @@ def _print_report_tables(summary: dict[str, Any]) -> None:
 def show_multi_seed_robustness_status(*, robustness_id: str | None = None) -> None:
     cfg = get_strategy_multi_seed_robustness_settings(robustness_id)
     settings = get_strategy_comparison_settings(cfg.profile_id)
-    status = collect_artifact_status(settings=settings)
+    status = collect_artifact_status(settings=settings, include_seed_dependencies=cfg.benchmark_id is None)
     fixed, stochastic = _robustness_arms(settings, cfg)
     model_arms = (
         _model_seed_sensitive_arms(settings, cfg, tuple(stochastic))
@@ -5692,7 +5692,7 @@ def run_multi_seed_robustness(
         if cfg.benchmark_id is not None else tuple(stochastic_arms)
     )
     strategy_only_arms = _strategy_only_benchmark_arms(tuple(stochastic_arms), tuple(model_arms))
-    status = collect_artifact_status(settings=settings)
+    status = collect_artifact_status(settings=settings, include_seed_dependencies=cfg.benchmark_id is None)
     plan_text, plan = _render_robustness_execution_plan(
         cfg=cfg, settings=settings, status=status, fixed_arms=fixed_arms, stochastic_arms=stochastic_arms
     )
@@ -5734,7 +5734,7 @@ def run_multi_seed_robustness(
                 f"returncode={upstream_code}"
             )
 
-    status = collect_artifact_status(settings=settings)
+    status = collect_artifact_status(settings=settings, include_seed_dependencies=cfg.benchmark_id is None)
     post_upstream_rows, post_upstream_blockers = _model_upstream_rows(status)
     post_upstream_pending = [
         row for row in post_upstream_rows if row[0] in {"BUILD", "REBUILD", "RESUME"}
@@ -5752,6 +5752,7 @@ def run_multi_seed_robustness(
     status = collect_preparation_status(
         project_root=PROJECT_ROOT,
         settings=settings,
+        include_seed_dependencies=cfg.benchmark_id is None,
     )
     comparison_start, comparison_end = _comparison_period_from_status(status)
     status = prepare_strategy_parameter_artifacts(
@@ -5762,6 +5763,7 @@ def run_multi_seed_robustness(
         status_refresher=lambda: collect_preparation_status(
             project_root=PROJECT_ROOT,
             settings=settings,
+            include_seed_dependencies=cfg.benchmark_id is None,
         ),
     )
     resolved_params = dict(status.get("resolved_arm_parameter_paths") or {})
