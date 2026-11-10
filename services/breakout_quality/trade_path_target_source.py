@@ -295,6 +295,32 @@ for _kind in ("formal_seed_mintrade_fullcycle_netr", "formal_seed_mintrade_fullc
     )
 
 
+def _declared_daily_source(capability):
+    source = capability["supervised_source"]
+    namespace = source["dependency_namespace"]
+    owner = getattr(import_module(source["module"]), source["factory"])(capability["target_kind"])
+    return TradePathSource(
+        contract_kind=capability["target_kind"], loader=owner.resolve_loader_kwargs,
+        dependencies=tuple(
+            TeacherDependency(
+                f"{namespace}_{phase}_teacher", f"optimizer_{namespace}_{phase}_teacher", priority,
+                partial(_teacher_method, owner, inspect), partial(_teacher_method, owner, execute),
+            )
+            for phase, priority, inspect, execute in (
+                ("historical", 30, "inspect_history", "execute_history"),
+                ("current", 40, "inspect_current", "execute_current"),
+            )
+        ),
+    )
+
+
+def _teacher_method(owner, method, **kwargs):
+    return getattr(owner, method)(**kwargs)
+
+
+_DECLARED_DAILY_SOURCES = {}
+
+
 _RETIRED_TRADE_PATH_CONTRACTS = frozenset({"daily_counterfactual_mintrade40_netr"})
 
 
@@ -309,7 +335,15 @@ def registered_trade_path_source(experiment_profile: str) -> TradePathSource | N
         return None  # Retired historical identity is not an executable producer.
     source = _TRADE_PATH_SOURCES.get(kind)
     if source is None:
-        raise ValueError(f"Unregistered real-path target capability: {kind!r}")
+        from core.daily_trade_path_capabilities import supervised_daily_capabilities
+        capability = next((item for item in supervised_daily_capabilities()
+                           if item["target_kind"] == kind), None)
+        if capability is None:
+            raise ValueError(f"Unregistered real-path target capability: {kind!r}")
+        key = (kind, repr(capability))
+        if key not in _DECLARED_DAILY_SOURCES:
+            _DECLARED_DAILY_SOURCES[key] = _declared_daily_source(capability)
+        source = _DECLARED_DAILY_SOURCES[key]
     return source
 
 

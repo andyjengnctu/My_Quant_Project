@@ -299,6 +299,13 @@ def oracle_scientific_target_name(legacy_receipt_key: str) -> str:
         name = "DailyUniversal_" + name[len("TrueDailyUniversal_"):]
     elif name.startswith("DailyUniversal_"):
         name = name[len("DailyUniversal_"):]
+    from core.daily_trade_path_capabilities import supervised_daily_capabilities
+    for capability in supervised_daily_capabilities():
+        alias = capability.get("presentation_alias")
+        if alias:
+            source, display = alias
+            if name in {source, source + "_Positive"}:
+                return display + ("_Positive" if name.endswith("_Positive") else "")
     return _ORACLE_TARGET_PRESENTATION_ALIASES.get(name, name)
 
 

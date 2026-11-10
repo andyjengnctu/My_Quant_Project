@@ -415,6 +415,10 @@ FULLTRADE_NETPNL_POSITIVE_PROFILE = "daily_universal_formal_fulltrade_fullcycle_
 FULLTRADE_NETPNL_RANK_PROFILE = "daily_universal_formal_fulltrade_fullcycle_netpnl_full_list_ndcg_pairwise"
 DAILY_MIN_P18_NETPNL_RANK_PROFILE = "daily_universal_min_p18_mintrade_netpnl_full_list_ndcg_pairwise"
 DAILY_MIN_P18_NETPNL_POSITIVE_PROFILE = "daily_universal_min_p18_mintrade_netpnl_positive_binary"
+from core.daily_trade_path_capabilities import DAILY_MIN_P21_FULLCYCLE_NETPNL_TARGET_ID
+
+DAILY_MIN_P21_NETPNL_RANK_PROFILE = "daily_universal_min_p21_mintrade_netpnl_full_list_ndcg_pairwise"
+DAILY_MIN_P21_NETPNL_POSITIVE_PROFILE = "daily_universal_min_p21_mintrade_netpnl_positive_binary"
 DAILY_MIN_P19_NETPNL_RANK_PROFILE = "daily_universal_min_p19_mintrade_netpnl_full_list_ndcg_pairwise"
 DAILY_MIN_P19_NETPNL_POSITIVE_PROFILE = "daily_universal_min_p19_mintrade_netpnl_positive_binary"
 DAILY_FULL_P20_NETPNL_RANK_PROFILE = "daily_universal_full_p20_fulltrade_netpnl_full_list_ndcg_pairwise"
@@ -1795,6 +1799,27 @@ _EXPERIMENT_PROFILES = {
         optimizer_name="adam", training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
         training_objective=TRAINING_OBJECTIVE_DAILY_NETPNL_POSITIVE_BINARY,
         continuous_target_id=DAILY_MIN_P18_FULLCYCLE_NETPNL_TARGET_ID,
+        loss_name="netpnl_positive_cross_entropy",
+        epoch_selection_metric="positive_validation_cross_entropy",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+        model_architecture="inception_time_v1", fit_contract_version=1,
+    ),
+    DAILY_MIN_P21_NETPNL_RANK_PROFILE: BreakoutQualityExperimentProfile(
+        name=DAILY_MIN_P21_NETPNL_RANK_PROFILE,
+        optimizer_name="adam", training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
+        continuous_target_id=DAILY_MIN_P21_FULLCYCLE_NETPNL_TARGET_ID,
+        loss_name="pairwise_logistic", epoch_selection_metric="mean_daily_spearman",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+        model_architecture="inception_time_v1",
+    ),
+    DAILY_MIN_P21_NETPNL_POSITIVE_PROFILE: BreakoutQualityExperimentProfile(
+        name=DAILY_MIN_P21_NETPNL_POSITIVE_PROFILE,
+        optimizer_name="adam", training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_NETPNL_POSITIVE_BINARY,
+        continuous_target_id=DAILY_MIN_P21_FULLCYCLE_NETPNL_TARGET_ID,
         loss_name="netpnl_positive_cross_entropy",
         epoch_selection_metric="positive_validation_cross_entropy",
         training_label_scope=TRAINING_LABEL_SCOPE_ALL,
@@ -3655,6 +3680,27 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         objective_description="Independent two-class cross-entropy P(NetPnL>0) classifier; admission only, not Rank.",
         metric_scope="all_stock_days_daily_min_p18_fullcycle_netpnl_positive_binary",
         score_semantic_id="daily_min_p18_fullcycle_netpnl_positive_probability",
+        selection_pit_authorized=True, current_time_validation_authorized=True,
+    ),
+    DAILY_MIN_P21_NETPNL_RANK_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=DAILY_MIN_P21_NETPNL_RANK_PROFILE,
+        model_research_id="MR-13DH", experiment_name="MR-13DH Daily Min/P21 broker NetPnL ranker",
+        phase="13DH", trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description="P21 6D daily EMA+volume filtered prior-close-limit full-cycle broker NetPnL from independently optimized same-seed historical and OOS P21 teachers; no fill/unmatured NULL.",
+        objective_description="Independent 300x10 full-list Delta-NDCG pairwise FIT; not P16 CU/CT, P19 DD/DE or P20 DB/DC supervised labels.",
+        metric_scope="all_stock_days_daily_min_p21_fullcycle_netpnl",
+        score_semantic_id="daily_min_p21_fullcycle_netpnl_rank",
+        pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        selection_pit_authorized=True, current_time_validation_authorized=True,
+    ),
+    DAILY_MIN_P21_NETPNL_POSITIVE_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=DAILY_MIN_P21_NETPNL_POSITIVE_PROFILE,
+        model_research_id="MR-13DI", experiment_name="MR-13DI Daily Min/P21 NetPnL Positive",
+        phase="13DI", trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description="Same PIT-matured P21 raw broker NetPnL as DH; class 1 iff NetPnL>0, class 0 otherwise; no-fill/unmatured NULL.",
+        objective_description="Independent two-class cross-entropy P(NetPnL>0) classifier; admission only, not Rank.",
+        metric_scope="all_stock_days_daily_min_p21_fullcycle_netpnl_positive_binary",
+        score_semantic_id="daily_min_p21_fullcycle_netpnl_positive_probability",
         selection_pit_authorized=True, current_time_validation_authorized=True,
     ),
     DAILY_MIN_P19_NETPNL_RANK_PROFILE: ContinuousRankerResearchSpec(

@@ -1251,7 +1251,7 @@ class ContinuousRankerExecutionRecipe:
 
 @lru_cache(maxsize=1)
 def _continuous_ranker_target_policies() -> dict[str, ContinuousRankerTargetPolicy]:
-    return {
+    policies = {
         "strategy_aligned_opportunity_r_v1": ContinuousRankerTargetPolicy(
             materialization_mode=CONTINUOUS_RANKER_TARGET_MATERIALIZATION_EXTERNAL,
         ),
@@ -1410,6 +1410,19 @@ def _continuous_ranker_target_policies() -> dict[str, ContinuousRankerTargetPoli
             contract_kind="risk_normalized",
         ),
     }
+
+    from core.daily_trade_path_capabilities import supervised_daily_capabilities
+    for capability in supervised_daily_capabilities():
+        target_id = capability["target_id"]
+        if target_id in policies:
+            raise ValueError(f"Duplicate Daily target capability: {target_id!r}")
+        policies[target_id] = ContinuousRankerTargetPolicy(
+            materialization_mode=CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH,
+            contract_kind=capability["target_kind"],
+            fit_target_kind=capability["target_kind"],
+            fit_teacher_contract=capability["teacher_contract"],
+        )
+    return policies
 
 @lru_cache(maxsize=1)
 def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTrainingPolicy]:

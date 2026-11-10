@@ -43,9 +43,9 @@ Registry 回答「**這個 ID 是什麼、屬於哪一層、是否已被占用�
 
 ## 3. Canonical identity 與 current／historical status（current 執行以設定為準）
 
-**2026-11-10 契約符合性修正（沿用原研究身分）**：P20 的原核准買入上限是資訊日 `Close + ATR × atr_buy_tol`；真值 producer 原先依賴呼叫者的 Daily execution context，可能退回 prior-close limit。現由共用交易真值 primitive 固定原已核准 ATR-limit context；P20 Truth／Score／Oracle calculation revision 升至 2，受同 primitive 影響的已退役 P19 亦升至 2，P19 維持退役。P17／P20（及歷史 P19）原 FIT dependency 遺漏 teacher 的 cutoff-visible prefix 與實際有序訓練真值，現由 canonical Target capability 驅動共用 FIT owner 驗證。MR-13CZ／DA、MR-13DB／DC 的 FIT contract 由 v1 升 v2；已退役 MR-13DD／DE 同步標記 v2，不重新啟用。各受影響模型的 Forward／Rolling／Robustness 舊版 Fold／Seed 均不得跨版重用，下游依真實模型依賴失效；P16 CO／CP、價格 Target 模型、P17 Oracle、策略參數與 No-DL 回放不因本修復升版。舊原始成果保留，但缺少上述證據的 FIT／衍生績效不得當作現行有效結果。Single-ranker Positive 校準 fitter 與訓練支線已退役，僅保留舊簽章唯讀驗證；目前 Positive 一律消費原已核准的獨立二元分類模型。本輪無全市場新績效或 E13 完整市場 parity 結果。
-**2026-11-10 後續使用者決策：P20 正式流程採逐 seed teacher（取代固定 teacher42）**。原 `daily_universal_full_p20_fullcycle_netpnl_seed42_v1`／`daily_full_p20_seed42` 與當時的 `CONTRACT_UNRESOLVED` 保留為歷史；現行 Target 為 `daily_universal_full_p20_fullcycle_netpnl_per_seed_v2`，teacher contract 為 `daily_full_p20_historical_plus_current_per_seed_v2`，source 為 `daily_full_p20_roos_seed`。每個執行 seed 的歷史 P20 teacher、當期 PARAM-P20 teacher、DL FIT、Oracle 與 Replay 都使用同一 seed；單 seed 仍由 Research config 決定（目前 42），Robustness 沿用 config 的四個 seed，禁止回退或挑選其他 seed。同一 seed 的 DB Rank／DC Positive 共用經濟真值及參數，仍分別訓練 Rank 與二類 Cross-Entropy。歷史 stock-day 只使用當時合法發布且已成熟的參數／交易路徑，不能由 OOS 參數回填。
-MR-13DB／DC 在既有 profile／DL／C172／C173 下以 Target v2 與 FIT v3 明確區分新契約；兩模型全部 Forward／Rolling／Robustness 舊 Fold／Seed 及依賴它們的分數／Replay 不得跨版重用。P20 FullTrade Oracle calculation revision 為 3，舊固定-teacher或混合-teacher真值／Oracle 收據不具新契約資格。合法且符合相同 seed 的原 P20 Optimizer 參數可 REUSE，缺少的歷史／當期 replica 由既有 canonical Optimizer 自動 BUILD／RESUME，歷史路徑為 `outputs/optimizer/daily_full_p20_label_history/seed_<seed>/`。P17 CZ／DA 仍為 FIT v2；C168 No-DL、C169 CJ、其他 Target、策略參數科學契約、報表／選單／Trading 不因本次 teacher 決策升版。固定 teacher42 的正式支線與 Oracle 暫時阻擋已退役，不保留雙模式。此為研究定義決策，尚無新市場績效；正式有效 Oracle 仍須取得既定 E13 同條件 parity 與完整收據。
+**現行交易路徑身分**：P20 採逐 seed teacher。Target=`daily_universal_full_p20_fullcycle_netpnl_per_seed_v2`，teacher contract=`daily_full_p20_historical_plus_current_per_seed_v2`，source=`daily_full_p20_roos_seed`；每個 seed 的歷史／當期 PARAM-P20、DL FIT、Oracle 與 Replay 必須一致。MR-13DB／DC 分別持有 Rank／獨立二類 Positive，FIT v3，策略為 C173／C172；P20 Oracle calculation revision 3。P20 入場上限為資訊日 `Close + ATR × atr_buy_tol`，歷史參數與交易結果須合法發布且成熟，不能以 OOS 參數回填。固定 teacher42 的 `daily_universal_full_p20_fullcycle_netpnl_seed42_v1`／`daily_full_p20_seed42` 及當時的 `CONTRACT_UNRESOLVED` 永久保留為歷史，不是可切換的現行模式。
+
+**歷史有效性與版本**：P17 MR-13CZ／DA 為 FIT v2；已退役 P19 MR-13DD／DE 為 FIT v2、Oracle calculation revision 2。修復前缺少 cutoff-visible teacher／有序真值證據的 FIT，以及固定或混合 teacher 的 P20 成果，均不得跨版當作現行證據；原始結果與有效性更正由 Experiment Log 保留。現行 Positive 僅使用獨立二類模型，single-ranker 校準支線不再執行。C168 No-DL、C169 CJ 及其他無依賴的模型／參數契約不隨 P20 teacher 版本變更。逐 seed P20 新市場績效及正式 Oracle parity 尚待取得。
 
 現行成果總覽入口為 Research `[1] Summary`。Target 驗證、模型訓練／驗證與策略組合比較的目前集合均從 `config/research_summary.py` 派生，解析與 binding 驗證由 `core/research_summary.py` 持有；本文件以下的歷史選單編號不作現行入口真理。Summary 清單只選擇研究範圍，不改寫既有 Target／Model／Strategy 身分、訓練與 Replay 契約；未有 matching Oracle 的既有研究仍可列示真實績效，但不得借用其他 Oracle 數值。現行總覽報表為 `research.target_dl_validation_overview@v13`：依 2026-11-08 與 2026-11-09 使用者授權，顯示順序為「策略編號、Strategy、Selector、DL Target、Rank DL、Positive DL、Rolling ρ、Robustness ρ、Rolling RoMD、Robustness RoMD、Mean RoMD、Oracle RoMD、Win Rate」共 13 欄。Oracle RoMD 與 Win Rate 均讀取同一份 canonical Oracle evidence，Win Rate 為已完成 Round-Trip 勝率（百分比、小數兩位），僅顯示不新增排序項目；Oracle RoMD 仍為預設及第 8 項排序選項，互動排序維持原 8 個項目。缺少合法 Oracle 證據時該欄留白，不代入 0 或其他策略勝率。Mean RoMD 仍依 Rolling 計 1 份、Robustness 計經驗證 Seed 數份加權（只有 Rolling 則沿用 Rolling，缺 Rolling 留空）；每次主欄位排序以 Mean RoMD 作第二順位。僅屬唯讀顯示，不升版 Model FIT／Strategy Replay；compact ledger 的歷史版本與研究 evidence 保留。
 
@@ -921,6 +921,26 @@ Decision：`P18_RETAINED / P19_DAILY_MIN_4D / P20_DAILY_FULL_19D / NO_BREAKOUT_E
 
 - **2026-11-09 後續範圍變更（覆蓋上文當時的 active-arm 敘述）**：使用者退役 `SR-C160/C161/C164/C165`，只移出 current Summary、Target Oracle、Forward／Rolling 與 Strategy Robustness。`PARAM-P18` 本身不退役，既有 3 維參數來源、Optimizer 工件、歷史 Replay/Oracle 收據與 Strategy Registry 定義不刪改；目前沒有 P18 的 active strategy consumer。P20 `C168/C169/C172/C173` 保留為現行對照，CJ／CU／CT 的其他合法模型消費端不受影響。此為研究清單決策，不是參數重訓、模型 FIT／Replay 升版或績效判定。
 
+
+### Daily (Min/P21)：Direct 研究身分
+
+C179 為 No-DL／Default 控制；三個 Direct treatment 的共同條件為原 PARAM-P21 六維、EMA＋量能、收盤限價、Min 出場與 Broker-Cash。C180/P22 維持退役。
+
+| 身分 | 正式定義 | 狀態 |
+|---|---|---|
+| `SR-C181` | T40 × Daily (Min/P21) Direct；重用 MR-13CJ 合法 PIT 分數，P21 六維 EMA＋量能／收盤限價／Min 出場，No-K／No-R0 | CURRENT / REPLAY v1 / MARKET_REPLAY_PENDING |
+| `SR-C182` | Daily_MinTrade_NetPnL (P21) Direct；獨立 MR-13DH Rank，同 seed P21 teacher | CURRENT / REPLAY v1 / FIT_REPLAY_PENDING |
+| `SR-C183` | Daily_MinTrade_NetPnL_Positive (P21) Direct；同 DH Rank + 獨立 MR-13DI 二類分類，嚴格 P(Positive)>0.5 | CURRENT / REPLAY v1 / FIT_REPLAY_PENDING |
+| `SR-C184` | P21 的已註冊 Exact 契約 witness；僅供原 Oracle 基準簽章核對，不進 Summary／RUN／比較／Robustness | INACTIVE / SOURCE_ONLY / REPLAY v1 RESERVED |
+| `MR-13DH` / `DL-CONT13DH-ROLL` | `daily_universal_min_p21_mintrade_netpnl_full_list_ndcg_pairwise`；300×10 InceptionTime，full-list Delta-NDCG pairwise，獨立 P21 完整交易 NetPnL Rank | CURRENT / FIT v1 / MARKET_FIT_PENDING |
+| `MR-13DI` / `DL-CONT13DI-ROLL` | `daily_universal_min_p21_mintrade_netpnl_positive_binary`；與 DH 相同合法成熟 raw NetPnL，獨立二類 Cross-Entropy P(NetPnL>0)，不取代 Rank | CURRENT / FIT v1 / MARKET_FIT_PENDING |
+| `LABEL-daily_universal_min_p21_fullcycle_netpnl_per_seed_v1` | 獨立 P21 經濟真值；資訊日 EMA＋量能共同篩選、次一市場日以資訊日 Close 限價嘗試一次、未成交失效、完整 Min Broker-Cash 淨損益；不合格／未成交／未成熟 NULL | CURRENT / NO_ORACLE_IN_FIT |
+
+Teacher=`daily_min_p21_historical_plus_current_per_seed_v1`，source=`daily_min_p21_roos_seed`。`DAILY_MIN_P21_LABEL_HISTORY_V1`（2014–2020）與當期 PARAM-P21（2021+）皆為同一執行 seed 的獨立 P21 Optimizer；不借用 P18/P19/P20 teacher。DH／DI 共用 raw NetPnL 真值，分別 FIT Rank 與 Positive。
+
+資訊日篩選後，次一市場日以資訊日 Close 限價嘗試一次；未成交即失效。不合格／未成交／未成熟為 NULL。FIT 僅使用 cutoff 前合法發布的參數與已成熟結果，研究終端結算不能提前回填為自然成熟標籤。模型母體不含投組 cash／holding state。
+
+Oracle recipe=`daily_trade_path_daily_min_p21_net_pnl`，calculation revision 1；沿用既有完美百分位與獨立 Positive 分數契約。T40 treatment 沿用 T40 真值與 P21 Replay 參數。新 DH／DI FIT、三個 treatment 的市場 Replay 與正式 Oracle parity 尚無已驗證結果，不升格 Trading。
 
 ### 2026-11-09 — Corrected P20 FullTrade DL and Strategy identities
 

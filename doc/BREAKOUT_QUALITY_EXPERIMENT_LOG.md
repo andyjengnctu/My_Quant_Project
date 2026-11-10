@@ -5382,7 +5382,6 @@ Assessment: `USER_REPORTED_ROLLING_RESULT_AVAILABLE / FULL_HORIZON_MAE_SMALL_PAI
 
 - **2026-11-09 使用者退役決策（C135/C136）**：將 CU rank + CT Positive 的 Breakout Exact `C135` 與 Breakout Direct `C136` 從現行 Research Summary、Target Oracle、Strategy Compare（Forward／Rolling）、Strategy Robustness 與 Target × DL 驗證移除。兩策略歷史 ID、Strategy Registry、Replay v2、原始簽章工件及既有績效仍保留，不視為現行結果；同一項已核准 TrueDaily 真值及其歷史 Oracle recipe 不刪改。`MR-13CU` 與 `MR-13CT` 模型 FIT／規格仍保留，無 FIT／Replay／Report contract 升版，亦不修改 C125/C126 或 P20 C168/C169/C172/C173。由於目前沒有其他啟用 CU／CT 策略 consumer，`[3]` 當前 Compare/Test 名單會依 Summary SSOT 自動不再列 CU／CT，但這不等於刪除或退役其模型研究身分及既有 FIT。上述屬使用者指定的研究 membership 縮減，非模型效能不佳的實證結論；原先迭代 OOS 報表保持歷史可追溯。
 
-- **2026-11-10 使用者新增獨立 P19 Target／策略（績效待驗）**：現行新增 `C174` Daily (Min/P19) 無 DL Default 對照、`C175` Daily (Min/P19) × `Daily_MinTrade_NetPnL` Direct（`MR-13DD` Rank）、`C176` Daily (Min/P19) × `Daily_MinTrade_NetPnL_Positive` Direct（`MR-13DD` Rank + 獨立 `MR-13DE` Binary）。使用者要求兩個 Target **必須是真正 P19 四維歷史＋當期合法參數**，不能借 P18 三維或原 CU／CT 真值。C166/C167 保留退役及原 OOS 歷史；C172/C173 P20 不動。無模型分數的 C174 依原引擎只可能 Default，不能在報表冒充 Direct。P19 Oracle、DL FIT、Rolling／Robustness 尚無本機正式實測收據；本次僅是新研究身分及獨立生產鏈，沒有新的市場 RoMD／Win Rate 可宣稱。
 
 
 ### 2026-11-10 — 使用者決策：P19 暫時退役（300-trial No Finalist）
@@ -5392,13 +5391,7 @@ Assessment: `USER_REPORTED_ROLLING_RESULT_AVAILABLE / FULL_HORIZON_MAE_SMALL_PAI
 - **之後另行研究（尚未授權修改）**：先使用既有 trial／Optuna 證據評估四維參數對成交、交易數、資金曲線及回撤的實際影響，釐清 N/A／0 分是無成交、無有效樣本、得分為零、績效 gate 或工程數值異常；再評估是否需要受控放寬條件（包含風險 gate 與收益／交易品質限制）、改進入場幾何或重新設計搜尋空間。若真的改變資格、回撤約束或 Target 科學語意，須另行取得新研究授權與身分；不能擅自修補成 PASS。迭代 OOS 結果非 untouched holdout。
 
 
-### 2026-11-10 — Current-scope decision: six retirements, four restorations and parameter-complete labels
-
-- **Decision (not a market result)**: retire `C121/C122/C160/C161/C177/C178` from the single current Summary roster and its Model Compare/Target Oracle/Forward/Rolling/N=4 Robustness projections. Restore the original `C123/C124` Breakout Min/P16 CO NetPnL Rank Exact/Direct and `C155/C156` Breakout Full/P17 CZ Rank+independent DA Positive Exact/Direct. The earlier 2026-11-10 P18 restoration record remains historical; latest status supersedes it.
-- **Display contract**: use `Breakout (Min/P16)` / `Breakout (Full/P17)` / `Daily (Full/P20)` and `MinTrade_NetPnL_Positive (P16)` / `FullTrade_NetPnL_Positive (P17)` / `Daily_FullTrade_NetPnL (P20)` consistently across current Summary, Oracle preflight and human-readable Oracle. Derive from the canonical param-set lineage, not a hardcoded arm-to-version alias.
-- **Evidence boundary**: no new FIT/Optimizer/Replay/Oracle OOS measurement or P16/P17/P20 performance value was produced by this scope/display decision. Preserve registered scientific identities and old receipts, without promoting Trading truth or upgrading FIT/Replay versions. The two human report contracts get append-only display versions in `REPORT_CONTRACT_VERSIONS.json`.
-
-- **2026-11-11 使用者後續退役決策**：退役 `SR-C180`（Daily (Min/P22)、No DL／Default Selector、EMA-only）。從同一 Summary SSOT 及其 Forward／Rolling／N=4 Robustness 現行清單移除；C180 本身沒有 DL Target，不新增或挪用 Oracle。原策略編號、Replay v1、`PARAM-P22` 四維參數契約與歷史 Optimizer／Replay 工件保留；不退役 C179/P21，也不變更現行 Optimizer 選擇。本次為研究清單決策，沒有新增市場績效或模型／參數重訓證據。
+- **C179 使用者回報控制組結果**：Daily (Min/P21)、No-DL／Default，2021-01-01～2026-03-02；Rolling RoMD `5.32`、Robustness RoMD `4.06`（4 seeds）、Mean RoMD `4.31`。來源為使用者提供的 Summary，屬迭代 OOS 觀察；未取得相應簽章市場工件重新驗證，不能當作新增 P21 DL 策略結果或正式 Oracle 證據。
 
 ## 6. 後續新增規則
 

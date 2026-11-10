@@ -21,6 +21,319 @@ from services.audit import target_oracle_romd as oracle
 
 
 class DailyEntryStrategyCases(TestCase):
+    def test_declared_daily_capability_needs_no_consumer_identity_registration(self):
+        """Another existing-capability composition is resolved by one descriptor."""
+        from copy import deepcopy
+        from dataclasses import replace
+        from tempfile import TemporaryDirectory
+        from pathlib import Path
+        from core import daily_trade_path_capabilities as capabilities
+        from core import breakout_quality_registry as registry
+        from core.breakout_quality_policy import get_continuous_ranker_execution_recipe
+        from services.breakout_quality.trade_path_target_source import registered_trade_path_source
+        from services.breakout_quality.daily_full_p20_training_source import teacher_for_kind
+        from core.audit_registry import oracle_scientific_target_name
+        from core.breakout_quality_runtime import _continuous_ranker_target_policies, trade_path_fit_capability
+        self.addCleanup(_continuous_ranker_target_policies.cache_clear)
+        original = next(s for s in capabilities.supervised_daily_capabilities())
+        declared = deepcopy(original)
+        declared.update(target_id="synthetic_declared_target", target_kind="synthetic_declared_kind",
+                        teacher_contract="synthetic_teacher_contract", source_id="synthetic_source",
+                        historical_parameter_set="synthetic_history", history_namespace="synthetic_history")
+        declared["supervised_source"]["dependency_namespace"] = "synthetic_daily"
+        declared["presentation_alias"] = ("Synthetic_Receipt", "Synthetic_Target")
+        profile_id = next(name for name, p in registry._EXPERIMENT_PROFILES.items()
+                          if p.continuous_target_id == original["target_id"])
+        profile = replace(registry.get_breakout_quality_experiment_profile(profile_id),
+                          continuous_target_id=declared["target_id"])
+        with patch.dict(capabilities.DAILY_TRUTH_CAPABILITIES, {"synthetic_recipe": declared}), \
+             patch.dict(registry._EXPERIMENT_PROFILES, {profile_id: profile}):
+            _continuous_ranker_target_policies.cache_clear()
+            policy = get_continuous_ranker_execution_recipe(profile_id).target_policy
+            self.assertIs(trade_path_fit_capability({"target_id": declared["target_id"],
+                          "target_kind": declared["target_kind"], "teacher_lineage": True}), policy)
+            self.assertEqual(policy.contract_kind, declared["target_kind"])
+            self.assertEqual(policy.fit_teacher_contract, declared["teacher_contract"])
+            source = registered_trade_path_source(profile_id)
+            owner = teacher_for_kind(declared["target_kind"])
+            self.assertIs(source.loader.__self__, owner)
+            self.assertIs(oracle._declared_daily_producer("synthetic_recipe"), owner)
+            self.assertEqual([d.name for d in source.dependencies],
+                             ["synthetic_daily_historical_teacher", "synthetic_daily_current_teacher"])
+            self.assertEqual(oracle_scientific_target_name("Synthetic_Receipt_Positive_Direct"),
+                             "Synthetic_Target_Positive")
+            with TemporaryDirectory() as tmp:
+                self.assertIn("synthetic_history", owner.historical_params_path(tmp, 42).parts)
+                with patch.object(owner, "inspect_history", return_value={"action": "REUSE"}) as inspect:
+                    self.assertEqual(source.dependencies[0].inspect(project_root=Path(tmp), seed=42),
+                                     {"action": "REUSE"})
+                    inspect.assert_called_once_with(project_root=Path(tmp), seed=42)
+
+    @staticmethod
+    def _p21_fixture(seed=42):
+        from dataclasses import replace
+        import numpy as np
+        from core.portfolio_param_runtime import build_portfolio_params_signature
+        from tools.validate.synthetic_daily_full_p20_fulltrade_cases import _fixture_source
+        from core.daily_trade_path_capabilities import DAILY_MIN_P21_SOURCE_ID as SOURCE_ID
+        days, frame, source = _fixture_source(seed)
+        params = replace(source.schedule[0].params, use_vol=True, vol_long_len=10,
+            vol_breakout_mult=1.1, use_breakout_ema_filter=True, breakout_ema_len=20,
+            use_history_threshold=False, atr_times_init=1.0, atr_times_trail=1.0)
+        frame['Volume'] = 1_000_000.
+        frame.iloc[np.arange(30,140,3),frame.columns.get_loc('Volume')] = 4_000_000.
+        p = replace(source.schedule[0], params=params, source_id=SOURCE_ID,
+                    params_signature=build_portfolio_params_signature(params))
+        return days, frame, replace(source, source_id=SOURCE_ID, schedule=(p,))
+
+    def test_p21_direct_membership_models_and_oracle_share_one_parameter_family(self):
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+        from core.research_summary import get_research_summary_strategy_arm_ids
+        from core.strategy_compare_policy import get_strategy_comparison_settings, get_strategy_multi_seed_robustness_settings
+        from services.research.target_dl_overview import collect_target_dl_overview
+        from services.breakout_quality.trade_path_target_source import registered_trade_path_source
+        from core.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
+        rank='daily_universal_min_p21_mintrade_netpnl_full_list_ndcg_pairwise'
+        pos='daily_universal_min_p21_mintrade_netpnl_positive_binary'
+        for mode in ('rolling','oos'):
+            s=get_strategy_comparison_settings('broker_cash_dl_conversion_'+mode)
+            self.assertTrue({'C179','C181','C182','C183'} <= {a.arm_id for a in s.enabled_arms})
+            self.assertNotIn('C180', {a.arm_id for a in s.enabled_arms})
+            for arm in ('C181','C182','C183'):
+                self.assertEqual(s.arms[arm].param_source,s.arms['C179'].param_source)
+                self.assertEqual(s.arms[arm].entry_strategy,'Daily')
+                self.assertFalse(s.arms[arm].dl_runtime_options['preserve_k'])
+                self.assertFalse(s.arms[arm].dl_runtime_options['preserve_r0'])
+            cfg=get_strategy_multi_seed_robustness_settings(s.profile_id)
+            self.assertTrue({'C181','C182','C183'} <= set(cfg.stochastic_arm_ids))
+        self.assertIs(registered_trade_path_source(rank),registered_trade_path_source(pos))
+        self.assertEqual(get_continuous_ranker_execution_recipe(rank).target_policy,
+                         get_continuous_ranker_execution_recipe(pos).target_policy)
+        with TemporaryDirectory() as tmp:
+            root=Path(tmp);p=root/'doc/scientific_contracts/REPORT_CONTRACT_VERSIONS.json';p.parent.mkdir(parents=True)
+            p.write_bytes((Path(__file__).resolve().parents[2]/'doc/scientific_contracts/REPORT_CONTRACT_VERSIONS.json').read_bytes())
+            rows={r['strategy']:r for r in collect_target_dl_overview(root)['rows']}
+        for arm in ('C181','C182','C183'):
+            self.assertEqual(rows[arm]['entry_strategy'],'Daily (Min/P21)')
+            self.assertEqual(rows[arm]['selector'],'Direct')
+        self.assertEqual(rows['C181']['target'],'T40')
+        self.assertEqual(rows['C182']['target'],'Daily_MinTrade_NetPnL (P21)')
+        self.assertEqual(rows['C183']['target'],'Daily_MinTrade_NetPnL_Positive (P21)')
+
+    def test_p21_filtered_close_labels_use_both_gates_and_canonical_broker_outcomes(self):
+        import numpy as np
+        from filters.breakout_quality.daily_filtered_mintrade_target import compute_daily_filtered_mintrade_batch
+        from filters.breakout_quality.true_daily_mintrade_target import compute_true_daily_mintrade_batch
+        from core.daily_common_entry_filters import daily_common_filter_signals
+        from filters.breakout_quality.trade_path_label import build_signal_cache
+        from core.portfolio_entry_policy import DAILY_EXECUTION_CLOSE_FILTERS, daily_signal_execution_context
+        days, frame, source=self._p21_fixture()
+        positions=np.arange(30,105,dtype=np.int64)
+        p=source.schedule[0].params
+        with daily_signal_execution_context(DAILY_EXECUTION_CLOSE_FILTERS):
+            admitted,limits=daily_common_filter_signals(frame,p,atr_main=build_signal_cache(frame,p,ticker='2330')[0],ticker='2330')
+            expected=compute_true_daily_mintrade_batch(frame,positions,ticker='2330',schedule=source.schedule,
+                exchange_calendar=days,research_cutoff=days[-1])
+        actual=compute_daily_filtered_mintrade_batch(frame,positions,ticker='2330',schedule=source.schedule,
+            exchange_calendar=days,research_cutoff=days[-1])
+        mask=admitted[positions]
+        self.assertTrue(mask.any());self.assertTrue((~mask).any())
+        np.testing.assert_equal(limits[admitted],frame['Close'].to_numpy()[admitted])
+        np.testing.assert_equal(actual.target_raw_pnl[mask],expected.target_raw_pnl[mask])
+        np.testing.assert_equal(actual.valid_mask,np.asarray(expected.valid_mask)&mask)
+        self.assertTrue(np.isnan(actual.target_raw_pnl[~mask]).all())
+        self.assertGreater(int(actual.valid_mask.sum()),0)
+        self.assertTrue((actual.target_raw_pnl[actual.valid_mask]>0).any())
+        self.assertTrue((actual.target_raw_pnl[actual.valid_mask]<0).any())
+
+    def test_p21_pit_maturity_future_data_and_foreign_seed_are_enforced(self):
+        from dataclasses import replace
+        import numpy as np
+        from services.breakout_quality.daily_full_p20_training_source import teacher_for_kind
+        materialize_labels = teacher_for_kind("daily_min_p21_fullcycle_netpnl_per_seed").materialize_labels
+        from services.breakout_quality.formal_mintrade40_pit_source import FormalMinTrade40PITBlocked
+        days,frame,source=self._p21_fixture()
+        positions=np.arange(30,80,dtype=np.int64);args=dict(expected_seed=42,frame=frame,positions=positions,ticker='2330',exchange_calendar=days,fit_cutoff=days[100])
+        a=materialize_labels(source,**args)
+        changed=frame.copy();changed.loc[days[101]:,['Open','High','Low','Close']]*=5
+        b=materialize_labels(source,**{**args,'frame':changed})
+        np.testing.assert_equal(a.raw_net_pnl,b.raw_net_pnl)
+        self.assertTrue((a.maturity_dates[a.completed]<=np.datetime64(days[100].date(),'D')).all())
+        for bad in (replace(source,seed=43),replace(source,source_id='daily_full_p20_roos_seed')):
+            with self.assertRaises(FormalMinTrade40PITBlocked):materialize_labels(bad,**args)
+        bad_params=replace(source.schedule[0].params,use_vol=False)
+        with self.assertRaises(FormalMinTrade40PITBlocked):materialize_labels(replace(source,schedule=(replace(source.schedule[0],params=bad_params),)),**args)
+
+    def test_p21_teacher_dependencies_are_per_seed_and_never_alias_other_families(self):
+        from tempfile import TemporaryDirectory
+        from pathlib import Path
+        from services.breakout_quality.daily_full_p20_training_source import teacher_for_kind
+        TEACHER = teacher_for_kind("daily_min_p21_fullcycle_netpnl_per_seed")
+        from services.breakout_quality.daily_full_p20_training_source import TEACHER as other
+        from core.strategy_compare_policy import get_strategy_multi_seed_robustness_settings
+        cfg=get_strategy_multi_seed_robustness_settings('broker_cash_dl_conversion_rolling')
+        with TemporaryDirectory() as tmp:
+            for seed in (42,*cfg.resolved_seeds):
+                expected=TEACHER.historical_params_path(tmp,seed)
+                self.assertNotEqual(expected,other.historical_params_path(tmp,seed))
+                self.assertEqual(TEACHER.inspect_history(project_root=tmp,seed=seed)['action'],'BUILD')
+                with (patch.object(TEACHER,'_validated_records'),
+                      patch.object(TEACHER,'prepare_selection_historical_p2_params',return_value={'params_path':expected}) as build,
+                      patch.object(TEACHER,'_current_p16_seed_artifact',return_value=()) as current):
+                    TEACHER.execute_history(project_root=tmp,seed=seed)
+                    self.assertEqual(build.call_args.kwargs['optimizer_seed'],seed)
+                    self.assertEqual(build.call_args.kwargs['daily_search_profile'],'min_close_ema_volume_v1')
+                    self.assertEqual(build.call_args.kwargs['parameter_set_identity'],'DAILY_MIN_P21_LABEL_HISTORY_V1')
+                    self.assertEqual(build.call_args.kwargs['output_relative_dir'],expected.parent.parent.parent)
+                    TEACHER.execute_current(project_root=tmp,seed=seed)
+                    self.assertEqual(current.call_args.args[1],seed)
+                    self.assertEqual(current.call_args.kwargs['baseline_arm'],'C179')
+
+    def test_p21_oracle_real_raw_witness_and_pit_labels_match_for_each_seed(self):
+        from types import SimpleNamespace
+        from tempfile import TemporaryDirectory
+        from pathlib import Path
+        import numpy as np
+        from services.breakout_quality.daily_full_p20_training_source import teacher_for_kind
+        source_owner = teacher_for_kind("daily_min_p21_fullcycle_netpnl_per_seed")
+        from services.audit import daily_filtered_trade_path_truth as truth
+        from services.audit.target_oracle_romd import _build_daily_truth,_oracle_daily_schedule
+        from core.strategy_compare_policy import get_strategy_multi_seed_robustness_settings
+        from filters.breakout_quality.daily_trade40_target import rank_trade40_outcome_frame
+        from tools.validate.synthetic_daily_full_p20_fulltrade_cases import DailyFullP20NetPnLContractCases
+        cfg=get_strategy_multi_seed_robustness_settings('broker_cash_dl_conversion_rolling')
+        for seed in (42,*cfg.resolved_seeds):
+            days,frame,source=self._p21_fixture(seed)
+            positions=np.arange(30,105,dtype=np.int64)
+            cohort=pd.DataFrame({'ticker':'2330','date':days.take(positions)})
+            record=DailyFullP20NetPnLContractCases._record(source,seed)
+            recipe='daily_trade_path_daily_min_p21_net_pnl'
+            schedule,_=_oracle_daily_schedule([record],seed=seed,param_sha256='a'*64,recipe=recipe)
+            bundle=SimpleNamespace(group_table=cohort,summary={'dataset':'full','filter_id':'test','sample_scope':'daily_eligible_stock_days','score_eligible_sample_count':len(cohort)})
+            with (TemporaryDirectory() as tmp,
+                patch.object(truth,'oracle_dataset_summary_sha256',return_value='c'*64),
+                patch.object(truth,'load_profile_continuous_ranker_data',return_value=bundle),
+                patch.object(truth,'discover_dataset_csv_inputs',return_value=([('2330',Path(tmp)/'2330.csv')],[])),
+                patch.object(truth,'collect_canonical_exchange_sessions',return_value=days),
+                patch.object(truth,'load_dataset_frame',return_value=frame),
+            ):
+                args=dict(project_root=Path(tmp),dataset='full',filter_id='test',profile_id='daily_universal_min_p21_mintrade_netpnl_full_list_ndcg_pairwise',
+                    cutoff=str(days[-1].date()),evaluation_start=str(days[1].date()),evaluation_end=str(days[-1].date()),score_start=str(days[1].date()),seed=seed,param_sha256='a'*64,
+                    canonical_schedule=schedule,price_sha256='b'*64,cache_root=Path(tmp)/'truth',output_subdir='audit')
+                scores,evidence=_build_daily_truth(recipe,**args)
+                labels=source_owner.materialize_labels(source,expected_seed=seed,frame=frame,positions=positions,ticker='2330',exchange_calendar=days,fit_cutoff=days[-1],research_end_is_terminal=True)
+                outcome=pd.DataFrame({'ticker':'2330','date':days.take(positions).strftime('%Y-%m-%d'),'realized_net_pnl':labels.raw_net_pnl})
+                self.assertEqual(scores,rank_trade40_outcome_frame(outcome,value_column='realized_net_pnl'))
+                raw=source_owner.load_positive_truth(project_root=Path(tmp),output_subdir='audit',seed=seed,price_sha256='b'*64,param_sha256='a'*64,canonical_scores=scores,canonical_evidence=evidence)
+                self.assertEqual(raw,{(r.ticker,r.date):r.realized_net_pnl for r in outcome.itertuples() if np.isfinite(r.realized_net_pnl)})
+                with patch.object(truth,'_stock_outcome',side_effect=AssertionError('REUSE must not recompute')):
+                    reused,receipt=_build_daily_truth(recipe,**args)
+                    self.assertEqual(scores,reused);self.assertEqual(receipt['teacher']['seed'],seed)
+
+    def test_p21_canonical_portfolio_candidates_match_label_admission(self):
+        import numpy as np
+        from core.portfolio_fast_data import prep_optimizer_stock_data_bundle
+        from core.portfolio_entry_policy import DAILY_EXECUTION_CLOSE_FILTERS, daily_signal_execution_context
+        from core.daily_common_entry_filters import daily_common_filter_signals
+        from filters.breakout_quality.trade_path_label import build_signal_cache
+        days,frame,source=self._p21_fixture()
+        params=source.schedule[0].params
+        with daily_signal_execution_context(DAILY_EXECUTION_CLOSE_FILTERS):
+            expected,limits=daily_common_filter_signals(frame,params,ticker='2330',
+                atr_main=build_signal_cache(frame,params,ticker='2330')[0])
+            dynamic,*_=prep_optimizer_stock_data_bundle(frame,params,include_trade_logs=False,include_pit_stats_index=False)
+        np.testing.assert_equal(dynamic['is_setup'],expected)
+        np.testing.assert_equal(dynamic['buy_limit'],limits)
+        self.assertTrue(expected.any());self.assertTrue((~expected).any())
+
+    def test_p21_rank_and_positive_loader_share_matching_historical_current_lineage(self):
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+        from services.breakout_quality.daily_full_p20_training_source import teacher_for_kind
+        TEACHER = teacher_for_kind("daily_min_p21_fullcycle_netpnl_per_seed")
+        from services.breakout_quality.trade_path_target_source import loader_kwargs_for_trade_path
+        from core.strategy_compare_policy import get_strategy_multi_seed_robustness_settings
+        from tools.validate.synthetic_daily_full_p20_fulltrade_cases import DailyFullP20NetPnLContractCases as Helpers
+        cfg=get_strategy_multi_seed_robustness_settings('broker_cash_dl_conversion_rolling')
+        signatures=[]
+        with TemporaryDirectory() as tmp:
+            for seed in (42,*cfg.resolved_seeds):
+                _,_,source=self._p21_fixture(seed)
+                past=Helpers._record(source,seed,start='2014-01-01',end='2020-12-31')
+                current=Helpers._record(source,seed,start='2021-01-01')
+                history={'folds':[{'effective_start':'2014-01-01','selection_end_date':'2013-12-31'}]}
+                payload={'folds':[{'effective_start':'2021-01-01','selection_end_date':'2020-12-31'}]}
+                with (
+                    patch.object(TEACHER,'_current_p16_seed_artifact',return_value=(Path(tmp)/'current','2021-01-01','2026-03-02','unused')),
+                    patch.object(TEACHER,'_validated_records',return_value=(history,[past])) as inspect,
+                    patch.object(TEACHER,'load_strategy_param_evaluation_view',return_value=({'kind':'rolling_active_param_ensemble','payload':payload},'a'*64)),
+                    patch.object(TEACHER,'resolve_formal_min_param_records',return_value=[current]),
+                    patch.object(TEACHER,'compute_strategy_param_file_sha256',return_value='b'*64),
+                ):
+                    result=[loader_kwargs_for_trade_path(experiment_profile=p,project_root=tmp,seed=seed) for p in
+                        ('daily_universal_min_p21_mintrade_netpnl_full_list_ndcg_pairwise','daily_universal_min_p21_mintrade_netpnl_positive_binary')]
+                    self.assertEqual(result[0]['target_lineage'],result[1]['target_lineage'])
+                    self.assertEqual(inspect.call_args.kwargs['seed'],seed)
+                    self.assertEqual(inspect.call_args.args[0],TEACHER.historical_params_path(tmp,seed))
+                    self.assertEqual(result[0]['target_lineage']['optimizer_teacher_seed'],seed)
+                    self.assertEqual(result[0]['target_materializer'].keywords['expected_seed'],seed)
+                    signatures.append(result[0]['target_lineage']['source_sha256'])
+        self.assertEqual(len(set(signatures)),len(signatures))
+
+    def test_p21_missing_teachers_are_planned_once_for_both_models_and_reused(self):
+        from services.breakout_quality.daily_full_p20_training_source import teacher_for_kind
+        teacher = teacher_for_kind("daily_min_p21_fullcycle_netpnl_per_seed")
+        from services.research import strategy_multi_seed_robustness as robust
+        from core.strategy_compare_policy import get_strategy_comparison_settings,get_strategy_multi_seed_robustness_settings
+        settings=get_strategy_comparison_settings('broker_cash_dl_conversion_rolling')
+        cfg=get_strategy_multi_seed_robustness_settings(settings.profile_id)
+        ready,built=set(),[]
+        def state(kind,**kwargs):return {'action':'REUSE' if (kind,kwargs['seed']) in ready else 'BUILD','reason':kind}
+        def build(kind,**kwargs):
+            key=(kind,kwargs['seed']);built.append(key);ready.add(key)
+        with (
+            patch.object(teacher,'inspect_history',side_effect=lambda **kw:state('history',**kw)),
+            patch.object(teacher,'inspect_current',side_effect=lambda **kw:state('current',**kw)),
+            patch.object(teacher,'execute_history',side_effect=lambda **kw:build('history',**kw)),
+            patch.object(teacher,'execute_current',side_effect=lambda **kw:build('current',**kw)),
+        ):
+            args=dict(cfg=cfg,settings=settings,model_arms=(settings.arms['C182'],settings.arms['C183']),robustness_unit_states={},model_source_reuse={})
+            rows,block=robust._trade_path_seed_plan(**args)
+            self.assertEqual(block,[]);self.assertEqual(len(rows),2*len(cfg.resolved_seeds))
+            for seed in cfg.resolved_seeds:
+                for profile in ('daily_universal_min_p21_mintrade_netpnl_full_list_ndcg_pairwise','daily_universal_min_p21_mintrade_netpnl_positive_binary'):
+                    robust._prepare_trade_path_teacher_for_model(experiment_profile=profile,seed=seed,authorized=True)
+            self.assertEqual(len(built),len(set(built)))
+            rows,block=robust._trade_path_seed_plan(**args)
+            self.assertEqual(block,[]);self.assertTrue(all(a=='REUSE' for a,_,_ in rows))
+
+    def test_p21_cache_and_effective_source_follow_delegated_broker_implementation(self):
+        from services.breakout_quality.daily_full_p20_training_source import teacher_for_kind
+        source = teacher_for_kind("daily_min_p21_fullcycle_netpnl_per_seed")
+        from services.research import oracle_artifact_contract as contracts
+        from services.audit import daily_trade40_oracle as broker
+        recipe='daily_trade_path_daily_min_p21_net_pnl'
+        profile='daily_universal_min_p21_mintrade_netpnl_full_list_ndcg_pairwise'
+        original=source.truth_producer_fingerprint()
+        execution=source.execution_fingerprint()
+        original_hash=source.compute_file_sha256
+        def oracle_only(path):
+            return 'e'*64 if path.name=='daily_filtered_trade_path_truth.py' else original_hash(path)
+        with patch.object(source,'compute_file_sha256',side_effect=oracle_only):
+            self.assertEqual(source.execution_fingerprint(),execution)
+            self.assertNotEqual(source.truth_producer_fingerprint(),original)
+        contracts.source_implementation_sha256.cache_clear()
+        before=contracts.source_implementation_sha256(recipe,profile)
+        with patch.object(source,'broker_fingerprint',return_value='f'*64):
+            self.assertNotEqual(source.truth_producer_fingerprint(),original)
+        try:
+            with patch.object(broker,'truth_producer_fingerprint',return_value='f'*64):
+                contracts.source_implementation_sha256.cache_clear()
+                self.assertNotEqual(contracts.source_implementation_sha256(recipe,profile),before)
+        finally:
+            contracts.source_implementation_sha256.cache_clear()
+
     def test_registered_daily_fixed_switches_are_optimizer_fixed_not_search_dimensions(self):
         """Every declarative fixed-switch profile must keep its optional
         gate ON during fitting without introducing a trainable switch.
@@ -1289,9 +1602,10 @@ class DailyEntryStrategyCases(TestCase):
                 selected, base_arm=base, exact_arm=exact)
         self.assertNotIn("daily_execution_contract", names["C96"])
         # Historical C161 is excluded by the current canonical Summary roster;
-        # new P21 is No-DL only and does not establish an Oracle score source.
+        # P21 now has approved Direct treatments and its own Oracle source.
         self.assertNotIn("C161", names)
-        self.assertNotIn("C179", names)
+        self.assertIn("C179", names)
+        self.assertEqual(names["C179"]["daily_execution_contract"], "daily_close_common_filters_v1")
         # P19 C166/C167 are retired; the active P20 oracle still uses the
         # independently registered full-filter execution policy.
         self.assertNotIn("C166", names)

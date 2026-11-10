@@ -346,8 +346,8 @@ class OracleParameterFamilyCases(TestCase):
         d = definition()
         comparisons = resolve_current_oracle_comparisons(d.source)
         baselines = oracle_baseline_arm_ids(d.source)
-        self.assertEqual(baselines,
-                         {"min": "C96", "full": "C97", "daily_full_p20": "C168"})
+        from core.research_summary import get_research_summary_baseline_arm_ids
+        self.assertEqual(baselines, get_research_summary_baseline_arm_ids())
         self.assertEqual(len(set(baselines.values())), len(baselines))
         scopes = oracle._oracle_strategy_scopes(d)
         by_scope = {}

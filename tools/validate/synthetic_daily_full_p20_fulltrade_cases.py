@@ -70,7 +70,7 @@ class DailyFullP20NetPnLContractCases(TestCase):
                 "effective_end_date": end, "members": [{"seed": seed}]}
 
     def test_seed_paths_never_fall_back_to_single_seed_history(self):
-        from services.breakout_quality import daily_full_p20_training_source as owner
+        from services.breakout_quality.daily_full_p20_training_source import TEACHER as owner
         with TemporaryDirectory() as tmp:
             seeds = self._seeds()
             original = historical_params_path(tmp, seeds[0])
@@ -89,7 +89,7 @@ class DailyFullP20NetPnLContractCases(TestCase):
                     historical_params_path(tmp, seed)
 
     def test_each_teacher_dependency_delegates_matching_seed_to_optimizer(self):
-        from services.breakout_quality import daily_full_p20_training_source as owner
+        from services.breakout_quality.daily_full_p20_training_source import TEACHER as owner
         from services.breakout_quality.trade_path_target_source import registered_trade_path_source
         rank = registered_trade_path_source(RANK_PROFILE)
         self.assertIs(rank, registered_trade_path_source(POS_PROFILE))
@@ -116,7 +116,7 @@ class DailyFullP20NetPnLContractCases(TestCase):
                     self.assertTrue(current.call_args.kwargs["authorized_build"])
 
     def test_historical_and_current_source_and_both_heads_bind_the_same_seed(self):
-        from services.breakout_quality import daily_full_p20_training_source as owner
+        from services.breakout_quality.daily_full_p20_training_source import TEACHER as owner
         from services.breakout_quality.trade_path_target_source import loader_kwargs_for_trade_path
         from core.breakout_quality_runtime import trade_path_fit_capability
         contracts = []
@@ -168,7 +168,7 @@ class DailyFullP20NetPnLContractCases(TestCase):
                     _oracle_daily_schedule([{**record, "members": members}], **args)
 
     def test_current_teacher_builds_the_registered_replica_without_production_fallback(self):
-        from services.breakout_quality import daily_full_p20_training_source as teacher
+        from services.breakout_quality.daily_full_p20_training_source import TEACHER as teacher
         from services.breakout_quality import formal_mintrade40_training_source as canonical
         from core.strategy_compare_policy import get_strategy_comparison_settings
         settings = get_strategy_comparison_settings("broker_cash_dl_conversion_rolling")
@@ -194,7 +194,7 @@ class DailyFullP20NetPnLContractCases(TestCase):
 
     def test_robustness_plans_and_builds_each_teacher_once_for_rank_and_positive(self):
         from services.research import strategy_multi_seed_robustness as robust
-        from services.breakout_quality import daily_full_p20_training_source as teacher
+        from services.breakout_quality.daily_full_p20_training_source import TEACHER as teacher
         from core.strategy_compare_policy import get_strategy_comparison_settings, get_strategy_multi_seed_robustness_settings
         settings = get_strategy_comparison_settings("broker_cash_dl_conversion_rolling")
         cfg = get_strategy_multi_seed_robustness_settings(settings.profile_id)
@@ -420,7 +420,7 @@ class DailyFullP20NetPnLContractCases(TestCase):
         self.assertEqual(labels.preflight["entry_policy"],
                          "next_exchange_session_daily_full_p20_atr_limit_v1")
         with self.assertRaisesRegex(FormalMinTrade40PITBlocked,
-                                    "Daily Full/P20 source identity mismatch"):
+                                    "Daily trade-path source identity mismatch"):
             materialize_daily_full_p20_pit_labels(**{
                 **args, "source": replace(source, source_id="formal_full_roos_seed")
             })
@@ -458,7 +458,7 @@ class DailyFullP20NetPnLContractCases(TestCase):
         return canonical_path, nested, identity
 
     def test_completed_legacy_nested_history_reuses_without_optimizer_trials(self):
-        from services.breakout_quality import daily_full_p20_training_source as owner
+        from services.breakout_quality.daily_full_p20_training_source import TEACHER as owner
         with TemporaryDirectory() as tmp:
             canonical, nested, identity = self._nested_history_fixture(Path(tmp))
             with (patch.object(owner, "_expected_historical_preflight",
@@ -495,7 +495,7 @@ class DailyFullP20NetPnLContractCases(TestCase):
             self.assertFalse(nested.exists())
 
     def test_nested_history_mismatched_signature_and_conflicts_are_blocked(self):
-        from services.breakout_quality import daily_full_p20_training_source as owner
+        from services.breakout_quality.daily_full_p20_training_source import TEACHER as owner
         with TemporaryDirectory() as tmp:
             canonical, nested, identity = self._nested_history_fixture(Path(tmp))
             bad_identity = "f" * 64
@@ -513,7 +513,7 @@ class DailyFullP20NetPnLContractCases(TestCase):
             self.assertTrue((nested / "active_params" / canonical.name).is_file())
 
     def test_new_history_uses_optimizer_workspace_root_not_arm_directory(self):
-        from services.breakout_quality import daily_full_p20_training_source as owner
+        from services.breakout_quality.daily_full_p20_training_source import TEACHER as owner
         with TemporaryDirectory() as tmp:
             expected = historical_params_path(tmp, 42)
             with (patch.object(owner, "_canonical_schedule_build_contract",

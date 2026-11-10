@@ -416,6 +416,10 @@ def source_implementation_sha256(recipe: str, profile_id: str) -> str:
     if capability is not None:
         parts.update({key: calculation_source(relative, name)
                       for key, relative, name in capability["calculation_owners"]})
+        closure = capability.get("calculation_closure")
+        if closure is not None:
+            module, function, *arguments = closure
+            parts["delegated_execution"] = getattr(importlib.import_module(module), function)(*arguments)
     elif recipe == "daily_trade_path_daily_min_p19_net_pnl":
         # P19 is a 4D ATR-limit/no-setup Daily primitive. Both the wrapper
         # and the reused canonical broker simulation are signed; no P18

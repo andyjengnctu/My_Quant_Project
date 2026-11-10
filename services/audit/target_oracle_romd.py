@@ -162,7 +162,11 @@ _ORACLE_DAILY_SCORE_RECIPES.update({recipe: spec["outcome_metric"]
 
 def _declared_daily_producer(recipe):
     spec = daily_truth_capability(recipe)
-    return None if spec is None else import_module(spec["producer_module"])
+    if spec is None:
+        return None
+    producer = import_module(spec["producer_module"])
+    factory = spec.get("producer_factory")
+    return getattr(producer, factory)(recipe) if factory else producer
 
 
 def _daily_truth_identity(recipe: str, horizon: int | None) -> tuple[str, str]:
@@ -292,7 +296,9 @@ def _oracle_daily_schedule(records, *, seed: int, param_sha256: str, recipe: str
     spec = daily_truth_capability(recipe)
     records = tuple(records)
     validator = None if spec is None else spec.get("record_validator")
-    if validator is not None:
+    if isinstance(validator, str):
+        getattr(_declared_daily_producer(recipe), validator)(records, seed=seed)
+    elif validator is not None:
         getattr(import_module(validator[0]), validator[1])(records, seed=seed)
     periods, evidence = build_formal_min_execution_schedule(
         records, seed=seed, param_sha256=param_sha256,
