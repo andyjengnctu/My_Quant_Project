@@ -1186,10 +1186,16 @@ def collect_target_dl_overview(project_root: Path) -> dict[str, Any]:
             arm = STRATEGY_COMPARE_ARMS.get(arm_id, {})
             pair = binding.get("rank_model")
             model = model_evidence.get(pair[1], {}) if pair else {}
-            entry_label, _daily_fitted = _summary_entry_label(
-                arm, family=str(group.get("parameter_family", "min")),
-            )
-            selector = research_summary_selector_label(arm)
+            # AI: A model-only Summary binding has no Strategy/Optimizer lineage.
+            # Keep both strategy presentation fields blank; actual strategy arms
+            # must continue to pass the canonical parameter-source verification.
+            if arm_id:
+                entry_label, _daily_fitted = _summary_entry_label(
+                    arm, family=str(group.get("parameter_family", "min")),
+                )
+                selector = research_summary_selector_label(arm)
+            else:
+                entry_label, selector = "", ""
             # No-DL controls never have a supervised Target. Arm IDs stay in
             # the Strategy ID column and in signed Replay identities only.
             target = _summary_scientific_target(group, binding, summary_model_targets)

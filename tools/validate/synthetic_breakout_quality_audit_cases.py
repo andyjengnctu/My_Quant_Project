@@ -648,7 +648,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         )
         from config.strategy_params import STRATEGY_PARAM_PROFILES
         from core.research_summary import get_research_summary_baseline_arm_ids
-        from core.audit_registry import oracle_target_semantics
+        from core.audit_registry import oracle_display_target
 
         by_arm = {row["strategy"]: row for row in snapshot["rows"] if row["strategy"]}
         expected_daily = {}
@@ -665,7 +665,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
                 profile = STRATEGY_PARAM_PROFILES[profile_id]
                 param_set = profile["parameter_set_identity"]
                 expected_daily[arm_id] = (
-                    oracle_target_semantics(group["oracle"])[0] if "oracle" in group else "",
+                    oracle_display_target(group["oracle"]) if "oracle" in group else "",
                     f"Daily ({profile['filter_profile'].capitalize()}/{param_set.removeprefix('PARAM-')})",
                     ("Default" if not arm.get("dl_enabled") else
                      "Direct" if arm.get("dl_runtime_mode") ==
@@ -689,11 +689,21 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
             and actual_daily == expected_daily,
         )
         control_arms = tuple(get_research_summary_baseline_arm_ids().values())
+        c98_source = STRATEGY_EXPERIMENTAL_PARAM_SOURCES[
+            STRATEGY_COMPARE_ARMS["C98"]["param_source"]
+        ]
+        c98_profile = STRATEGY_PARAM_PROFILES[
+            c98_source["builder"]["options"]["training_profile_id"]
+        ]
+        expected_unscored_breakout = (
+            f"Breakout ({c98_profile['filter_profile'].capitalize()}/"
+            f"{c98_profile['parameter_set_identity'].removeprefix('PARAM-')})"
+        )
         check_true("summary_no_dl_controls_have_no_target_and_other_targets_preserved",
                    all(by_arm[arm]["target"] == ""
                            and by_arm[arm]["selector"] == "Default"
                            for arm in control_arms)
-                   and by_arm["C98"]["entry_strategy"] == "Breakout (Full/P17)"
+                   and by_arm["C98"]["entry_strategy"] == expected_unscored_breakout
                    and by_arm["C103"]["target"] == "D40 Safety + Conditional MFE")
         corrupted = tuple({**group, "display_target": "T40 × Daily (Full/P20)"}
                           if any(binding.get("arm_id") == "C169"
@@ -757,6 +767,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
                        extra_pair in get_breakout_quality_model_test_settings().model_profiles
                        and set(get_research_summary_strategy_arm_ids()) == arms
                        and any(row["model"] == extra_pair[0] and not row["strategy"]
+                               and row["entry_strategy"] == "" and row["selector"] == ""
                                and row["oracle_romd"] is None for row in extra_report["rows"]))
         # Pick a configured, isolated Oracle/model group dynamically. Removing
         # its source and Direct variants must change all three workflows once.
