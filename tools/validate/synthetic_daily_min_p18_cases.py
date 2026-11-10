@@ -39,20 +39,20 @@ def labels(source, days, frame, positions=(30, 40, 50, 60, 70, 80, 90), **kwargs
 
 
 class DailyMinP18Cases(TestCase):
-    def test_current_four_arms_and_independent_rank_positive_models(self):
+    def test_p18_scientific_identities_survive_current_roster_retirement(self):
         from core.research_summary import (get_research_summary_strategy_arm_ids,
             get_research_summary_model_profiles, get_research_summary_baseline_arm_ids)
         from core.strategy_compare_policy import get_strategy_comparison_settings, get_strategy_multi_seed_robustness_settings
         from core.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
-        from core.breakout_quality_registry import get_continuous_ranker_research_spec
+        from core.breakout_quality_registry import get_breakout_quality_experiment_profile
         from filters.breakout_quality.strategy_compare_dl_artifacts import resolve_arm_runtime_dl_source_ids
         from services.research.target_dl_overview import _is_exact_supervision, _is_positive_classification
         settings = get_strategy_comparison_settings('broker_cash_dl_conversion_rolling')
-        active = set(get_research_summary_strategy_arm_ids())
-        self.assertTrue({'C160', 'C161', 'C177', 'C178'} <= active)
-        self.assertTrue({'C159','C162','C163','C164','C165','C166','C167','C174','C175','C176'}.isdisjoint(active))
-        self.assertEqual(get_research_summary_baseline_arm_ids()['daily_min'], 'C161')
-        self.assertTrue({('MR-13DF', RANK), ('MR-13DG', POSITIVE)} <= set(get_research_summary_model_profiles()))
+        retired = {'C160', 'C161', 'C177', 'C178'}
+        self.assertTrue(retired.isdisjoint(set(get_research_summary_strategy_arm_ids())))
+        self.assertNotIn('daily_min', get_research_summary_baseline_arm_ids())
+        self.assertTrue({'MR-13DF', 'MR-13DG'}.isdisjoint(
+            {mid for mid, _ in get_research_summary_model_profiles()}))
         self.assertEqual(resolve_arm_runtime_dl_source_ids(settings, settings.arms['C178']),
                          ('CONT13DF_ROLL', 'CONT13DG_ROLL'))
         self.assertFalse(settings.arms['C161'].dl_enabled)
@@ -61,49 +61,47 @@ class DailyMinP18Cases(TestCase):
         self.assertEqual(rank.target_policy, positive.target_policy)
         self.assertNotEqual(rank.training_objective, positive.training_objective)
         self.assertEqual(positive.training_objective, 'daily_mintrade_netpnl_positive_binary_cross_entropy')
-        from core.breakout_quality_registry import get_breakout_quality_experiment_profile
         target_id = get_breakout_quality_experiment_profile(RANK).continuous_target_id
         self.assertTrue(_is_exact_supervision(RANK, target_id))
         self.assertFalse(_is_exact_supervision(POSITIVE, target_id))
         self.assertTrue(_is_positive_classification(POSITIVE, target_id))
         for mode in ('broker_cash_dl_conversion_rolling', 'broker_cash_dl_conversion_oos'):
             s = get_strategy_comparison_settings(mode)
-            self.assertTrue({'C160','C161','C177','C178'} <= {a.arm_id for a in s.enabled_arms})
+            self.assertTrue(retired.isdisjoint({a.arm_id for a in s.enabled_arms}))
         robust = get_strategy_multi_seed_robustness_settings(settings.profile_id)
         self.assertEqual(len(robust.resolved_seeds), 4)
-        self.assertTrue({'C160','C161','C177','C178'} <= set(robust.benchmark_strategy_arm_ids))
-        self.assertTrue({'C160','C177','C178'} <= set(robust.model_seed_sensitive_arm_ids))
-        self.assertNotIn('C161',robust.model_seed_sensitive_arm_ids)
+        self.assertTrue(retired.isdisjoint(set(robust.benchmark_strategy_arm_ids)))
+        self.assertTrue(retired.isdisjoint(set(robust.model_seed_sensitive_arm_ids)))
 
-    def test_membership_removal_propagates_without_consumer_exceptions(self):
+    def test_archived_p18_requires_explicit_oracle_reauthorization(self):
         from config import research_summary as config
         from core.research_summary import (get_research_summary_strategy_arm_ids,
             get_research_summary_model_profiles, get_research_summary_baseline_arm_ids)
         from core.audit_registry import resolve_current_oracle_comparisons
         from core.audit_policy import get_reusable_audit_definitions
         from core.strategy_compare_policy import get_strategy_comparison_settings
-        def is_p18(row):
-            return (row.get('oracle_parameter_family') == 'daily_min'
-                    or row.get('parameter_family') == 'daily_min'
-                    or row.get('oracle', {}).get('parameter_family') == 'daily_min')
-        original = set(get_research_summary_strategy_arm_ids())
-        replacement = tuple({**row, 'enabled':False} if is_p18(row) else row
-                            for row in config.RESEARCH_SUMMARY_ROWS)
-        with patch.object(config,'RESEARCH_SUMMARY_ROWS',replacement):
+        retired={'C160', 'C161', 'C177', 'C178'}
+        original=set(get_research_summary_strategy_arm_ids())
+        self.assertTrue(retired.isdisjoint(original))
+        def controls_p18(row):
+            return row.get('arm_id') in retired or any(
+                b.get('arm_id') in retired for b in row.get('bindings', ()))
+        restored=tuple({**row,'enabled': True} if controls_p18(row) else row
+                       for row in config.RESEARCH_SUMMARY_ROWS)
+        with patch.object(config, 'RESEARCH_SUMMARY_ROWS', restored):
             active=set(get_research_summary_strategy_arm_ids())
-            self.assertEqual(original-active, {'C160','C161','C177','C178'})
-            self.assertTrue({'C168','C169','C172','C173'} <= active)
-            self.assertNotIn('daily_min',get_research_summary_baseline_arm_ids())
-            self.assertTrue({'MR-13DF','MR-13DG'}.isdisjoint(
-                {mid for mid,p in get_research_summary_model_profiles()}))
-            from services.audit.target_oracle_romd import SUPPORTED_AUDIT_TYPE
+            self.assertEqual(active-original, retired)
+            self.assertEqual(get_research_summary_baseline_arm_ids()['daily_min'], 'C161')
+            self.assertTrue({'MR-13DF','MR-13DG'} <= {
+                mid for mid,_ in get_research_summary_model_profiles()})
             definition=next(d for d in get_reusable_audit_definitions('breakout_quality')
-                            if d.audit_type == SUPPORTED_AUDIT_TYPE)
-            self.assertFalse(any(r.get('parameter_family') == 'daily_min'
-                                 for r in resolve_current_oracle_comparisons(definition.source)))
+                            if d.audit_type == 'target_ground_truth_strategy_romd')
+            with self.assertRaisesRegex(ValueError, 'Historical-only Oracle target'):
+                resolve_current_oracle_comparisons(definition.source)
             settings=get_strategy_comparison_settings('broker_cash_dl_conversion_rolling')
             self.assertEqual({a.arm_id for a in settings.enabled_arms}, active)
         self.assertEqual(set(get_research_summary_strategy_arm_ids()),original)
+        self.assertNotIn('daily_min', get_research_summary_baseline_arm_ids())
 
     def test_fit_identity_uses_only_asof_teacher_and_ordered_mature_labels(self):
         from types import SimpleNamespace

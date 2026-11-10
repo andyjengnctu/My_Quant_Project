@@ -104,6 +104,11 @@
           "contract_id": "audit.target_oracle_romd@v14",
           "version": 14,
           "fingerprint": "ccadf4b45fc153f1"
+        },
+        {
+          "contract_id": "audit.target_oracle_romd@v15",
+          "version": 15,
+          "fingerprint": "ce8910dd98d5f600"
         }
       ]
     },
@@ -254,6 +259,11 @@
           "contract_id": "research.target_dl_validation_overview@v13",
           "version": 13,
           "fingerprint": "0dd766f47d569029"
+        },
+        {
+          "contract_id": "research.target_dl_validation_overview@v14",
+          "version": 14,
+          "fingerprint": "b5fd9b192ef01739"
         }
       ]
     },

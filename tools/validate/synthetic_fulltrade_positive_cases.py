@@ -1,4 +1,4 @@
-"""Full/P17 rank-only current contracts and archived Positive identity guards.
+"""Full/P17 rank-only and restored independent Positive contracts.
 
 Synthetic, temporary, never a live optimizer run or formal Test Suite.
 """
@@ -42,12 +42,12 @@ from tools.validate.synthetic_daily_trade40_oracle_cases import PROFILE, source_
 
 
 class FullTradeContracts(TestCase):
-    def test_rank_only_current_retains_historical_positive_identities(self):
+    def test_fulltrade_rank_and_positive_are_both_current_with_original_identities(self):
         models = dict(BREAKOUT_QUALITY_MODEL_TEST_PROFILES)
         self.assertIn("MR-13CZ", models)
-        self.assertNotIn("MR-13DA", models)
-        # Historical DA classification profile and strategy identities remain registered,
-        # but neither contributes to current Model, Compare, Robustness or Oracle.
+        self.assertIn("MR-13DA", models)
+        # Original DA classification independently contributes to restored
+        # C155/C156; it is not a threshold applied to the CZ rank score.
         from core.breakout_quality_registry import FULLTRADE_NETPNL_POSITIVE_PROFILE
         rank = get_breakout_quality_experiment_profile(models["MR-13CZ"])
         sign = get_breakout_quality_experiment_profile(FULLTRADE_NETPNL_POSITIVE_PROFILE)
@@ -60,11 +60,11 @@ class FullTradeContracts(TestCase):
         self.assertEqual(FULL_BASELINE_ARM, "C97")
         active_ids = set(get_research_summary_strategy_arm_ids())
         self.assertTrue({"C157", "C158"}.issubset(active_ids))
-        self.assertTrue({"C155", "C156"}.isdisjoint(active_ids))
-        self.assertNotIn("MR-13DA", dict(get_research_summary_model_profiles()))
+        self.assertTrue({"C155", "C156"}.issubset(active_ids))
+        self.assertIn("MR-13DA", dict(get_research_summary_model_profiles()))
         s = get_strategy_comparison_settings("broker_cash_dl_conversion_rolling")
         self.assertTrue({"C157", "C158"}.issubset({a.arm_id for a in s.enabled_arms}))
-        self.assertTrue({"C155", "C156"}.isdisjoint({a.arm_id for a in s.enabled_arms}))
+        self.assertTrue({"C155", "C156"}.issubset({a.arm_id for a in s.enabled_arms}))
         for cid in ("C155", "C156", "C157", "C158"):
             arm = s.arms[cid]
             self.assertEqual(arm.param_source, s.arms["C97"].param_source)
@@ -80,18 +80,18 @@ class FullTradeContracts(TestCase):
         self.assertEqual(len(robust.resolved_seeds), 4)
         self.assertTrue({"C157", "C158"}.issubset(set(robust.stochastic_arm_ids)))
         self.assertTrue({"C157", "C158"}.issubset(set(robust.model_seed_sensitive_arm_ids)))
-        self.assertTrue({"C155", "C156"}.isdisjoint(set(robust.stochastic_arm_ids)))
+        self.assertTrue({"C155", "C156"}.issubset(set(robust.stochastic_arm_ids)))
         defs = get_reusable_audit_definitions("breakout_quality")
         source = next(d.source for d in defs if d.audit_type == "target_ground_truth_strategy_romd")
         full = [c for c in source["oracle_comparisons"]
                 if str(c["target"]).startswith("FullTrade_NetPnL")]
-        self.assertEqual(len(full), 2)
-        self.assertEqual({str(c["strategy_arm_id"]) for c in full}, {"C157", "C158"})
-        self.assertTrue(all(not c.get("positive_output") for c in full))
-        self.assertEqual({"FullTrade_NetPnL_Positive", "FullTrade_NetPnL_Positive_Direct"},
-                         set(source["historical_only_oracle_targets"]).intersection({
-                             "FullTrade_NetPnL_Positive", "FullTrade_NetPnL_Positive_Direct",
-                         }))
+        self.assertEqual(len(full), 4)
+        self.assertEqual({str(c["strategy_arm_id"]) for c in full},
+                         {"C155", "C156", "C157", "C158"})
+        self.assertEqual({str(c["strategy_arm_id"]) for c in full if c.get("positive_output")},
+                         {"C155", "C156"})
+        self.assertFalse({"FullTrade_NetPnL_Positive", "FullTrade_NetPnL_Positive_Direct"}
+                         & set(source["historical_only_oracle_targets"]))
         self.assertTrue(all(c["target"] not in source["historical_only_oracle_targets"]
                             for c in full))
 

@@ -13,9 +13,10 @@ RESEARCH_SUMMARY_ROWS = (
     {'arm_id': 'C96', 'oracle_parameter_family': 'min'},
     {'arm_id': 'C97', 'oracle_parameter_family': 'full'},
     {'arm_id': 'C98', 'parameter_family': 'full'},
-    # AI: Restore P18 C160/C161 controls. C164/C165 remain historical P16-FIT
-    # transfers; C177/C178 below use independently supervised P18 DF/DG FIT.
-    {'arm_id': 'C161', 'oracle_parameter_family': 'daily_min'},
+    # AI: 2026-11-10 membership decision: retire P18 C160/C161/C177/C178
+    # from all current Research projections. Keep their scientific Registry,
+    # parameters, model specs and historical evidence unchanged.
+    {'enabled': False, 'arm_id': 'C161', 'oracle_parameter_family': 'daily_min'},
     # P18 DF/DG below use new PIT supervision; the hidden Exact row is source-only.
     # P19 C166/C167 are retired; original research results remain in the
     # Experiment Log/Registry and are never reused by P20 training.
@@ -31,14 +32,14 @@ RESEARCH_SUMMARY_ROWS = (
                 'provider': 'daily_trade40_profile',
                 'horizon_mode': 'full_trade_cycle', 'selector': 'exact',
                 'strategy': 'Daily', 'parameter_family': 'daily_min'}},
-    {'oracle': {'target': 'TrueDailyUniversal_MinTrade_P18_NetPnL_Direct',
+    {'enabled': False, 'oracle': {'target': 'TrueDailyUniversal_MinTrade_P18_NetPnL_Direct',
                 'description': 'Independent P18 MinTrade broker NetPnL rank, Direct',
                 'score_source': 'TrueDailyUniversal_MinTrade_P18_NetPnL',
                 'selector': 'direct', 'strategy_arm_id': 'C177',
                 'strategy': 'Daily', 'parameter_family': 'daily_min'},
      'bindings': ({'arm_id': 'C177',
                    'rank_model': ('MR-13DF', 'daily_universal_min_p18_mintrade_netpnl_full_list_ndcg_pairwise')},)},
-    {'oracle': {'target': 'TrueDailyUniversal_MinTrade_P18_NetPnL_Positive_Direct',
+    {'enabled': False, 'oracle': {'target': 'TrueDailyUniversal_MinTrade_P18_NetPnL_Positive_Direct',
                 'description': 'Same P18 MinTrade Rank with independent Positive classifier',
                 'score_source': 'TrueDailyUniversal_MinTrade_P18_NetPnL',
                 'selector': 'direct', 'positive_output': 'netpnl_positive_probability_v1',
@@ -106,16 +107,16 @@ RESEARCH_SUMMARY_ROWS = (
      'bindings': ({'arm_id': 'C169',
                    'rank_model': ('MR-13CJ', 'daily_universal_terminal_mae_gated_t40_full_list_ndcg_pairwise')},)},
 
-    # AI: Restore the original P18 T40 Direct control only. Other historical
-    # P18 templates stay disabled; new P18 economic models are registered above.
+    # AI: P18 CJ T40 Direct has returned to historical-only status, along with
+    # the P18 no-DL and independently supervised NetPnL strategies.
     {'enabled': False, 'oracle_template_arm_id': 'C145', 'parameter_family': 'daily_min',
      'bindings': ({'arm_id': 'C159',
                    'rank_model': ('MR-13CJ', 'daily_universal_terminal_mae_gated_t40_full_list_ndcg_pairwise')},)},
-    {'oracle_template_arm_id': 'C146', 'parameter_family': 'daily_min',
+    {'enabled': False, 'oracle_template_arm_id': 'C146', 'parameter_family': 'daily_min',
      'bindings': ({'arm_id': 'C160',
                    'rank_model': ('MR-13CJ', 'daily_universal_terminal_mae_gated_t40_full_list_ndcg_pairwise')},)},
-    # Keep C123/C124 retired in Breakout/P16.  Only reuse their immutable
-    # event-driven full-cycle NetPnL score recipes for new Daily/P18 arms.
+    # Historical P18 model-transfer templates remain disabled; the original
+    # C123/C124 Breakout/P16 comparisons are reactivated below.
     {'enabled': False, 'oracle_template_arm_id': 'C123', 'parameter_family': 'daily_min',
      'strategy': 'Daily',
      'bindings': ({'arm_id': 'C162',
@@ -248,6 +249,28 @@ RESEARCH_SUMMARY_ROWS = (
      'bindings': ({'arm_id': 'C158',
                    'rank_model': ('MR-13CZ',
                                   'daily_universal_formal_fulltrade_fullcycle_netpnl_full_list_ndcg_pairwise')},)},
+    # AI: 2026-11-10 restore the original Full/P17 two-DL NetPnL Positive
+    # research treatment. Its independent MR-13CZ/DA FIT identities and
+    # source-only raw NetPnL perfect-score contract are unchanged.
+    {'oracle': {'target': 'FullTrade_NetPnL_Positive',
+                'description': 'Full/P17 independent CZ full-cycle broker NetPnL rank plus DA Positive admission; '
+                               'Exact K/R0, same P17 truth as the rank-only arm',
+                'score_source': 'FullTrade_NetPnL',
+                'selector': 'exact',
+                'positive_output': 'netpnl_positive_probability_v1',
+                'strategy_arm_id': 'C155', 'parameter_family': 'full'},
+     'bindings': ({'arm_id': 'C155',
+                   'rank_model': ('MR-13CZ', 'daily_universal_formal_fulltrade_fullcycle_netpnl_full_list_ndcg_pairwise'),
+                   'positive_model': ('MR-13DA', 'daily_universal_formal_fulltrade_fullcycle_netpnl_positive_binary')},)},
+    {'oracle': {'target': 'FullTrade_NetPnL_Positive_Direct',
+                'description': 'Same Full/P17 CZ rank and DA Positive admission, Direct No-K/No-R0',
+                'score_source': 'FullTrade_NetPnL',
+                'selector': 'direct',
+                'positive_output': 'netpnl_positive_probability_v1',
+                'strategy_arm_id': 'C156', 'parameter_family': 'full'},
+     'bindings': ({'arm_id': 'C156',
+                   'rank_model': ('MR-13CZ', 'daily_universal_formal_fulltrade_fullcycle_netpnl_full_list_ndcg_pairwise'),
+                   'positive_model': ('MR-13DA', 'daily_universal_formal_fulltrade_fullcycle_netpnl_positive_binary')},)},
     {'enabled': False, 'oracle': {'target': 'T40-MFE_Direct',
                 'description': 'Same T40-MFE score; canonical No-K/No-R0 direct allocation',
                 'score_source': 'T40-MFE',
@@ -271,7 +294,7 @@ RESEARCH_SUMMARY_ROWS = (
      'bindings': ({'arm_id': 'C120',
                    'rank_model': ('MR-13CM',
                                   'daily_universal_formal_mintrade40_netr_per_seed_full_list_ndcg_pairwise')},)},
-    {'oracle': {'target': 'DailyUniversal_MinTrade_NetR',
+    {'enabled': False, 'oracle': {'target': 'DailyUniversal_MinTrade_NetR',
                 'description': 'Formal per-seed Min ROOS stock-day Net-R through natural exit or Research-data-end '
                                'closeout; no session cap',
                 'score': 'daily_trade_path_net_r',
@@ -281,27 +304,29 @@ RESEARCH_SUMMARY_ROWS = (
      'bindings': ({'arm_id': 'C121',
                    'rank_model': ('MR-13CN',
                                   'daily_universal_formal_mintrade_fullcycle_netr_per_seed_full_list_ndcg_pairwise')},)},
-    {'oracle': {'target': 'DailyUniversal_MinTrade_NetR_Direct',
+    {'enabled': False, 'oracle': {'target': 'DailyUniversal_MinTrade_NetR_Direct',
                 'description': 'Same full-cycle Min Net-R target and ranks; canonical No-K/No-R0 selector',
                 'score_source': 'DailyUniversal_MinTrade_NetR',
                 'selector': 'direct'},
      'bindings': ({'arm_id': 'C122',
                    'rank_model': ('MR-13CN',
                                   'daily_universal_formal_mintrade_fullcycle_netr_per_seed_full_list_ndcg_pairwise')},)},
-    {'enabled': False, 'oracle': {'target': 'DailyUniversal_MinTrade_NetPnL',
+    {'oracle': {'target': 'DailyUniversal_MinTrade_NetPnL',
                 'description': 'Formal Min full-cycle realized broker-ledger NetPnL at canonical reference sizing; '
                                'natural exit or Research-cutoff closeout, hindsight ranking',
                 'score': 'daily_trade_path_net_pnl',
                 'provider': 'daily_trade40_profile',
                 'horizon_mode': 'full_trade_cycle',
-                'selector': 'exact'},
+                'selector': 'exact',
+                'strategy_arm_id': 'C123'},
      'bindings': ({'arm_id': 'C123',
                    'rank_model': ('MR-13CO',
                                   'daily_universal_formal_mintrade_fullcycle_netpnl_per_seed_full_list_ndcg_pairwise')},)},
-    {'enabled': False, 'oracle': {'target': 'DailyUniversal_MinTrade_NetPnL_Direct',
+    {'oracle': {'target': 'DailyUniversal_MinTrade_NetPnL_Direct',
                 'description': 'Same full-cycle Min NetPnL perfect daily ranks; canonical No-K/No-R0 selector',
                 'score_source': 'DailyUniversal_MinTrade_NetPnL',
-                'selector': 'direct'},
+                'selector': 'direct',
+                'strategy_arm_id': 'C124'},
      'bindings': ({'arm_id': 'C124',
                    'rank_model': ('MR-13CO',
                                   'daily_universal_formal_mintrade_fullcycle_netpnl_per_seed_full_list_ndcg_pairwise')},)},

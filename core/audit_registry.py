@@ -13,7 +13,7 @@ from config.market_data import RESEARCH_REQUIRED_CUTOFF
 from core.research_summary import (
     get_research_summary_oracle_comparisons,
     get_research_summary_oracle_source_catalog,
-    get_research_summary_baseline_arm_ids, research_summary_entry_label,
+    get_research_summary_baseline_arm_ids,
 )
 
 from core.breakout_quality_registry import (
@@ -134,12 +134,10 @@ AUDIT_REUSABLE_REPORTS: dict[str, dict[str, Any]] = {
                     "CG40_EqualRank": "40D MFE + full D40 Safety, 50/50 daily rank",
                     "T40_Positive_Direct": "Retired 2026-11-06: old CJ+CW dual-Model Direct C143; receipt kept historically",
                     "T40_Positive": "Retired 2026-11-07: Default-only C144; historical Exact C142 and Default receipts retained",
-                    "FullTrade_NetPnL_Positive": "Retired 2026-11-08: historical Full/P17 CZ+DA Positive C155 Exact",
-                    "FullTrade_NetPnL_Positive_Direct": "Retired 2026-11-08: historical Full/P17 CZ+DA Positive C156 Direct",
                     "DailyUniversal_MinTrade40_NetR": "Retired 2026-11-08: Min 40D rank C119 Exact, MR-13CM historical",
                     "DailyUniversal_MinTrade40_NetR_Direct": "Retired 2026-11-08: Min 40D rank C120 Direct",
-                    "DailyUniversal_MinTrade_NetPnL": "Retired 2026-11-08: non-Positive rank C123 Exact; immutable price truth still supplies Positive",
-                    "DailyUniversal_MinTrade_NetPnL_Direct": "Retired 2026-11-08: non-Positive rank C124 Direct",
+                    "DailyUniversal_MinTrade_NetR": "Retired 2026-11-10: C121 Breakout Min/P16 NetR Exact, original historical receipt reserved",
+                    "DailyUniversal_MinTrade_NetR_Direct": "Retired 2026-11-10: C122 Breakout Min/P16 NetR Direct, original historical receipt reserved",
                     # Historical treatment keys are permanently reserved;
                     # these do not imply retirement of shared truth producers
                     # that may still serve a different current Target family.
@@ -149,7 +147,10 @@ AUDIT_REUSABLE_REPORTS: dict[str, dict[str, Any]] = {
                     "TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct": "Retired 2026-11-09: C136 CU+CT Breakout Direct",
                     "TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct::Daily": "Retired 2026-11-08: C134 Daily/P16 Positive Direct; retained as P18 C164 template",
                     "TrueDailyUniversal_MinTrade_NetPnL_Direct::Daily": "Retired 2026-11-08: C138 Daily/P16 CU Direct; retained as P18 C165 template",
-                    "T40_Direct::Daily": "Retired 2026-11-08: C146 Daily/P16 CJ Direct; retained as P18 C160 template",
+                    "T40_Direct::Daily": "Retired 2026-11-08: C146 Daily/P16 CJ Direct; original scientific identity preserved",
+                    "T40_Direct::Daily::Daily_min": "Retired 2026-11-10: C160 Daily/P18 CJ Direct",
+                    "TrueDailyUniversal_MinTrade_P18_NetPnL_Direct::Daily::Daily_min": "Retired 2026-11-10: C177 Daily/P18 DF rank Direct",
+                    "TrueDailyUniversal_MinTrade_P18_NetPnL_Positive_Direct::Daily::Daily_min": "Retired 2026-11-10: C178 Daily/P18 DF+DG Positive Direct",
                     "DailyUniversal_MinTrade_NetPnL_Direct::Daily::Daily_min": "Retired 2026-11-08: C163 event-driven CO Daily/P18 Direct",
                     # 2026-11-10 P19 current research retirement: no P19
                     # Oracle Target/Strategy treatment may silently revive.
@@ -341,33 +342,52 @@ def oracle_parameter_family(row: Mapping[str, Any]) -> str:
     return family
 
 
-def oracle_display_strategy(*, strategy: str, parameter_family: str) -> str:
-    """Presentation-only entry label: family belongs to Strategy, never Target.
+def _oracle_parameter_dimensions(parameter_family: str) -> tuple[str, str]:
+    """Read actual Optimizer identity from the active family's no-DL control."""
+    family = oracle_parameter_family({"parameter_family": parameter_family})
+    baseline_id = get_research_summary_baseline_arm_ids().get(family)
+    if not baseline_id:
+        raise ValueError(f"Oracle display family has no registered control: {family}")
+    from core.research_summary import research_summary_parameter_dimensions
+    from core.strategy_compare_registry import (
+        STRATEGY_COMPARE_ARMS, STRATEGY_EXPERIMENTAL_PARAM_SOURCES,
+    )
+    control = STRATEGY_COMPARE_ARMS.get(baseline_id)
+    if not control or control.get("dl_enabled"):
+        raise ValueError(f"Oracle display family has no no-DL control: {family}")
+    filter_label, parameter_version, _ = research_summary_parameter_dimensions(
+        control, parameter_sources=STRATEGY_EXPERIMENTAL_PARAM_SOURCES,
+    )
+    return filter_label, parameter_version
 
-    This must not be used to construct canonical Oracle keys, FIT/Replay
-    identities, Score sources or saved receipt payloads.
+
+def oracle_display_strategy(*, strategy: str, parameter_family: str) -> str:
+    """Full strategy label from the underlying verified Optimizer family.
+
+    Presentation-only: must never feed signed Oracle keys, score sources,
+    PIT FIT or Portfolio Replay fingerprints.
     """
     name = str(strategy)
     if name not in {"Breakout", "Daily"}:
         raise ValueError(f"Invalid Oracle display entry strategy: {name}")
-    family = oracle_parameter_family({"parameter_family": parameter_family})
-    # Non-legacy families must display the *actual* registered Optimizer
-    # lineage, not an invented title derived from the family identifier.
-    if family not in {"min", "full"}:
-        baseline_id = get_research_summary_baseline_arm_ids().get(family)
-        if not baseline_id:
-            raise ValueError(f"Oracle display family has no registered control: {family}")
-        from core.strategy_compare_registry import (
-            STRATEGY_COMPARE_ARMS, STRATEGY_EXPERIMENTAL_PARAM_SOURCES,
+    filter_label, version = _oracle_parameter_dimensions(parameter_family)
+    return f"{name} ({filter_label}/{version})"
+
+
+def oracle_display_target(row: Mapping[str, Any]) -> str:
+    """Display a real-execution trade outcome with its actual parameter ID.
+
+    Price-only T40/MFE/R40 are not trade-path outcomes and stay unchanged.
+    Historical signed Target/Score/Replay IDs remain free of this suffix.
+    """
+    name = oracle_target_semantics(row)[0]
+    if (any(part in name for part in ("MinTrade", "FullTrade"))
+            and any(name.endswith(suffix) for suffix in ("_NetR", "_NetPnL", "_NetPnL_Positive"))):
+        _filter_label, parameter_version = _oracle_parameter_dimensions(
+            oracle_parameter_family(row),
         )
-        control = STRATEGY_COMPARE_ARMS.get(baseline_id)
-        if not control or str(control.get("entry_strategy", "Breakout")) != name:
-            raise ValueError(f"Oracle display family/control entry mismatch: {family}")
-        return research_summary_entry_label(
-            control, family=family,
-            parameter_sources=STRATEGY_EXPERIMENTAL_PARAM_SOURCES,
-        )[0]
-    return name if family == "min" else f"{name} ({family.capitalize()})"
+        return f"{name} ({parameter_version})"
+    return name
 
 
 def oracle_comparison_key(row: Mapping[str, Any]) -> str:
@@ -513,7 +533,7 @@ def oracle_work_display_dimensions(
         target, selector, strategy = oracle_target_semantics(row)
         key = oracle_comparison_key(row)
         display[key] = (
-            target,
+            oracle_display_target(row),
             oracle_display_strategy(strategy=strategy,
                                     parameter_family=oracle_parameter_family(row)),
             selector,
@@ -629,6 +649,7 @@ __all__ = [
     "oracle_control_dependency_inventory",
     "oracle_work_display_dimensions",
     "oracle_display_strategy",
+    "oracle_display_target",
     "validate_oracle_compare_family_coverage",
     "oracle_target_semantics",
     "oracle_scientific_target_name",

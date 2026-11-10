@@ -6329,33 +6329,32 @@ class OracleInventoryAndSourceIsolationRegressionCases(TestCase):
         names = {row["target"] for row in selected}
         retired_targets = {
             "DailyUniversal_MinTrade40_NetR", "DailyUniversal_MinTrade40_NetR_Direct",
-            "DailyUniversal_MinTrade_NetPnL", "DailyUniversal_MinTrade_NetPnL_Direct",
+            "DailyUniversal_MinTrade_NetR", "DailyUniversal_MinTrade_NetR_Direct",
             "T40-MFE", "T40-MFE_Direct",
         }
-        # Retire the original Breakout/P16 treatment identities, not the
-        # immutable NetPnL outcome reused with an independently fitted P18
-        # entry policy.  Display names alone cannot identify a Replay.
+        # Retire NetR/P16 and old price-only identities; the original
+        # NetPnL/P16 rank and Positive arms are current again.  Display
+        # names alone cannot identify a Replay.
         from core.audit_registry import oracle_comparison_key
         current_keys = {oracle_comparison_key(row) for row in selected}
         self.assertTrue(retired_targets.isdisjoint(current_keys))
         self.assertTrue(retired_targets.issubset(
             definition.source["historical_only_oracle_targets"]))
-        self.assertTrue({"DailyUniversal_MinTrade_NetPnL_Positive",
+        self.assertTrue({"DailyUniversal_MinTrade_NetPnL", "DailyUniversal_MinTrade_NetPnL_Direct",
+                         "DailyUniversal_MinTrade_NetPnL_Positive",
                          "DailyUniversal_MinTrade_NetPnL_Positive_Direct"}.issubset(names))
         self.assertTrue({"MR-13AH", "MR-13AK", "MR-13CM", "MR-13CK"}.isdisjoint(
             {model for model, _profile in get_research_summary_model_profiles()}))
         self.assertTrue({"C105", "C115", "C116", "C117", "C119", "C120",
-                         "C123", "C124", "C108", "C110"}.isdisjoint(get_research_summary_strategy_arm_ids()))
+                         "C121", "C122", "C108", "C110"}.isdisjoint(get_research_summary_strategy_arm_ids()))
+        self.assertTrue({"C123", "C124", "C155", "C156"}.issubset(get_research_summary_strategy_arm_ids()))
         catalog = definition.source["oracle_source_catalog"]
         root = next(row for row in catalog if row["target"] ==
                     "DailyUniversal_MinTrade_NetPnL")
-        # A source-only producer can become the active producer in another
-        # family without restoring the retired Breakout/Min comparison.
-        self.assertTrue(root.get("source_only") or (
-            oracle_comparison_key(root) ==
-            "DailyUniversal_MinTrade_NetPnL::Daily::Daily_min"
-            and root["selector"] == "exact"
-        ))
+        # Original Breakout/P16 NetPnL itself is again an executable
+        # treatment; the signed recipe stays under its original identity.
+        self.assertFalse(root.get("source_only", False))
+        self.assertEqual(oracle_comparison_key(root), "DailyUniversal_MinTrade_NetPnL")
         self.assertEqual(root["score"], "daily_trade_path_net_pnl")
         self.assertEqual(root["horizon_mode"], "full_trade_cycle")
         self.assertFalse(any(row["target"] in {"T40-MFE", "T40-MFE_Direct"}

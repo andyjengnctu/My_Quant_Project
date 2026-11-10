@@ -173,33 +173,49 @@ def get_research_summary_model_profiles() -> tuple[tuple[str, str], ...]:
 
 
 
+def research_summary_parameter_dimensions(
+    arm: Mapping[str, Any], *, parameter_sources: Mapping[str, Mapping[str, Any]],
+) -> tuple[str, str, bool]:
+    """Verified Optimizer parameter label for display only (e.g. Min, P16).
+
+    Derive from the actual param_source's registered training profile and
+    canonical parameter_set, not the strategy name or guessed current version.
+    This must not participate in Replay/FIT/Optimizer fingerprint construction.
+    """
+    from config.strategy_params import STRATEGY_PARAM_PROFILES
+
+    source_id = str(arm.get("param_source") or "")
+    source = parameter_sources.get(source_id, {})
+    profile_id = (source.get("builder") or {}).get("options", {}).get("training_profile_id")
+    profile = STRATEGY_PARAM_PROFILES.get(profile_id, {}) if profile_id else {}
+    actual_set = str(profile.get("parameter_set_identity") or "")
+    registered_set = ((source.get("artifact_contract") or {}).get(
+        "breakout_quality_param_adaptation") or {}).get("parameter_set")
+    filter_profile = str(profile.get("filter_profile") or "").strip().lower()
+    entry = str(arm.get("entry_strategy", "Breakout"))
+    is_daily_fitted = profile.get("strategy_id") == "daily"
+    if (not filter_profile or not actual_set.startswith("PARAM-")
+            or not actual_set[6:] or actual_set != registered_set
+            or entry not in {"Breakout", "Daily"}
+            or (is_daily_fitted and entry != "Daily")):
+        raise ValueError(f"Summary strategy/parameter lineage mismatch: {source_id}")
+    return filter_profile.capitalize(), actual_set[6:], is_daily_fitted
+
+
 def research_summary_entry_label(
     arm: Mapping[str, Any], *, family: str = "min",
     parameter_sources: Mapping[str, Mapping[str, Any]],
 ) -> tuple[str, bool]:
-    """Canonical strategy display from the actual Optimizer parameter lineage.
+    """Full strategy label (Breakout (Min/P16), Daily (Full/P20), ...).
 
-    An independently daily-fitted Min profile is NOT a Breakout-fitted Min
-    with the entry filter disabled. No scientific Target or Replay key uses
-    this presentation-only label.
+    The family argument is kept for callers' compatibility; the actual
+    Optimizer parameter lineage is the only source of display identity.
     """
+    filter_label, version, independently_daily_fitted = research_summary_parameter_dimensions(
+        arm, parameter_sources=parameter_sources,
+    )
     entry = str(arm.get("entry_strategy", "Breakout"))
-    from config.strategy_params import STRATEGY_PARAM_PROFILES
-
-    source = parameter_sources.get(str(arm.get("param_source") or ""), {})
-    profile_id = (source.get("builder") or {}).get("options", {}).get("training_profile_id")
-    profile = STRATEGY_PARAM_PROFILES.get(profile_id, {}) if profile_id else {}
-    if profile.get("strategy_id") != "daily":
-        return entry if family == "min" else f"{entry} ({family.capitalize()})", False
-    parameter_set = str(profile.get("parameter_set_identity") or "")
-    registered_set = ((source.get("artifact_contract") or {}).get(
-        "breakout_quality_param_adaptation") or {}).get("parameter_set")
-    filter_profile = str(profile.get("filter_profile") or "")
-    if (entry != "Daily" or not parameter_set.startswith("PARAM-")
-            or not parameter_set[6:] or not filter_profile
-            or registered_set != parameter_set):
-        raise ValueError(f"Summary Daily parameter/entry identity mismatch: {arm.get('param_source')}")
-    return f"{entry} ({filter_profile.capitalize()}/{parameter_set[6:]})", True
+    return f"{entry} ({filter_label}/{version})", independently_daily_fitted
 
 
 

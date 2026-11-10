@@ -3688,11 +3688,12 @@ def _run_single_stage_oracle(
                 run_causes[(seed, target)] = "合法策略參數待 Optimizer 自動補建"
     scoped_rows = {str(row["target"]): row
                    for row in definition.source["oracle_comparisons"]}
+    scoped_display = oracle_work_display_dimensions(definition.source)
     preflight = render_replay_preflight(
         label="Fixed", seeds=seed_set, targets=[name for name, _ in plan["targets"]],
         control_dependencies=[_baseline_target(definition)], decisions=decisions,
         strategies={target: _oracle_target_strategy(definition, target) for target in targets},
-        display_targets={target: oracle_target_semantics(scoped_rows[target])[0]
+        display_targets={target: scoped_display[oracle_comparison_key(scoped_rows[target])][0]
                          for target, _ in plan["targets"]},
         selectors={target: oracle_target_semantics(scoped_rows[target])[1]
                    for target, _ in plan["targets"]},
@@ -4320,7 +4321,8 @@ def render_result(report: Mapping[str, Any], *, target: str) -> str:
     # No-DL controls are reference evidence for paired RoMD, not Targets.
     # Keep signed baselines in the report payload; never render them as
     # Target-performance, annual-Target, or paired-Target rows.
-    items = [_present(item) for item in report["oracles"]]
+    published_pairs = [(item, _present(item)) for item in report["oracles"]]
+    items = [presented for _original, presented in published_pairs]
     # Presentation-only sort; preserve the canonical comparison/Replay order.
     items.sort(key=lambda row: (float(row["romd"]), str(row["target"]),
                                 str(row.get("strategy", "Breakout"))))
@@ -4358,9 +4360,12 @@ def render_result(report: Mapping[str, Any], *, target: str) -> str:
     # Published receipt names remain in the signed JSON for full provenance.
     target_definitions: dict[str, str] = {}
     for legacy_key, desc in report["definitions"].items():
-        name = _oracle_display_name(legacy_key)
-        if name not in target_definitions:
-            target_definitions[name] = str(desc).replace("D40", "MAE40")
+        names = sorted({presented["target"] for original, presented in published_pairs
+                        if original["target"] == legacy_key})
+        # Old signed reports may contain retired treatments; never assign a
+        # current parameter identity to a historical row by guesswork.
+        for name in names or [_oracle_display_name(legacy_key)]:
+            target_definitions.setdefault(name, str(desc).replace("D40", "MAE40"))
     lines.extend(["", f"## {sections[1].display_title}",
                   *[f"- **{name}** - {desc}" for name, desc in target_definitions.items()],
                   "", f"## {sections[2].display_title}"])

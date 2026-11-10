@@ -306,6 +306,9 @@ class ScientificVersionCases(TestCase):
     def test_robustness_rho_independent_of_main_rolling_version_state(self):
         """Valid per-Seed Robustness evidence must survive a missing main Rolling FIT."""
         from services.research import target_dl_overview as overview
+        from core.audit_policy import get_reusable_audit_definitions
+        source = next(d.source for d in get_reusable_audit_definitions("breakout_quality")
+                      if d.audit_type == "target_ground_truth_strategy_romd")
 
         target = "DailyUniversal_MinTrade_NetPnL_Positive"
         rank_profile = get_strategy_comparison_settings(STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE).dl_sources[
@@ -316,8 +319,7 @@ class ScientificVersionCases(TestCase):
         with tempfile.TemporaryDirectory() as tmp, \
              patch.object(overview, "load_report_contract_versions", return_value={}), \
              patch.object(overview, "get_formal_oracle_definition",
-                          return_value=SimpleNamespace(source={"filter_id": "breakout_quality_v1",
-                                                             "baseline_arm_id": "C96"})), \
+                          return_value=SimpleNamespace(source=source)), \
              patch.object(overview, "get_active_audit_module_id", return_value="synthetic"), \
              patch.object(overview, "validate_oracle_compare_family_coverage", return_value=None), \
              patch.object(overview, "_oracle_rows", return_value=evidence), \

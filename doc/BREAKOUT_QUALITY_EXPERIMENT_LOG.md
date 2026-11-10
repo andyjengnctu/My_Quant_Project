@@ -5390,6 +5390,12 @@ Assessment: `USER_REPORTED_ROLLING_RESULT_AVAILABLE / FULL_HORIZON_MAE_SMALL_PAI
 - **之後另行研究（尚未授權修改）**：先使用既有 trial／Optuna 證據評估四維參數對成交、交易數、資金曲線及回撤的實際影響，釐清 N/A／0 分是無成交、無有效樣本、得分為零、績效 gate 或工程數值異常；再評估是否需要受控放寬條件（包含風險 gate 與收益／交易品質限制）、改進入場幾何或重新設計搜尋空間。若真的改變資格、回撤約束或 Target 科學語意，須另行取得新研究授權與身分；不能擅自修補成 PASS。迭代 OOS 結果非 untouched holdout。
 
 
+### 2026-11-10 — Current-scope decision: six retirements, four restorations and parameter-complete labels
+
+- **Decision (not a market result)**: retire `C121/C122/C160/C161/C177/C178` from the single current Summary roster and its Model Compare/Target Oracle/Forward/Rolling/N=4 Robustness projections. Restore the original `C123/C124` Breakout Min/P16 CO NetPnL Rank Exact/Direct and `C155/C156` Breakout Full/P17 CZ Rank+independent DA Positive Exact/Direct. The earlier 2026-11-10 P18 restoration record remains historical; latest status supersedes it.
+- **Display contract**: use `Breakout (Min/P16)` / `Breakout (Full/P17)` / `Daily (Full/P20)` and `MinTrade_NetPnL_Positive (P16)` / `FullTrade_NetPnL_Positive (P17)` / `Daily_FullTrade_NetPnL (P20)` consistently across current Summary, Oracle preflight and human-readable Oracle. Derive from the canonical param-set lineage, not a hardcoded arm-to-version alias.
+- **Evidence boundary**: no new FIT/Optimizer/Replay/Oracle OOS measurement or P16/P17/P20 performance value was produced by this scope/display decision. Preserve registered scientific identities and old receipts, without promoting Trading truth or upgrading FIT/Replay versions. The two human report contracts get append-only display versions in `REPORT_CONTRACT_VERSIONS.json`.
+
 ## 6. 後續新增規則
 
 **只有新科學證據或舊科學證據有效性更正才能增加本文件內容。** 記錄必須有實驗／Target 身分、期間／Seed、控制變數、原始結果、負結果與決策，並指向正式證據。沒有市場／模型結果的工程測試、提交紀錄、打包、格式調整或一次性 Audit 清理，不可追加研究章節。本文件不再生成封存副本或研究待辦。

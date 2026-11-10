@@ -693,7 +693,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
                    all(by_arm[arm]["target"] == ""
                            and by_arm[arm]["selector"] == "Default"
                            for arm in control_arms)
-                   and by_arm["C98"]["entry_strategy"] == "Breakout (Full)"
+                   and by_arm["C98"]["entry_strategy"] == "Breakout (Full/P17)"
                    and by_arm["C103"]["target"] == "D40 Safety + Conditional MFE")
         corrupted = tuple({**group, "display_target": "T40 × Daily (Full/P20)"}
                           if any(binding.get("arm_id") == "C169"

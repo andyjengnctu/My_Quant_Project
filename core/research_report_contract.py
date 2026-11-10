@@ -700,7 +700,7 @@ PORTFOLIO_DRAWDOWN_REPORT = PersistentReportContract(
 # The current schema is declared directly; historical identities remain in
 # the compact report ledger and are not executable presentation templates.
 TARGET_ORACLE_ROMD_REPORT = PersistentReportContract(
-    report_id="audit.target_oracle_romd", version=14, role="persistent_reusable_hindsight_non_pit",
+    report_id="audit.target_oracle_romd", version=15, role="persistent_reusable_hindsight_non_pit",
     menu_path=("Research", "Target 驗證"),
     sections=(
         S("oracle_performance", 1, "Oracle Performance (8-seed mean)", tables=(T("performance", (
@@ -815,7 +815,7 @@ STRATEGY_CONSISTENCY_METRIC_KEYS = (
 # Preserve the eight sort choices and all scientific/artifact identities.
 TARGET_DL_VALIDATION_OVERVIEW_REPORT = PersistentReportContract(
     report_id="research.target_dl_validation_overview",
-    version=13,
+    version=14,
     role="read_only_local_completed_report_summary",
     menu_path=("Research", "Summary"),
     sections=(

@@ -223,12 +223,16 @@ class PositiveNetPnlContractCases(TestCase):
         from filters.breakout_quality.strategy_compare_dl_artifacts import resolve_arm_runtime_dl_source_ids
         settings = get_strategy_comparison_settings(STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE)
         cases = (
-            ("Daily_MinTrade_NetPnL", "Daily (Min/P18)", "Direct", "C177", "MR-13DF", ""),
-            ("Daily_MinTrade_NetPnL_Positive", "Daily (Min/P18)", "Direct", "C178", "MR-13DF", "MR-13DG"),
-            ("MinTrade_NetPnL_Positive", "Breakout", "Exact", "C125", "MR-13CO", "MR-13CP"),
-            ("MinTrade_NetPnL_Positive", "Breakout", "Direct", "C126", "MR-13CO", "MR-13CP"),
-            ("Daily_FullTrade_NetPnL", "Daily (Full/P20)", "Direct", "C173", "MR-13DB", ""),
-            ("Daily_FullTrade_NetPnL_Positive", "Daily (Full/P20)", "Direct", "C172", "MR-13DB", "MR-13DC"),
+            ("MinTrade_NetPnL (P16)", "Breakout (Min/P16)", "Exact", "C123", "MR-13CO", ""),
+            ("MinTrade_NetPnL (P16)", "Breakout (Min/P16)", "Direct", "C124", "MR-13CO", ""),
+            ("MinTrade_NetPnL_Positive (P16)", "Breakout (Min/P16)", "Exact", "C125", "MR-13CO", "MR-13CP"),
+            ("MinTrade_NetPnL_Positive (P16)", "Breakout (Min/P16)", "Direct", "C126", "MR-13CO", "MR-13CP"),
+            ("FullTrade_NetPnL (P17)", "Breakout (Full/P17)", "Exact", "C157", "MR-13CZ", ""),
+            ("FullTrade_NetPnL (P17)", "Breakout (Full/P17)", "Direct", "C158", "MR-13CZ", ""),
+            ("FullTrade_NetPnL_Positive (P17)", "Breakout (Full/P17)", "Exact", "C155", "MR-13CZ", "MR-13DA"),
+            ("FullTrade_NetPnL_Positive (P17)", "Breakout (Full/P17)", "Direct", "C156", "MR-13CZ", "MR-13DA"),
+            ("Daily_FullTrade_NetPnL (P20)", "Daily (Full/P20)", "Direct", "C173", "MR-13DB", ""),
+            ("Daily_FullTrade_NetPnL_Positive (P20)", "Daily (Full/P20)", "Direct", "C172", "MR-13DB", "MR-13DC"),
         )
         published = {arm_id: float(i + 1) for i, (*_, arm_id, rank, classifier) in enumerate(cases)}
         with patch('services.research.target_dl_overview._strategy_rolling_metrics', return_value=published):
@@ -256,7 +260,9 @@ class PositiveNetPnlContractCases(TestCase):
                                  (rank, classifier) if classifier else (rank,))
         self.assertTrue(all(row['model'] not in {'MR-13CP', 'MR-13CT'}
                             for row in report['rows']))
-        self.assertTrue({'C123', 'C124'}.isdisjoint(
+        self.assertTrue({'C123', 'C124', 'C155', 'C156'}.issubset(
+            {row['strategy'] for row in report['rows']}))
+        self.assertTrue({'C121', 'C122', 'C160', 'C161', 'C177', 'C178'}.isdisjoint(
             {row['strategy'] for row in report['rows']}))
         self.assertEqual(table_contract('research.target_dl_validation_overview',
                                        'comparison', 'target_dl').headers[4:6],
@@ -294,7 +300,7 @@ class PositiveNetPnlContractCases(TestCase):
         # Restoring the scientific source restores the same signed bindings.
         restored = _strategy_bindings(target_names=targets,score_targets=labels, definition=definition)
         self.assertEqual(restored[(target, rank_profile)], 'C125')
-        self.assertNotIn(('DailyUniversal_MinTrade_NetPnL', rank_profile), restored)
+        self.assertEqual(restored[('DailyUniversal_MinTrade_NetPnL', rank_profile)], 'C123')
 
     def test_no_filter_on_original_netpnl_and_positive_filter_fail_closed(self):
         rank = {'available': True,'score':0.70,'score_date':'2024-10-01',
@@ -500,6 +506,9 @@ class PositiveNetPnlContractCases(TestCase):
             self.assertEqual(info["seeds"], tuple(seeds))
             self.assertEqual(values["C96"]["oracle_romd"], 9.17)
             self.assertEqual(values["MFE40_Control"]["oracle_romd"], 24.62)
+            # C123/C124 have explicit live DL consumer arms again. Historical
+            # reports lacking certified reference-arm execution evidence may
+            # not be credited to the restored treatments.
             self.assertNotIn("DailyUniversal_MinTrade_NetPnL_Direct", values)
             self.assertEqual(set(values), legacy_keys)
             self.assertNotIn(positive_exact, values)  # Never backfill a new Target.
@@ -518,9 +527,10 @@ class PositiveNetPnlContractCases(TestCase):
             self.assertTrue(true_daily.isdisjoint(values))
             p18_keys = {oracle_comparison_key(row) for row in comparisons
                         if oracle_parameter_family(row) == "daily_min"}
-            self.assertTrue(p18_keys)
+            self.assertFalse(p18_keys)
             self.assertTrue(p18_keys.isdisjoint(values))  # Never borrow old P16 receipts.
-            scientific_daily = {oracle_target_semantics(row)[0] for row in comparisons
+            from core.audit_registry import oracle_display_target
+            scientific_daily = {oracle_display_target(row) for row in comparisons
                                 if row.get("strategy") == "Daily"}
             ledger = Path(temp) / "doc/scientific_contracts/REPORT_CONTRACT_VERSIONS.json"
             ledger.parent.mkdir(parents=True)
@@ -533,28 +543,28 @@ class PositiveNetPnlContractCases(TestCase):
             self.assertTrue(rows)
             self.assertTrue(all(row["oracle_romd"] == 24.62 for row in rows))
             self.assertTrue(all(row["oracle_romd"] is None for row in overview["rows"]
-                                if row["target"] == "MinTrade_NetPnL_Positive"))
+                                if row["target"] == "MinTrade_NetPnL_Positive (P16)"))
             self.assertTrue(all(row["oracle_romd"] is None for row in overview["rows"]
                                 if row["target"] in scientific_daily
                                 and row["entry_strategy"] == "Daily (Min/P18)"))
-            historical_breakout_labels = {oracle_target_semantics(row)[0] for row in published
+            historical_breakout_labels = {oracle_display_target(row) for row in published
                                           if oracle_comparison_key(row) in legacy_keys}
             self.assertTrue(all(row["oracle_romd"] is None for row in overview["rows"]
                                 if row["target"] in scientific_daily
-                                and row["entry_strategy"] == "Breakout"
+                                and row["entry_strategy"] == "Breakout (Min/P16)"
                                 and row["target"] not in historical_breakout_labels))
             daily_overview_rows = [row for row in overview["rows"]
                                    if row["target"] in scientific_daily
-                                   and (row["entry_strategy"] == "Daily"
+                                   and (row["entry_strategy"].startswith("Daily (")
                                         or row["target"] not in historical_breakout_labels)]
             self.assertTrue(daily_overview_rows)
             self.assertTrue(all(row["oracle_romd"] is None for row in daily_overview_rows))
-            self.assertEqual(overview["rows"][0]["entry_strategy"], "Breakout")
+            self.assertEqual(overview["rows"][0]["entry_strategy"], "Breakout (Min/P16)")
             from core.audit_registry import oracle_display_strategy
             expected_entries = {
                 oracle_display_strategy(strategy=oracle_target_semantics(row)[2],
                                         parameter_family=oracle_parameter_family(row))
-                for row in comparisons if oracle_target_semantics(row)[0] in scientific_daily
+                for row in comparisons if oracle_display_target(row) in scientific_daily
             }
             self.assertEqual({row["entry_strategy"] for row in overview["rows"]
                               if row["target"] in scientific_daily}, expected_entries)
@@ -694,7 +704,7 @@ class PositiveNetPnlContractCases(TestCase):
         }
         for key,value in expected.items():
             self.assertEqual(bindings.get(key),value)
-        self.assertFalse(any(arm in {'C123', 'C124'} for arm in bindings.values()))
+        self.assertTrue({'C123', 'C124', 'C155', 'C156'}.issubset(set(bindings.values())))
         # C135/C136, like historical Daily/P16/P18 transfers, must not
         # return to current Target x DL bindings after their retirement.
         for suffix in ("", "_Direct"):
