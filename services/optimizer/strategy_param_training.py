@@ -195,7 +195,12 @@ def _min_roos_adaptation_contract(
         if daily_search_profile is not None:
             from strategies.daily.search_space import resolve_daily_search_profile
             payload["daily_execution_contract"] = resolve_daily_search_profile(daily_search_profile)["execution_contract"]
-            payload["fixed_rule_contract"] = "daily_common_filters_search_v2" if "common_filters" in daily_search_profile else "all_rule_filters_off"
+            daily_spec = resolve_daily_search_profile(daily_search_profile)
+            payload["fixed_rule_contract"] = daily_spec.get(
+                "fixed_rule_contract",
+                "daily_common_filters_search_v2" if "common_filters" in daily_search_profile
+                else "all_rule_filters_off",
+            )
     return payload
 EXPERIMENT_RELATIVE_DIR = Path(
     "models/research/breakout_quality/binary_dl_filter_param_adaptation/risk_only_rolling"
@@ -426,10 +431,13 @@ def _build_min_roos_fixed_overrides(*, args, training_dl_enabled: bool) -> dict[
         }
     )
     if strategy_id == "daily":
-        # Only risk/exit ATR geometry is optimized; neither breakout threshold
-        # nor breakout entry tolerance participates in the Daily search.
+        # Daily always uses stock-day eligibility rather than Breakout events.
         fixed["use_breakout_buy"] = False
         fixed["use_breakout_reclaim_reentry"] = False
+        from strategies.daily.search_space import resolve_daily_search_profile
+        fixed.update(dict(resolve_daily_search_profile(
+            getattr(args, "daily_search_profile", None)
+        ).get("fixed_switches") or {}))
     for field_name in search_fields:
         fixed.pop(field_name, None)
     return fixed

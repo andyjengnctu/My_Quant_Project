@@ -24,8 +24,10 @@ DAILY_ATR_ENTRY_CONTRACT = "daily_stockday_atr_limit_next_exchange_session_v1"
 DAILY_EXECUTION_LEGACY = "legacy_daily_close_v1"
 DAILY_EXECUTION_ATR_LIMIT = "daily_atr_limit_v2"
 DAILY_EXECUTION_FULL_FILTERS = "daily_atr_limit_common_filters_v2"
+DAILY_EXECUTION_CLOSE_FILTERS = "daily_close_common_filters_v1"
 _DAILY_EXECUTION_CONTRACTS = frozenset({
     DAILY_EXECUTION_LEGACY, DAILY_EXECUTION_ATR_LIMIT, DAILY_EXECUTION_FULL_FILTERS,
+    DAILY_EXECUTION_CLOSE_FILTERS,
 })
 
 
@@ -34,6 +36,18 @@ def resolve_daily_execution_contract(raw: str | None) -> str:
     if contract not in _DAILY_EXECUTION_CONTRACTS:
         raise ValueError(f"Unregistered Daily execution contract: {contract!r}")
     return contract
+
+
+def daily_execution_uses_common_filters(contract: str | None) -> bool:
+    return resolve_daily_execution_contract(contract) in {
+        DAILY_EXECUTION_FULL_FILTERS, DAILY_EXECUTION_CLOSE_FILTERS,
+    }
+
+
+def daily_execution_uses_atr_limit(contract: str | None) -> bool:
+    return resolve_daily_execution_contract(contract) in {
+        DAILY_EXECUTION_ATR_LIMIT, DAILY_EXECUTION_FULL_FILTERS,
+    }
 
 
 def daily_execution_contract_from_params(params) -> str:

@@ -1,9 +1,8 @@
-"""Daily Full stock-day admission from shared, decision-time indicator primitives.
+"""Daily stock-day admission from shared, decision-time filter primitives.
 
 This is an opt-in *candidate* capability, not a Breakout buy signal.  It runs
-only for the registered Daily Full execution contract.  Keeping it outside the
-legacy signal producer isolates existing Breakout/P18/MinTrade source lineage
-from changes to a newly enabled Daily strategy.
+for declared filtered Daily execution contracts (ATR-limit or close-limit).
+Keeping it outside the legacy signal producer preserves original P18 lineage.
 
 ATR/EMA/rolling and ATR-percent calculations reuse their canonical primitives
 from ``core.signal_utils`` and ``core.breakout_false_filter``.  No separate
@@ -15,6 +14,9 @@ import numpy as np
 
 from core.breakout_false_filter import build_breakout_false_filter_pass_condition
 from core.feature_bank import coerce_feature_bank
+from core.portfolio_entry_policy import (
+    current_daily_execution_contract, daily_execution_uses_atr_limit,
+)
 from core.price_utils import adjust_long_buy_limit_array
 from core.signal_utils import _rolling_mean_shift1, _rolling_mean_std0, tv_ema
 
@@ -23,21 +25,21 @@ def daily_common_filter_signals(
     df, params, *, atr_main, ticker=None, feature_bank=None,
     use_native_hotpath=False,
 ):
-    """Return P20 Daily eligibility mask and canonical next-session buy limit.
+    """Return filtered Daily eligibility and the declared next-session buy limit.
 
     All columns are from the completed *information* day.  The result never
     asserts a Breakout event or creates a synthetic standalone trade log.
     """
     if bool(getattr(params, "use_breakout_buy", True)):
-        raise ValueError("Daily Full cannot require a Breakout buy event")
+        raise ValueError("Filtered Daily cannot require a Breakout buy event")
     if bool(getattr(params, "use_breakout_quality_filter", False)):
-        raise ValueError("Daily Full cannot use a Breakout-only quality gate")
+        raise ValueError("Filtered Daily cannot use a Breakout-only quality gate")
     close = df["Close"].to_numpy(dtype=np.float64, copy=False)
     opening = df["Open"].to_numpy(dtype=np.float64, copy=False)
     volume = df["Volume"].to_numpy(dtype=np.float64, copy=False)
     atr = np.asarray(atr_main, dtype=np.float64)
     if close.shape != atr.shape:
-        raise ValueError("Daily Full ATR and information-day prices disagree")
+        raise ValueError("Filtered Daily ATR and information-day prices disagree")
     cache = coerce_feature_bank(feature_bank)
     resolved_ticker = ticker or df.attrs.get("ticker")
 
@@ -84,9 +86,17 @@ def daily_common_filter_signals(
         threshold = float(getattr(params, "breakout_false_filter_atr_pct_min", 0.045))
         eligible &= build_breakout_false_filter_pass_condition(close, atr, threshold)
 
-    raw_limits = close + atr * float(params.atr_buy_tol)
+    # Same admission primitive for ATR-limit and prior-close-limit Daily paths.
+    # Price is a separate execution contract; do not silently add atr_buy_tol
+    # to an otherwise Min/close-limit experiment.
+    use_atr_limit = daily_execution_uses_atr_limit(current_daily_execution_contract())
+    raw_limits = close + atr * float(params.atr_buy_tol) if use_atr_limit else close
     limits = np.full_like(close, np.nan)
     valid = eligible & ~np.isnan(raw_limits)
     if np.any(valid):
-        limits[valid] = adjust_long_buy_limit_array(raw_limits[valid], ticker=resolved_ticker)
+        limits[valid] = (
+            adjust_long_buy_limit_array(raw_limits[valid], ticker=resolved_ticker)
+            if use_atr_limit
+            else raw_limits[valid]
+        )
     return eligible, limits

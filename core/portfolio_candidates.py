@@ -64,8 +64,8 @@ _NATIVE_EXTENDED_CANDIDATE_BATCH_SIZED_ENABLED = bool(
 )
 from core.portfolio_fast_access import get_fast_value
 from core.portfolio_entry_policy import (
-    DAILY_EXECUTION_ATR_LIMIT, DAILY_EXECUTION_FULL_FILTERS,
     current_daily_execution_contract,
+    daily_execution_uses_common_filters, daily_execution_uses_atr_limit,
 )
 from core.portfolio_fast_data import (
     get_fast_extended_day_market_values,
@@ -470,11 +470,11 @@ def _resolve_qualified_normal_setup(
     security_profile = get_fast_security_profile(fast_df)
     if entry_policy == "daily":
         execution = current_daily_execution_contract()
-        if execution == DAILY_EXECUTION_FULL_FILTERS and not get_fast_value(
+        if daily_execution_uses_common_filters(execution) and not get_fast_value(
             fast_df, "is_setup", pos=y_pos, date=signal_date
         ):
             return None
-        if execution in {DAILY_EXECUTION_ATR_LIMIT, DAILY_EXECUTION_FULL_FILTERS}:
+        if daily_execution_uses_atr_limit(execution):
             # Use the same canonical tick-adjusted price-cap rule as Breakout;
             # no extension of the order beyond the next exchange session.
             y_buy_limit = adjust_long_buy_limit(

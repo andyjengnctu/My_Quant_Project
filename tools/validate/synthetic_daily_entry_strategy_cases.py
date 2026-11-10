@@ -21,6 +21,87 @@ from services.audit import target_oracle_romd as oracle
 
 
 class DailyEntryStrategyCases(TestCase):
+    def test_registered_daily_fixed_switches_are_optimizer_fixed_not_search_dimensions(self):
+        """Every declarative fixed-switch profile must keep its optional
+        gate ON during fitting without introducing a trainable switch.
+        """
+        from types import SimpleNamespace
+        from config.strategy_params import STRATEGY_PARAM_PROFILES
+        from services.optimizer.strategy_param_training import (
+            _build_min_roos_fixed_overrides, _min_roos_search_fields,
+        )
+        from strategies.daily.search_space import resolve_daily_search_profile
+
+        for profile_id, raw in STRATEGY_PARAM_PROFILES.items():
+            if raw.get("strategy_id") != "daily" or not raw.get("daily_search_profile"):
+                continue
+            search = resolve_daily_search_profile(raw["daily_search_profile"])
+            switches = dict(search.get("fixed_switches") or {})
+            with self.subTest(profile=profile_id):
+                args = SimpleNamespace(
+                    strategy_id="daily", daily_search_profile=raw["daily_search_profile"],
+                    filter_id="breakout_quality_v1", fixed_risk=0.01,
+                    max_position_cap_pct=0.3,
+                )
+                fixed = _build_min_roos_fixed_overrides(
+                    args=args, training_dl_enabled=False,
+                )
+                search_fields = _min_roos_search_fields(
+                    "daily", raw["daily_search_profile"],
+                )
+                for name, expected in switches.items():
+                    self.assertIs(fixed[name], expected)
+                    self.assertNotIn(name, search_fields)
+                for name in search_fields:
+                    self.assertNotIn(name, fixed)
+
+    def test_filtered_daily_close_limit_and_atr_limit_share_information_day_admission(self):
+        """All enabled filters use information-date observations; the buy
+        price, not the EMA/volume candidate universe, varies by entry contract.
+        """
+        from dataclasses import replace
+        import numpy as np
+        from core.daily_common_entry_filters import daily_common_filter_signals
+        from core.portfolio_entry_policy import (
+            DAILY_EXECUTION_CLOSE_FILTERS, DAILY_EXECUTION_FULL_FILTERS,
+            daily_signal_execution_context,
+        )
+        from core.signal_utils import _rolling_mean_shift1, tv_ema
+        from tools.validate.synthetic_daily_trade40_cases import fixture
+
+        _days, frame, original, _ = fixture(count=175)
+        volume = frame["Volume"].to_numpy(copy=True)
+        for index in (65, 82, 93, 110, 140, 169):
+            volume[index] = 2_500_000
+        frame["Volume"] = volume
+        params = replace(
+            original, use_breakout_buy=False,
+            use_vol=True, vol_long_len=5, vol_breakout_mult=1.0,
+            use_breakout_ema_filter=True, breakout_ema_len=60,
+            use_bb=False, use_kc=False, use_breakout_return_filter=False,
+            use_breakout_false_filter=False,
+        )
+        atr = np.full(len(frame), 2.0)
+        with daily_signal_execution_context(DAILY_EXECUTION_CLOSE_FILTERS):
+            close_mask, close_limit = daily_common_filter_signals(
+                frame, params, atr_main=atr, ticker="2330",
+            )
+        with daily_signal_execution_context(DAILY_EXECUTION_FULL_FILTERS):
+            atr_mask, atr_limit = daily_common_filter_signals(
+                frame, params, atr_main=atr, ticker="2330",
+            )
+        close = frame["Close"].to_numpy()
+        expected_mask = ((volume > 0)
+                         & (close > tv_ema(close, params.breakout_ema_len))
+                         & (volume > _rolling_mean_shift1(volume, params.vol_long_len)
+                            * params.vol_breakout_mult))
+        np.testing.assert_array_equal(close_mask, expected_mask)
+        np.testing.assert_array_equal(close_mask, atr_mask)
+        self.assertGreater(int(close_mask.sum()), 0)
+        np.testing.assert_allclose(close_limit[close_mask], close[close_mask])
+        self.assertTrue(np.isnan(close_limit[~close_mask]).all())
+        self.assertTrue(np.all(atr_limit[close_mask] > close_limit[close_mask]))
+
     def test_optimizer_trial_prepares_daily_data_with_trial_scoped_execution_contract(self):
         """The P20 signal mask must be computed under the same policy as replay.
 
@@ -1118,8 +1199,10 @@ class DailyEntryStrategyCases(TestCase):
             names[base.arm_id] = _canonical_oracle_replay_policy(
                 selected, base_arm=base, exact_arm=exact)
         self.assertNotIn("daily_execution_contract", names["C96"])
-        self.assertIn("C161", names)
-        self.assertNotIn("daily_execution_contract", names["C161"])
+        # Historical C161 is excluded by the current canonical Summary roster;
+        # new P21 is No-DL only and does not establish an Oracle score source.
+        self.assertNotIn("C161", names)
+        self.assertNotIn("C179", names)
         # P19 C166/C167 are retired; the active P20 oracle still uses the
         # independently registered full-filter execution policy.
         self.assertNotIn("C166", names)

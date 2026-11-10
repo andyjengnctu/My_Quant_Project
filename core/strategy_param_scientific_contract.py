@@ -76,7 +76,10 @@ def _build_parameter_generation_contract(strategy_id: str, *, daily_search_profi
     if key == "breakout":
         return _build_breakout_parameter_generation_contract()
     if key == "daily":
-        from core.portfolio_entry_policy import DAILY_ENTRY_CONTRACT, DAILY_ATR_ENTRY_CONTRACT
+        from core.portfolio_entry_policy import (
+            DAILY_ENTRY_CONTRACT, DAILY_ATR_ENTRY_CONTRACT,
+            daily_execution_uses_atr_limit,
+        )
         # Search primitives and schema are shared with the canonical Optimizer;
         # this new contract freezes all Breakout-only dimensions and declares
         # an independent stock-day selection/replay objective.
@@ -85,8 +88,9 @@ def _build_parameter_generation_contract(strategy_id: str, *, daily_search_profi
         contract = {
             **_build_breakout_parameter_generation_contract(),
             "strategy_id": "daily",
-            "entry_contract": (DAILY_ENTRY_CONTRACT if daily_search_profile is None
-                               else DAILY_ATR_ENTRY_CONTRACT),
+            "entry_contract": (DAILY_ATR_ENTRY_CONTRACT
+                               if daily_execution_uses_atr_limit(daily_spec["execution_contract"])
+                               else DAILY_ENTRY_CONTRACT),
             "entry_universe": "unscored_all_adjacent_quote_stockdays_v1",
             "search_fields": list(daily_spec["fields"]),
             "breakout_signals_required": False,
@@ -95,6 +99,8 @@ def _build_parameter_generation_contract(strategy_id: str, *, daily_search_profi
         # declare a distinct replay execution policy.
         if daily_search_profile is not None:
             contract["daily_execution_contract"] = daily_spec["execution_contract"]
+        if daily_spec.get("fixed_switches"):
+            contract["fixed_switches"] = dict(daily_spec["fixed_switches"])
         return contract
     raise ValueError(f"尚未登記strategy parameter scientific contract builder: {strategy_id!r}")
 

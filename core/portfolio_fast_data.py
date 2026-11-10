@@ -170,8 +170,10 @@ def prep_optimizer_stock_data_bundle(df, params, profile_stats=None, ticker=None
         use_compiled_kernels=is_optimizer_compiled_signal_kernels_enabled(),
         use_native_hotpath=is_optimizer_native_hotpath_kernels_enabled(),
     )
-    from core.portfolio_entry_policy import DAILY_EXECUTION_FULL_FILTERS, current_daily_execution_contract
-    if current_daily_execution_contract() == DAILY_EXECUTION_FULL_FILTERS:
+    from core.portfolio_entry_policy import (
+        current_daily_execution_contract, daily_execution_uses_common_filters,
+    )
+    if daily_execution_uses_common_filters(current_daily_execution_contract()):
         from core.daily_common_entry_filters import daily_common_filter_signals
         atr, _old_setup, sell, _old_limits = unpack_precomputed_signals(precomputed_signals)
         setup, limits = daily_common_filter_signals(
@@ -186,7 +188,7 @@ def prep_optimizer_stock_data_bundle(df, params, profile_stats=None, ticker=None
     t0 = time.perf_counter() if profile_stats is not None else None
     _atr_main, buy_condition, _sell_condition, _buy_limits = unpack_precomputed_signals(precomputed_signals)
     has_executable_setup = (
-        current_daily_execution_contract() != DAILY_EXECUTION_FULL_FILTERS
+        not daily_execution_uses_common_filters(current_daily_execution_contract())
         and bool(np.any(np.asarray(buy_condition, dtype=bool)[:-1]))
     )
     if not include_trade_logs and not include_pit_stats_index:

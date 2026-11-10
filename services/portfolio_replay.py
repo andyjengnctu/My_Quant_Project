@@ -38,7 +38,9 @@ from core.active_param_ensemble import (
 from filters.breakout_quality import runtime as _breakout_quality_runtime_adapter
 
 from core.portfolio_engine import run_portfolio_timeline
-from core.portfolio_entry_policy import current_daily_execution_contract
+from core.portfolio_entry_policy import (
+    current_daily_execution_contract, daily_execution_uses_common_filters,
+)
 from core.portfolio_run_result import append_portfolio_replay_profile
 from core.portfolio_fast_data import (
     build_normal_setup_index,
@@ -636,7 +638,7 @@ def _load_portfolio_market_context_sequential(data_dir, params, *, verbose=True,
                     f"(異常OHLCV={invalid_row_count}, 重複日期={duplicate_date_count})"
                 )
 
-            if current_daily_execution_contract() == "daily_atr_limit_common_filters_v2":
+            if daily_execution_uses_common_filters(current_daily_execution_contract()):
                 # Daily Full's is_setup is a daily eligibility mask, not a
                 # Breakout entry. Reuse the canonical dynamic-signal producer
                 # instead of inventing standalone Breakout trade history.

@@ -8,9 +8,22 @@ from __future__ import annotations
 from strategies.breakout.search_space import BREAKOUT_OPTIMIZER_SEARCH_SPACE
 from core.portfolio_entry_policy import (
     DAILY_EXECUTION_LEGACY, DAILY_EXECUTION_ATR_LIMIT, DAILY_EXECUTION_FULL_FILTERS,
+    DAILY_EXECUTION_CLOSE_FILTERS,
 )
 
 DAILY_SEARCH_PROFILES = {
+    "min_close_ema_volume_v1": {
+        "fields": (
+            "atr_len", "atr_times_init", "atr_times_trail",
+            "vol_long_len", "vol_breakout_mult", "breakout_ema_len",
+        ),
+        "execution_contract": DAILY_EXECUTION_CLOSE_FILTERS,
+        "fixed_switches": {
+            "use_vol": True,
+            "use_breakout_ema_filter": True,
+        },
+        "fixed_rule_contract": "daily_min_close_ema_volume_always_on_v1",
+    },
     "min_atr_limit_v2": {
         "fields": ("atr_len", "atr_buy_tol", "atr_times_init", "atr_times_trail"),
         "execution_contract": DAILY_EXECUTION_ATR_LIMIT,
@@ -48,4 +61,12 @@ def resolve_daily_search_profile(profile: str | None):
         raise ValueError("Duplicate Daily optimizer dimensions")
     if any(field not in BREAKOUT_OPTIMIZER_SEARCH_SPACE for field in result["fields"]):
         raise ValueError("Daily dimension not in canonical Full search schema")
+    switches = dict(result.get("fixed_switches") or {})
+    if any(name in result["fields"] or name not in BREAKOUT_OPTIMIZER_SEARCH_SPACE
+           or not isinstance(value, bool) for name, value in switches.items()):
+        raise ValueError("Daily fixed switches must be distinct, registered bool dimensions")
+    for field in result["fields"]:
+        enabled_by = BREAKOUT_OPTIMIZER_SEARCH_SPACE[field].get("enabled_by")
+        if enabled_by and enabled_by not in result["fields"] and switches.get(enabled_by) is not True:
+            raise ValueError(f"Daily conditional dimension requires an enabled parent: {field}")
     return result
