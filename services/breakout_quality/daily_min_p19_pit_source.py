@@ -1,8 +1,8 @@
-"""PIT-gated Daily Min/P19 NetPnL supervision using the existing Min execution owner.
+"""PIT-gated Daily Min/P19 NetPnL supervision using the canonical Min execution owner.
 
 The Oracle's signed 2021+ hindsight labels are never a training dependency.
 Historical stock-days are simulated independently with the same canonical
-next-market-session previous-close limit and historical seed Min parameters.
+next-market-session Close + ATR × atr_buy_tol limit and signed historical Min parameters.
 """
 from __future__ import annotations
 

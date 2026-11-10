@@ -33,13 +33,64 @@ from services.research.oracle_artifact_contract import source_implementation_sha
 from tools.validate.synthetic_daily_trade40_oracle_cases import PROFILE, source_fixture
 
 
-class TrueDailyUniversalOracleCases(TestCase):
+def _historical_min_definition():
+    """Isolate archived receipt examples from today's research membership.
+
+    Only this synthetic fixture exposes the retained historical declarations.
+    Production retirement, user config and immutable receipts are untouched.
+    """
+    from config.research_summary import RESEARCH_SUMMARY_ROWS
+    from core.audit_policy import get_active_audit_module_id
+    from core.audit_registry import oracle_comparison_key
+    from services.research.target_oracle_application import get_formal_oracle_definition
+    definition = get_formal_oracle_definition(get_active_audit_module_id())
+    source = dict(definition.source)
+    comparisons = [dict(row) for row in source["oracle_comparisons"]
+                   if row.get("parameter_family", "min") in {"min", "full"}]
+    archived = [dict(group["oracle"]) for group in RESEARCH_SUMMARY_ROWS
+                if "oracle" in group and group["oracle"].get("target") in {
+                    "TrueDailyUniversal_MinTrade_NetPnL_Positive",
+                    "TrueDailyUniversal_MinTrade_NetPnL_Positive_Direct"}
+                and group["oracle"].get("parameter_family", "min") == "min"]
+    comparisons.extend(archived)
+    source["oracle_source_catalog"] = (
+        *source["oracle_source_catalog"],
+        *(dict(group["oracle"]) for group in RESEARCH_SUMMARY_ROWS
+          if "oracle" in group
+          and group["oracle"].get("target", "").startswith("TrueDailyUniversal_MinTrade_NetPnL")
+          and group["oracle"].get("selector") == "exact"
+          and group["oracle"].get("parameter_family", "min") == "min"),
+    )
+    keys = {oracle_comparison_key(row) for row in archived}
+    source["oracle_comparisons"] = tuple(comparisons)
+    source["historical_only_oracle_targets"] = {
+        key: value for key, value in source["historical_only_oracle_targets"].items()
+        if key not in keys}
+    source["additional_parameter_baselines"] = {
+        key: value for key, value in source["additional_parameter_baselines"].items()
+        if key == "full"}
+    return replace(definition, source=source)
+
+
+class HistoricalMinReceiptFixture(TestCase):
+    def setUp(self):
+        from core.audit_registry import AUDIT_REUSABLE_REPORTS, oracle_comparison_key
+        historical = _historical_min_definition()
+        keys = {oracle_comparison_key(row) for row in historical.source["oracle_comparisons"]}
+        self.enterContext(patch.object(oracle, "_ORACLE_RETIRED_TARGETS",
+                                      set(oracle._ORACLE_RETIRED_TARGETS) - keys))
+        self.enterContext(patch.dict(
+            AUDIT_REUSABLE_REPORTS["breakout_quality"]["target_oracle_romd"]["source"],
+            {"oracle_comparisons": historical.source["oracle_comparisons"]}))
+
+
+class TrueDailyUniversalOracleCases(HistoricalMinReceiptFixture):
     def test_preflight_identifies_daily_only_in_strategy_column(self):
         from core.audit_policy import get_active_audit_module_id
         from core.audit_registry import oracle_comparison_key
         from services.research.target_oracle_application import get_formal_oracle_definition
         from core.display_common import _strip_ansi
-        definition = get_formal_oracle_definition(get_active_audit_module_id())
+        definition = _historical_min_definition()
         selected = [row for row in definition.source["oracle_comparisons"]
                     if row["target"] in {
                         "MFE40_Control", "TrueDailyUniversal_MinTrade_NetPnL_Positive",
@@ -61,7 +112,9 @@ class TrueDailyUniversalOracleCases(TestCase):
         ))
         self.assertIn("Target", output)
         self.assertIn("Strategy", output)
-        self.assertIn("Portfolio REUSE 8 / RUN（需回放）2 / BLOCKED 0", output)
+        reuse_count = sum(action == "REUSE" for action in decisions.values())
+        run_count = sum(action == "RUN" for action in decisions.values())
+        self.assertIn(f"Portfolio REUSE {reuse_count} / RUN（需回放）{run_count} / BLOCKED 0", output)
         self.assertIn("Target 真值及 Score 另依各自簽章 REUSE／RUN", output)
         for line in output.splitlines():
             if "TrueDailyUniversal_MinTrade_NetPnL_Positive" in line:
@@ -75,8 +128,7 @@ class TrueDailyUniversalOracleCases(TestCase):
                 self.assertIn("REUSE", line)
 
     def test_comparisons_and_previous_source_identities(self):
-        definition = next(d for d in get_reusable_audit_definitions("breakout_quality")
-                          if d.audit_type == oracle.SUPPORTED_AUDIT_TYPE)
+        definition = _historical_min_definition()
         plan = oracle._oracle_comparison_plan(definition)
         exact = "TrueDailyUniversal_MinTrade_NetPnL_Positive"
         direct = exact + "_Direct"
@@ -259,7 +311,7 @@ class TrueDailyUniversalOracleCases(TestCase):
 
 
 
-class OraclePerfectOutputReuseCases(TestCase):
+class OraclePerfectOutputReuseCases(HistoricalMinReceiptFixture):
     """Actual immutable old-format receipts; no FIT, truth build or Replay."""
 
     def _fixture(self, root, *, seed_count=8):
@@ -274,7 +326,7 @@ class OraclePerfectOutputReuseCases(TestCase):
         from services.audit.oracle_replay_artifacts import OracleReplayStore, replay_identity
         from services.audit.daily_trade40_oracle import NET_PNL_EVIDENCE, NET_PNL_RANK_POLICY
 
-        definition = get_formal_oracle_definition(get_active_audit_module_id())
+        definition = _historical_min_definition()
         settings, base, exact = oracle._contract(definition)
         seeds = (693545351, 2014432738, 104504529, 762252050,
                  9734312, 1020806211, 116293459, 1234683984)[:seed_count]
@@ -412,8 +464,10 @@ class OraclePerfectOutputReuseCases(TestCase):
             before = {p: p.read_bytes() for p in root.rglob("*") if p.is_file()}
             with self._environment(root, fixture):
                 preview = oracle.preview_oracle_replay_plan(fixture[0], project_root=root)
-                comparison_count = len(preview["targets"])
-                self.assertEqual(len(preview["preflight"]), len(fixture[1]) * comparison_count)
+                from core.audit_registry import oracle_control_dependency_inventory
+                planned = set(preview["targets"]) | set(oracle_control_dependency_inventory(fixture[0].source))
+                self.assertEqual(set(preview["preflight"]),
+                                 {(seed, key) for seed in fixture[1] for key in planned})
                 certified_keys = {key for _seed, key in fixture[-1]}
                 self.assertEqual({preview["preflight"][(seed, key)]
                                   for seed in fixture[1] for key in certified_keys}, {"REUSE"})
@@ -421,7 +475,8 @@ class OraclePerfectOutputReuseCases(TestCase):
                                   for seed in fixture[1] for key in set(preview["targets"]) - certified_keys}, {"RUN"})
                 _, _, _, values, info = _oracle_rows(root, fixture[0], {})
             target = "TrueDailyUniversal_MinTrade_NetPnL_Positive"
-            self.assertEqual(set(values), certified_keys)  # Full has no signed receipts.
+            # No-DL controls are replay prerequisites, not hindsight Oracle metrics.
+            self.assertEqual(set(values), certified_keys & set(preview["targets"]))
             self.assertTrue({"C97", "T40::Full", "T40_Direct::Full"}.isdisjoint(values))
             self.assertEqual(values[target]["oracle_romd"], 11.)
             self.assertEqual(values[target + "::Daily"]["oracle_romd"], 31.)
@@ -557,7 +612,8 @@ class OraclePerfectOutputReuseCases(TestCase):
             self.assertEqual(list(preview["preflight"].values()).count("RUN"),
                              len(preview["preflight"]) - len(fixture[-1]) + 1)
             self.assertEqual(preview["preflight"][(fixture[1][-1], key)], "RUN")
-            self.assertEqual(set(values), {target for _seed, target in fixture[-1]} - {key})
+            self.assertEqual(set(values),
+                             ({target for _seed, target in fixture[-1]} & set(preview["targets"])) - {key})
             self.assertNotIn(key, values)
             self.assertIn(key.replace("::Daily", ""), values)
             self.assertIn(key.replace("::Daily", "_Direct::Daily"), values)

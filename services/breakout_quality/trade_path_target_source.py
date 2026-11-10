@@ -19,6 +19,7 @@ from typing import Callable, Any
 from core.breakout_quality_runtime import (
     CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH,
     DAILY_MIN_P18_TRADE_PATH_KIND,
+    DAILY_FULL_P20_TRADE_PATH_KIND,
 )
 from core.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
 
@@ -232,8 +233,8 @@ _TRADE_PATH_SOURCES: dict[str, TradePathSource] = {
                               _daily_min_p19_current_inspect, _daily_min_p19_current_execute),
         ),
     ),
-    "daily_full_p20_seed42_fullcycle_netpnl": TradePathSource(
-        contract_kind="daily_full_p20_seed42_fullcycle_netpnl",
+    DAILY_FULL_P20_TRADE_PATH_KIND: TradePathSource(
+        contract_kind=DAILY_FULL_P20_TRADE_PATH_KIND,
         loader=_daily_full_p20_loader,
         dependencies=(
             TeacherDependency("daily_full_p20_historical_teacher", "optimizer_daily_full_p20_historical_teacher", 30,

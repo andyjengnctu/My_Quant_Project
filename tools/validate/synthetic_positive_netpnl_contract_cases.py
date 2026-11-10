@@ -731,6 +731,39 @@ class PositiveNetPnlContractCases(TestCase):
 class IndependentPositiveClassifierCases(TestCase):
     """The Positive gate consumes a distinct PIT-safe binary model, never raw outcomes."""
 
+    def test_retired_calibration_is_read_only_and_cannot_train_or_restore(self):
+        from dataclasses import replace
+        from types import SimpleNamespace
+        from core.breakout_quality_registry import get_breakout_quality_experiment_profile
+        from core.research_summary import get_research_summary_model_profiles
+        from core.positive_netpnl_contract import POSITIVE_RANK_CALIBRATION
+        from filters.breakout_quality import positive_rank_calibration as legacy
+
+        for _model, name in get_research_summary_model_profiles():
+            profile = get_breakout_quality_experiment_profile(name)
+            with self.subTest(profile=name):
+                self.assertFalse(legacy.calibration_enabled(profile))
+                self.assertEqual(legacy.checkpoint_calibration_payload(None, profile), {})
+                self.assertEqual(legacy.calibrated_score_columns(None, profile, []), {})
+                with self.assertRaisesRegex(ValueError, "[Rr]etired"):
+                    replace(profile, score_calibration=POSITIVE_RANK_CALIBRATION)
+                with self.assertRaisesRegex(ValueError, "Retired"):
+                    legacy.restore_score_calibration(None, profile, {"score_calibration": {}})
+        self.assertFalse(hasattr(legacy, "fit_score_calibration"))
+        self.assertFalse(hasattr(legacy, "attach_score_calibration"))
+        with self.assertRaisesRegex(ValueError, "Retired"):
+            legacy.calibration_enabled(SimpleNamespace(score_calibration=POSITIVE_RANK_CALIBRATION))
+        evidence = dict(contract=POSITIVE_RANK_CALIBRATION, x=[0., 1.], y=[.1, .9],
+            rank_preserved=True, validation_count=2, selected_epoch=1,
+            information_cutoff="2020-12-31", validation_start="2020-10-01",
+            validation_end="2020-11-01", validation_maturity_end="2020-12-01",
+            inner_train_maturity_end="2020-09-30",
+            refit_policy="freeze_selected_epoch_validation_curve_for_final_refit")
+        evidence["sha256"] = legacy._digest(evidence)
+        self.assertEqual(legacy.validate_score_calibration(evidence).y.tolist(), [.1, .9])
+        with self.assertRaisesRegex(ValueError, "corrupt"):
+            legacy.validate_score_calibration({**evidence, "y": [.2, .8]})
+
     def test_no_legacy_single_ranker_contract_or_unknown_secondary_options(self):
         from core.positive_netpnl_contract import requires_positive_score
         with self.assertRaises(ValueError):

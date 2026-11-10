@@ -4,6 +4,6 @@ Shared by the independent P20 FIT-source and PIT-materialization services.
 Neither service imports the other to obtain this identity.
 """
 
-SOURCE_ID = "daily_full_p20_seed42"
+from core.breakout_quality_runtime import DAILY_FULL_P20_SOURCE_ID as SOURCE_ID
 
 __all__ = ["SOURCE_ID"]

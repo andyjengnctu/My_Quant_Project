@@ -438,7 +438,7 @@ class DailyMinP19NetPnLCases(TestCase):
         p20 = source_calculation_contract(recipe='daily_trade_path_daily_full_p20_net_pnl',
                                           profile_id=RANK)
         old = source_calculation_contract(recipe='daily_trade_path_true_net_pnl', profile_id=RANK)
-        self.assertEqual(p19['calculation_revision'], 1)
+        self.assertEqual(p19['calculation_revision'], 2)
         self.assertNotEqual(p19['implementation_sha256'], p20['implementation_sha256'])
         self.assertNotEqual(p19['implementation_sha256'], old['implementation_sha256'])
 

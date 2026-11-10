@@ -11,6 +11,9 @@ from __future__ import annotations
 
 from functools import lru_cache
 from core.daily_common_entry_filters import daily_common_filter_signals
+from core.portfolio_entry_policy import (
+    DAILY_EXECUTION_FULL_FILTERS, daily_signal_execution_context,
+)
 import math
 
 import numpy as np
@@ -75,9 +78,12 @@ def compute_daily_full_p20_batch(
                 f"{ticker} {day.date()}"
             )
         if period.params_signature not in signal_cache:
-            signal_cache[period.params_signature] = build_signal_cache(
-                frame, period.params, ticker=ticker,
-            )
+            # AI: Label/Oracle workers do not inherit portfolio replay context.
+            # Bind the declared ATR-limit execution at its numerical owner.
+            with daily_signal_execution_context(DAILY_EXECUTION_FULL_FILTERS):
+                signal_cache[period.params_signature] = build_signal_cache(
+                    frame, period.params, ticker=ticker,
+                )
         return signal_cache[period.params_signature]
 
     forced_count = 0
@@ -104,10 +110,11 @@ def compute_daily_full_p20_batch(
         # The *next session's* PIT P20 parameter settings determine today's
         # completed-information-bar admission and canonical ATR buy limit.
         if period.params_signature not in entry_cache:
-            entry_cache[period.params_signature] = daily_common_filter_signals(
-                frame, period.params, ticker=ticker,
-                atr_main=cache_on(trade_day)[0],
-            )
+            with daily_signal_execution_context(DAILY_EXECUTION_FULL_FILTERS):
+                entry_cache[period.params_signature] = daily_common_filter_signals(
+                    frame, period.params, ticker=ticker,
+                    atr_main=cache_on(trade_day)[0],
+                )
         admitted, limits = entry_cache[period.params_signature]
         if not bool(admitted[position]):
             reasons.append("daily_full_filter_rejected")

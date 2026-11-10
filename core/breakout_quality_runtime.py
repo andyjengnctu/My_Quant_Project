@@ -39,7 +39,10 @@ DAILY_MIN_P18_TRADE_PATH_KIND = "daily_min_p18_fullcycle_netpnl_per_seed"
 DAILY_MIN_P18_SOURCE_ID = "daily_min_p18_seed"
 DAILY_MIN_P18_FULLCYCLE_NETPNL_TARGET_ID = "daily_universal_min_p18_fullcycle_netpnl_per_seed_v1"
 DAILY_MIN_P19_FULLCYCLE_NETPNL_TARGET_ID = "daily_universal_min_p19_fullcycle_netpnl_seed42_v1"
-DAILY_FULL_P20_FULLCYCLE_NETPNL_TARGET_ID = "daily_universal_full_p20_fullcycle_netpnl_seed42_v1"
+DAILY_FULL_P20_FULLCYCLE_NETPNL_TARGET_ID = "daily_universal_full_p20_fullcycle_netpnl_per_seed_v2"
+DAILY_FULL_P20_TRADE_PATH_KIND = "daily_full_p20_fullcycle_netpnl_per_seed"
+DAILY_FULL_P20_SOURCE_ID = "daily_full_p20_roos_seed"
+DAILY_FULL_P20_TEACHER_CONTRACT = "daily_full_p20_historical_plus_current_per_seed_v2"
 DAILY_FIRST_RISK_BREACH_PURE_MFE_TARGET_ID = "daily_first_risk_breach_pure_mfe_r_v1"
 DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID = "daily_full_horizon_low_adverse_r_v1"
 DAILY_FULL_HORIZON_EQUAL_RANK_MFE_LOW_ADVERSE_TARGET_ID = "daily_full_horizon_equal_rank_mfe_low_adverse_v1"
@@ -524,8 +527,23 @@ class ContinuousRankerTargetPolicy:
     contract_kind: str = "external"
     horizon_bars: int | None = None
     sample_universe_horizon_bars: int | None = None
+    # AI: Canonical FIT provenance capability; excluded from persisted recipe payloads.
+    fit_target_kind: str | None = None
+    fit_teacher_contract: str | None = None
+
+    def as_target_calculation_payload(self) -> dict[str, Any]:
+        """Stable numerical target identity; FIT evidence is a separate contract."""
+        from dataclasses import asdict
+        payload = asdict(self)
+        payload.pop("fit_target_kind")
+        payload.pop("fit_teacher_contract")
+        return payload
 
     def __post_init__(self) -> None:
+        if bool(self.fit_target_kind) != bool(self.fit_teacher_contract):
+            raise ValueError("Trade-path FIT kind and teacher contract must be declared together")
+        if self.fit_target_kind and self.materialization_mode != CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH:
+            raise ValueError("Only trade-path targets may declare a FIT teacher")
         if self.horizon_bars is not None and int(self.horizon_bars) < 2:
             raise ValueError("daily target horizon_bars must be >= 2")
         if self.sample_universe_horizon_bars is not None and (
@@ -1337,34 +1355,50 @@ def _continuous_ranker_target_policies() -> dict[str, ContinuousRankerTargetPoli
             materialization_mode=CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH,
             horizon_bars=40,
             contract_kind="formal_seed_mintrade40_netr",
+            fit_target_kind="formal_seed_mintrade40_broker_net_r",
+            fit_teacher_contract="formal_mintrade40_seed_historical_plus_p16_v1",
         ),
         DAILY_FORMAL_MINTRADE_FULLCYCLE_NETR_TARGET_ID: ContinuousRankerTargetPolicy(
             materialization_mode=CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH,
             contract_kind="formal_seed_mintrade_fullcycle_netr",
+            fit_target_kind="formal_seed_mintrade_fullcycle_broker_net_r",
+            fit_teacher_contract="formal_mintrade40_seed_historical_plus_p16_v1",
         ),
         DAILY_FORMAL_MINTRADE_FULLCYCLE_NETPNL_TARGET_ID: ContinuousRankerTargetPolicy(
             materialization_mode=CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH,
             contract_kind="formal_seed_mintrade_fullcycle_netpnl",
+            fit_target_kind="formal_seed_mintrade_fullcycle_broker_net_pnl",
+            fit_teacher_contract="formal_mintrade40_seed_historical_plus_p16_v1",
         ),
         FULLTRADE_FULLCYCLE_NETPNL_TARGET_ID: ContinuousRankerTargetPolicy(
             materialization_mode=CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH,
             contract_kind="formal_seed_fulltrade_fullcycle_netpnl",
+            fit_target_kind="formal_seed_fulltrade_fullcycle_broker_net_pnl",
+            fit_teacher_contract="formal_fulltrade_seed_historical_plus_p17_v1",
         ),
         DAILY_MIN_P18_FULLCYCLE_NETPNL_TARGET_ID: ContinuousRankerTargetPolicy(
             materialization_mode=CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH,
             contract_kind=DAILY_MIN_P18_TRADE_PATH_KIND,
+            fit_target_kind=DAILY_MIN_P18_TRADE_PATH_KIND,
+            fit_teacher_contract="daily_min_p18_historical_plus_current_v1",
         ),
         DAILY_MIN_P19_FULLCYCLE_NETPNL_TARGET_ID: ContinuousRankerTargetPolicy(
             materialization_mode=CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH,
             contract_kind="daily_min_p19_seed42_fullcycle_netpnl",
+            fit_target_kind="daily_min_p19_seed42_fullcycle_netpnl",
+            fit_teacher_contract="daily_min_p19_historical_plus_current_v1",
         ),
         DAILY_FULL_P20_FULLCYCLE_NETPNL_TARGET_ID: ContinuousRankerTargetPolicy(
             materialization_mode=CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH,
-            contract_kind="daily_full_p20_seed42_fullcycle_netpnl",
+            contract_kind=DAILY_FULL_P20_TRADE_PATH_KIND,
+            fit_target_kind=DAILY_FULL_P20_TRADE_PATH_KIND,
+            fit_teacher_contract=DAILY_FULL_P20_TEACHER_CONTRACT,
         ),
         TRUE_DAILY_MINTRADE_FULLCYCLE_NETPNL_TARGET_ID: ContinuousRankerTargetPolicy(
             materialization_mode=CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH,
             contract_kind="true_daily_seed_mintrade_fullcycle_netpnl",
+            fit_target_kind="true_daily_seed_mintrade_fullcycle_broker_net_pnl",
+            fit_teacher_contract="formal_mintrade40_seed_historical_plus_p16_v1",
         ),
         DAILY_COUNTERFACTUAL_MINTRADE40_NETR_TARGET_ID: ContinuousRankerTargetPolicy(
             materialization_mode=CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH,
@@ -1830,14 +1864,7 @@ def get_continuous_ranker_score_output_columns(
             else dict(output_policy.manifest_columns())
         )
     if score_calibration is not None:
-        from core.positive_netpnl_contract import (
-            POSITIVE_P_CLASS_COLUMN, POSITIVE_RANK_CALIBRATION,
-        )
-        if (score_calibration != POSITIVE_RANK_CALIBRATION
-                or policy.categorical_class_count is not None
-                or output_policy is not None or not policy.uses_pairwise_loss):
-            raise ValueError("Unsupported scalar-rank score calibration capability")
-        columns["positive_probability"] = POSITIVE_P_CLASS_COLUMN
+        raise ValueError("Single-ranker Positive calibration is retired; no current score-output capability")
     return columns
 
 
@@ -1867,6 +1894,23 @@ def get_continuous_ranker_report_evidence_families(training_objective: str) -> t
     """Return comparison/report evidence families from the training-composition owner."""
 
     return tuple(get_continuous_ranker_training_policy(training_objective).report_evidence_families)
+
+
+def trade_path_fit_capability(contract):
+    """Resolve FIT teacher semantics from the target owner, never a model allowlist.
+
+    Older Min manifests may omit target_id; their registered kind remains
+    sufficient. A supplied target ID must agree, and unknown teacher-backed
+    targets fail closed instead of silently dropping their FIT dependencies.
+    """
+    for target_id, policy in _continuous_ranker_target_policies().items():
+        if policy.fit_target_kind and contract.get("target_kind") == policy.fit_target_kind:
+            if contract.get("target_id") not in (None, target_id):
+                raise ValueError("Trade-path FIT target identity differs from its capability")
+            return policy
+    if contract.get("teacher_lineage"):
+        raise ValueError("Unregistered trade-path FIT teacher capability")
+    return None
 
 
 def _resolve_continuous_ranker_target_policy(profile: Any) -> ContinuousRankerTargetPolicy:

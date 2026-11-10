@@ -718,11 +718,7 @@ class BreakoutQualityExperimentProfile:
             if any(token in architecture for token in ("/", "\\", "\x00")):
                 raise ValueError("profile model_architecture 必須是安全名稱")
         if self.score_calibration is not None:
-            from core.positive_netpnl_contract import POSITIVE_RANK_CALIBRATION
-            if (self.score_calibration != POSITIVE_RANK_CALIBRATION
-                    or self.training_objective != TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING
-                    or self.portfolio_score_scale != "raw"):
-                raise ValueError("Positive calibration requires the canonical scalar ranker")
+            raise ValueError("Single-ranker Positive calibration is retired; use a registered binary classifier")
         if type(self.fit_contract_version) is not int or self.fit_contract_version < 1:
             raise ValueError("FIT contract version must be a positive integer")
         if self.encoder_pretraining_profile is not None:
@@ -1814,6 +1810,7 @@ _EXPERIMENT_PROFILES = {
         training_label_scope=TRAINING_LABEL_SCOPE_ALL,
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
         model_architecture="inception_time_v1",
+        fit_contract_version=2,
     ),
     DAILY_MIN_P19_NETPNL_POSITIVE_PROFILE: BreakoutQualityExperimentProfile(
         name=DAILY_MIN_P19_NETPNL_POSITIVE_PROFILE,
@@ -1824,7 +1821,7 @@ _EXPERIMENT_PROFILES = {
         epoch_selection_metric="positive_validation_cross_entropy",
         training_label_scope=TRAINING_LABEL_SCOPE_ALL,
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
-        model_architecture="inception_time_v1", fit_contract_version=1,
+        model_architecture="inception_time_v1", fit_contract_version=2,
     ),
     DAILY_FULL_P20_NETPNL_RANK_PROFILE: BreakoutQualityExperimentProfile(
         name=DAILY_FULL_P20_NETPNL_RANK_PROFILE,
@@ -1836,6 +1833,7 @@ _EXPERIMENT_PROFILES = {
         training_label_scope=TRAINING_LABEL_SCOPE_ALL,
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
         model_architecture="inception_time_v1",
+        fit_contract_version=3,
     ),
     DAILY_FULL_P20_NETPNL_POSITIVE_PROFILE: BreakoutQualityExperimentProfile(
         name=DAILY_FULL_P20_NETPNL_POSITIVE_PROFILE,
@@ -1847,7 +1845,7 @@ _EXPERIMENT_PROFILES = {
         epoch_selection_metric="positive_validation_cross_entropy",
         training_label_scope=TRAINING_LABEL_SCOPE_ALL,
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
-        model_architecture="inception_time_v1", fit_contract_version=1,
+        model_architecture="inception_time_v1", fit_contract_version=3,
     ),
     FULLTRADE_NETPNL_RANK_PROFILE: BreakoutQualityExperimentProfile(
         name=FULLTRADE_NETPNL_RANK_PROFILE,
@@ -1859,6 +1857,7 @@ _EXPERIMENT_PROFILES = {
         training_label_scope=TRAINING_LABEL_SCOPE_ALL,
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
         model_architecture="inception_time_v1",
+        fit_contract_version=2,
     ),
     FULLTRADE_NETPNL_POSITIVE_PROFILE: BreakoutQualityExperimentProfile(
         name=FULLTRADE_NETPNL_POSITIVE_PROFILE,
@@ -1870,7 +1869,7 @@ _EXPERIMENT_PROFILES = {
         epoch_selection_metric="positive_validation_cross_entropy",
         training_label_scope=TRAINING_LABEL_SCOPE_ALL,
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
-        model_architecture="inception_time_v1", fit_contract_version=1,
+        model_architecture="inception_time_v1", fit_contract_version=2,
     ),
     TRUE_DAILY_MINTRADE_NETPNL_POSITIVE_PROFILE: BreakoutQualityExperimentProfile(
         name=TRUE_DAILY_MINTRADE_NETPNL_POSITIVE_PROFILE,

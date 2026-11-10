@@ -163,6 +163,8 @@ def build_daily_full_p20_oracle_scores(
     exchange_calendar_cache: dict | None = None, ticker_workers: int = 1,
     progress_callback: Callable[[str], None] | None = None,
 ) -> tuple[dict, dict[str, Any]]:
+    if type(seed) is not int or seed <= 0:
+        raise DailyTrade40OracleBlockedError("Daily Full/P20 requires an explicit positive teacher seed")
     root = Path(project_root).resolve()
     if any(period.source_id != SOURCE_ID for period in canonical_schedule):
         raise DailyTrade40OracleBlockedError("Daily Full/P20 truth must use its own economic source")
@@ -286,7 +288,7 @@ def build_daily_full_p20_oracle_scores(
         "dataset_summary_sha256": dataset_sha, "rank_sha256": rank_sha,
         "raw_label_sha256": raw_sha,
         "calendar_sha256": sha256("\n".join(exchange.strftime("%Y-%m-%d")).encode("ascii")).hexdigest(),
-        "teacher": {"origin": "daily_full_p20_seed42_historical_plus_current", "optimizer_seed": 42, "seed": int(seed),
+        "teacher": {"origin": SOURCE_ID, "optimizer_seed": int(seed), "seed": int(seed),
                     "param_identity_sha256": str(param_sha256),
                     "periods": [{"start": str(p.start.date()),
                                  "end": None if p.end is None else str(p.end.date()),

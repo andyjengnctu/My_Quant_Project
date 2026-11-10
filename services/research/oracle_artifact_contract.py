@@ -38,8 +38,7 @@ DAILY_CALCULATION_REVISIONS = {
     "daily_trade_path_net_pnl": 1,
     "daily_trade_path_true_net_pnl": 2,
     "daily_trade_path_full_net_pnl": 1,
-    "daily_trade_path_daily_min_p19_net_pnl": 1,
-    "daily_trade_path_daily_full_p20_net_pnl": 1,
+    "daily_trade_path_daily_min_p19_net_pnl": 2,
 }
 DAILY_CALCULATION_REVISIONS.update({recipe: spec["calculation_revision"]
                                     for recipe, spec in DAILY_TRUTH_CAPABILITIES.items()})
@@ -441,32 +440,6 @@ def source_implementation_sha256(recipe: str, profile_id: str) -> str:
             "broker_path": calculation_source(
                 "filters/breakout_quality/trade_path_label.py", "simulate_realized_trade_path_label"),
         })
-    elif recipe == "daily_trade_path_daily_full_p20_net_pnl":
-        # P20 uses a separate stock-day entry/filter/buy-limit decision. It
-        # shares canonical broker/period/ranking primitives with Min, but the
-        # original event-driven and TrueDaily source hashes must not change.
-        # Bind the source to the actual P20 numerical owners, not the legacy
-        # compute_counterfactual_trade40_batch path (which is not executed).
-        parts.update({
-            "daily_full_entry": calculation_source(
-                "filters/breakout_quality/daily_full_p20_target.py",
-                "compute_daily_full_p20_batch"),
-            "daily_full_filters": calculation_source(
-                "core/daily_common_entry_filters.py", "daily_common_filter_signals"),
-            "stock_outcomes": calculation_source(
-                "services/audit/daily_full_p20_oracle_truth.py", "_stock_outcome"),
-            "truth_cohort": calculation_source(
-                "services/audit/daily_full_p20_oracle_truth.py",
-                "build_daily_full_p20_oracle_scores"),
-            "rank_outcomes": calculation_source(
-                "filters/breakout_quality/daily_trade40_target.py", "rank_trade40_outcome_frame"),
-            "schedule": calculation_source(
-                "filters/breakout_quality/daily_trade40_target.py", "build_formal_min_execution_schedule"),
-            "active_period": calculation_source(
-                "filters/breakout_quality/daily_trade40_target.py", "resolve_historical_min_period"),
-            "broker_path": calculation_source(
-                "filters/breakout_quality/trade_path_label.py", "simulate_realized_trade_path_label"),
-        })
     elif recipe == "daily_trade_path_true_net_pnl":
         # New source capability uses the same canonical Min ledger but a new
         # independent every-stock-day entry decision. Old recipes are unchanged.
@@ -605,7 +578,7 @@ def source_calculation_contract(*, recipe: str, profile_id: str,
             "profile_id": profile_id, "sample_scope": profile.training_sample_scope,
             "model_architecture": architecture,
             "source_target": profile.continuous_target_id,
-            "target_policy": asdict(get_continuous_ranker_execution_recipe(profile_id).target_policy),
+            "target_policy": get_continuous_ranker_execution_recipe(profile_id).target_policy.as_target_calculation_payload(),
             # Only requirements consumed by the daily eligibility loader.
             # Head widths, channels, dropout and training objectives do not
             # determine the Oracle's feature-eligible stock-day population.

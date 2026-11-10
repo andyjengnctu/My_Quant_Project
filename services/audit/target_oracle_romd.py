@@ -154,7 +154,6 @@ _ORACLE_DAILY_SCORE_RECIPES = {
     "daily_trade_path_true_net_pnl": "net_pnl",
     "daily_trade_path_full_net_pnl": "net_pnl",
     "daily_trade_path_daily_min_p19_net_pnl": "net_pnl",
-    "daily_trade_path_daily_full_p20_net_pnl": "net_pnl",
 }
 
 _ORACLE_DAILY_SCORE_RECIPES.update({recipe: spec["outcome_metric"]
@@ -177,11 +176,6 @@ def _daily_truth_identity(recipe: str, horizon: int | None) -> tuple[str, str]:
             raise OracleBlockedError("P19 MinTrade must be full-cycle")
         from services.audit.daily_min_p19_oracle_truth import TARGET_ID, LABEL_ID
         return TARGET_ID, LABEL_ID
-    if recipe == "daily_trade_path_daily_full_p20_net_pnl":
-        if horizon is not None:
-            raise OracleBlockedError("P20 FullTrade must be full-cycle")
-        from services.audit.daily_full_p20_oracle_truth import TARGET_ID, LABEL_ID
-        return TARGET_ID, LABEL_ID
     if recipe == "daily_trade_path_full_net_pnl":
         if horizon is not None:
             raise OracleBlockedError("FullTrade NetPnL cannot have a fixed-session cap")
@@ -203,9 +197,6 @@ def _daily_truth_entry_policy(recipe: str) -> str | None:
     if recipe == "daily_trade_path_daily_min_p19_net_pnl":
         from services.audit.daily_min_p19_oracle_truth import ENTRY_POLICY
         return ENTRY_POLICY
-    if recipe == "daily_trade_path_daily_full_p20_net_pnl":
-        from services.audit.daily_full_p20_oracle_truth import ENTRY_POLICY
-        return ENTRY_POLICY
     if recipe == "daily_trade_path_true_net_pnl":
         from services.audit.true_daily_mintrade_oracle import ENTRY_POLICY
         return ENTRY_POLICY
@@ -218,9 +209,6 @@ def _daily_truth_fingerprint(recipe: str) -> str:
         return producer.truth_producer_fingerprint()
     if recipe == "daily_trade_path_daily_min_p19_net_pnl":
         from services.audit.daily_min_p19_oracle_truth import truth_producer_fingerprint
-        return truth_producer_fingerprint()
-    if recipe == "daily_trade_path_daily_full_p20_net_pnl":
-        from services.audit.daily_full_p20_oracle_truth import truth_producer_fingerprint
         return truth_producer_fingerprint()
     if recipe == "daily_trade_path_full_net_pnl":
         from services.audit.fulltrade_oracle_truth import truth_producer_fingerprint
@@ -244,12 +232,6 @@ def _build_daily_truth(recipe: str, *, output_subdir: str, **kwargs):
             key: value for key, value in kwargs.items()
             if key not in ("horizon_sessions", "outcome_metric")
         })
-    if recipe == "daily_trade_path_daily_full_p20_net_pnl":
-        from services.audit.daily_full_p20_oracle_truth import build_daily_full_p20_oracle_scores
-        return build_daily_full_p20_oracle_scores(output_subdir=output_subdir, **{
-            key: value for key, value in kwargs.items()
-            if key not in ("horizon_sessions", "outcome_metric")
-        })
     if recipe == "daily_trade_path_full_net_pnl":
         from services.audit.fulltrade_oracle_truth import build_fulltrade_oracle_scores
         return build_fulltrade_oracle_scores(**kwargs)
@@ -270,14 +252,6 @@ def _load_positive_truth_for_recipe(recipe: str, *, execution, cache_root, **kwa
                                          "param_sha256", "canonical_scores", "canonical_evidence")}), None
     if recipe == "daily_trade_path_daily_min_p19_net_pnl":
         from services.audit.daily_min_p19_oracle_truth import load_positive_truth
-        return load_positive_truth(execution=execution, cache_root=cache_root, **{
-            key: kwargs[key] for key in (
-                "project_root", "output_subdir", "seed", "price_sha256", "param_sha256",
-                "canonical_scores", "canonical_evidence",
-            )
-        }), None
-    if recipe == "daily_trade_path_daily_full_p20_net_pnl":
-        from services.audit.daily_full_p20_oracle_truth import load_positive_truth
         return load_positive_truth(execution=execution, cache_root=cache_root, **{
             key: kwargs[key] for key in (
                 "project_root", "output_subdir", "seed", "price_sha256", "param_sha256",
@@ -315,6 +289,11 @@ def _oracle_daily_schedule(records, *, seed: int, param_sha256: str, recipe: str
     modules stay unchanged. Receipt periods/signatures are preserved.
     """
     from filters.breakout_quality.daily_trade40_target import build_formal_min_execution_schedule
+    spec = daily_truth_capability(recipe)
+    records = tuple(records)
+    validator = None if spec is None else spec.get("record_validator")
+    if validator is not None:
+        getattr(import_module(validator[0]), validator[1])(records, seed=seed)
     periods, evidence = build_formal_min_execution_schedule(
         records, seed=seed, param_sha256=param_sha256,
     )
@@ -322,9 +301,6 @@ def _oracle_daily_schedule(records, *, seed: int, param_sha256: str, recipe: str
         periods = tuple(replace(period, source_id="formal_full_roos_seed") for period in periods)
     if recipe == "daily_trade_path_daily_min_p19_net_pnl":
         from services.breakout_quality.daily_min_p19_training_source import SOURCE_ID
-        periods = tuple(replace(period, source_id=SOURCE_ID) for period in periods)
-    if recipe == "daily_trade_path_daily_full_p20_net_pnl":
-        from services.breakout_quality.daily_full_p20_training_source import SOURCE_ID
         periods = tuple(replace(period, source_id=SOURCE_ID) for period in periods)
     spec = daily_truth_capability(recipe)
     if spec is not None:
@@ -2473,7 +2449,7 @@ def _certified_saved_oracle_identity(
         from services.audit.mintrade_truth_source_attestation import mintrade_sources_equivalent
         current_producer = _daily_truth_fingerprint(recipe)
         if not (recorded.get("truth_source_sha256") == current_producer
-                if (daily_truth_capability(recipe) is not None or recipe in {"daily_trade_path_full_net_pnl", "daily_trade_path_daily_full_p20_net_pnl", "daily_trade_path_daily_min_p19_net_pnl"}) else
+                if (daily_truth_capability(recipe) is not None or recipe in {"daily_trade_path_full_net_pnl", "daily_trade_path_daily_min_p19_net_pnl"}) else
                 mintrade_sources_equivalent(recorded.get("truth_source_sha256"), current_producer)):
             raise ValueError("historical Target outcome producer semantics not certified")
         if ("dataset_summary_sha256" not in recorded or
@@ -2695,8 +2671,8 @@ def _execute_single_stage_missing(
                         elif _recipe == "daily_trade_path_daily_min_p19_net_pnl" and any(
                                 period.source_id != "daily_min_p19_seed42" for period in schedule):
                             raise OracleBlockedError("P19 truth may only use its own Min/P19 teacher")
-                        elif _recipe in {"daily_trade_path_full_net_pnl", "daily_trade_path_daily_full_p20_net_pnl"} and any(
-                                period.source_id not in {"formal_full_roos_seed", "daily_full_p20_seed42"} for period in schedule):
+                        elif _recipe == "daily_trade_path_full_net_pnl" and any(
+                                period.source_id != "formal_full_roos_seed" for period in schedule):
                             raise OracleBlockedError("Full/P20 truth cannot share a Min/P19 schedule")
                         try:
                             def produce_truth():

@@ -32,8 +32,6 @@ from services.breakout_quality.fitting_data_dependencies import (
     FitDataDependencies, fold_source_dependency_issues,
 )
 from services.audit import dl_fit_sample_coverage as audit
-from core.positive_netpnl_contract import POSITIVE_RANK_CALIBRATION
-from filters.breakout_quality.positive_rank_calibration import calibration_enabled
 
 
 class SampleCoverageTests(unittest.TestCase):
@@ -43,12 +41,20 @@ class SampleCoverageTests(unittest.TestCase):
             CONTINUOUS_RANKER_CONTEXT_SOURCE_NONE,
             CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT,
         )
-        for _model, profile in audit._inventory():
-            recipe = get_continuous_ranker_execution_recipe(profile)
+        from core.breakout_quality_registry import (
+            SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES,
+            CONTINUOUS_RANKER_TRAINING_OBJECTIVES,
+            get_breakout_quality_experiment_profile,
+        )
+        for name in SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES:
+            profile = get_breakout_quality_experiment_profile(name)
+            if profile.training_objective not in CONTINUOUS_RANKER_TRAINING_OBJECTIVES:
+                continue
+            recipe = get_continuous_ranker_execution_recipe(profile.name)
             if (recipe.context_policy.source != CONTINUOUS_RANKER_CONTEXT_SOURCE_NONE
                 and recipe.target_policy.materialization_mode
                 == CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT):
-                return profile
+                return name
         raise AssertionError("No registered daily-component external-context profile")
     def fake_bundle(self, *, daily=True):
         dates = pd.to_datetime([
@@ -66,7 +72,7 @@ class SampleCoverageTests(unittest.TestCase):
                                    if daily else TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS),
             training_label_scope=(TRAINING_LABEL_SCOPE_ALL if daily else TRAINING_LABEL_SCOPE_PASS_ONLY),
             continuous_target_id="test_target",
-            score_calibration=POSITIVE_RANK_CALIBRATION,
+            score_calibration=None,
         )
         return SimpleNamespace(
             profile=profile,
@@ -191,7 +197,7 @@ class SampleCoverageTests(unittest.TestCase):
             args = {"filter_id": "test_filter", "model_architecture": "test_arch"}
             fake_settings = SimpleNamespace(**args)
             fake_recipe = SimpleNamespace(
-                training_policy=SimpleNamespace(target_builder="scalar_pairwise"),
+                training_policy=SimpleNamespace(target_builder="netpnl_positive_binary"),
                 target_policy=SimpleNamespace(materialization_mode=CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH),
                 context_policy=SimpleNamespace(source="none"),
             )
@@ -230,7 +236,7 @@ class SampleCoverageTests(unittest.TestCase):
             signed_before = signed_path.read_bytes()
             fake_settings = SimpleNamespace(filter_id="test_filter", model_architecture="test_arch")
             fake_recipe = SimpleNamespace(
-                training_policy=SimpleNamespace(target_builder="scalar_pairwise"),
+                training_policy=SimpleNamespace(target_builder="netpnl_positive_binary"),
                 target_policy=SimpleNamespace(materialization_mode=CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH),
                 context_policy=SimpleNamespace(source="none"),
             )
@@ -278,10 +284,10 @@ class SampleCoverageTests(unittest.TestCase):
                 recipe = get_continuous_ranker_execution_recipe(profile)
                 from core.breakout_quality_registry import get_breakout_quality_experiment_profile
                 registered_profile = get_breakout_quality_experiment_profile(profile)
-                is_positive = calibration_enabled(registered_profile)
+                is_positive = recipe.training_policy.target_builder == "netpnl_positive_binary"
                 if is_positive:
-                    self.assertIsNone(recipe.training_policy.categorical_class_count)
-                    self.assertTrue(recipe.training_policy.uses_pairwise_loss)
+                    self.assertEqual(recipe.training_policy.categorical_class_count, 2)
+                    self.assertFalse(recipe.training_policy.uses_pairwise_loss)
                 daily = recipe.training_sample_scope == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
                 bundle = self.fake_bundle(daily=daily)
                 bundle.profile.score_calibration = registered_profile.score_calibration

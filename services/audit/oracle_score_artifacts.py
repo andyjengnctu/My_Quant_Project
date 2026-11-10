@@ -172,10 +172,12 @@ def _oracle_price_provider_contract_sha256() -> str:
     contracts = {}
     for role in _ORACLE_PRICE_PROVIDER_ROLES:
         profile = str(registered[role])
+        recipe = get_continuous_ranker_execution_recipe(profile)
         contracts[role] = {
             "profile_id": profile,
             "profile": asdict(get_breakout_quality_experiment_profile(profile)),
-            "recipe": asdict(get_continuous_ranker_execution_recipe(profile)),
+            "recipe": {**asdict(recipe),
+                       "target_policy": recipe.target_policy.as_target_calculation_payload()},
         }
     return canonical_json_sha256(contracts)
 

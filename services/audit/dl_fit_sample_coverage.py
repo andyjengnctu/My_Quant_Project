@@ -318,8 +318,7 @@ def _audit_seed(root: Path, *, model: str, profile: str, seed: int) -> dict[str,
     )
     cohort = _prepare_cohort(bundle)
     recipe = get_continuous_ranker_execution_recipe(profile)
-    from filters.breakout_quality.positive_rank_calibration import calibration_enabled
-    has_positive_output = calibration_enabled(bundle.profile)
+    has_positive_output = recipe.training_policy.target_builder == "netpnl_positive_binary"
     all_fold_rows: list[dict[str, Any]] = []
     all_year_rows: list[dict[str, Any]] = []
     last_observation = None

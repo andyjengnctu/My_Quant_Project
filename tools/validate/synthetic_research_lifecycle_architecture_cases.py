@@ -6,6 +6,7 @@ from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
 from tempfile import TemporaryDirectory
+from unittest import TestCase
 from unittest.mock import patch
 
 from .checks import bind_synthetic_case
@@ -19,11 +20,134 @@ from .research_lifecycle_architecture import (
 )
 
 
+
+class RealizedTargetFitIdentityCases(TestCase):
+    """Every registered economic target must bind its real PIT labels and teacher."""
+
+    def test_registered_teachers_and_ordered_labels_determine_fit_identity(self):
+        import numpy as np
+        import pandas as pd
+        from core.breakout_quality_runtime import _continuous_ranker_target_policies
+        from services.breakout_quality.fitting_data_dependencies import (
+            FitDataDependencies, mintrade40_fit_sample_sha256,
+        )
+        count = 0
+        for target_id, policy in _continuous_ranker_target_policies().items():
+            if not policy.fit_target_kind:
+                continue
+            count += 1
+            with self.subTest(target=target_id):
+                contract = {"target_id": target_id, "target_kind": policy.fit_target_kind,
+                            "teacher_lineage": {"contract": policy.fit_teacher_contract,
+                                                "seed": 42, "oos_start_date": "2021-01-01"}}
+                manifest = {"target_contract": contract, "formal_mintrade40_teacher_periods": [
+                    {"start": "2014-01-01", "end": "2020-12-31", "published": "2013-12-31",
+                     "params_signature": "original"},
+                    {"start": "2021-01-01", "end": None, "published": "2020-12-31",
+                     "params_signature": "future"},
+                ]}
+                def fit(value):
+                    return FitDataDependencies({}, value).rolling_source(fit_cutoff="2020-01-01")
+                original = fit(manifest)
+                future = deepcopy(manifest)
+                future["formal_mintrade40_teacher_periods"][1]["params_signature"] = "future-changed"
+                self.assertEqual(original, fit(future))
+                past = deepcopy(manifest)
+                past["formal_mintrade40_teacher_periods"][0]["params_signature"] = "past-changed"
+                self.assertNotEqual(original, fit(past))
+                self.assertEqual(original["target_contract"],
+                                 FitDataDependencies({}, manifest).forward_source(
+                                     fit_cutoff="2020-01-01")["target_contract"])
+                invalid = deepcopy(manifest)
+                invalid["target_contract"]["teacher_lineage"]["contract"] = "wrong-teacher"
+                with self.assertRaisesRegex(ValueError, "lineage contract"):
+                    fit(invalid)
+                table = pd.DataFrame({"ticker": ["2330", "2317"],
+                    "date": ["2019-01-01", "2019-01-02"], "source_pos": [300, 301],
+                    "label_eval_end_date": ["2019-02-01", "2019-02-02"]})
+                bundle = SimpleNamespace(target_manifest=manifest, group_table=table,
+                                         raw_target=np.array([-10., 20.]))
+                digest = mintrade40_fit_sample_sha256(bundle, [0, 1])
+                self.assertIsNotNone(digest)
+                self.assertNotEqual(digest, mintrade40_fit_sample_sha256(bundle, [1, 0]))
+                bundle.raw_target[0] = 10.
+                self.assertNotEqual(digest, mintrade40_fit_sample_sha256(bundle, [0, 1]))
+                bundle.raw_target[0] = np.nan
+                with self.assertRaisesRegex(ValueError, "NULL"):
+                    mintrade40_fit_sample_sha256(bundle, [0, 1])
+        self.assertGreater(count, 0)
+
+    def test_every_executable_trade_path_policy_declares_fit_provenance(self):
+        from core.breakout_quality_runtime import (
+            _continuous_ranker_target_policies,
+            CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH,
+        )
+        from services.breakout_quality.trade_path_target_source import _TRADE_PATH_SOURCES
+        for target_id, policy in _continuous_ranker_target_policies().items():
+            if (policy.materialization_mode == CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH
+                    and policy.contract_kind in _TRADE_PATH_SOURCES):
+                with self.subTest(target=target_id):
+                    self.assertTrue(policy.fit_target_kind)
+                    self.assertTrue(policy.fit_teacher_contract)
+
+    def test_unknown_teacher_contract_cannot_silently_omit_fit_witness(self):
+        from services.breakout_quality.fitting_data_dependencies import FitDataDependencies
+        with self.assertRaisesRegex(ValueError, "Unregistered"):
+            FitDataDependencies({}, {"target_contract": {
+                "target_id": "unregistered", "target_kind": "unregistered",
+                "teacher_lineage": {"contract": "unregistered"},
+            }}).rolling_source(fit_cutoff="2020-01-01")
+
+    def test_atr_limit_truth_is_independent_of_callers_execution_context(self):
+        import numpy as np
+        from dataclasses import replace
+        from core.portfolio_entry_policy import (
+            daily_signal_execution_context, current_daily_execution_contract,
+            DAILY_EXECUTION_LEGACY, DAILY_EXECUTION_CLOSE_FILTERS,
+            DAILY_EXECUTION_FULL_FILTERS,
+        )
+        from core.portfolio_param_runtime import build_portfolio_params_signature
+        from core.daily_common_entry_filters import daily_common_filter_signals
+        from filters.breakout_quality.daily_full_p20_target import compute_daily_full_p20_batch
+        from filters.breakout_quality.trade_path_label import build_signal_cache
+        from tools.validate.synthetic_daily_full_p20_fulltrade_cases import _fixture_source
+        days, frame, source = _fixture_source()
+        params = replace(source.schedule[0].params, atr_buy_tol=1.)
+        period = replace(source.schedule[0], params=params,
+                         params_signature=build_portfolio_params_signature(params))
+        kwargs = dict(frame=frame, positions=np.arange(40, 105), ticker="2330",
+                      schedule=(period,), exchange_calendar=days, research_cutoff=days[-1])
+        with daily_signal_execution_context(DAILY_EXECUTION_FULL_FILTERS):
+            expected = compute_daily_full_p20_batch(**kwargs)
+            atr = build_signal_cache(frame, params, ticker="2330")[0]
+            admitted, expected_limits = daily_common_filter_signals(frame, params, atr_main=atr, ticker="2330")
+        self.assertTrue(np.any(expected_limits[admitted] > frame["Close"].to_numpy()[admitted]))
+        import filters.breakout_quality.daily_full_p20_target as owner
+        original = owner.simulate_realized_trade_path_label
+        for context in (DAILY_EXECUTION_LEGACY, DAILY_EXECUTION_CLOSE_FILTERS):
+            with self.subTest(context=context), daily_signal_execution_context(context):
+                with patch.object(owner, "simulate_realized_trade_path_label", wraps=original) as simulate:
+                    actual = compute_daily_full_p20_batch(**kwargs)
+                self.assertEqual(current_daily_execution_contract(), context)
+                for call in simulate.call_args_list:
+                    self.assertEqual(call.kwargs["counterfactual_entry_limit"],
+                                     expected_limits[call.kwargs["signal_pos"]])
+                np.testing.assert_equal(actual.target_raw_pnl, expected.target_raw_pnl)
+                np.testing.assert_equal(actual.maturity_dates, expected.maturity_dates)
+                self.assertEqual(actual.reasons, expected.reasons)
+
+
 def validate_research_fit_lifecycle_architecture_case(_base_params):
     case_id = "RESEARCH_FIT_LIFECYCLE_ARCHITECTURE"
     results, summary, check, check_true = bind_synthetic_case(
         case_id, "meta_architecture_contract",
     )
+    from .check_result_utils import run_unittest_capability_cases
+    fit_checks, fit_details = run_unittest_capability_cases(
+        case_id, "meta_architecture_contract", (RealizedTargetFitIdentityCases,),
+    )
+    results.extend(fit_checks)
+    summary["realized_target_fit"] = fit_details
     root = Path(__file__).resolve().parents[2]
     sources = {
         name: (root / name).read_text(encoding="utf-8")
