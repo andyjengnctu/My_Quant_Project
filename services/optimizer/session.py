@@ -18,20 +18,26 @@ from core.exact_accounting import infer_security_profile
 
 
 def close_study_storage(study):
-    storage = getattr(study, "_storage", None)
-    if storage is None:
-        return
-    remove_session = getattr(storage, "remove_session", None)
-    if callable(remove_session):
-        remove_session()
-    backend = getattr(storage, "_backend", None)
-    backend_remove_session = getattr(backend, "remove_session", None)
-    if callable(backend_remove_session):
-        backend_remove_session()
-    engine = getattr(backend, "engine", None)
-    dispose = getattr(engine, "dispose", None)
-    if callable(dispose):
-        dispose()
+    write_lock = getattr(study, "_optimizer_study_write_lock", None)
+    try:
+        storage = getattr(study, "_storage", None)
+        if storage is None:
+            return
+        remove_session = getattr(storage, "remove_session", None)
+        if callable(remove_session):
+            remove_session()
+        backend = getattr(storage, "_backend", None)
+        backend_remove_session = getattr(backend, "remove_session", None)
+        if callable(backend_remove_session):
+            backend_remove_session()
+        engine = getattr(backend, "engine", None)
+        dispose = getattr(engine, "dispose", None)
+        if callable(dispose):
+            dispose()
+    finally:
+        if write_lock is not None:
+            study._optimizer_study_write_lock = None
+            write_lock.release()
 
 
 def _merge_int_count_dict(target: dict, source) -> None:

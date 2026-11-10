@@ -1,4 +1,9 @@
+- 退役c155, 156
+- 加回c123, 124, c155, c156
+- 每個stregtegy都要像這樣完整標示 Breakout (Min/P16)
+- 每個真實交易路徑的target 都要像這樣完整標示 MinTrade_NetPnL_Positive (P16)
 
+加入R40_positive exact/direct
 
 - bug
     - 0050 cannot be selected by any DL

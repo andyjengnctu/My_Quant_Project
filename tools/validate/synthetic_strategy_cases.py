@@ -1781,7 +1781,38 @@ def validate_optimizer_sampler_resume_determinism_case(_base_params):
                 # SQLAlchemy schema/bootstrap cost inside the synthetic suite.
                 uninterrupted_storage = optuna.storages.InMemoryStorage()
                 resumed_storage = f"sqlite:///{temp_root / 'resumed.db'}"
+                failed_create_storage = f"sqlite:///{temp_root / 'failed_open.db'}"
                 legacy_storage = optuna.storages.InMemoryStorage()
+
+                with patch("optuna.create_study", side_effect=RuntimeError("synthetic open failure")):
+                    try:
+                        create_optimizer_study(failed_create_storage, seed=42, sampler_kind="tpe")
+                    except RuntimeError:
+                        create_failed = True
+                    else:
+                        create_failed = False
+                recovered_after_failed_create = _track_study(create_optimizer_study(
+                    failed_create_storage, seed=42, sampler_kind="tpe"
+                ))
+                add_check(
+                    results, "strategy_contract", case_id,
+                    "sqlite_failed_study_open_releases_exclusive_writer_lock",
+                    (True, 0),
+                    (create_failed, len(recovered_after_failed_create.trials)),
+                )
+                close_study_storage(recovered_after_failed_create)
+
+                from services.optimizer.outer_rolling_runtime import _is_non_retryable_fold_failure
+                add_check(
+                    results, "strategy_contract", case_id,
+                    "optimizer_active_writer_and_finished_trial_conflicts_never_fallback",
+                    True,
+                    all(_is_non_retryable_fold_failure(RuntimeError(reason)) for reason in (
+                        "NON_RETRYABLE_OPTIMIZER_STUDY_BUSY",
+                        "UpdateFinishedTrialError: Trial#295 has already finished",
+                        "ValueError: Cannot tell a FAIL trial.",
+                    )),
+                )
 
                 plain_tpe_sampler = optuna.samplers.TPESampler(seed=42)
                 tpe_startup_trials = int(getattr(plain_tpe_sampler, "_n_startup_trials", 10) or 10)
@@ -1811,6 +1842,23 @@ def validate_optimizer_sampler_resume_determinism_case(_base_params):
 
                 resumed = _track_study(create_optimizer_study(resumed_storage, seed=42, sampler_kind="tpe"))
                 resumed.optimize(_objective, n_trials=tpe_resume_prefix_trials)
+                # A second owner must never mark this live study's trials FAIL.
+                concurrent_study_blocked = False
+                try:
+                    another = create_optimizer_study(resumed_storage, seed=42, sampler_kind="tpe")
+                except RuntimeError as exc:
+                    concurrent_study_blocked = "NON_RETRYABLE_OPTIMIZER_STUDY_BUSY" in str(exc)
+                else:
+                    close_study_storage(another)
+                add_check(
+                    results,
+                    "strategy_contract",
+                    case_id,
+                    "sqlite_live_study_reopen_is_blocked_before_optuna_recovery",
+                    True,
+                    concurrent_study_blocked,
+                )
+                close_study_storage(resumed)
                 resumed = _track_study(create_optimizer_study(resumed_storage, seed=42, sampler_kind="tpe"))
                 check_before = len(list(resumed.trials or []))
                 resumed.optimize(_objective, n_trials=1)

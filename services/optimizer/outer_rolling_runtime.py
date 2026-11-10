@@ -172,6 +172,9 @@ def _is_non_retryable_fold_failure(exc: BaseException | None) -> bool:
         current = current.__cause__ or current.__context__
     text = " ".join(parts).lower()
     markers = (
+        "non_retryable_optimizer_study_busy",
+        "updatefinishedtrialerror",
+        "cannot tell a fail trial",
         "non_retryable_runtime_identity_error",
         "non_retryable_no_finalist",
         "找不到 breakout quality 正式 manifest",

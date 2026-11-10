@@ -42,6 +42,74 @@ def prompt_existing_db_policy(db_file, colors):
         print(f"{colors['red']}🗑️ 已刪除舊記憶。{colors['reset']}")
 
 
+class _OptimizerStudyWriteLock:
+    """Protect one physical SQLite study against concurrent optimizer owners.
+
+    An Optuna resume marks an abandoned RUNNING trial as FAIL.  That recovery
+    must not run while the original worker can still write the same trial.
+    The OS owns the lock lifetime, including after a hard worker termination.
+    """
+
+    def __init__(self, db_file: str):
+        self._handle = None
+        self._db_label = os.path.basename(db_file)
+        lock_path = f"{db_file}.writer.lock"
+        os.makedirs(os.path.dirname(os.path.abspath(lock_path)), exist_ok=True)
+        handle = open(lock_path, "a+b")
+        try:
+            handle.seek(0, os.SEEK_END)
+            if handle.tell() == 0:
+                handle.write(b"\0")
+                handle.flush()
+            handle.seek(0)
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            handle.close()
+            raise RuntimeError(
+                "NON_RETRYABLE_OPTIMIZER_STUDY_BUSY: SQLite Optimizer study "
+                f"已有執行中的寫入者；不得將其RUNNING trial標成FAIL並接續：{self._db_label}"
+            ) from exc
+        except BaseException:
+            handle.close()
+            raise
+        self._handle = handle
+
+    def release(self) -> None:
+        handle = self._handle
+        if handle is None:
+            return
+        self._handle = None
+        try:
+            handle.seek(0)
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            handle.close()
+
+
+def _acquire_optimizer_study_write_lock(db_name):
+    """Only physical SQLite studies need a cross-process write-owner lock."""
+    if not isinstance(db_name, str) or not db_name.startswith("sqlite:///"):
+        return None
+    db_file = db_name[len("sqlite:///"):].partition("?")[0]
+    if not db_file or db_file == ":memory:":
+        return None
+    return _OptimizerStudyWriteLock(os.path.abspath(db_file))
+
+
 OPTIMIZER_LEGACY_STUDY_NAME = "portfolio_optimization_overnight"
 OPTIMIZER_DETERMINISTIC_RESUME_STUDY_NAME = "portfolio_optimization_overnight_resume_safe_v1"
 OPTIMIZER_EXECUTION_EVIDENCE_CONTRACT = "optimizer_resume_determinism_v1"
@@ -354,6 +422,21 @@ def _restore_seeded_sampler_resume_state(optuna, *, study, sampler, sampler_kind
 
 
 def create_optimizer_study(db_name, *, seed=None, sampler_kind="tpe"):
+    # The lock covers study creation, interrupted-trial recovery and all
+    # optimizer writes until close_study_storage(), not just optimize().
+    write_lock = _acquire_optimizer_study_write_lock(db_name)
+    try:
+        study = _create_optimizer_study_unlocked(db_name, seed=seed, sampler_kind=sampler_kind)
+        if write_lock is not None:
+            study._optimizer_study_write_lock = write_lock
+        return study
+    except BaseException:
+        if write_lock is not None:
+            write_lock.release()
+        raise
+
+
+def _create_optimizer_study_unlocked(db_name, *, seed=None, sampler_kind="tpe"):
     try:
         import optuna
         from sqlalchemy.exc import SQLAlchemyError

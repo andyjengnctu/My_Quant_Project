@@ -3396,12 +3396,15 @@ def main(argv=None, environ=None):
         if not os.path.exists(db_file):
             print(f"{C_RED}❌ 記憶庫不存在，無法匯出: {_project_relative_path(db_file)}；請用 Trade mode --trials N 重新訓練產生 candidate_best。{C_RESET}", file=sys.stderr)
             return 1
+        study = None
         try:
             ensure_optimizer_db_usable(db_file)
             ensure_export_only_db_not_empty(db_file)
             study = create_optimizer_study(db_name, seed=optimizer_seed, sampler_kind=resolve_optimizer_sampler_kind())
             _ensure_study_effective_policy_compatible(study=study, walk_forward_policy=walk_forward_policy)
         except RuntimeError as exc:
+            if study is not None:
+                close_study_storage(study)
             print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
             return 1
         try:
@@ -3534,6 +3537,7 @@ def main(argv=None, environ=None):
     seed_text = str(optimizer_seed) if optimizer_seed is not None else "未設定"
     print(f"{C_GRAY}🎲 Optimizer seed: {seed_text} | 來源: {seed_source}{C_RESET}")
 
+    study = None
     try:
         if not timing_mode and selected_model_mode == "study":
             _apply_interactive_study_db_policy(
@@ -3552,6 +3556,8 @@ def main(argv=None, environ=None):
         study = create_optimizer_study(db_name, seed=optimizer_seed, sampler_kind=sampler_kind)
         _ensure_study_effective_policy_compatible(study=study, walk_forward_policy=walk_forward_policy)
     except (ValueError, RuntimeError) as exc:
+        if study is not None:
+            close_study_storage(study)
         print(f"{C_RED}❌ {exc}{C_RESET}", file=sys.stderr)
         return 1
 
