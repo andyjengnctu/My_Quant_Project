@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from core.data_utils import OHLCV_SANITIZATION_CONTRACT_VERSION, discover_unique_csv_inputs
-from core.file_integrity import canonical_json_sha256, is_sha256_hex
+from core.file_integrity import canonical_json_sha256, is_sha256_hex, compute_observed_file_sha256
 from core.dataset_profiles import DATASET_PROFILE_FULL, get_dataset_dir, normalize_dataset_profile_key
 
 SOURCE_DATA_INVENTORY_SCHEMA_VERSION = 1
@@ -160,23 +160,20 @@ def _source_content_witness(
     for ticker, raw_path in sorted(csv_inputs, key=lambda row: (str(row[0]), str(row[1]))):
         path = Path(raw_path).resolve()
         before = path.stat()
-        file_hash = hashlib.sha256()
-        with path.open("rb") as handle:
-            for chunk in iter(lambda: handle.read(4 * 1024 * 1024), b""):
-                file_hash.update(chunk)
+        file_hash = compute_observed_file_sha256(path)
         after = path.stat()
         if ((before.st_size, before.st_mtime_ns, before.st_ctime_ns,
              before.st_dev, before.st_ino)
                 != (after.st_size, after.st_mtime_ns, after.st_ctime_ns,
                     after.st_dev, after.st_ino)):
             raise ValueError("來源 CSV 在內容驗證期間已更新，拒絕判定同一 source inventory")
-        for token in (str(ticker), path.relative_to(data_dir).as_posix(), file_hash.hexdigest()):
+        for token in (str(ticker), path.relative_to(data_dir).as_posix(), file_hash):
             content.update(token.encode("utf-8"))
             content.update(b"\0")
         # Exactly the historic Oracle Replay dataset SHA algorithm. This
         # runs during the canonical source-content check, not on menu entry.
         price_digest.update(str(ticker).encode("utf-8") + b"\0")
-        price_digest.update(file_hash.hexdigest().encode("ascii") + b"\n")
+        price_digest.update(file_hash.encode("ascii") + b"\n")
     # Detect additions/deletions and regular metadata changes during the scan.
     if dict(inventory) != _build_source_data_inventory(root, profile):
         raise ValueError("來源 CSV inventory 在內容驗證期間已變更")

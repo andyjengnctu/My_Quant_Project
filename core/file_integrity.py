@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from contextlib import contextmanager
+from functools import lru_cache
 import json
 import os
 import re
@@ -48,8 +49,51 @@ def file_change_signature(path: str | Path) -> tuple[int, int, int, int, int] | 
         return ("missing",)
     return (
         int(stat.st_dev), int(stat.st_ino), int(stat.st_size),
-        int(stat.st_mtime_ns), int(stat.st_ctime_ns),
+        int(stat.st_mtime_ns),
+        _windows_file_change_time_ns(path) if os.name == "nt" else int(stat.st_ctime_ns),
     )
+
+
+@lru_cache(maxsize=1)
+def _windows_file_information_api():
+    """Windows stat.ctime is creation time; use the actual NTFS ChangeTime."""
+    import ctypes
+    from ctypes import wintypes
+
+    class FileBasicInfo(ctypes.Structure):
+        _fields_ = [
+            ("CreationTime", ctypes.c_longlong), ("LastAccessTime", ctypes.c_longlong),
+            ("LastWriteTime", ctypes.c_longlong), ("ChangeTime", ctypes.c_longlong),
+            ("FileAttributes", wintypes.DWORD),
+        ]
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    create = kernel.CreateFileW
+    create.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                       wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+    create.restype = wintypes.HANDLE
+    query = kernel.GetFileInformationByHandleEx
+    query.argtypes = [wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD]
+    query.restype = wintypes.BOOL
+    close = kernel.CloseHandle
+    close.argtypes = [wintypes.HANDLE]
+    close.restype = wintypes.BOOL
+    return ctypes, FileBasicInfo, create, query, close
+
+
+def _windows_file_change_time_ns(path: str | Path) -> int:
+    ctypes, info_type, create, query, close = _windows_file_information_api()
+    # Attribute-only access, allowing concurrent readers/writers/atomic rename.
+    handle = create(str(Path(path).resolve()), 0x80, 0x7, None, 3, 0x02000000, None)
+    if handle == ctypes.c_void_p(-1).value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        info = info_type()
+        if not query(handle, 0, ctypes.byref(info), ctypes.sizeof(info)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        return int(info.ChangeTime) * 100
+    finally:
+        close(handle)
 
 
 def compute_file_sha256(path: str | Path, *, chunk_size: int = 1024 * 1024) -> str:
@@ -61,6 +105,32 @@ def compute_file_sha256(path: str | Path, *, chunk_size: int = 1024 * 1024) -> s
                 break
             digest.update(chunk)
     return digest.hexdigest()
+
+
+@lru_cache(maxsize=4096)
+def _observed_file_sha256(path: str, revision: tuple) -> str:
+    digest = compute_file_sha256(path)
+    if file_change_signature(path) != revision:
+        raise RuntimeError("File changed during SHA256 verification")
+    return digest
+
+
+def compute_observed_file_sha256(path: str | Path) -> str:
+    """Reuse a byte-verified digest only for the same local file revision.
+
+    The bounded process-local cache stores digests, never artifact readiness.
+    Callers still compare the result with their current canonical manifest.
+    Windows uses ChangeTime rather than creation-time ctime; on unsupported
+    filesystems the observation error propagates instead of accepting a hit.
+    """
+    resolved = Path(path).resolve()
+    before = file_change_signature(resolved)
+    if before == ("missing",):
+        raise FileNotFoundError(resolved)
+    digest = _observed_file_sha256(str(resolved), before)
+    if file_change_signature(resolved) != before:
+        raise RuntimeError("File changed during SHA256 observation")
+    return digest
 
 
 def atomic_replace_with_retry(
@@ -336,6 +406,7 @@ __all__ = [
     "atomic_write_text",
     "canonical_json_sha256",
     "compute_file_sha256",
+    "compute_observed_file_sha256",
     "load_json_object_or_none",
     "load_json_strict",
     "is_sha256_hex",

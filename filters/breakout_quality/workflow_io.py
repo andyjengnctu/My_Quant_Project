@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from copy import deepcopy
+from functools import lru_cache
 from pathlib import Path
 from typing import Iterable
 
@@ -12,7 +14,7 @@ import numpy as np
 import pandas as pd
 
 from core.data_utils import discover_unique_csv_inputs, sanitize_ohlcv_dataframe
-from core.file_integrity import atomic_write_text
+from core.file_integrity import atomic_write_text, file_change_signature
 from core.dataset_profiles import get_dataset_dir, normalize_dataset_profile_key
 from filters.breakout_quality.artifacts import compute_file_sha256
 from filters.breakout_quality.contract import (
@@ -36,6 +38,7 @@ from filters.breakout_quality.dataset_store import (
     DATASET_STORAGE_SCHEMA_VERSION,
     IndexedFeatureBank,
     dataset_artifact_metadata_reasons,
+    dataset_artifact_content_reasons,
     market_set_artifact_metadata_reasons,
     load_npy,
     resolve_dataset_paths,
@@ -223,12 +226,11 @@ def read_json(path: Path) -> dict:
 
 
 def _validate_artifact_hash(artifact_name: str, artifact_path: Path, record: dict) -> None:
-    expected_hash = str(record.get("sha256", "")).strip().lower()
-    actual_hash = compute_file_sha256(artifact_path).lower()
-    if not expected_hash or actual_hash != expected_hash:
-        raise ValueError(
-            f"dataset artifact SHA256 不一致: {artifact_name}; expected={expected_hash}, actual={actual_hash}"
-        )
+    reasons = dataset_artifact_content_reasons(
+        {artifact_name: artifact_path}, {artifact_name: record},
+    )
+    if reasons:
+        raise ValueError("dataset artifact SHA256 不一致: " + "; ".join(reasons))
 
 
 def _validate_future_paths(
@@ -247,16 +249,22 @@ def _validate_future_paths(
     chunk_size = 4096
     for start in range(0, len(future_available_bars), chunk_size):
         stop = min(start + chunk_size, len(future_available_bars))
-        for local_index, available in enumerate(future_available_bars[start:stop]):
-            group_index = start + local_index
-            count = int(available)
-            if count <= 0:
-                continue
-            highs = future_high_prices[group_index, :count]
-            lows = future_low_prices[group_index, :count]
-            finite_pair = np.isfinite(highs) & np.isfinite(lows)
-            if bool(np.any(finite_pair & (highs < lows))):
-                raise ValueError(f"future price cache 含 high < low: group_index={group_index}")
+        highs = future_high_prices[start:stop]
+        lows = future_low_prices[start:stop]
+        # AI: Same per-row available-prefix rule, evaluated in bounded blocks.
+        # Integer conversion preserves the original int(available) semantics.
+        raw_available = future_available_bars[start:stop]
+        available = (
+            np.asarray(raw_available, dtype=np.int64)
+            if np.issubdtype(raw_available.dtype, np.integer)
+            else np.asarray([int(value) for value in raw_available], dtype=np.int64)
+        )
+        active = np.arange(path_bars)[None, :] < available[:, None]
+        invalid = active & np.isfinite(highs) & np.isfinite(lows) & (highs < lows)
+        invalid_rows = np.flatnonzero(np.any(invalid, axis=1))
+        if invalid_rows.size:
+            group_index = start + int(invalid_rows[0])
+            raise ValueError(f"future price cache 含 high < low: group_index={group_index}")
 
 
 def load_validated_dataset_bundle(
@@ -268,6 +276,7 @@ def load_validated_dataset_bundle(
     paths = dataset_paths(filter_id)
     if not paths.summary.is_file():
         raise FileNotFoundError(f"找不到 dataset_summary.json: {paths.summary}")
+    revision = _dataset_bundle_revision(paths)
     summary = read_json(paths.summary)
     if str(summary.get("filter_id", "")).strip() != str(filter_id).strip():
         raise ValueError("dataset_summary.filter_id 與命令不一致")
@@ -306,6 +315,44 @@ def load_validated_dataset_bundle(
     if metadata_reasons:
         raise ValueError("dataset artifact metadata 不一致: " + "; ".join(metadata_reasons))
     assert isinstance(artifact_records, dict)
+    # AI: The summary and all backing files define one local physical revision.
+    # Each revision still passes the complete canonical SHA/shape/row checks on
+    # first use. Source freshness and caller-specific policy stay outside the
+    # cache and run on EVERY request, including diagnostic-only consumers.
+    events = _load_validated_dataset_payload(
+        paths, revision, json.dumps(summary, sort_keys=True, ensure_ascii=False),
+    )
+    if _dataset_bundle_revision(paths) != revision:
+        raise RuntimeError("Dataset artifacts changed during validated bundle loading")
+    # Do not retain mmap handles in the cache: Windows must be able to
+    # replace Dataset files once consumers release their ordinary bundles.
+    features = IndexedFeatureBank(load_npy(paths.feature_bank), load_npy(paths.event_group_index))
+    context, labels = load_npy(paths.event_context), load_npy(paths.event_labels)
+    if _dataset_bundle_revision(paths) != revision:
+        raise RuntimeError("Dataset artifacts changed while opening validated arrays")
+    return deepcopy(summary), features, context, labels, events.copy(deep=True)
+
+
+def _dataset_bundle_revision(paths) -> tuple:
+    return tuple(
+        (str(path.resolve()), file_change_signature(path))
+        for path in (paths.summary, *paths.artifact_paths().values())
+    )
+
+
+@lru_cache(maxsize=1)
+def _load_validated_dataset_payload(paths, revision: tuple, summary_json: str):
+    """Keep the validated event table for one current Dataset revision.
+
+    A stat revision is an invalidation hint, never proof of valid content.
+    Nothing is persisted; a fresh process verifies SHA256 and every invariant.
+    No mmap handle is retained, and callers receive a copy of the event table.
+    """
+    if _dataset_bundle_revision(paths) != revision:
+        raise RuntimeError("Dataset artifacts changed before payload validation")
+    summary = json.loads(summary_json)
+    policy = summary["policy"]
+    artifact_records = summary["dataset_artifacts"]
     for artifact_name, artifact_path in paths.artifact_paths().items():
         record = artifact_records[artifact_name]
         _validate_artifact_hash(artifact_name, artifact_path, record)
@@ -506,8 +553,9 @@ def load_validated_dataset_bundle(
     if int(summary.get("feature_group_count", -1)) != group_count:
         raise ValueError("dataset_summary.feature_group_count 與 artifacts 不一致")
 
-    indexed_features = IndexedFeatureBank(feature_bank, event_group_index)
-    return summary, indexed_features, context, labels, events
+    if _dataset_bundle_revision(paths) != revision:
+        raise RuntimeError("Dataset artifacts changed during payload validation")
+    return events
 
 
 def load_validated_market_set_bank(

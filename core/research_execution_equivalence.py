@@ -9,6 +9,24 @@ from __future__ import annotations
 
 # Baseline ZIP SHA256: 3aae4d710c451d519245c2c1d204ffc235bcc453497f607b4078751659c21c6e
 _REVIEWED = {
+    # AI: b0548fab input-read optimization: unchanged SHA bytes, Dataset rows
+    # and validation decisions; only repeated reads/scans are memoized. The
+    # complete current source is pinned so ANY later edit hashes normally.
+    "core/file_integrity.py": {
+        "file_sha256": "ab5ad7c0ef8cc0c6c7b0eee28061ebd6d6e20cd784f5d2e83a445d249834deb3",
+        "original_file_sha256": "6f5abc343fb6ecc75e43f0ed8ead19023b627fc5ebaa93a2804c6bf1d87746ec",
+        "calculations": {},
+    },
+    "filters/breakout_quality/source_inventory.py": {
+        "file_sha256": "56542cc049f2a48eeb258b65f09869c8d85f468dc02c366b544e0301664621c0",
+        "original_file_sha256": "a0d20b2e0a99a40f747880bfc5dce7fff92e54660876a73b2c538fc6ac2c8fa6",
+        "calculations": {},
+    },
+    "filters/breakout_quality/workflow_io.py": {
+        "file_sha256": "4ca328dd515831fee40da42386d71fc0b19577d90f7b54d4e2c220b8f89c9a31",
+        "original_file_sha256": "332d1facb60f0474e78608e366db91a8b3b7aa00b0436998b7229854d65f0d42",
+        "calculations": {},
+    },
     "filters/breakout_quality/trade_path_label.py": {
         "file_sha256": "a9da0254197bc8bae01378b237d226710707647ed60f52406c0ad2f7c422e724",
         "original_file_sha256": "c64d7d40e5ac7a26364a2be1ccaf34a756a6013d239e5eda151094d48faca202",
