@@ -190,14 +190,28 @@ def _mintrade_source_fingerprint_proof() -> tuple[str, frozenset[str]]:
                 hashes[name] = (attested_mintrade_source_sha256(name, root / name)
                                 if name == _SOURCE_OWNER and not raw_owner
                                 else reviewed_execution_source_sha256(name, sha256(data).hexdigest()))
-            for daily_sha in daily_sources:
-                digest = sha256(b"canonical_daily_source\0" + daily_sha.encode("ascii") + b"\n")
-                for name in source_modules:
-                    digest.update(name.encode("utf-8") + b"\0")
-                    digest.update(hashes[name].encode("ascii") + b"\n")
-                result.add(digest.hexdigest())
-                if newline is None and not raw_owner and daily_sha == daily:
-                    executing = digest.hexdigest()
+            # A Windows checkout/partial ZIP can convert just one source,
+            # leaving a mixed-encoding tree. Reconstruct these closures from
+            # current bytes as well as uniform LF/CRLF trees. This is a bounded
+            # encoding proof, not acceptance of an arbitrary historical SHA.
+            variants = [hashes]
+            for name, data in contents.items():
+                if name == _SOURCE_OWNER and not raw_owner:
+                    continue  # This owner already has an executable-AST proof.
+                lf = data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+                for encoded in (lf, lf.replace(b"\n", b"\r\n")):
+                    value = reviewed_execution_source_sha256(name, sha256(encoded).hexdigest())
+                    if value != hashes[name]:
+                        variants.append({**hashes, name: value})
+            for values in variants:
+                for daily_sha in daily_sources:
+                    digest = sha256(b"canonical_daily_source\0" + daily_sha.encode("ascii") + b"\n")
+                    for name in source_modules:
+                        digest.update(name.encode("utf-8") + b"\0")
+                        digest.update(values[name].encode("ascii") + b"\n")
+                    result.add(digest.hexdigest())
+                    if values is hashes and newline is None and not raw_owner and daily_sha == daily:
+                        executing = digest.hexdigest()
     if executing is None:
         raise ValueError("Oracle truth source closure has no executing fingerprint")
     return executing, frozenset(result)

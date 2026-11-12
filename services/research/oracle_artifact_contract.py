@@ -164,6 +164,8 @@ def oracle_execution_contract(context: Mapping[str, Any]) -> dict[str, Any]:
     result["replay_policy"] = oracle_replay_policy(context["replay_policy"])
     if context.get("score_contract") is not None:
         result["score_contract"] = oracle_score_contract(context["score_contract"])
+    if context.get("source_contract") is not None:
+        result["source_contract"] = oracle_source_contract(context["source_contract"])
     return result
 
 
@@ -408,8 +410,7 @@ def portfolio_candidate_execution_sha256(*, daily_execution_contract: str | None
     return canonical_json_sha256(parts)
 
 
-@lru_cache(maxsize=32)
-def source_implementation_sha256(recipe: str, profile_id: str) -> str:
+def _source_implementation_parts(recipe: str, profile_id: str) -> dict[str, str]:
     parts = {"daily_percentile": calculation_source(
         "filters/breakout_quality/continuous_ranker_data.py", "build_same_date_percentile_targets")}
     capability = daily_truth_capability(recipe)
@@ -499,7 +500,45 @@ def source_implementation_sha256(recipe: str, profile_id: str) -> str:
         if recipe in {"terminal_mae_gate", "mfe_mae_gate"}:
             parts["mae_gate"] = calculation_source("filters/breakout_quality/continuous_target.py",
                                                  "full_horizon_mae_gated_reward_r")
-    return canonical_json_sha256(parts)
+    return parts
+
+
+@lru_cache(maxsize=32)
+def source_implementation_sha256(recipe: str, profile_id: str) -> str:
+    return canonical_json_sha256(_source_implementation_parts(recipe, profile_id))
+
+
+@lru_cache(maxsize=32)
+def _source_implementation_encodings(recipe: str, profile_id: str) -> frozenset[str]:
+    """Rebuild only the declared closure's encoding-equivalent digests.
+
+    Every calculation owner is evaluated from the executing implementation;
+    a changed formula, admission or delegated source cannot inherit an old
+    digest. No archived result hash or model/strategy ID is an authority.
+    """
+    capability = daily_truth_capability(recipe)
+    closure = capability.get("calculation_closure") if capability else None
+    if not closure or tuple(closure[:2]) != (
+            "services.audit.daily_trade40_oracle", "truth_producer_fingerprint"):
+        return frozenset()
+    from services.audit.mintrade_truth_source_attestation import _mintrade_source_fingerprint_proof
+    executing, encodings = _mintrade_source_fingerprint_proof()
+    parts = _source_implementation_parts(recipe, profile_id)
+    if parts.get("delegated_execution") != executing:
+        return frozenset()
+    return frozenset(canonical_json_sha256({**parts, "delegated_execution": value})
+                     for value in encodings)
+
+
+def oracle_source_contract(source: Mapping[str, Any]) -> dict[str, Any]:
+    """Project proven encoding variants; retain all other source inputs."""
+    result = dict(source)
+    recipe = str(source.get("recipe") or "")
+    provider = source.get("feature_provider") or {}
+    profile_id = str(provider.get("profile_id") or "")
+    if source.get("implementation_sha256") in _source_implementation_encodings(recipe, profile_id):
+        result["implementation_sha256"] = source_implementation_sha256(recipe, profile_id)
+    return result
 
 
 # Frozen *format migration* boundary, not a producer-SHA alias list. Legacy
@@ -825,14 +864,24 @@ class OracleExecutionIndex:
         if original is not None:
             recorded["score_contract"] = {key: value for key, value in original.items()
                                           if key not in _REFERENCE_FIELDS | _SCORE_WITNESS_FIELDS}
-        return (canonical_json_sha256(recorded) == digest
-                and oracle_execution_contract(recorded) == oracle_execution_contract(context))
+        candidates = [recorded]
+        source = recorded.get("source_contract")
+        if source is not None:
+            encodings = _source_implementation_encodings(
+                str(source.get("recipe") or ""),
+                str((source.get("feature_provider") or {}).get("profile_id") or ""))
+            if source.get("implementation_sha256") in encodings:
+                candidates.extend({**recorded, "source_contract": {
+                    **source, "implementation_sha256": value}} for value in sorted(encodings))
+        return any(canonical_json_sha256(candidate) == digest
+                   and oracle_execution_contract(candidate) == oracle_execution_contract(context)
+                   for candidate in candidates)
 
     def native_completed(self, context):
         """Recover an index from a native effective-contract signed receipt.
 
-        Source-byte aliases and numerical artifacts are unnecessary: native
-        receipts already name this exact execution-effective contract.
+        Reconstruct the original signed context, including proven encoding
+        variants, without publishing aliases or opening numerical artifacts.
         """
         matches = []
         for identity in self.store.existing_completed_identities(seed=context["seed"], target=context["target"]):

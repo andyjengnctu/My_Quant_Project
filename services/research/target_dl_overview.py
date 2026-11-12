@@ -1203,6 +1203,14 @@ def collect_target_dl_overview(project_root: Path) -> dict[str, Any]:
             # No-DL controls never have a supervised Target. Arm IDs stay in
             # the Strategy ID column and in signed Replay identities only.
             target = _summary_scientific_target(group, binding, summary_model_targets)
+            if arm_id and target:
+                from core.research_summary import (
+                    research_summary_parameter_dimensions, research_summary_target_label,
+                )
+                _filter, parameter_version, _daily = research_summary_parameter_dimensions(
+                    arm, parameter_sources=STRATEGY_EXPERIMENTAL_PARAM_SOURCES,
+                )
+                target = research_summary_target_label(target, parameter_version=parameter_version)
             append_row(
                 target=target, entry=entry_label,
                 selector=selector, model=model, arm=arm_id, metrics={},

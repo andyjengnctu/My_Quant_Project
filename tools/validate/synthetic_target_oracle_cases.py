@@ -7731,6 +7731,69 @@ class OracleTruthReferenceSignedNpZCases(TestCase):
 class OracleEffectiveArtifactContractCases(TestCase):
     """Generic capability ownership, invalidation and original-evidence checks."""
 
+    def test_mixed_line_endings_are_proven_from_current_bytes_not_old_hashes(self):
+        from services.audit import mintrade_truth_source_attestation as attest
+        from services.audit import oracle_score_artifacts as sources
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first, second = root / "first.py", root / "second.py"
+            first.write_bytes(b"value = 1\n")
+            second.write_bytes(b"fee = 2\r\n")
+            with patch.object(attest, "__file__", str(root / "services/audit/proof.py")), \
+                    patch.object(attest, "_truth_source_inventory", return_value=("first.py", "second.py")), \
+                    patch.object(sources, "oracle_daily_source_fingerprint", return_value="a" * 64):
+                def proof():
+                    attest._mintrade_source_fingerprint_proof.cache_clear()
+                    return attest._mintrade_source_fingerprint_proof()
+                self.addCleanup(attest._mintrade_source_fingerprint_proof.cache_clear)
+                original, _ = proof()
+                first.write_bytes(b"value = 1\r\n")
+                converted, equivalents = proof()
+                self.assertNotEqual(converted, original)
+                self.assertIn(original, equivalents)
+                second.write_bytes(b"fee = 3\r\n")
+                changed, equivalents = proof()
+                self.assertNotEqual(changed, converted)
+                self.assertNotIn(original, equivalents)
+                self.assertNotIn(converted, equivalents)
+
+    def test_declared_closure_encoding_projection_retains_other_source_inputs(self):
+        from services.research import oracle_artifact_contract as contracts
+        from core.daily_trade_path_capabilities import DAILY_TRUTH_CAPABILITIES
+        recipes = [recipe for recipe, capability in DAILY_TRUTH_CAPABILITIES.items()
+                   if capability.get("calculation_closure", ())[:2] == (
+                       "services.audit.daily_trade40_oracle", "truth_producer_fingerprint")]
+        self.assertTrue(recipes)
+        for recipe in recipes:
+            with self.subTest(recipe=recipe):
+                profile = "isolated_encoding_contract"
+                executing = contracts.source_implementation_sha256(recipe, profile)
+                variants = contracts._source_implementation_encodings(recipe, profile)
+                archived = next(value for value in variants if value != executing)
+                source = {"recipe": recipe, "feature_provider": {"profile_id": profile},
+                          "implementation_sha256": executing, "calculation_revision": 1}
+                original = {**source, "implementation_sha256": archived}
+                self.assertEqual(contracts.oracle_source_contract(original), source)
+                self.assertEqual(original["implementation_sha256"], archived)
+                revised = {**original, "calculation_revision": 2}
+                self.assertNotEqual(contracts.oracle_source_contract(revised), source)
+                unknown = {**source, "implementation_sha256": "0" * 64}
+                self.assertEqual(contracts.oracle_source_contract(unknown), unknown)
+
+                calculation = contracts.calculation_source
+                def changed_owner(relative, name, **kwargs):
+                    if name == "simulate_realized_trade_path_label":
+                        return "e" * 64
+                    return calculation(relative, name, **kwargs)
+                for fn in (contracts.source_implementation_sha256, contracts._source_implementation_encodings):
+                    fn.cache_clear()
+                    self.addCleanup(fn.cache_clear)
+                with patch.object(contracts, "calculation_source", side_effect=changed_owner):
+                    self.assertNotEqual(contracts.source_implementation_sha256(recipe, profile), executing)
+                    self.assertEqual(contracts.oracle_source_contract(original), original)
+                for fn in (contracts.source_implementation_sha256, contracts._source_implementation_encodings):
+                    fn.cache_clear()
+
     def _implementations(self):
         from services.research.oracle_artifact_contract import source_implementation_sha256
         plan = oracle._oracle_comparison_plan(_ACTIVE_ORACLE_DEFINITION)

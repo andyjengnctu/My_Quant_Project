@@ -202,6 +202,18 @@ def research_summary_parameter_dimensions(
     return filter_profile.capitalize(), actual_set[6:], is_daily_fitted
 
 
+def research_summary_target_label(name: str, *, parameter_version: str) -> str:
+    """Format execution-path Targets identically with or without an Oracle row.
+
+    The caller supplies the verified Optimizer identity; the scientific name
+    and all saved Target/FIT/Replay identities remain unchanged.
+    """
+    if (any(part in name for part in ("MinTrade", "FullTrade"))
+            and any(name.endswith(suffix) for suffix in ("_NetR", "_NetPnL", "_NetPnL_Positive"))):
+        return f"{name} ({parameter_version})"
+    return name
+
+
 def research_summary_entry_label(
     arm: Mapping[str, Any], *, family: str = "min",
     parameter_sources: Mapping[str, Mapping[str, Any]],

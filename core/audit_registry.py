@@ -386,14 +386,12 @@ def oracle_display_target(row: Mapping[str, Any]) -> str:
     Price-only T40/MFE/R40 are not trade-path outcomes and stay unchanged.
     Historical signed Target/Score/Replay IDs remain free of this suffix.
     """
+    from core.research_summary import research_summary_target_label
     name = oracle_target_semantics(row)[0]
-    if (any(part in name for part in ("MinTrade", "FullTrade"))
-            and any(name.endswith(suffix) for suffix in ("_NetR", "_NetPnL", "_NetPnL_Positive"))):
-        _filter_label, parameter_version = _oracle_parameter_dimensions(
-            oracle_parameter_family(row),
-        )
-        return f"{name} ({parameter_version})"
-    return name
+    _filter_label, parameter_version = _oracle_parameter_dimensions(
+        oracle_parameter_family(row),
+    )
+    return research_summary_target_label(name, parameter_version=parameter_version)
 
 
 def oracle_comparison_key(row: Mapping[str, Any]) -> str:

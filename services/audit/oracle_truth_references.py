@@ -109,18 +109,26 @@ class OracleTruthReferences:
 
     def read(self, context):
         path = self._path(context)
-        if not path.is_file():
-            return None
-        try:
-            raw = json.loads(path.read_text(encoding="utf-8"))
-            payload = {key: raw[key] for key in ("schema", "context", "origin_identity", "evidence_sha256")}
-            if (payload["schema"] != 1 or payload["context"] != context
-                    or raw.get("reference_sha256") != canonical_json_sha256(payload)
-                    or not self._matches(payload["origin_identity"], context)):
-                raise ValueError("truth reference contract/SHA mismatch")
-            return raw
-        except (OSError, ValueError, KeyError, TypeError) as exc:
-            raise ValueError(f"Oracle truth reference corrupt: {path.name}: {exc}") from exc
+        from services.research.oracle_artifact_contract import oracle_source_contract
+        wanted = {**context, "source_contract": oracle_source_contract(context["source_contract"])}
+        matches = []
+        for candidate in sorted(path.parent.glob("*.json")):
+            try:
+                raw = json.loads(candidate.read_text(encoding="utf-8"))
+                payload = {key: raw[key] for key in ("schema", "context", "origin_identity", "evidence_sha256")}
+                recorded = payload["context"]
+                if (payload["schema"] != 1 or self._path(recorded) != candidate
+                        or raw.get("reference_sha256") != canonical_json_sha256(payload)
+                        or not self._matches(payload["origin_identity"], recorded)):
+                    raise ValueError("truth reference contract/SHA mismatch")
+                effective = {**recorded, "source_contract": oracle_source_contract(recorded["source_contract"])}
+                if effective == wanted:
+                    matches.append(raw)
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                raise ValueError(f"Oracle truth reference corrupt: {candidate.name}: {exc}") from exc
+        if matches and any(item["evidence_sha256"] != matches[0]["evidence_sha256"] for item in matches[1:]):
+            raise ValueError("Oracle same effective truth contract has conflicting evidence")
+        return matches[0] if matches else None
 
     def origin_path(self, identity):
         name = str(identity["target_id"])

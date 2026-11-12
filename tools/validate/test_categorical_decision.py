@@ -112,6 +112,12 @@ class PayoffDecisionCases(TestCase):
             self.assertEqual(len(rows), 1)
             self.assertIsNone(rows[0]['oracle_romd'])
             self.assertTrue(rows[0]['positive_model'])
+            from core.research_summary import research_summary_parameter_dimensions, research_summary_target_label
+            from core.strategy_compare_registry import STRATEGY_EXPERIMENTAL_PARAM_SOURCES
+            _filter, version, _daily = research_summary_parameter_dimensions(
+                STRATEGY_COMPARE_ARMS[arm_id], parameter_sources=STRATEGY_EXPERIMENTAL_PARAM_SOURCES)
+            self.assertEqual(rows[0]['target'], research_summary_target_label(
+                'Daily_MinTrade_NetPnL_Positive', parameter_version=version))
         self.assertEqual(len([r for r in report['rows'] if r['strategy'] == 'C183']), 1)
 
 
