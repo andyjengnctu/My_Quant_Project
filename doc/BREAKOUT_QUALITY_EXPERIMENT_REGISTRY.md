@@ -1010,8 +1010,8 @@ The canonical `config/research_summary.py` roster alone determines current Model
 
 | 身分 | 現行定義 | 狀態 |
 |---|---|---|
-| `MR-13DJ` / `DL-CONT13DJ_ROLL` | `daily_universal_min_p21_netpnl_utility_binary`；原生 300×10 InceptionTime，獨立二類 payoff-weighted CE；輸入只含既有合法股價特徵，不讀 DH／DI 分數 | CURRENT / FIT v4 / MARKET_FIT_PENDING / NO_TRADING |
-| `SR-C186` | 與 C183 同 P21、DH Rank、Direct、費稅、出場與資金規則；第二個模型改為 DJ 的 `positive_trade_allowed`，無可調 probability threshold、無 DI 依賴 | CURRENT / REPLAY v4 / MARKET_REPLAY_PENDING / ORACLE_CONTRACT_UNRESOLVED |
+| `MR-13DJ` / `DL-CONT13DJ_ROLL` | `daily_universal_min_p21_netpnl_utility_binary`；原生 300×10 InceptionTime，獨立二類 payoff-weighted CE；輸入只含既有合法股價特徵，不讀 DH／DI 分數 | CURRENT / FIT v4 / USER_REPORTED_ROLLING_AND_4SEED_RESULT_2026_11_12 / NO_TRADING |
+| `SR-C186` | 與 C183 同 P21、DH Rank、Direct、費稅、出場與資金規則；第二個模型改為 DJ 的 `positive_trade_allowed`，無可調 probability threshold、無 DI 依賴 | CURRENT / REPLAY v4 / USER_REPORTED_ROLLING_AND_4SEED_RESULT_2026_11_12 / ORACLE_CONTRACT_UNRESOLVED |
 | `SR-C183` / `MR-13DH` / `MR-13DI` | 原 DH＋DI 控制組完整保留；DI 仍為原本等權 CE 與 P(Positive)>0.5 | EXISTING_IDENTITY_UNCHANGED |
 
 - 監督真值保持同 seed P21 合法成熟 broker NetPnL；no-fill／未成熟仍 NULL。訓練類別為 NetPnL>0，權重為 abs(NetPnL) / mean(abs(NetPnL of FIT rows))。選 epoch 的 Train 與 final refit 各用自己明列的合法 FIT rows 計算尺度；不讀 OOS／未來 fold 的統計。
@@ -1020,4 +1020,13 @@ The canonical `config/research_summary.py` roster alone determines current Model
 - Epoch selection 使用該合法 Validation cohort 的 abs(NetPnL)-weighted CE、同口徑 Brier tie-break；無 threshold grid、無額外校準、無 OOS 選模。既有 Forward／Rolling、逐 fold FIT owner、四 seed Robustness 與七項工作選單共用原生流程。現行 Training Model 設為 DJ，正式 Model Compare／Strategy Compare 均從 Summary 同源投影。
 - C186 由 DH＋DJ 兩份 PIT 分數同資訊日對齊，任一缺失不入場；比對只消費模型保存的 0/1 action，不在策略端計算 probability cutoff。C183 與 C186 共用既有 DH、teacher 合法工件；DJ FIT／C186 Replay 不重用先前錯誤三模型工件。
 - 新輸出尚無核准的 perfect-score 映射與端到端 Oracle parity。Summary 保留正式比較列與實際模型／策略結果，Oracle 欄位留白，不借用 C183 Oracle。此狀態不阻擋已授權模型訓練與策略比較；不新增虛構 Oracle 成果或改寫舊簽章。
-- 尚未取得本機市場訓練／Rolling／四 seed Replay 結果；工程測試不是績效證據，結果取得後才依規則增補 Experiment Log。
+- 2026-11-12 已取得使用者 Summary 的 Rolling／四 Seed 結果，數值與限制登錄於 Experiment Log；未附原始 FIT／Replay 工件，不宣稱已獨立驗證。
+
+## 2026-11-12：P16 payoff Positive 退役（MR-13DK／C187／C188）
+
+| 永久保留身分 | 歷史定義 | 最新狀態 |
+|---|---|---|
+| `MR-13DK` / `DL-CONT13DK_ROLL` | `daily_universal_formal_mintrade_fullcycle_netpnl_utility_binary`；同 seed P16 成熟 full-cycle NetPnL，獨立 300×10 InceptionTime、abs(NetPnL)-weighted CE、strict-logit action；FIT v1 | RETIRED 2026-11-12 / HISTORICAL_ID_RESERVED / RESULTS_READ_ONLY / NO_TRADING |
+| `SR-C187` / `SR-C188` | 原 CO Rank＋DK action，P16 Breakout Exact K/R0／Direct No-K/No-R0；共用 DK FIT/PIT，獨立 Replay v1；未認證的 Oracle 留白 | RETIRED 2026-11-12 / HISTORICAL_IDS_RESERVED / RESULTS_READ_ONLY / NO_ACTIVE_MODEL_OR_STRATEGY |
+
+使用者依正式 Summary 的負面對照結果指示退役；實測值與限制只由 Experiment Log 的同日結果段持有。移除專屬 profile／ResearchSpec、DL source、兩個 arm、五個 contrast 與 Summary bindings，不設 legacy 可執行替代入口。現行 Training Model 回到 MR-13DJ；C125／C126 的 CO＋CP 與 P21 C186 的 DH＋DJ 繼續保留。共同 payoff 訓練／action capability 仍被 DJ 使用，不屬於 DK 專屬資產。原工件不得更名、改派或當作其他模型 REUSE，亦不回收上述編號。

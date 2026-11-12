@@ -654,37 +654,6 @@ Formal bundle閉環（2026-07-26 13:26）：來源程式ZIP `test-branch-1_20260
 | 下一步 | 取得真實`strategy_comparison.md/.json`後比較淨總報酬、最大回撤、RoMD、年化、Log R²、月勝率、交易數、候選／持股缺口與年度穩定性；結果只決定是否部署／是否再比較8F，不得回頭調9A |
 
 
-#### 3.60 Selection Point-in-time Score Workflow 第一階段（2026-08-01）
-
-| 項目 | 紀錄 |
-|---|---|
-| 狀態 | `IMPLEMENTED / RESULT_NOT_AVAILABLE`；已完成程式與獨立合成契約驗證，尚未在完整專案資料上訓練 |
-| 程式基準 | 來源 `test-branch-1_20260801_144606_024e49d(2).zip`，SHA256 `762eac6a328c318efa9ecbd1922e29607e06b8f9053a80e1322fff770ccbb6c6` |
-| 單一入口 | `apps/breakout_quality.py`主選單改為模型研究、策略驗證、設定／工件狀態三項；舊`apps/breakout_quality_strategy_compare.py`只轉送至新`strategy-compare`子命令 |
-| 泛用config | 新增`config/breakout_quality_workflow.py`，集中filter、architecture、experiment profile、seed、PIT日期／fold及策略mode／Score source／buy-sort；選單與工件名稱不寫死9A／11G／11K。後續3.63補正為依profile training objective自動派送binary或continuous流程 |
-| 共用pipeline | 新增`continuous_ranker_pipeline.py`重用既有資料載入、percentile target、Validation選epoch、final refit、checkpoint與inference；沒有複製loss或建立第二套訓練語意 |
-| PIT builder | 新增expanding-window builder。Train／Validation／final refit均要求事件早於score period且`label_eval_end_date < score_start`；每個group只能由一個未見該事件的fold模型評分 |
-| 工件防錯 | 每fold保存日期範圍、row/group coverage、selected epoch、checkpoint與Score hash；串接時檢查重複、缺失、cutoff、identity、有限值與完整coverage。正式Score CSV不含Future Target |
-| 模型audit | 新增PIT audit，離線join Target後輸出global／daily Spearman、年度與decile spread、fold分布／drift、PASS分類重疊與orderable coverage；已支援既有orderable工件的`target_date`日期欄位 |
-| Runtime邊界 | Builder manifest固定`eligible=false`與`selection_model_validation_only`；不作forward-OOS runtime、scanner、buy-sort或optimizer輸入。策略選單在PIT score-store與泛用Score排序尚未實作時明確阻擋 |
-| 驗證 | 已通過modified-files編譯、CLI help、舊入口轉接、AST無循環／無apps反向依賴、無bare except，以及獨立合成資料的fold embargo、coverage、duplicate rejection與orderable `target_date` coverage；依專案規範未執行`apps/test_suite.py` |
-| 尚未完成 | 未建立真實`selection_point_in_time_scores.csv`、未取得模型Spearman結果、未修改buy-sort、未跑策略optimizer或OOS績效比較 |
-
-
-#### 3.61 Formal quick-gate 舊 Strategy Compare Help 閉環（2026-08-01）
-
-| 項目 | 紀錄 |
-|---|---|
-| 狀態 | `IMPLEMENTED / FORMAL_RERUN_PENDING`；已完成根因確認、程式修正與獨立CLI重現，待使用者重新執行正式suite確認 |
-| 程式基準 | 來源`test-branch-1_20260801_170534_3cc7f52.zip`，SHA256 `881a4670875a0e633d8ae74eff90f6b96b33e2df9e11b4b05717f64d94d3a003`；bundle `to_chatgpt_bundle_20260801_170703_78c6748d.zip`，SHA256 `45021dfceb2c12241d66669f13922dfc18f54e1782fa45d09160bf73564ca8d5` |
-| Formal結果 | quick gate唯一FAIL為`help::breakout_quality_strategy_compare.py`；consistency、chain checks、ML smoke與meta quality均PASS。Bundle manifest共58個工件，逐檔size與SHA256驗證一致 |
-| 根因 | 舊`apps/breakout_quality_strategy_compare.py`雖正常以exit code 0轉呼叫統一入口，但轉送時把program name硬設為`apps/breakout_quality.py`，使help首行顯示`breakout_quality.py strategy-compare`；quick gate依舊CLI契約要求看到`breakout_quality_strategy_compare.py`，因此判FAIL |
-| 唯一修正 | 舊adapter轉送時保留自己的program name；統一入口新增泛用legacy command-entrypoint alias解析，只有alias已代表該子命令時不再把command附加到`sys.argv[0]`。舊入口仍不建立argparse或第二套strategy compare邏輯 |
-| 獨立驗證 | `python apps/breakout_quality_strategy_compare.py --help`回傳0並顯示`usage: breakout_quality_strategy_compare.py ...`；`python apps/breakout_quality.py strategy-compare --help`回傳0並維持`usage: breakout_quality.py strategy-compare ...`。全專案251個Python檔編譯／AST通過、無bare except、無top-level import cycle、core／config／filters／strategies無反向依賴apps |
-| Dataset／模型 | 不需重建Dataset或relabel；不改continuous-ranker、PIT folds、checkpoint、Score、9A、Target、optimizer、buy-sort、portfolio replay或正式策略參數 |
-| 下一步 | 使用者套用修補後重跑formal suite；若quick gate通過，即繼續建立Selection point-in-time Scores，不新增其他模型或排序變更 |
-
-
 #### 3.62 Selection PIT Scores完成與Orderable Coverage欄位碰撞修正（2026-08-01）
 
 | 項目 | 紀錄 |
@@ -699,68 +668,6 @@ Formal bundle閉環（2026-07-26 13:26）：來源程式ZIP `test-branch-1_20260
 | 防錯驗證 | 合成orderable工件刻意帶入同名舊Score：一筆有PIT match、一筆無PIT match但舊Score有效；修正後coverage仍正確為1／2=0.5，證明未誤用舊Score。保留欄位若被外部工件占用則fail-fast |
 | Dataset／模型 | 不重建Dataset、不relabel、不重訓fold、不改continuous-ranker、selected epoch、checkpoint、Score CSV、Target、seed、buy-sort或策略參數 |
 | 下一步 | 直接重跑`python apps/breakout_quality.py audit-point-in-time-scores`；取得global／daily Spearman、年度spread、fold drift及orderable coverage後，才判定是否進入泛用Score buy-sort。不得因本次audit程式錯誤重跑7個fold |
-
-
-#### 3.63 泛用Profile Workflow Router修正（2026-08-01）
-
-| 項目 | 紀錄 |
-|---|---|
-| 狀態 | `IMPLEMENTED / RESULT_NOT_AVAILABLE`；完成程式、設定與獨立路由驗證，未重新訓練模型或執行策略回放 |
-| 程式基準 | 來源`test-branch-1_20260801_173825_934eddc.zip`，SHA256 `f4a75d6a5d5d74b3c5579b28148684bcb155f2a35b412cd73622b6498fb1de35` |
-| 問題 | 第一階段主選單雖使用泛用名稱，但`get_breakout_quality_workflow_settings()`、狀態頁、`[Enter]`與`[1]`均硬綁continuous ranker／PIT流程；把profile改成9A `unique_group_sampling`會直接報錯，違反config驅動設計 |
-| 唯一修正 | Experiment profile既有`training_objective`成為流程派送單一來源。Binary classification走既有完整classification research workflow；continuous ranker維持Selection PIT builder＋audit。狀態頁只顯示當前objective相關工件 |
-| 策略auto契約 | `BREAKOUT_QUALITY_STRATEGY_COMPARISON_MODE／SCORE_SOURCE／BUY_SORT`新增`auto`：binary解析為`hard-filter／canonical_runtime／original`；continuous解析為`score-ranking／selection_point_in_time／breakout_quality_score_desc`。明確覆寫仍需通過跨欄一致性檢查 |
-| 參數政策 | `base-finalist-best`／`base-finalists-agree`不再只限score-ranking；hard-filter也可由統一選單忠實傳入並以不同輸出目錄隔離。Controlled pair仍只允許切換相應filter或ranking開關；`attribution-only`與11C預設改由同一canonical directory discovery辨識policy-specific及舊目錄 |
-| 切換方式 | 原9A與continuous皆只切換workflow profile；Seed統一由`BREAKOUT_QUALITY_RANDOM_SEED`控制，預設42，不再依profile切換。此列原先的continuous seed=1規則已由3.67取代 |
-| 固定條件 | 不改active architecture、Dataset、Label、threshold、continuous Target、PIT folds／checkpoint／Scores、portfolio accounting、候選生成、成交、出場或正式runtime開關 |
-| Dataset／Label | 不需重建Dataset或relabel；只有使用者在binary模型流程確認開始訓練時，才依既有workflow規則檢查並更新工件 |
-| 驗證 | 已獨立驗證binary／continuous settings解析、binary模型route、binary hard-filter策略route、hard-filter參數政策輸出隔離與下游目錄發現、CLI help、全專案編譯／AST與依賴方向；依專案規範未執行`apps/test_suite.py` |
-| 結果邊界 | 本輪只修正操作與配置契約；不得據此宣稱9A或continuous模型、排序或策略績效改善 |
-
-
-#### 3.64 Formal Consistency Canonical Strategy-Compare Fixture閉環（2026-08-01）
-
-| 項目 | 紀錄 |
-|---|---|
-| 狀態 | `IMPLEMENTED / FORMAL_RERUN_PENDING`；根因已由formal bundle確認，validator fixture已同步，待使用者重跑正式suite確認 |
-| 程式基準 | 來源`test-branch-1_20260801_175951_e781354.zip`，SHA256 `f2d8b1dcc1d79d848013995f68fc80697039776c7837ce010cf19df966e63a8c`；bundle `to_chatgpt_bundle_20260801_180117_5ac62bbf.zip`，SHA256 `e33c8a5ace14bd0e2fbef31a30d97d06550d04d5473dd18393e495a7e6566d5d` |
-| Formal結果 | quick gate PASS；consistency為4,999 PASS／30 SKIP／1 FAIL；chain checks與ML smoke PASS；meta quality唯一FAIL為`coverage_synthetic_suite_runs_successfully`。Consistency唯一失敗metric為`continuous_target_round_trip_auto_path_uses_output_tree` |
-| 根因 | Router修正後hard-filter strategy compare正式優先目錄為`strategy_compare_base_finalist_best`，舊`strategy_compare`只作相容fallback。Runtime正確把舊目錄回報為`active_9a_strategy_compare_discovery`；synthetic fixture仍把檔案建立在舊目錄，卻期待`active_9a_standard_path`，形成validator自相矛盾 |
-| 唯一修正 | Synthetic fixture不再硬編碼`strategy_compare`；改呼叫`canonical_strategy_compare_output_dir_names(COMPARISON_MODE_HARD_FILTER)[0]`建立目前正式優先目錄，並保留`active_9a_standard_path`預期。Runtime discovery、目錄優先序與相容fallback均不修改 |
-| Meta quality閉環 | Coverage比例、critical targets與checklist本身均已通過；meta quality失敗只因synthetic fail count=1。修正同一fixture後，該衍生FAIL應同步消失，但正式結果仍須由本機重跑確認 |
-| Dataset／模型 | 不重建Dataset、不relabel、不重訓9A或continuous folds；不改checkpoint、PIT Scores、Target、threshold、seed、optimizer、buy-sort、portfolio replay或策略參數 |
-| 獨立驗證 | 已獨立驗證canonical優先目錄回報`active_9a_standard_path`、舊目錄回報`active_9a_strategy_compare_discovery`、全專案AST／compile、bare-except、依賴方向、import cycle、Markdown table與formal registry／checklist一致性；依規範未執行`apps/test_suite.py`或其正式step |
-| 下一步 | 使用者覆蓋修補後重跑正式suite；預期consistency與meta quality同時恢復PASS。若仍有新FAIL，再依新bundle閉環，不修改runtime以迎合舊fixture |
-
-
-#### 3.65 Breakout-quality Config單一來源整併（2026-08-01）
-
-| 項目 | 紀錄 |
-|---|---|
-| 狀態 | `IMPLEMENTED / RESULT_NOT_AVAILABLE`；完成設定架構整併與獨立相容驗證，未重新訓練模型或執行策略回放 |
-| 程式基準 | 來源`test-branch-1_20260801_180913_c77a7cc(1).zip`，SHA256 `90691c277723f2846e94f56c4bc4f17f9c852112d65805b46ecee9a75088b101` |
-| 問題 | `breakout_quality_policy.py`、`breakout_quality_experiments.py`與`breakout_quality_workflow.py`分散模型、profile與workflow設定；使用者切換9A／continuous流程時需理解三個檔案，且容易誤改非作用中的設定 |
-| 唯一修正 | 新增`config/breakout_quality.py`作唯一可編輯設定來源。檔案最上方先放主選單workflow profile切換，再依模型identity、Dataset／Label、architecture、training、validation、execution、PIT與策略分類排列；profile類別／registry、驗證、衍生值與helper全部集中下半部 |
-| 最終檔案契約 | 依使用者要求只保留必要檔案，三個舊設定檔已刪除；專案內部與外部腳本都必須直接import`config.breakout_quality`，不提供會隱藏殘留依賴的alias |
-| 行為一致性 | 合併前後132個公開名稱完整保留；所有可序列化設定、active profile payload、workflow manifest payload、Inception kernels與receptive field逐項一致。後續刪除alias檔只移除舊import入口，不改canonical設定值、衍生結果或runtime行為 |
-| 固定條件 | 不改active architecture、binary／continuous profile定義、optimizer、Label、threshold、seed目前值、PIT fold／checkpoint／Scores、strategy mode解析、portfolio accounting、候選生成、成交或出場 |
-| Dataset／Label | 不需重建Dataset或relabel；設定檔整併不改任何artifact identity或hash契約 |
-| 結果邊界 | 本輪只改善設定可維護性與單一真理來源；不得據此宣稱9A、continuous ranker或策略績效改善 |
-
-
-#### 3.66 單一Config刪檔後Formal閉環（2026-08-01）
-
-| 項目 | 紀錄 |
-|---|---|
-| 狀態 | `IMPLEMENTED / FORMAL_RERUN_PENDING`；已修正bundle確認的validator／文件殘留，待使用者重跑正式suite確認 |
-| 程式基準 | 來源`test-branch-1_20260801_183429_c2f3b2a.zip`，SHA256 `e5cf9d58b8b3f5165cff24a2e17889247e3ce6add46656aaf9a83cd1e1f8faa6`；bundle`to_chatgpt_bundle_20260801_183502_5e1d75ef.zip`，SHA256 `a4b1867dab4e3c7ed3c07573ec13d363be622b4aec82d1113ccfbf59e68c1f47` |
-| Formal結果 | quick gate PASS；consistency 956 PASS／30 SKIP／1 FAIL；chain checks與ML smoke PASS；meta quality FAIL 4。Consistency唯一FAIL為synthetic suite啟動時`ModuleNotFoundError: config.breakout_quality_policy`；coverage run info顯示returncode=1、synthetic_case_count=0 |
-| 根因 | Runtime與專案內部imports已正確使用`config.breakout_quality`，但`validate_breakout_quality_policy_single_source_case`仍把三個舊alias檔存在與可import當成成功條件。使用者刪除舊檔後，該case在產生check row前就拋例外，連帶使coverage line／branch／key-target gates因0個synthetic cases而失敗 |
-| 唯一修正 | Single-source validator改為要求canonical檔存在、舊三檔全部不存在，並繼續AST／source掃描runtime是否殘留舊import；同步canonical docstring、CMD、Architecture與checklist。沒有恢復alias檔來迎合舊測試 |
-| Meta quality閉環 | 四個meta failures均是synthetic suite未執行的衍生結果；修正後suite可進入原coverage cases。實際coverage百分比仍以本機正式重跑為準，不預先寫成PASS |
-| Dataset／模型 | 不重建Dataset、不relabel、不重訓9A或continuous folds；不改checkpoint、PIT Scores、Target、threshold、seed、optimizer、buy-sort、portfolio replay或策略參數 |
-| 獨立驗證 | 已獨立執行changed-case、全專案compile／AST、舊import AST掃描、bare-except、依賴方向、import cycle、CLI、binary／continuous workflow解析、Markdown table與checklist transition檢查；依規範未執行`apps/test_suite.py`或其正式steps |
-| 下一步 | 使用者覆蓋修補後重跑正式suite；預期consistency與四個coverage衍生FAIL同步消失。如coverage仍有獨立FAIL，再以新bundle追查，不恢復舊config檔 |
 
 
 ### 2026-07 · 已排除或暫停的方向
@@ -5397,3 +5304,16 @@ Assessment: `USER_REPORTED_ROLLING_RESULT_AVAILABLE / FULL_HORIZON_MAE_SMALL_PAI
 
 **只有新科學證據或舊科學證據有效性更正才能增加本文件內容。** 記錄必須有實驗／Target 身分、期間／Seed、控制變數、原始結果、負結果與決策，並指向正式證據。沒有市場／模型結果的工程測試、提交紀錄、打包、格式調整或一次性 Audit 清理，不可追加研究章節。本文件不再生成封存副本或研究待辦。
 
+### 2026-11-12 — P16 payoff Positive DK Exact／Direct 結果與退役決策
+
+- **共同條件／來源**：使用者提供正式 Summary，Oracle 標頭為 end_to_end_v1／N=4，研究 OOS 為 2021-01-01～2026-03-02。P16 Breakout、同一 MR-13CO Rank、對應 Exact／Direct 與 Broker-Cash 規則；唯一 Positive 學習變數為 CP 的等權二類 CE 對 DK 的 abs(NetPnL)-weighted CE／模型 action。下列是 user-reported Console 數值，未附逐 Seed／Fold／成交原工件，不能視為 GPT 獨立重算或正式測試 PASS。
+
+| 策略 | Selector | Positive DL | Rolling RoMD | Robustness RoMD（4S） | Mean RoMD |
+|---|---|---|---:|---:|---:|
+| C125 | Exact | MR-13CP | 11.11 | 10.81 | 10.87 |
+| C187 | Exact | MR-13DK | 7.52 | 6.82 | 6.96 |
+| C126 | Direct | MR-13CP | 13.01 | 7.12 | 8.30 |
+| C188 | Direct | MR-13DK | 3.90 | 5.27 | 5.00 |
+
+- **決策／限制**：DK 在兩個 Selector 的 Rolling、四 Seed Robustness 與加權 Mean RoMD 均低於 CP 對照。使用者明確指示退役 C187／C188；其唯一專用 Positive 模型 MR-13DK／DL-CONT13DK_ROLL 一併退出 current training／compare。ID 與本次負面觀測永久保留，原工件保留唯讀；不以這些迭代研究 OOS 重新擬合門檻或修改訓練。未提供 Exposure、MDD 或逐 Seed 分布，不能推斷退步原因或否決其他參數家族的 payoff 能力。
+- **P21 獨立觀測**：同份 Summary 的 C186（DH＋DJ）Rolling／4S Robustness／Mean RoMD 為 13.73／4.67／6.49；C183（DH＋DI）為 12.80／2.66／4.69。這是 P21 的原有對照，不與 P16 混為同條件比較，也不構成升格；DJ／C186 保留。兩組 payoff action 的 Oracle 欄位未提供有效數值，不補造。
