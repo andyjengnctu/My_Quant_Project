@@ -647,7 +647,9 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
             STRATEGY_COMPARE_ARMS, STRATEGY_EXPERIMENTAL_PARAM_SOURCES,
         )
         from config.strategy_params import STRATEGY_PARAM_PROFILES
-        from core.research_summary import get_research_summary_baseline_arm_ids
+        from core.research_summary import (
+            get_research_summary_baseline_arm_ids, research_summary_target_label,
+        )
         from core.audit_registry import oracle_display_target
 
         by_arm = {row["strategy"]: row for row in snapshot["rows"] if row["strategy"]}
@@ -665,7 +667,11 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
                 profile = STRATEGY_PARAM_PROFILES[profile_id]
                 param_set = profile["parameter_set_identity"]
                 expected_daily[arm_id] = (
-                    oracle_display_target(group["oracle"]) if "oracle" in group else "",
+                    oracle_display_target(group["oracle"]) if "oracle" in group else
+                    research_summary_target_label(
+                        str(group.get("display_target") or ""),
+                        parameter_version=param_set.removeprefix("PARAM-"),
+                    ),
                     f"Daily ({profile['filter_profile'].capitalize()}/{param_set.removeprefix('PARAM-')})",
                     ("Default" if not arm.get("dl_enabled") else
                      "Direct" if arm.get("dl_runtime_mode") ==
@@ -773,7 +779,18 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         # its source and Direct variants must change all three workflows once.
         from config.breakout_quality import BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE
         active_profile = BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE[1]
-        removable = next(profile for _name, profile in pairs if profile != active_profile
+        # AI: Removing a Rank group also removes its Positive bindings. Keep
+        # every group containing the selected Training Model in either role.
+        protected_rank_profiles = {
+            binding["rank_model"][1]
+            for group in original_rows
+            if any(binding.get(role, (None, None))[1] == active_profile
+                   for binding in group.get("bindings", ())
+                   for role in ("rank_model", "positive_model"))
+            for binding in group.get("bindings", ()) if binding.get("rank_model")
+        }
+        removable = next(profile for _name, profile in pairs
+                         if profile != active_profile and profile not in protected_rank_profiles
                          and any("oracle" in group and group.get("bindings")
                                  and all(binding.get("rank_model", (None, None))[1] == profile
                                          for binding in group["bindings"]) for group in original_rows)
@@ -794,6 +811,9 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         ))
         removed_arms = {binding["arm_id"] for group in removed for binding in group.get("bindings", ())}
         with patch.object(summary_cfg, "RESEARCH_SUMMARY_ROWS", remaining):
+            check_true("summary_removal_preserves_selected_training_model_in_either_role",
+                       tuple(BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE)
+                       in get_research_summary_model_profiles())
             current_definition = oracle_application.get_formal_oracle_definition("breakout_quality")
             updated = target_dl_overview.collect_target_dl_overview(root)
             updated_arms = {row["strategy"] for row in updated["rows"] if row["strategy"]}
