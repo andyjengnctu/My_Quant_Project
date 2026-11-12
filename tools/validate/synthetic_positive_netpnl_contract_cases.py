@@ -732,6 +732,148 @@ class PositiveNetPnlContractCases(TestCase):
             "daily_universal_full_p20_fulltrade_netpnl_full_list_ndcg_pairwise")), "C173")
 
 
+class OracleScalarPositiveCapabilityCases(TestCase):
+    """Only approved scalar-sign capabilities; no per-experiment test matrix."""
+
+    @staticmethod
+    def scalar_rows():
+        from core.audit_registry import oracle_positive_output_for_recipe
+        definition = get_formal_oracle_definition(get_active_audit_module_id())
+        plan = _oracle_comparison_plan(definition)
+        rows = []
+        for row in definition.source['oracle_comparisons']:
+            origin = plan['aliases'].get(row['target'], row['target'])
+            if row.get('positive_output') and origin in plan['recipes']:
+                recipe, provider = plan['recipes'][origin]
+                if row['positive_output'] == oracle_positive_output_for_recipe(recipe):
+                    rows.append((row, origin, recipe, provider))
+        return definition, rows
+
+    def test_perfect_scalar_class_uses_raw_sign_with_zero_and_null(self):
+        from dataclasses import replace
+        import pandas as pd
+        from services.audit import target_oracle_romd as oracle
+        definition, rows = self.scalar_rows()
+        self.assertTrue(rows)
+        for row, origin, recipe, provider in rows:
+            with self.subTest(recipe=recipe, selector=row['selector']):
+                # More than half are positive: rank-half and raw-sign differ.
+                raw = [0.001, 0.1, 0.3, 0.7, 0.0, -0.2, np.nan]
+                truth = pd.DataFrame({'ticker': [str(1000+i) for i in range(len(raw))],
+                    'date': ['2021-01-04'] * len(raw),
+                    'mfe': [1.] * len(raw), 'peak_adverse': [.1] * len(raw),
+                    'min_low': [-.1] * len(raw), 'raw': [1.] * len(raw),
+                    f'scalar_raw_{recipe}': raw})
+                scoped = replace(definition, source={**definition.source,
+                    'oracle_comparisons': (row,)})
+                with patch.object(oracle, '_load_truth', return_value=truth.drop(columns=f'scalar_raw_{recipe}')), \
+                     patch.object(oracle, '_market_truth_for_oracle', return_value=(
+                         {provider: truth}, {'score_start': '2021-01-01'})):
+                    actual = oracle._load_price_positive_scores(scoped, source=origin,
+                        project_root=ROOT, cutoff='2026-03-02')
+                expected = {(str(1000+i), '2021-01-04'): value
+                            for i, value in enumerate([1., 1., 1., 1., 0., 0.])}
+                self.assertEqual(actual, expected)
+
+    def test_scalar_positive_cache_reuses_source_and_rejects_corruption(self):
+        from dataclasses import replace
+        from types import SimpleNamespace
+        from services.audit import target_oracle_romd as oracle
+        import json
+        definition, rows = self.scalar_rows()
+        self.assertTrue(rows)
+        with TemporaryDirectory() as folder:
+            scores = {('2330', '2021-01-04'): 1., ('2317', '2021-01-04'): 0.}
+            identity = {'schema': 1, 'canonical_source': rows[0][1]}
+            certificate = oracle._price_positive_algorithm_sha256()
+            with patch.object(oracle, '_price_positive_algorithm_sha256', return_value=certificate), \
+                 patch.object(oracle, '_contract', return_value=(
+                     SimpleNamespace(dataset='full'), None, None)), \
+                 patch.object(oracle, '_formal_dl_score_start', return_value='2021-01-01'), \
+                 patch.object(oracle, 'price_score_source_identity', return_value=identity), \
+                 patch.object(oracle, '_build_price_positive_scores', return_value=scores) as build:
+                for row, origin, _recipe, _provider in rows:
+                    scoped = replace(definition, source={**definition.source, 'oracle_comparisons': (row,)})
+                    actual = oracle._load_price_positive_scores(scoped, source=origin,
+                        project_root=Path(folder), cutoff='2026-03-02', price_sha='a'*64)
+                    self.assertEqual(actual, scores)
+                self.assertEqual(build.call_count, 1)
+                cached = list(Path(folder).rglob('price_scores_*.npz'))
+                self.assertEqual(len(cached), 1)
+                with np.load(cached[0], allow_pickle=False) as archive:
+                    arrays = {key: archive[key].copy() for key in archive.files}
+                arrays['matrix'][0, 0] = 1. - arrays['matrix'][0, 0]
+                np.savez_compressed(cached[0], **arrays)
+                with self.assertRaisesRegex(oracle.OracleBlockedError, 'corrupt'):
+                    oracle._load_price_positive_scores(scoped, source=origin,
+                        project_root=Path(folder), cutoff='2026-03-02', price_sha='a'*64)
+                self.assertEqual(build.call_count, 1)
+
+    def test_formal_pit_and_oracle_scalar_positive_replay_are_identical(self):
+        from core.strategy_params import V16StrategyParams
+        from config.strategy_compare import STRATEGY_COMPARE_CURRENT_OOS_PROFILE
+        from tools.validate.synthetic_portfolio_common import (
+            build_synthetic_competing_candidates_case, run_portfolio_core_check_for_dir)
+        from tools.validate.synthetic_frame_utils import write_synthetic_csv_bundle
+        import pandas as pd
+        _definition, rows = self.scalar_rows()
+        self.assertTrue(rows)
+        case = build_synthetic_competing_candidates_case(V16StrategyParams())
+        params = case['params']
+        params.use_breakout_quality_ranking = True
+        with TemporaryDirectory() as folder:
+            write_synthetic_csv_bundle(folder, case['frames'])
+            for profile_id in (STRATEGY_COMPARE_CURRENT_OOS_PROFILE,
+                               STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE):
+                settings = get_strategy_comparison_settings(profile_id)
+                for row, _origin, _recipe, _provider in rows:
+                    arm = settings.arms[row['strategy_arm_id']]
+                    source = settings.dl_sources[arm.dl_id]
+                    classifier = settings.dl_sources[arm.dl_runtime_options['positive_dl_id']]
+                    options = {**arm.dl_runtime_options,
+                        'positive_filter_id': classifier.filter_id,
+                        'positive_model_architecture': classifier.model_architecture,
+                        'positive_experiment_profile': classifier.experiment_profile,
+                        'positive_score_source': classifier.score_source}
+                    for allowed in (*case['frames'], None):
+                        scores = {(ticker, day): .9 if i == 0 else .1
+                            for i, (ticker, frame) in enumerate(case['frames'].items())
+                            for day in frame['Date']}
+                        positive = {key: float(key[0] == allowed) for key in scores}
+                        def lookup(*, ticker, signal_date, filter_id, score_column=None, **kwargs):
+                            day = pd.Timestamp(signal_date).strftime('%Y-%m-%d')
+                            value = (positive if score_column else scores)[(ticker, day)]
+                            return {'score': value, 'available': True, 'score_date': day,
+                                'filter_id': filter_id, 'unavailable_reason': '',
+                                'score_source': SCORE_SOURCE_SELECTION_POINT_IN_TIME}
+                        def execute(perfect):
+                            context = (audit_oracle_truth_score_context(scores,
+                                ranking_policy=arm.dl_runtime_mode, ranking_options=options,
+                                positive_scores=positive, key_mode='information_date')
+                                if perfect else breakout_quality_ranking_source_context(
+                                    score_source=SCORE_SOURCE_SELECTION_POINT_IN_TIME,
+                                    model_architecture=source.model_architecture,
+                                    experiment_profile=source.experiment_profile,
+                                    ranking_policy=arm.dl_runtime_mode, ranking_options=options))
+                            with context, patch(
+                                'filters.breakout_quality.runtime.lookup_selection_point_in_time_candidate_score',
+                                side_effect=lookup):
+                                return run_portfolio_core_check_for_dir(folder, params,
+                                    max_positions=case['max_positions'],
+                                    enable_rotation=case['enable_rotation'],
+                                    start_year=case['start_year'], benchmark_ticker=case['benchmark_ticker'])
+                        with self.subTest(mode=profile_id, arm=arm.arm_id, allowed=allowed):
+                            perfect, fitted = execute(True), execute(False)
+                            for field in ('total_return', 'mdd', 'final_eq', 'trade_count',
+                                          'win_rate', 'filled_buy_count', 'avg_exp', 'max_exp',
+                                          'reserved_buy_fill_rate', 'portfolio_completed_trades'):
+                                self.assertEqual(perfect[field], fitted[field], field)
+                            pd.testing.assert_frame_equal(perfect['df_trades'], fitted['df_trades'])
+                            buys = ([] if perfect['df_trades'].empty else perfect['df_trades'].loc[
+                                perfect['df_trades']['Type'].str.startswith('買進'), 'Ticker'].tolist())
+                            self.assertEqual(buys, [] if allowed is None else [allowed])
+
+
 class IndependentPositiveClassifierCases(TestCase):
     """The Positive gate consumes a distinct PIT-safe binary model, never raw outcomes."""
 
@@ -810,11 +952,15 @@ class IndependentPositiveClassifierCases(TestCase):
                               'label': (raw > 0).astype(int)})
         percentiles = trainer.build_same_date_percentile_targets(raw, np.ones(24,dtype=bool), groups['date'])
         from core.breakout_quality_registry import SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES
-        decision_profiles = tuple(name for name in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES
-            if getattr(get_continuous_ranker_training_policy(
-                get_breakout_quality_experiment_profile(name).training_objective), 'categorical_decision_column', None))
-        for name in (DAILY_UNIVERSAL_NETPNL_POSITIVE_BINARY_PROFILE,
-                     TRUE_DAILY_MINTRADE_NETPNL_POSITIVE_PROFILE, *decision_profiles):
+        # One CPU roundtrip per reusable objective/architecture, independent of
+        # how many experiments compose that same capability.
+        binary_profiles = {}
+        from core.research_summary import get_research_summary_model_profiles
+        for _model_id, name in get_research_summary_model_profiles():
+            profile = get_breakout_quality_experiment_profile(name)
+            if get_continuous_ranker_training_policy(profile.training_objective).categorical_class_count == 2:
+                binary_profiles.setdefault((profile.training_objective, profile.model_architecture), name)
+        for name in binary_profiles.values():
             with self.subTest(profile=name), redirect_stdout(StringIO()):
                 recipe = get_breakout_quality_experiment_profile(name)
                 self.assertEqual(get_continuous_ranker_training_policy(recipe.training_objective).categorical_class_count, 2)

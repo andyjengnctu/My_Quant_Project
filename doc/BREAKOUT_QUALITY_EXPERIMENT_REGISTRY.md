@@ -1030,3 +1030,19 @@ The canonical `config/research_summary.py` roster alone determines current Model
 | `SR-C187` / `SR-C188` | 原 CO Rank＋DK action，P16 Breakout Exact K/R0／Direct No-K/No-R0；共用 DK FIT/PIT，獨立 Replay v1；未認證的 Oracle 留白 | RETIRED 2026-11-12 / HISTORICAL_IDS_RESERVED / RESULTS_READ_ONLY / NO_ACTIVE_MODEL_OR_STRATEGY |
 
 使用者依正式 Summary 的負面對照結果指示退役；實測值與限制只由 Experiment Log 的同日結果段持有。移除專屬 profile／ResearchSpec、DL source、兩個 arm、五個 contrast 與 Summary bindings，不設 legacy 可執行替代入口。現行 Training Model 回到 MR-13DJ；C125／C126 的 CO＋CP 與 P21 C186 的 DH＋DJ 繼續保留。共同 payoff 訓練／action capability 仍被 DJ 使用，不屬於 DK 專屬資產。原工件不得更名、改派或當作其他模型 REUSE，亦不回收上述編號。
+
+
+## 2026-11-12：R40_Positive × Breakout (Min/P16) Exact／Direct
+
+使用者授權新增 R40_Positive 的兩個 P16 策略；不是恢復已退役 T40_Positive 或 payoff DK。
+
+| 身分 | 現行定義 | 狀態 |
+|---|---|---|
+| `MR-13DL` / `DL-CONT13DL_ROLL` | `daily_universal_terminal_r40_positive_binary`；獨立 300×10 InceptionTime、Adam、等權二類 CE；共用 CI 的 `daily_terminal_r40_v1` 合法成熟 Daily stock-days，分類 raw R40>0 | AUTHORIZED / FIT v1 / MARKET_RESULTS_PENDING / NO_TRADING |
+| `SR-C189` | Breakout (Min/P16) R40_Positive Exact K/R0；既有 CI Rank ＋ DL Positive，嚴格 P(R40>0)>0.5 | AUTHORIZED / REPLAY v1 / RESULTS_PENDING / NO_PROMOTION |
+| `SR-C190` | 同一 CI Rank ＋ DL Positive，僅改用 canonical Direct No-K/No-R0 | AUTHORIZED / REPLAY v1 / RESULTS_PENDING / NO_PROMOTION |
+
+- `R40=(Close[T+40]/Close[T]-1)/0.10` 沿用 CI；不以真實交易 NetPnL、T40 MAE gate 或 abs(NetPnL) 權重替代。只有完整 40-bar 且在 fold cutoff 前成熟的標籤可 FIT；未成熟／缺值維持 NULL，不混入負類。R40>0 不保證策略成交後扣費淨獲利。
+- Exact／Direct 共用逐 fold／seed 的新 DL FIT/PIT；CI、P16 及其他原合法工件依完整身分 REUSE，不因新增策略升版。新模型可由既有七項工作操作；Summary 同源派生模型比較、策略 Forward／Rolling 及 end_to_end_v1 四 seed Robustness，不新增選單。
+- Oracle 將同一 R40 canonical daily percentile 作 Rank、同一原始 R40 的 strict >0 作完美二類輸出，經正式雙分數入口注入；不以 rank percentile>0.5 取代 raw R40>0，不在候選端加未來真值 gate。沿用既有 40D Oracle 資格／cutoff／尾端處理與 P16 交易條件；R40_Positive／_Direct 各有獨立 Replay 身分。合成 parity 不代表全市場 Oracle 已完成；未取得正式簽章結果前不填 Oracle RoMD／Win Rate。
+- 舊 C106／C118 R40 無 Positive 控制、C125／C126 及 DJ／C186 保留。未取得新市場 FIT、Rolling／四 seed 或策略績效，不追加 Experiment Log 結果。

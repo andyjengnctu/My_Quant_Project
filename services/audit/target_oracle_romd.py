@@ -794,10 +794,8 @@ def _resolve_oracle_target_score_contracts(definition, settings, plan) -> dict[s
                 raise OracleBlockedError(f"Oracle Positive score-contract mismatch: {name}")
             primary_profile = get_breakout_quality_experiment_profile(arm_source.experiment_profile)
             from core.audit_registry import oracle_supervised_target_id
-            # Only certified NetPnL price-path truth provides current Positive
-            # classes. Retired scalar-price Positive branches are not executable.
-            if origin in plan["recipes"]:
-                raise OracleBlockedError(f"Oracle price-only Positive has been retired: {name}")
+            # Approved raw-score capabilities own Positive semantics. Historical
+            # treatment retirement is enforced by the Registry before this resolver.
             raw_comparison = next(
                 (item for item in definition.source["oracle_source_catalog"]
                  if item["target"] == origin), None)
@@ -826,6 +824,8 @@ def _resolve_oracle_target_score_contracts(definition, settings, plan) -> dict[s
                 "positive_score_source_id": positive_dl_id,
                 "positive_profile_id": str(classifier_source.experiment_profile),
                 "positive_score_contract_revision": POSITIVE_SCORE_CONTRACT,
+                **({"positive_label_projection_sha256": _price_positive_algorithm_sha256()}
+                   if origin in plan["recipes"] else {}),
             }
         result[name] = {
             **({"hindsight_extra_gate": extra_gate} if extra_gate is not None else {}),
@@ -1295,6 +1295,94 @@ def _reconcile_oracle_truth(
         if name.startswith("scalar_raw_"):
             matched[name] = check[name]
     return matched, int((~completed).sum())
+
+
+def _price_positive_algorithm_sha256() -> str:
+    """Sign projection implementation plus the unchanged canonical raw label owner."""
+    import inspect
+    from core.positive_netpnl_contract import positive_labels
+    payload = (_price_score_algorithm_sha256() + inspect.getsource(_build_price_positive_scores)
+               + inspect.getsource(positive_labels))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _load_price_positive_scores(
+    definition, *, source: str, project_root: Path, cutoff: str,
+    price_sha: str | None = None,
+) -> dict[tuple[str, str], float]:
+    """Share certified raw-sign scores across selectors, seeds and resumed RUNs."""
+    if price_sha is None:
+        return _build_price_positive_scores(
+            definition, source=source, project_root=project_root, cutoff=cutoff)
+    from core.file_integrity import canonical_json_sha256, exclusive_file_lock
+
+    root = Path(project_root).resolve()
+    plan = _oracle_comparison_plan(definition)
+    recipe, provider = plan["recipes"][source]
+    settings, _base, _exact = _contract(definition)
+    try:
+        identity = price_score_source_identity(
+            root=root, dataset=str(settings.dataset), filter_id=str(definition.source["filter_id"]),
+            price_sha256=price_sha, providers={provider: str(definition.source[provider])},
+            recipes={source: (recipe, provider)}, score_start=_formal_dl_score_start(definition, settings),
+            cutoff=cutoff, score_algorithm_sha256=_price_positive_algorithm_sha256(),
+            label_policy=DEFAULT_LABEL_POLICY.as_manifest_payload(),
+        )
+        if identity is None:
+            return _build_price_positive_scores(
+                definition, source=source, project_root=root, cutoff=cutoff)
+        identity["perfect_output"] = oracle_positive_output_for_recipe(recipe)
+        cache_root = root / AUDIT_OUTPUT_ROOT / definition.output_subdir / "truth_cache" / "price_positive"
+        store = OraclePriceScoreStore(cache_root)
+        cached = store.read(identity, score_sha=_canonical_score_map_sha256)
+        if cached is not None:
+            return cached[0][source]
+        # Parent prewarms shared sources before starting seed workers. A lock
+        # also rejects conflicting independent writers of the same cold source.
+        with exclusive_file_lock(cache_root / (canonical_json_sha256(identity) + ".lock")):
+            cached = store.read(identity, score_sha=_canonical_score_map_sha256)
+            if cached is not None:
+                return cached[0][source]
+            scores = _build_price_positive_scores(
+                definition, source=source, project_root=root, cutoff=cutoff)
+            cohort = {"cohort_rows": len(scores),
+                      "first_common_day": min(day for _ticker, day in scores),
+                      "last_common_day": max(day for _ticker, day in scores)}
+            store.write(identity, {source: scores}, cohort, score_sha=_canonical_score_map_sha256)
+            return scores
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise OracleBlockedError(f"Oracle price Positive truth artifact BLOCKED: {exc}") from exc
+
+
+def _build_price_positive_scores(
+    definition, *, source: str, project_root: Path, cutoff: str,
+) -> dict[tuple[str, str], float]:
+    """Project the canonical price-label sign, never its daily rank percentile.
+
+    Use the exact feature cohort, scalar label owner and cutoff-tail treatment
+    used by the Rank producer. NULL stays unavailable. This is only a perfect
+    score at the normal two-source consumption boundary, never a candidate gate.
+    """
+    from core.positive_netpnl_contract import positive_labels
+
+    plan = _oracle_comparison_plan(definition)
+    recipe, provider = plan["recipes"][source]
+    if not oracle_positive_output_for_recipe(recipe):
+        raise OracleBlockedError(f"Oracle raw price sign capability is not approved: {recipe}")
+    root = Path(project_root).resolve()
+    official = _load_truth(definition, root, provider, cutoff=cutoff)
+    market, evidence = _market_truth_for_oracle(
+        definition, root, cutoff=cutoff, provider_fields=(provider,),
+        eligible_truth={provider: official},
+    )
+    truth, _extra = _reconcile_oracle_truth(
+        official, market[provider], field=provider, score_start=evidence["score_start"],
+    )
+    if truth.duplicated(["ticker", "date"]).any():
+        raise OracleBlockedError("Oracle raw price sign has duplicate stock-days")
+    labels = positive_labels(truth[f"scalar_raw_{recipe}"].to_numpy(dtype=float))
+    keys = zip(truth["ticker"].astype(str), truth["date"].astype(str))
+    return {key: float(label) for key, label in zip(keys, labels) if np.isfinite(label)}
 
 
 def _load_truth(definition, root: Path, source_field: str, *, cutoff: str) -> pd.DataFrame:
@@ -2640,6 +2728,8 @@ def _execute_single_stage_missing(
     calendar_cache: dict[tuple[str, str, str], pd.DatetimeIndex] = {}
     truth_cache: dict[tuple[int, str], tuple[dict[tuple[str, str], float], dict[str, Any]]] = {}
     positive_raw_cache: dict[tuple[int, str], dict[tuple[str, str], float]] = {}
+    # Price-label signs are seed-independent and shared by both selectors.
+    positive_price_cache: dict[str, dict[tuple[str, str], float]] = {}
     _validated_execution_gates(definition, plan)  # E13: fail closed on raw-future candidate gates
     data_dir = Path(get_dataset_dir(str(project_root), settings.dataset)).resolve()
     for seed, param_sha, kind, base_params, oracle_params in prepared:
@@ -2793,35 +2883,50 @@ def _execute_single_stage_missing(
             selected = next((row for row in definition.source["oracle_comparisons"]
                              if row["target"] == target), None)
             if selected is not None and selected.get("positive_output"):
-                if target not in plan["daily_sources"]:
-                    raise OracleBlockedError(f"Retired price-only Positive score source: {target}")
-                positive_key = (seed, plan["daily_sources"][target])
-                if positive_key not in positive_raw_cache:
-                    recipe_for_positive = plan["daily_recipes"][positive_key[1]][0]
-                    if schedule is None:
-                        schedule, _ = _oracle_daily_schedule(
-                            resolve_formal_min_param_records(kind, base_params),
-                            seed=seed, param_sha256=param_sha, recipe=recipe_for_positive,
+                if target in plan["daily_sources"]:
+                    positive_key = (seed, plan["daily_sources"][target])
+                    if positive_key not in positive_raw_cache:
+                        recipe_for_positive = plan["daily_recipes"][positive_key[1]][0]
+                        if schedule is None:
+                            schedule, _ = _oracle_daily_schedule(
+                                resolve_formal_min_param_records(kind, base_params),
+                                seed=seed, param_sha256=param_sha, recipe=recipe_for_positive,
+                            )
+                        positive_raw_cache[positive_key], _ = _load_positive_truth_for_recipe(
+                            plan["daily_recipes"][positive_key[1]][0],
+                            execution=execution_contexts[key],
+                            cache_root=project_root / AUDIT_OUTPUT_ROOT / definition.output_subdir / "truth_cache",
+                            project_root=project_root, output_subdir=definition.output_subdir,
+                            dataset=str(settings.dataset), filter_id=str(definition.source["filter_id"]),
+                            profile_id=str(definition.source["daily_trade40_profile"]),
+                            seed=seed, price_sha256=price_sha, param_sha256=param_sha,
+                            canonical_schedule=schedule, research_cutoff=str(settings.end_date),
+                            score_start=_formal_dl_score_start(definition, settings), evaluation_end=end,
+                            canonical_scores=score_map, canonical_evidence=evidence,
+                            feature_cohort_cache=feature_cohort_cache,
+                            progress=None if quiet else lambda msg: print(f"[Positive output] {msg}", flush=True),
                         )
-                    positive_raw_cache[positive_key], _ = _load_positive_truth_for_recipe(
-                        plan["daily_recipes"][positive_key[1]][0],
-                        execution=execution_contexts[key],
-                        cache_root=project_root / AUDIT_OUTPUT_ROOT / definition.output_subdir / "truth_cache",
-                        project_root=project_root, output_subdir=definition.output_subdir,
-                        dataset=str(settings.dataset), filter_id=str(definition.source["filter_id"]),
-                        profile_id=str(definition.source["daily_trade40_profile"]),
-                        seed=seed, price_sha256=price_sha, param_sha256=param_sha,
-                        canonical_schedule=schedule, research_cutoff=str(settings.end_date),
-                        score_start=_formal_dl_score_start(definition, settings), evaluation_end=end,
-                        canonical_scores=score_map, canonical_evidence=evidence,
-                        feature_cohort_cache=feature_cohort_cache,
-                        progress=None if quiet else lambda msg: print(f"[Positive output] {msg}", flush=True),
-                    )
-                raw_values = positive_raw_cache[positive_key]
-                positive_score_map = {
-                    key: (1.0 if float(value) > 0.0 else 0.0)
-                    for key, value in raw_values.items() if key in score_map
-                }
+                    raw_values = positive_raw_cache[positive_key]
+                    positive_score_map = {
+                        key: (1.0 if float(value) > 0.0 else 0.0)
+                        for key, value in raw_values.items() if key in score_map
+                    }
+                else:
+                    origin = plan["aliases"].get(target, target)
+                    if origin not in positive_price_cache:
+                        # Narrow the source graph to this approved recipient; other
+                        # scalar labels/providers must not be materialized here.
+                        price_positive_def = replace(definition, source={
+                            **definition.source, "oracle_comparisons": (selected,),
+                        })
+                        positive_price_cache[origin] = _load_price_positive_scores(
+                            price_positive_def, source=origin, project_root=project_root,
+                            cutoff=str(settings.end_date), price_sha=price_sha,
+                        )
+                    positive_score_map = {
+                        key: value for key, value in positive_price_cache[origin].items()
+                        if key in score_map
+                    }
             replay_execution_rows = None
             replay_kwargs = dict(
                 replay_execution_rows=replay_execution_rows,
@@ -3080,6 +3185,22 @@ def _execute_oracle_missing_parallel(
             return _execute_single_stage_missing(
                 definition, **kwargs, mintrade_stock_workers=min(max(1, cpu_budget - 1), stock_limit),
             )
+
+    # Canonical raw-sign output is also seed-independent. BUILD once in the
+    # parent, then every seed/selector reads the certified score artifact.
+    warmed_positive_sources = set()
+    if price_targets:
+        for item in price_def.source["oracle_comparisons"]:
+            origin = plan["aliases"].get(item["target"], item["target"])
+            if item.get("positive_output") and origin not in warmed_positive_sources:
+                positive_def = replace(price_def, source={
+                    **price_def.source, "oracle_comparisons": (item,),
+                })
+                _load_price_positive_scores(
+                    positive_def, source=origin, project_root=root,
+                    cutoff=str(settings.end_date), price_sha=price_sha,
+                )
+                warmed_positive_sources.add(origin)
 
     if not quiet:
         print(

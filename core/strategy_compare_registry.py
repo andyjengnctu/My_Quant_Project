@@ -143,13 +143,14 @@ STRATEGY_COMPARE_SUITES = {
         # accounting; they differ only by model score or selector.
         "arm_ids": (
             "C96", "C97", "C98", "C99", "C100", "C101", "C102", "C103",
-            "C105", "C106", "C107", "C108", "C109", "C110",
+            "C105", "C106", "C107", "C108", "C109", "C110", "C189", "C190",
             "C111", "C112", "C115", "C116", "C117", "C118", "C119", "C120", "C121", "C122", "C123", "C124", "C125", "C126", "C133", "C134", "C135", "C136", "C137", "C138", "C145", "C146", "C147", "C148", "C153", "C154", "C155", "C156", "C157", "C158", "C159", "C160", "C161", "C162", "C163", "C164", "C165", "C179", "C180",
         ),
         # A compact connected contrast graph supports each selected model
         # versus C96 plus the matched CK/CJ label contrast. Historical AO/CH
         # contrasts remain registered and filter out with their inactive arms.
         "contrast_ids": (
+            "C189-C96", "C190-C96", "C189-C190", "C189-C106", "C190-C118",
             "C186-C183", "C97-C96", "C98-C97", "C98-C96",
             "C99-C96", "C101-C96",
             "C100-C99", "C103-C99", "C102-C101",
@@ -181,6 +182,8 @@ STRATEGY_COMPARE_SUITES = {
             "C103": "Min MR-13CG Exact K/R0 / Broker-Cash",
             "C105": "Min MR-13AK Exact K/R0 / Broker-Cash",
             "C106": "Min MR-13CI Exact K/R0 / Broker-Cash",
+            "C189": "Min MR-13CI Rank + MR-13DL R40 Positive Exact K/R0 / Broker-Cash",
+            "C190": "Min MR-13CI Rank + MR-13DL R40 Positive Direct No-K No-R0 / Broker-Cash",
             "C107": "Min MR-13CJ Exact K/R0 / Broker-Cash",
             "C108": "Min MR-13CK T40-MFE Exact K/R0 / Broker-Cash",
             "C109": "Min MR-13CJ T40 Direct No-K No-R0 / Broker-Cash",
@@ -2342,6 +2345,16 @@ STRATEGY_DL_SOURCES = {
             "options": {"resume": True, "allow_stale_source": False},
         },
     },
+    "CONT13DL_ROLL": {
+        "filter_id": "breakout_quality_v1",
+        "model_architecture": "inception_time_v1",
+        "experiment_profile": "daily_universal_terminal_r40_positive_binary",
+        "threshold": None, "score_source": "selection_point_in_time",
+        "single_seed_strategy_conversion_authorized": True,
+        "description": "MR-13DL independent R40>0 two-class PIT classifier, shared by P16 Exact/Direct.",
+        "forward_scores_builder": {"enabled": True, "builder_type": "selection_pit_from_existing_folds",
+                                   "options": {"resume": True, "allow_stale_source": False}},
+    },
     "CONT13CI_ROLL": {
         "filter_id": "breakout_quality_v1",
         "model_architecture": "inception_time_v1",
@@ -2716,6 +2729,39 @@ STRATEGY_COMPARE_ARMS = {
         "dl_enabled": True, "dl_id": "CONT13AK_ROLL",
         "dl_runtime_mode": "resource-aware-continuous-score-constrained-optimal",
         "dl_runtime_options": {"preserve_k_r0": True, "constrained_solver": "exact_branch_and_bound_v1", "selection_only": True},
+        "robustness_role": "off",
+    },
+    "C189": {
+        "replay_contract_version": 1,
+        "name": "Min MR-13CI Rank + MR-13DL R40 Positive Exact K/R0 / Broker-Cash",
+        "description": "Independent CI R40 rank plus DL P(R40>0)>0.5; same P16 Breakout execution, costs and cash.",
+        "param_source": "min_best_broker_cash_rolling_experiment",
+        "param_policy": "base-finalist-best", "rule_policy": "all_off",
+        "dl_enabled": True, "dl_id": "CONT13CI_ROLL",
+        "dl_runtime_mode": "resource-aware-continuous-score-constrained-optimal",
+        "dl_runtime_options": {
+            "preserve_k_r0": True, "constrained_solver": "exact_branch_and_bound_v1", "selection_only": True,
+            "positive_score_column": "positive_p_positive",
+            "positive_dl_id": "CONT13DL_ROLL",
+            "positive_probability_threshold": 0.5,
+        },
+        "robustness_role": "off",
+    },
+    "C190": {
+        "replay_contract_version": 1,
+        "name": "Min MR-13CI Rank + MR-13DL R40 Positive Direct No-K No-R0 / Broker-Cash",
+        "description": "Independent CI R40 rank plus DL P(R40>0)>0.5; same P16 Breakout execution, costs and cash.",
+        "param_source": "min_best_broker_cash_rolling_experiment",
+        "param_policy": "base-finalist-best", "rule_policy": "all_off",
+        "dl_enabled": True, "dl_id": "CONT13CI_ROLL",
+        "dl_runtime_mode": "resource-aware-continuous-score-no-k-no-r0",
+        "dl_runtime_options": {
+            "preserve_k": False, "preserve_r0": False,
+            "selection_order": "model_score_desc_then_canonical_tie_v1", "selection_only": True,
+            "positive_score_column": "positive_p_positive",
+            "positive_dl_id": "CONT13DL_ROLL",
+            "positive_probability_threshold": 0.5,
+        },
         "robustness_role": "off",
     },
     "C106": {
@@ -4034,6 +4080,11 @@ for _mode in ("oos", "rolling"):
 # Contrast 是否啟用只由 STRATEGY_COMPARE_PROFILES[*]["contrast_ids"] 決定。
 
 STRATEGY_COMPARE_CONTRASTS = {
+    "C189-C96": {"left": "C189", "right": "C96", "description": "CI R40 rank plus DL Positive Exact versus same-P16 no-DL control"},
+    "C190-C96": {"left": "C190", "right": "C96", "description": "CI R40 rank plus DL Positive Direct versus same-P16 no-DL control"},
+    "C189-C190": {"left": "C189", "right": "C190", "description": "Same CI R40 rank and independent DL Positive: Exact versus Direct"},
+    "C189-C106": {"left": "C189", "right": "C106", "description": "Same CI R40 Exact: with versus without independent R40 Positive admission"},
+    "C190-C118": {"left": "C190", "right": "C118", "description": "Same CI R40 Direct: with versus without independent R40 Positive admission"},
     "C97-C96": {"left": "C97", "right": "C96", "description": "same-fee broker cash Full vs Min overall policy comparison"},
     "C155-C97": {"left": "C155", "right": "C97", "description": "Full/P17 CZ/DA Exact versus Full DL-off C97"},
     "C156-C97": {"left": "C156", "right": "C97", "description": "Full/P17 CZ/DA Direct versus Full DL-off C97"},

@@ -402,6 +402,7 @@ DAILY_UNIVERSAL_SHARED_FULL_D20_SAFETY_HS_CONDITIONAL_MFE_PROFILE = (
     "daily_universal_shared_full_d20_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
 )
 DAILY_UNIVERSAL_TERMINAL_R40_PAIRWISE_PROFILE = "daily_universal_terminal_r40_full_list_ndcg_pairwise"
+DAILY_UNIVERSAL_TERMINAL_R40_POSITIVE_PROFILE = "daily_universal_terminal_r40_positive_binary"
 DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_PAIRWISE_PROFILE = "daily_universal_terminal_mae_gated_t40_full_list_ndcg_pairwise"
 DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_POSITIVE_PROFILE = "daily_universal_terminal_mae_gated_t40_positive_binary"
 DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_PROBABILISTIC_PROFILE = "daily_universal_terminal_mae_gated_t40_probabilistic_pairwise"
@@ -1709,6 +1710,18 @@ _EXPERIMENT_PROFILES = {
         continuous_target_id="daily_terminal_mae_gated_t40_v1",
         loss_name="pairwise_bernoulli_probability",
         epoch_selection_metric="mean_daily_spearman",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+        model_architecture="inception_time_v1",
+    ),
+    DAILY_UNIVERSAL_TERMINAL_R40_POSITIVE_PROFILE: BreakoutQualityExperimentProfile(
+        name=DAILY_UNIVERSAL_TERMINAL_R40_POSITIVE_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_SCALAR_SIGN_POSITIVE_BINARY,
+        continuous_target_id="daily_terminal_r40_v1",
+        loss_name="scalar_sign_positive_cross_entropy",
+        epoch_selection_metric="positive_validation_cross_entropy",
         training_label_scope=TRAINING_LABEL_SCOPE_ALL,
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
         model_architecture="inception_time_v1",
@@ -3542,6 +3555,28 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         metric_scope="all_stock_days_terminal_mae_gated_t40_probabilistic_rank",
         score_semantic_id="daily_terminal_mae_gated_t40_expected_pairwise_win_fraction",
         pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
+        selection_pit_authorized=True,
+        current_time_validation_authorized=True,
+    ),
+    DAILY_UNIVERSAL_TERMINAL_R40_POSITIVE_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=DAILY_UNIVERSAL_TERMINAL_R40_POSITIVE_PROFILE,
+        model_research_id="MR-13DL",
+        experiment_name="MR-13DL Daily R40 Positive Binary Classifier",
+        phase="13DL",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description=(
+            "Same mature daily-universal terminal R40 as MR-13CI; "
+            "Positive iff raw R40>0, nonpositive iff <=0; incomplete 40D path stays NULL"
+        ),
+        objective_description=(
+            "Independent two-class cross-entropy classifier with 300x10 InceptionTime, "
+            "Adam and the existing PIT-mature stock-day splits. Outputs P(R40>0); "
+            "the unchanged CI model ranks R40. No CI weights, strategy membership, "
+            "NetPnL labels, payoff weights, calibration or OOS-fitted threshold. "
+            "One fold/seed FIT and PIT source serves both P16 Exact and Direct."
+        ),
+        metric_scope="all_stock_days_terminal_r40_positive_binary",
+        score_semantic_id="daily_terminal_r40_positive_probability",
         selection_pit_authorized=True,
         current_time_validation_authorized=True,
     ),

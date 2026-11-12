@@ -257,6 +257,7 @@ AUDIT_MODULES: dict[str, dict[str, Any]] = {
 # Only the canonical raw-score recipe decides a perfect Positive output's
 # supervised meaning. Consumers must not infer it from an MR/C arm identity.
 _ORACLE_POSITIVE_OUTPUT_BY_RECIPE = {
+    "terminal_r": "scalar_sign_positive_probability_v1",
     "daily_trade_path_net_pnl": "netpnl_positive_probability_v1",
     "daily_trade_path_true_net_pnl": "netpnl_positive_probability_v1",
     "daily_trade_path_full_net_pnl": "netpnl_positive_probability_v1",
