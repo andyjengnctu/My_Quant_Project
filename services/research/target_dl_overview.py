@@ -617,6 +617,8 @@ def _strategy_bindings(*, target_names: tuple[str, ...],
     # historical strategy definitions are still available for old artifacts.
     suite_id = str(STRATEGY_COMPARE_PROFILES[STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE]["suite_id"])
     active_arms = set(get_strategy_compare_suite(suite_id)["arm_ids"])
+    from core.research_summary import unresolved_oracle_strategy_contracts
+    unresolved = unresolved_oracle_strategy_contracts(arm_registry=STRATEGY_COMPARE_ARMS)
     candidates: dict[tuple[str, str], set[str]] = {}
     for target in target_names:
         if target == baseline or not score_targets.get(target):
@@ -640,6 +642,8 @@ def _strategy_bindings(*, target_names: tuple[str, ...],
             raise ValueError(f"Oracle reference arm not registered: {declared_arm_id}")
         arm_choices = ((arm_id, STRATEGY_COMPARE_ARMS[arm_id]) for arm_id in active_arms)
         for arm_id, arm in arm_choices:
+            if arm_id in unresolved:
+                continue
             if (not arm.get("dl_enabled") or arm.get("dl_runtime_mode") != desired_mode
                     or str(arm.get("entry_strategy", "Breakout")) != entry_strategy
                     or arm.get("param_source") != reference_baseline["param_source"]

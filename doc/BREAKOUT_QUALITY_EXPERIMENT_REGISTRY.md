@@ -1003,3 +1003,21 @@ User-authorized **current scope**, superseding the prior dated membership entrie
 The canonical `config/research_summary.py` roster alone determines current Model Compare, Oracle, Summary, Strategy Forward/Rolling and Strategy N=4 Robustness membership. `C125/C126` positive Min and `C157/C158` rank-only Full remain independent current treatments; no retired arm is scheduled only because its scientific Registry remains present.
 
 **Read-only human labels**: every Strategy presentation is `Entry (Filter/Pxx)` from the actual canonical Optimizer parameter-set identity, e.g. `Breakout (Min/P16)`, `Breakout (Full/P17)`, `Daily (Full/P20)`. Every **trade-execution-path** Target presentation is suffixed `(Pxx)` from the same parameter family, e.g. `MinTrade_NetPnL_Positive (P16)`, `FullTrade_NetPnL_Positive (P17)`, `Daily_FullTrade_NetPnL_Positive (P20)`; price-only `T40`, `R40` and `MFE40` keep their original labels. These aliases **must never** modify immutable scientific Target, FIT, PIT score, Oracle signed key, Optimizer, Replay identity, historical result, or Trading truth. This is research membership and report presentation only, **not** new market-performance evidence or a promotion decision. The Target Oracle and Summary report display-contract versions advance under the existing compact ledger; no scientific score/replay version advances.
+
+## 2026-11-12：第二個 Positive DL 自行學習交易決策（MR-13DJ／C186）
+
+使用者澄清：每個策略維持「Rank DL＋Positive DL」兩個模型，第二個 DL 自行學好進場界線，不另加第三個 DL，也不在訓練後掃描／調整 probability threshold。先前交付中 DH→DI→DJ 的 stacked threshold MLP 是需求誤解，並非獲核准的三模型研究；其 DJ／C186 v1～v3 工件不具本需求有效證據資格。依 PROJECT_SETTINGS C23 回到原始 `0da1fc97` 基準修正原 identity；不配置新 MR／C 編號，不保留錯誤的 context／architecture 支線。
+
+| 身分 | 現行定義 | 狀態 |
+|---|---|---|
+| `MR-13DJ` / `DL-CONT13DJ_ROLL` | `daily_universal_min_p21_netpnl_utility_binary`；原生 300×10 InceptionTime，獨立二類 payoff-weighted CE；輸入只含既有合法股價特徵，不讀 DH／DI 分數 | CURRENT / FIT v4 / MARKET_FIT_PENDING / NO_TRADING |
+| `SR-C186` | 與 C183 同 P21、DH Rank、Direct、費稅、出場與資金規則；第二個模型改為 DJ 的 `positive_trade_allowed`，無可調 probability threshold、無 DI 依賴 | CURRENT / REPLAY v4 / MARKET_REPLAY_PENDING / ORACLE_CONTRACT_UNRESOLVED |
+| `SR-C183` / `MR-13DH` / `MR-13DI` | 原 DH＋DI 控制組完整保留；DI 仍為原本等權 CE 與 P(Positive)>0.5 | EXISTING_IDENTITY_UNCHANGED |
+
+- 監督真值保持同 seed P21 合法成熟 broker NetPnL；no-fill／未成熟仍 NULL。訓練類別為 NetPnL>0，權重為 abs(NetPnL) / mean(abs(NetPnL of FIT rows))。選 epoch 的 Train 與 final refit 各用自己明列的合法 FIT rows 計算尺度；不讀 OOS／未來 fold 的統計。
+- 兩個 logit 分別學習不交易／交易的相對支持；推論僅當交易 logit 嚴格較大才輸出 1，平手輸出 0。輸出的連續分數是 **positive payoff mass share**，不是 P(NetPnL>0)。因損益金額已進入 loss，學到的是正負期望淨損益的決策界線，不是把原本 0.5 勝率閘門改名。
+- 給定股價特徵 x，理想加權 CE 的 q(x)=E[max(Y,0)|x] / E[abs(Y)|x]；兩類比較等價於 E[Y|x]>0。這是單筆淨損益決策目標，**不保證**組合 RoMD／Exposure 最佳。若整個 FIT 或 Validation 全為零損益，無有效加權訊號則 fail-fast；零損益 minibatch 跳過。
+- Epoch selection 使用該合法 Validation cohort 的 abs(NetPnL)-weighted CE、同口徑 Brier tie-break；無 threshold grid、無額外校準、無 OOS 選模。既有 Forward／Rolling、逐 fold FIT owner、四 seed Robustness 與七項工作選單共用原生流程。現行 Training Model 設為 DJ，正式 Model Compare／Strategy Compare 均從 Summary 同源投影。
+- C186 由 DH＋DJ 兩份 PIT 分數同資訊日對齊，任一缺失不入場；比對只消費模型保存的 0/1 action，不在策略端計算 probability cutoff。C183 與 C186 共用既有 DH、teacher 合法工件；DJ FIT／C186 Replay 不重用先前錯誤三模型工件。
+- 新輸出尚無核准的 perfect-score 映射與端到端 Oracle parity。Summary 保留正式比較列與實際模型／策略結果，Oracle 欄位留白，不借用 C183 Oracle。此狀態不阻擋已授權模型訓練與策略比較；不新增虛構 Oracle 成果或改寫舊簽章。
+- 尚未取得本機市場訓練／Rolling／四 seed Replay 結果；工程測試不是績效證據，結果取得後才依規則增補 Experiment Log。

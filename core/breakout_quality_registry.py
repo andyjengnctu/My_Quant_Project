@@ -54,6 +54,7 @@ from core.breakout_quality_runtime import (
     TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING,
     TRAINING_OBJECTIVE_DAILY_JOINT_MFE_D40_QUADRANT,
     TRAINING_OBJECTIVE_DAILY_NETPNL_POSITIVE_BINARY,
+    TRAINING_OBJECTIVE_DAILY_NETPNL_PAYOFF_BINARY,
     TRAINING_OBJECTIVE_DAILY_SCALAR_SIGN_POSITIVE_BINARY,
     CONTINUOUS_RANKER_TRAINER_EVENT,
     CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
@@ -418,6 +419,7 @@ DAILY_MIN_P18_NETPNL_POSITIVE_PROFILE = "daily_universal_min_p18_mintrade_netpnl
 from core.daily_trade_path_capabilities import DAILY_MIN_P21_FULLCYCLE_NETPNL_TARGET_ID
 
 DAILY_MIN_P21_NETPNL_RANK_PROFILE = "daily_universal_min_p21_mintrade_netpnl_full_list_ndcg_pairwise"
+DAILY_MIN_P21_NETPNL_PAYOFF_PROFILE = "daily_universal_min_p21_netpnl_utility_binary"
 DAILY_MIN_P21_NETPNL_POSITIVE_PROFILE = "daily_universal_min_p21_mintrade_netpnl_positive_binary"
 DAILY_MIN_P19_NETPNL_RANK_PROFILE = "daily_universal_min_p19_mintrade_netpnl_full_list_ndcg_pairwise"
 DAILY_MIN_P19_NETPNL_POSITIVE_PROFILE = "daily_universal_min_p19_mintrade_netpnl_positive_binary"
@@ -1814,6 +1816,17 @@ _EXPERIMENT_PROFILES = {
         training_label_scope=TRAINING_LABEL_SCOPE_ALL,
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
         model_architecture="inception_time_v1",
+    ),
+    DAILY_MIN_P21_NETPNL_PAYOFF_PROFILE: BreakoutQualityExperimentProfile(
+        name=DAILY_MIN_P21_NETPNL_PAYOFF_PROFILE,
+        optimizer_name="adam", training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_NETPNL_PAYOFF_BINARY,
+        continuous_target_id=DAILY_MIN_P21_FULLCYCLE_NETPNL_TARGET_ID,
+        loss_name="netpnl_payoff_cross_entropy",
+        epoch_selection_metric="payoff_validation_cross_entropy",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+        model_architecture="inception_time_v1", fit_contract_version=4,
     ),
     DAILY_MIN_P21_NETPNL_POSITIVE_PROFILE: BreakoutQualityExperimentProfile(
         name=DAILY_MIN_P21_NETPNL_POSITIVE_PROFILE,
@@ -3691,6 +3704,16 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         metric_scope="all_stock_days_daily_min_p21_fullcycle_netpnl",
         score_semantic_id="daily_min_p21_fullcycle_netpnl_rank",
         pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        selection_pit_authorized=True, current_time_validation_authorized=True,
+    ),
+    DAILY_MIN_P21_NETPNL_PAYOFF_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=DAILY_MIN_P21_NETPNL_PAYOFF_PROFILE,
+        model_research_id="MR-13DJ", experiment_name="MR-13DJ Daily Min/P21 Positive learned decision",
+        phase="13DJ", trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description="Same PIT-matured same-seed P21 broker NetPnL as DH/DI; no fill and unmatured outcomes stay NULL.",
+        objective_description="Independent 300x10 InceptionTime binary CE weighted by absolute NetPnL; FIT-only mean weight normalization. Two logits learn trade/cash decision; no upstream DL inputs or threshold search.",
+        metric_scope="all_stock_days_daily_min_p21_fullcycle_netpnl_payoff_binary",
+        score_semantic_id="daily_min_p21_positive_payoff_mass_share_and_trade_decision",
         selection_pit_authorized=True, current_time_validation_authorized=True,
     ),
     DAILY_MIN_P21_NETPNL_POSITIVE_PROFILE: ContinuousRankerResearchSpec(

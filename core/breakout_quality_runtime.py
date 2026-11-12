@@ -123,6 +123,7 @@ TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING = (
 TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING = "daily_hmhs_pairwise_ranking"
 TRAINING_OBJECTIVE_DAILY_LISTWISE_RANKING = "daily_listwise_ranking"
 TRAINING_OBJECTIVE_DAILY_JOINT_MFE_D40_QUADRANT = "daily_joint_mfe_d40_quadrant_cross_entropy"
+TRAINING_OBJECTIVE_DAILY_NETPNL_PAYOFF_BINARY = "daily_netpnl_payoff_weighted_binary_cross_entropy"
 TRAINING_OBJECTIVE_DAILY_NETPNL_POSITIVE_BINARY = "daily_mintrade_netpnl_positive_binary_cross_entropy"
 TRAINING_OBJECTIVE_DAILY_SCALAR_SIGN_POSITIVE_BINARY = "daily_scalar_sign_positive_binary_cross_entropy"
 
@@ -1011,6 +1012,32 @@ class ContinuousRankerTrainingPolicy:
 
 
 @dataclass(frozen=True)
+class PayoffCategoricalTrainingPolicy(ContinuousRankerTrainingPolicy):
+    """Optional binary decision capability; legacy policy payloads stay unchanged."""
+
+    categorical_decision_column: str = "positive_trade_allowed"
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if (self.categorical_class_count != 2 or self.categorical_primary_class != 1
+                or self.target_builder != CONTINUOUS_RANKER_TARGET_BUILDER_NETPNL_POSITIVE
+                or not self.categorical_decision_column
+                or self.categorical_decision_column in self.categorical_score_columns):
+            raise ValueError("Payoff decision requires strict-sign binary supervision")
+
+    def decision_manifest(self) -> dict:
+        return {
+            "model_score": "positive_payoff_mass_share_not_win_probability",
+            "sample_weight": "absolute_mature_net_payoff_divided_by_fit_mean_absolute_payoff",
+            "fit_normalization": "explicit_fit_ids_only_recomputed_for_selection_and_refit",
+            "validation_weighting": "absolute_net_payoff_over_validation_cohort_only",
+            "decision_column": self.categorical_decision_column,
+            "decision": "trade_logit_strictly_exceeds_cash_logit_ties_cash",
+            "threshold_fitting": "none",
+        }
+
+
+@dataclass(frozen=True)
 class ContinuousRankerObjectivePolicy:
     """Executable objective semantics independent of research naming/history."""
 
@@ -1782,6 +1809,15 @@ def _continuous_ranker_training_policies() -> dict[str, ContinuousRankerTraining
             semantics_contract_key=CONTINUOUS_RANKER_SEMANTICS_DIRECT_HMHS,
             uses_pairwise_loss=True,
         ),
+        TRAINING_OBJECTIVE_DAILY_NETPNL_PAYOFF_BINARY: PayoffCategoricalTrainingPolicy(
+            batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
+            target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_NETPNL_POSITIVE,
+            loss_handler=CONTINUOUS_RANKER_LOSS_HANDLER_CATEGORICAL_CE,
+            profile_loss_metrics=(("netpnl_payoff_cross_entropy", "payoff_validation_cross_entropy"),),
+            categorical_class_count=2, categorical_primary_class=1,
+            categorical_score_columns=("payoff_mass_nonpositive", "payoff_mass_positive"),
+            epoch_loss_aggregation=CONTINUOUS_RANKER_EPOCH_LOSS_AGGREGATION_MEAN_BATCH,
+        ),
         TRAINING_OBJECTIVE_DAILY_NETPNL_POSITIVE_BINARY: ContinuousRankerTrainingPolicy(
             batch_mode=CONTINUOUS_RANKER_BATCH_MODE_DATE_COHERENT,
             target_builder=CONTINUOUS_RANKER_TARGET_BUILDER_NETPNL_POSITIVE,
@@ -1879,6 +1915,9 @@ def get_continuous_ranker_score_output_columns(
             if output_policy is None
             else dict(output_policy.manifest_columns())
         )
+    decision_column = getattr(policy, "categorical_decision_column", None)
+    if decision_column:
+        columns["decision"] = decision_column
     if score_calibration is not None:
         raise ValueError("Single-ranker Positive calibration is retired; no current score-output capability")
     return columns
@@ -1889,6 +1928,9 @@ def get_continuous_ranker_persisted_score_columns() -> tuple[str, ...]:
 
     columns: list[str] = []
     for training_policy in _continuous_ranker_training_policies().values():
+        decision_column = getattr(training_policy, "categorical_decision_column", None)
+        if decision_column and decision_column not in columns:
+            columns.append(decision_column)
         for column in training_policy.categorical_score_columns:
             if column not in columns:
                 columns.append(str(column))

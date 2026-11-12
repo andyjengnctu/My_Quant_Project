@@ -2418,11 +2418,17 @@ def _train_epoch(
                     classes = int(training_policy.categorical_class_count or 0)
                     if logits.ndim != 2 or int(logits.shape[1]) != classes:
                         raise ValueError("categorical logits width differs from training contract")
-                    if target.ndim != 1 or torch.any(~torch.isfinite(target)) or torch.any(target != target.long()):
-                        raise ValueError("categorical targets must be finite integer classes")
-                    if torch.any((target < 0) | (target >= classes)):
-                        raise ValueError("categorical target is outside class range")
-                    loss = F.cross_entropy(logits.float(), target.long(), reduction="mean")
+                    if getattr(training_policy, "categorical_decision_column", None):
+                        from filters.breakout_quality.categorical_decision import payoff_cross_entropy
+                        loss = payoff_cross_entropy(torch, logits, target)
+                        if loss is None:
+                            continue
+                    else:
+                        if target.ndim != 1 or torch.any(~torch.isfinite(target)) or torch.any(target != target.long()):
+                            raise ValueError("categorical targets must be finite integer classes")
+                        if torch.any((target < 0) | (target >= classes)):
+                            raise ValueError("categorical target is outside class range")
+                        loss = F.cross_entropy(logits.float(), target.long(), reduction="mean")
                     loss_weight = int(len(ids))
                 elif loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_PERCENTILE_MSE:
                     score = torch.softmax(logits.float(), dim=1)[:, LABEL_PASS]
@@ -3901,8 +3907,12 @@ def _training_target_for_profile(
     raw_target: np.ndarray,
     percentile_target: np.ndarray,
     group_table: pd.DataFrame,
+    *, fit_ids: np.ndarray | None = None,
 ) -> np.ndarray:
     recipe = get_continuous_ranker_execution_recipe(profile.name)
+    if getattr(recipe.training_policy, "categorical_decision_column", None) and fit_ids is not None:
+        from filters.breakout_quality.categorical_decision import payoff_training_targets
+        return payoff_training_targets(raw_target, fit_ids)
     target_builder = str(recipe.training_policy.target_builder)
     opportunity_target_attrs = {
         CONTINUOUS_RANKER_TARGET_BUILDER_CONDITIONAL_MFE_SINGLE: "single_head_training_target",
@@ -4090,6 +4100,9 @@ def _evaluate_epoch_split(
             logits, labels[ids], class_count=int(policy.categorical_class_count),
             positive_class=int(policy.categorical_primary_class),
         )
+        if getattr(policy, "categorical_decision_column", None):
+            from filters.breakout_quality.categorical_decision import payoff_validation_metrics
+            details["joint_quadrant_metrics"].update(payoff_validation_metrics(logits, raw_target[ids]))
         scores = predict_scores(
             torch, model, feature_bank, group_context, ids,
             training_objective=profile.training_objective, **predict_common,
@@ -4295,7 +4308,7 @@ def select_epoch(
         else None
     )
     training_target = _training_target_for_profile(
-        profile, raw_target, percentile_target, group_table
+        profile, raw_target, percentile_target, group_table, fit_ids=train_ids
     )
     adaptive_horizon_target_provider = _adaptive_horizon_target_provider(
         loss_handler=loss_handler,
@@ -4830,7 +4843,9 @@ def fit_final(
     execution_recipe = get_continuous_ranker_execution_recipe(str(args.experiment_profile))
     training_policy = execution_recipe.training_policy
     loss_handler = str(training_policy.loss_handler)
-    training_target = _training_target_for_profile(profile, raw_target, percentile_target, group_table)
+    training_target = _training_target_for_profile(
+        profile, raw_target, percentile_target, group_table, fit_ids=final_ids
+    )
     adaptive_horizon_target_provider = _adaptive_horizon_target_provider(
         loss_handler=loss_handler,
         profile=profile,

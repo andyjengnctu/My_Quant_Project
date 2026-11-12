@@ -562,6 +562,8 @@ def validate_oracle_compare_family_coverage(
     """
     baselines = oracle_baseline_arm_ids(source)
     registered = resolve_current_oracle_comparisons(dict(source))
+    from core.research_summary import unresolved_oracle_strategy_contracts
+    unresolved = unresolved_oracle_strategy_contracts(arm_registry=arm_registry)
     claimed_arms = {}
     for row in registered:
         family = oracle_parameter_family(row)
@@ -584,6 +586,8 @@ def validate_oracle_compare_family_coverage(
                     "param_source", "param_policy", "rule_policy")) != signature:
                 continue
             row = claimed_arms.get(arm_id)
+            if row is None and arm_id in unresolved:
+                continue
             if row is None or oracle_parameter_family(row) != family:
                 raise ValueError(
                     f"[4] arm {arm_id} belongs to Oracle {family} family but [1] "

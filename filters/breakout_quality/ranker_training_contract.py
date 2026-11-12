@@ -696,6 +696,7 @@ def training_semantics(profile) -> dict[str, Any]:
                 "epoch_selection": str(policy.epoch_selection_rule),
                 "model_score": "probability_of_joint_event_class",
                 "target_source": "same_date_mature_daily_universal_future_path_no_inference_future_features",
+                **(policy.decision_manifest() if getattr(policy, "categorical_decision_column", None) else {}),
             },
         )
 

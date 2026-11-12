@@ -275,3 +275,25 @@ def validate_research_summary_strategy_bindings(
                 classifier = dl_sources.get(options["positive_dl_id"], {})
                 if binding["positive_model"][1] != classifier.get("experiment_profile"):
                     raise ValueError(f"Summary Positive binding differs from strategy: {binding['arm_id']}")
+
+
+def unresolved_oracle_strategy_contracts(*, arm_registry):
+    """Explicitly declare a new model-output composition awaiting Oracle parity."""
+    from core.positive_score_admission import uses_model_positive_decision
+    result = {}
+    for group in get_research_summary_rows():
+        if group.get("oracle_contract_status") is None:
+            continue
+        reason = str(group.get("oracle_contract_reason") or "").strip()
+        if group["oracle_contract_status"] != "CONTRACT_UNRESOLVED" or not reason or "oracle" in group:
+            raise ValueError("Invalid unresolved Oracle declaration")
+        bindings = tuple(group.get("bindings", ()))
+        if not bindings:
+            raise ValueError("Unresolved Oracle declaration requires a strategy binding")
+        for binding in bindings:
+            arm_id = binding.get("arm_id")
+            if (arm_id not in arm_registry or arm_id in result
+                    or not uses_model_positive_decision(arm_registry[arm_id].get("dl_runtime_options"))):
+                raise ValueError("Unresolved Oracle requires a declared model-decision composition")
+            result[arm_id] = reason
+    return result

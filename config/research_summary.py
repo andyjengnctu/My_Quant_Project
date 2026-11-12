@@ -36,6 +36,13 @@ RESEARCH_SUMMARY_ROWS = (
      'bindings': ({'arm_id': 'C183', 'rank_model': ('MR-13DH',
         'daily_universal_min_p21_mintrade_netpnl_full_list_ndcg_pairwise'),
         'positive_model': ('MR-13DI', 'daily_universal_min_p21_mintrade_netpnl_positive_binary')},)},
+    {'display_target': 'Daily_MinTrade_NetPnL_Positive',
+     'parameter_family': 'daily_min_p21',
+     'oracle_contract_status': 'CONTRACT_UNRESOLVED',
+     'oracle_contract_reason': 'Learned payoff decision perfect-score mapping/parity not certified; do not borrow C183 Oracle.',
+     'bindings': ({'arm_id': 'C186', 'rank_model': ('MR-13DH',
+        'daily_universal_min_p21_mintrade_netpnl_full_list_ndcg_pairwise'),
+        'positive_model': ('MR-13DJ', 'daily_universal_min_p21_netpnl_utility_binary')},)},
     # AI: 2026-11-11 user-directed C180 retirement; retain PARAM-P22/history.
     {'enabled': False, 'arm_id': 'C180', 'parameter_family': 'daily_min_p22'},
     # AI: 2026-11-10 membership decision: retire P18 C160/C161/C177/C178

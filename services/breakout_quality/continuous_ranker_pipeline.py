@@ -443,10 +443,12 @@ def predict_score_output_payload(
         shifted = logits - np.max(logits, axis=1, keepdims=True)
         exp = np.exp(shifted)
         probs = (exp / exp.sum(axis=1, keepdims=True)).astype(np.float32)
-        return (
-            probs[:, int(training_policy.categorical_primary_class)].copy(),
-            {column: probs[:, i].copy() for i, column in enumerate(training_policy.categorical_score_columns)},
-        )
+        extras = {column: probs[:, i].copy() for i, column in enumerate(training_policy.categorical_score_columns)}
+        decision_column = getattr(training_policy, "categorical_decision_column", None)
+        if decision_column:
+            from filters.breakout_quality.categorical_decision import payoff_trade_decisions
+            extras[decision_column] = payoff_trade_decisions(logits)
+        return probs[:, int(training_policy.categorical_primary_class)].copy(), extras
     if output_policy is None:
         from filters.breakout_quality.positive_rank_calibration import calibrated_score_columns
         primary = predict_scores(

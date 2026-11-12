@@ -238,8 +238,9 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
 
     from .check_result_utils import run_unittest_capability_cases
     from .synthetic_positive_netpnl_contract_cases import ScoreOutputCompletenessCases
+    from .test_categorical_decision import PayoffDecisionCases
     output_checks, _details = run_unittest_capability_cases(
-        case_id, "synthetic_breakout_quality", (ScoreOutputCompletenessCases,),
+        case_id, "synthetic_breakout_quality", (ScoreOutputCompletenessCases, PayoffDecisionCases),
     )
     results.extend(output_checks)
 
@@ -1202,19 +1203,7 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
     registered_optional_score_columns = {
         str(column)
         for training_objective in CONTINUOUS_RANKER_TRAINING_OBJECTIVES
-        for training_policy in (
-            get_continuous_ranker_training_policy(training_objective),
-        )
-        for column in (
-            training_policy.categorical_score_columns
-            + tuple(
-                column
-                for _head_name, column in (
-                    training_policy.score_output_policy.persisted_columns
-                    if training_policy.score_output_policy is not None else ()
-                )
-            )
-        )
+        for column in get_continuous_ranker_score_output_columns(training_objective).values()
         if str(column) != "breakout_quality_score"
     }
     from core.breakout_quality_registry import SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES

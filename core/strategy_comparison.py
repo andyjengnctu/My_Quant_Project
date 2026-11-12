@@ -1219,6 +1219,14 @@ def _validate_strategy_comparison_arm_runtime(settings: StrategyComparisonSettin
             positive_profile = get_breakout_quality_experiment_profile(classifier.experiment_profile)
             from core.breakout_quality_runtime import get_continuous_ranker_training_policy
             classification = get_continuous_ranker_training_policy(positive_profile.training_objective)
+            from core.positive_score_admission import uses_model_positive_decision
+            if uses_model_positive_decision(options):
+                column_valid = (options["positive_score_column"] ==
+                                getattr(classification, "categorical_decision_column", None))
+            else:
+                column_valid = (not getattr(classification, "categorical_decision_column", None)
+                                and options["positive_score_column"] in classification.categorical_score_columns
+                                and options.get("positive_probability_threshold") == POSITIVE_PROBABILITY_THRESHOLD)
             if (primary.score_source != "selection_point_in_time"
                     or classifier.score_source != primary.score_source
                     or primary.filter_id != classifier.filter_id
@@ -1228,8 +1236,7 @@ def _validate_strategy_comparison_arm_runtime(settings: StrategyComparisonSettin
                     or positive_profile.score_calibration is not None
                     or classification.categorical_class_count != 2
                     or classification.categorical_primary_class != 1
-                    or options["positive_score_column"] not in classification.categorical_score_columns
-                    or options.get("positive_probability_threshold") != POSITIVE_PROBABILITY_THRESHOLD):
+                    or not column_valid):
                 raise ValueError(f"arm {key} requires matching PIT NetPnL rank and independent binary Positive DL")
         if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL:
             if options.get("preserve_k_r0") is not True:

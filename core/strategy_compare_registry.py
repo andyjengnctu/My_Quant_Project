@@ -150,7 +150,7 @@ STRATEGY_COMPARE_SUITES = {
         # versus C96 plus the matched CK/CJ label contrast. Historical AO/CH
         # contrasts remain registered and filter out with their inactive arms.
         "contrast_ids": (
-            "C97-C96", "C98-C97", "C98-C96",
+            "C186-C183", "C97-C96", "C98-C97", "C98-C96",
             "C99-C96", "C101-C96",
             "C100-C99", "C103-C99", "C102-C101",
             "C99-C101", "C100-C102",
@@ -2473,6 +2473,15 @@ STRATEGY_DL_SOURCES = {
         "forward_scores_builder": {"enabled": True, "builder_type": "selection_pit_from_existing_folds",
                                    "options": {"resume": True, "allow_stale_source": False}},
     },
+    "CONT13DJ_ROLL": {
+        "filter_id": "breakout_quality_v1", "model_architecture": "inception_time_v1",
+        "experiment_profile": "daily_universal_min_p21_netpnl_utility_binary",
+        "threshold": None, "score_source": "selection_point_in_time",
+        "single_seed_strategy_conversion_authorized": True,
+        "description": "MR-13DJ independent Positive learned decision; no upstream DL or tuned threshold",
+        "forward_scores_builder": {"enabled": True, "builder_type": "selection_pit_from_existing_folds",
+                                   "options": {"resume": True, "allow_stale_source": False}},
+    },
     "CONT13DI_ROLL": {
         "filter_id": "breakout_quality_v1", "model_architecture": "inception_time_v1",
         "experiment_profile": "daily_universal_min_p21_mintrade_netpnl_positive_binary",
@@ -3437,6 +3446,21 @@ STRATEGY_COMPARE_ARMS = {
         },
         "robustness_role": "off", "entry_strategy": "Daily",
     },
+    "C186": {
+        "replay_contract_version": 4,
+        "name": "Daily_MinTrade_NetPnL_Positive x Daily (Min/P21) Direct / Learned Decision / Broker-Cash",
+        "description": "Same C183 DH rank and P21 economics; second DL DJ learns payoff-sensitive trade/cash decision, no DI dependency or threshold search.",
+        "param_source": "daily_min_six_best_broker_cash_rolling_experiment",
+        "param_policy": "base-finalist-best", "rule_policy": "formal",
+        "dl_enabled": True, "dl_id": "CONT13DH_ROLL",
+        "dl_runtime_mode": "resource-aware-continuous-score-no-k-no-r0",
+        "dl_runtime_options": {"preserve_k": False, "preserve_r0": False,
+            "selection_order": "model_score_desc_then_canonical_tie_v1", "selection_only": True,
+            "positive_dl_id": "CONT13DJ_ROLL", "positive_score_column": "positive_trade_allowed",
+            "positive_source_mode": "model_decision",
+        },
+        "robustness_role": "off", "entry_strategy": "Daily",
+    },
     "C183": {
         "replay_contract_version": 1,
         "name": "Daily_MinTrade_NetPnL_Positive x Daily (Min/P21) Direct No-K No-R0 / Broker-Cash",
@@ -4022,6 +4046,7 @@ STRATEGY_COMPARE_CONTRASTS = {
     "C157-C153": {"left": "C157", "right": "C153", "description": "Full/P17 Exact: NetPnL continuous ranking versus T40 ranking"},
     "C158-C154": {"left": "C158", "right": "C154", "description": "Full/P17 Direct: NetPnL continuous ranking versus T40 ranking"},
     "C159-C161": {"left": "C159", "right": "C161", "description": "Same Daily/P18 market-day entry and ATR exits: CJ T40 Exact against no-DL default selector"},
+    "C186-C183": {"left": "C186", "right": "C183", "description": "Same DH rank and P21 economics; second Positive DL payoff-learned action versus win-probability gate"},
     "C160-C161": {"left": "C160", "right": "C161", "description": "Same Daily/P18 market-day entry and ATR exits: CJ T40 Direct against no-DL default selector"},
     "C159-C160": {"left": "C159", "right": "C160", "description": "Same Daily/P18 CJ T40 PIT score: Exact versus Direct selector"},
     "C159-C145": {"left": "C159", "right": "C145", "description": "Same CJ T40 PIT Daily Exact: independently Daily-optimized P18 versus Breakout-optimized P16"},

@@ -21,6 +21,7 @@ if str(ROOT) not in sys.path:
 from core.positive_netpnl_contract import (positive_labels, POSITIVE_SCORE_CONTRACT, POSITIVE_P_CLASS_COLUMN)
 from core.positive_score_admission import (
     positive_score_admitted, admit_positive_score_rows, uses_primary_positive_classifier,
+    uses_model_positive_decision,
 )
 from core.breakout_quality_runtime import (
     get_continuous_ranker_training_policy,
@@ -134,8 +135,11 @@ class PositiveNetPnlContractCases(TestCase):
                 self.assertEqual(classification_recipe.training_policy.target_builder, 'netpnl_positive_binary')
                 self.assertEqual(classification_recipe.training_policy.categorical_class_count, 2)
                 self.assertEqual(classification_recipe.training_policy.categorical_primary_class, 1)
-                self.assertEqual(classification_recipe.training_policy.categorical_score_columns[1],
-                                 POSITIVE_P_CLASS_COLUMN)
+                policy = classification_recipe.training_policy
+                expected_column = (getattr(policy, 'categorical_decision_column', None)
+                                   if uses_model_positive_decision(settings.arms[arm_id].dl_runtime_options)
+                                   else policy.categorical_score_columns[1])
+                self.assertEqual(settings.arms[arm_id].dl_runtime_options['positive_score_column'], expected_column)
                 self.assertIsNone(positive_profile.score_calibration)
 
     def test_retired_t40_positive_is_not_in_any_current_research_inventory(self):
@@ -378,7 +382,7 @@ class PositiveNetPnlContractCases(TestCase):
                     column=kwargs.get('score_column')
                     columns.append(column)
                     lookup_calls.append(kwargs)
-                    return {'score': .82 if column is None else .61,
+                    return {'score': .82 if column is None else (1. if uses_model_positive_decision(options) else .61),
                             'available':True, 'score_date':'2024-10-01',
                             'score_source':SCORE_SOURCE_SELECTION_POINT_IN_TIME}
                 with breakout_quality_ranking_source_context(
@@ -392,13 +396,13 @@ class PositiveNetPnlContractCases(TestCase):
                     predicted=resolve_breakout_quality_candidate_rank(
                         ticker='2330',signal_date='2024-10-01',
                         information_date='2024-10-01',high_len=40)
-                self.assertEqual(columns,[None,'positive_p_positive'])
+                self.assertEqual(columns,[None, options['positive_score_column']])
                 self.assertNotEqual(lookup_calls[0]['experiment_profile'],
                                     lookup_calls[1]['experiment_profile'])
                 self.assertEqual(lookup_calls[0]['experiment_profile'], source.experiment_profile)
                 self.assertEqual(lookup_calls[1]['experiment_profile'], classifier.experiment_profile)
                 self.assertEqual(predicted['score'],.82)
-                self.assertEqual(predicted['positive_probability'],.61)
+                self.assertEqual(predicted['positive_probability'],1. if uses_model_positive_decision(options) else .61)
                 self.assertTrue(positive_score_admitted({
                     'breakout_quality_rank':predicted,
                     'breakout_quality_ranking_options':arm.dl_runtime_options,
@@ -805,8 +809,12 @@ class IndependentPositiveClassifierCases(TestCase):
                               'ticker': np.tile([str(1000+i) for i in range(6)], 4),
                               'label': (raw > 0).astype(int)})
         percentiles = trainer.build_same_date_percentile_targets(raw, np.ones(24,dtype=bool), groups['date'])
+        from core.breakout_quality_registry import SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES
+        decision_profiles = tuple(name for name in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES
+            if getattr(get_continuous_ranker_training_policy(
+                get_breakout_quality_experiment_profile(name).training_objective), 'categorical_decision_column', None))
         for name in (DAILY_UNIVERSAL_NETPNL_POSITIVE_BINARY_PROFILE,
-                     TRUE_DAILY_MINTRADE_NETPNL_POSITIVE_PROFILE):
+                     TRUE_DAILY_MINTRADE_NETPNL_POSITIVE_PROFILE, *decision_profiles):
             with self.subTest(profile=name), redirect_stdout(StringIO()):
                 recipe = get_breakout_quality_experiment_profile(name)
                 self.assertEqual(get_continuous_ranker_training_policy(recipe.training_objective).categorical_class_count, 2)
@@ -824,11 +832,15 @@ class IndependentPositiveClassifierCases(TestCase):
                     target_manifest={},raw_target=raw)
                 scores, columns=pipeline.predict_score_output_payload(torch,model,bundle,
                     np.arange(18,24),batch_size=64,plan=plan)
-                self.assertIn(POSITIVE_P_CLASS_COLUMN, columns)
-                self.assertTrue(np.all((columns[POSITIVE_P_CLASS_COLUMN] >= 0)&
-                                       (columns[POSITIVE_P_CLASS_COLUMN] <= 1)))
-                np.testing.assert_allclose(scores,columns[POSITIVE_P_CLASS_COLUMN])
-                np.testing.assert_allclose(columns['positive_p_nonpositive'] + columns[POSITIVE_P_CLASS_COLUMN],1.0)
+                policy = get_continuous_ranker_training_policy(recipe.training_objective)
+                negative_column, positive_column = policy.categorical_score_columns
+                self.assertTrue(np.all((columns[positive_column] >= 0)&(columns[positive_column] <= 1)))
+                np.testing.assert_allclose(scores,columns[positive_column])
+                np.testing.assert_allclose(columns[negative_column] + columns[positive_column],1.0)
+                decision_column = getattr(policy, 'categorical_decision_column', None)
+                if decision_column:
+                    self.assertEqual(set(columns), {negative_column, positive_column, decision_column})
+                    self.assertTrue(set(columns[decision_column]).issubset({0., 1.}))
                 payload=pipeline.build_checkpoint_payload(model,bundle,args=args,plan=plan,
                     selected_epoch=selected['best_epoch'],fold_contract={})
                 with TemporaryDirectory() as directory:
@@ -839,8 +851,9 @@ class IndependentPositiveClassifierCases(TestCase):
                     actual,restored_columns=pipeline.predict_score_output_payload(torch,restored,bundle,
                         np.arange(18,24),batch_size=64,plan=plan)
                     np.testing.assert_array_equal(scores,actual)
-                    np.testing.assert_array_equal(columns[POSITIVE_P_CLASS_COLUMN],
-                                                  restored_columns[POSITIVE_P_CLASS_COLUMN])
+                    self.assertEqual(set(columns), set(restored_columns))
+                    for column in columns:
+                        np.testing.assert_array_equal(columns[column], restored_columns[column])
 
 class ScoreOutputCompletenessCases(TestCase):
     """Registry-driven binary-classifier output checks for PIT and OOS."""
@@ -854,8 +867,7 @@ class ScoreOutputCompletenessCases(TestCase):
         return [profile for name in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES
                 if (profile := get_breakout_quality_experiment_profile(name))
                 and (policy := get_continuous_ranker_training_policy(profile.training_objective))
-                and policy.categorical_class_count == 2
-                and POSITIVE_P_CLASS_COLUMN in policy.categorical_score_columns]
+                and policy.categorical_class_count == 2]
 
     def test_classifier_output_is_required_by_manifest_and_fold(self):
         from types import SimpleNamespace
@@ -870,7 +882,8 @@ class ScoreOutputCompletenessCases(TestCase):
                 columns = get_continuous_ranker_score_output_columns(
                     profile.training_objective, score_calibration=profile.score_calibration,
                 )
-                self.assertIn(POSITIVE_P_CLASS_COLUMN, columns.values())
+                self.assertEqual(columns['class_1'], get_continuous_ranker_training_policy(
+                    profile.training_objective).categorical_score_columns[1])
                 self.assertEqual(_score_output_columns(SimpleNamespace(profile=profile)), columns)
                 self.assertEqual(_score_output_capability(SimpleNamespace(profile=profile))["columns"], columns)
                 _validate_score_output_capability_contract({"score_columns": columns}, profile=profile)
@@ -885,9 +898,10 @@ class ScoreOutputCompletenessCases(TestCase):
                                       "model_information_cutoff": ["2020-12-31"]})
                 with self.assertRaises(ValueError):
                     _validate_score_frame(frame, fold_contract=contract)
-                frame[POSITIVE_P_CLASS_COLUMN] = .6
-                frame['positive_p_nonpositive'] = .4
-                self.assertIn(POSITIVE_P_CLASS_COLUMN, _validate_score_frame(frame, fold_contract=contract))
+                for role, column in columns.items():
+                    if role != 'primary':
+                        frame[column] = 1. if role == 'decision' else (.6 if role == 'class_1' else .4)
+                self.assertIn(columns['class_1'], _validate_score_frame(frame, fold_contract=contract))
 
     def test_forward_writer_and_both_readers_require_same_positive_output(self):
         import pandas as pd
@@ -904,14 +918,17 @@ class ScoreOutputCompletenessCases(TestCase):
                 with self.assertRaises(ValueError):
                     _write_forward_score_frame(frame, path, profile=profile, score_extras={})
                 self.assertFalse(path.exists())
-                extras = {POSITIVE_P_CLASS_COLUMN: [.1, .9],
-                          'positive_p_nonpositive': [.9,.1]}
+                columns = get_continuous_ranker_score_output_columns(profile.training_objective)
+                positive_column = columns['class_1']
+                extras = {column: ([0., 1.] if role == 'decision' else [.1,.9] if role == 'class_1' else [.9,.1])
+                          for role, column in columns.items() if role != 'primary'}
                 _write_forward_score_frame(frame, path, profile=profile, score_extras=extras)
                 loaded = load_continuous_ranker_oos_score_table_from_path(str(path), profile.name)
-                self.assertIn(POSITIVE_P_CLASS_COLUMN, loaded)
+                self.assertTrue(set(extras).issubset(loaded))
                 original = pd.read_csv(path, dtype={"ticker": str})
                 np.testing.assert_allclose(original["model_score"], frame["model_score"])
-                np.testing.assert_allclose(original[POSITIVE_P_CLASS_COLUMN], extras[POSITIVE_P_CLASS_COLUMN])
+                for column in extras:
+                    np.testing.assert_allclose(original[column], extras[column])
                 frame.to_csv(path, index=False, compression="gzip")
                 with self.assertRaises(ValueError):
                     load_continuous_ranker_oos_score_table_from_path(str(path), profile.name)
@@ -920,10 +937,10 @@ class ScoreOutputCompletenessCases(TestCase):
                 pit.to_csv(path, index=False, compression="gzip")
                 with self.assertRaises(ValueError):
                     load_selection_point_in_time_score_table_from_path(str(path), experiment_profile=profile.name)
-                pit[POSITIVE_P_CLASS_COLUMN] = extras[POSITIVE_P_CLASS_COLUMN]
-                pit['positive_p_nonpositive'] = extras['positive_p_nonpositive']
+                for column in extras:
+                    pit[column] = extras[column]
                 pit.to_csv(path, index=False, compression="gzip")
-                self.assertIn(POSITIVE_P_CLASS_COLUMN, load_selection_point_in_time_score_table_from_path(
+                self.assertIn(positive_column, load_selection_point_in_time_score_table_from_path(
                     str(path), experiment_profile=profile.name))
 
     def test_retired_predictors_and_raw_outcome_gate_cannot_execute(self):
