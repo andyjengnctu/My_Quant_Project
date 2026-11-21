@@ -143,13 +143,14 @@ STRATEGY_COMPARE_SUITES = {
         # accounting; they differ only by model score or selector.
         "arm_ids": (
             "C96", "C97", "C98", "C99", "C100", "C101", "C102", "C103",
-            "C105", "C106", "C107", "C108", "C109", "C110", "C189", "C190",
+            "C105", "C106", "C107", "C108", "C109", "C110", "C189", "C190", "C191", "C192",
             "C111", "C112", "C115", "C116", "C117", "C118", "C119", "C120", "C121", "C122", "C123", "C124", "C125", "C126", "C133", "C134", "C135", "C136", "C137", "C138", "C145", "C146", "C147", "C148", "C153", "C154", "C155", "C156", "C157", "C158", "C159", "C160", "C161", "C162", "C163", "C164", "C165", "C179", "C180",
         ),
         # A compact connected contrast graph supports each selected model
         # versus C96 plus the matched CK/CJ label contrast. Historical AO/CH
         # contrasts remain registered and filter out with their inactive arms.
         "contrast_ids": (
+            "C191-C123", "C192-C124", "C191-C192",
             "C189-C96", "C190-C96", "C189-C190", "C189-C106", "C190-C118",
             "C186-C183", "C97-C96", "C98-C97", "C98-C96",
             "C99-C96", "C101-C96",
@@ -2345,6 +2346,16 @@ STRATEGY_DL_SOURCES = {
             "options": {"resume": True, "allow_stale_source": False},
         },
     },
+    "CONT13DM_ROLL": {
+        "filter_id": "breakout_quality_v1",
+        "model_architecture": "inception_time_trade_decision_context_v1",
+        "experiment_profile": "daily_formal_mintrade_fullcycle_netpnl_decision_context_full_list_ndcg_pairwise",
+        "threshold": None, "score_source": "selection_point_in_time",
+        "single_seed_strategy_conversion_authorized": True,
+        "description": "MR-13DM same-CO-target NetPnL rank with PIT decision conditions; P16 Exact/Direct.",
+        "forward_scores_builder": {"enabled": True, "builder_type": "selection_pit_from_existing_folds",
+                                   "options": {"resume": True, "allow_stale_source": False}},
+    },
     "CONT13DL_ROLL": {
         "filter_id": "breakout_quality_v1",
         "model_architecture": "inception_time_v1",
@@ -2980,12 +2991,42 @@ STRATEGY_COMPARE_ARMS = {
         },
         "robustness_role": "off",
     },
+    "C191": {
+        "replay_contract_version": 1,
+        "name": "Min MR-13DM Formal MinTrade Full-cycle NetPnL Exact K/R0 / Broker-Cash",
+        "description": "MR-13DM same-seed canonical P16 MinTrade Full-cycle NetPnL PIT rank; C96/P16 broker-cash with Exact K/R0.",
+        "param_source": "min_best_broker_cash_rolling_experiment",
+        "param_policy": "base-finalist-best", "rule_policy": "all_off",
+        "dl_enabled": True, "dl_id": "CONT13DM_ROLL",
+        "dl_runtime_mode": "resource-aware-continuous-score-constrained-optimal",
+        "dl_runtime_options": {
+            "preserve_k_r0": True,
+            "constrained_solver": "exact_branch_and_bound_v1",
+            "selection_only": True,
+        },
+        "robustness_role": "off",
+    },
     "C124": {
         "name": "Min MR-13CO Formal MinTrade Full-cycle NetPnL Direct No-K No-R0 / Broker-Cash",
         "description": "Same MR-13CO PIT scores/P16/broker cash as C123; only selector changes to Direct No-K/No-R0.",
         "param_source": "min_best_broker_cash_rolling_experiment",
         "param_policy": "base-finalist-best", "rule_policy": "all_off",
         "dl_enabled": True, "dl_id": "CONT13CO_ROLL",
+        "dl_runtime_mode": "resource-aware-continuous-score-no-k-no-r0",
+        "dl_runtime_options": {
+            "preserve_k": False, "preserve_r0": False,
+            "selection_order": "model_score_desc_then_canonical_tie_v1",
+            "selection_only": True,
+        },
+        "robustness_role": "off",
+    },
+    "C192": {
+        "replay_contract_version": 1,
+        "name": "Min MR-13DM Formal MinTrade Full-cycle NetPnL Direct No-K No-R0 / Broker-Cash",
+        "description": "Same MR-13DM PIT scores/P16/broker cash as C191; only selector changes to Direct No-K/No-R0.",
+        "param_source": "min_best_broker_cash_rolling_experiment",
+        "param_policy": "base-finalist-best", "rule_policy": "all_off",
+        "dl_enabled": True, "dl_id": "CONT13DM_ROLL",
         "dl_runtime_mode": "resource-aware-continuous-score-no-k-no-r0",
         "dl_runtime_options": {
             "preserve_k": False, "preserve_r0": False,
@@ -4080,6 +4121,9 @@ for _mode in ("oos", "rolling"):
 # Contrast 是否啟用只由 STRATEGY_COMPARE_PROFILES[*]["contrast_ids"] 決定。
 
 STRATEGY_COMPARE_CONTRASTS = {
+    "C191-C123": {"left": "C191", "right": "C123", "description": "Same NetPnL target and Exact P16: decision-context rank versus CO sequence-only"},
+    "C192-C124": {"left": "C192", "right": "C124", "description": "Same NetPnL target and Direct P16: decision-context rank versus CO sequence-only"},
+    "C191-C192": {"left": "C191", "right": "C192", "description": "Same decision-context NetPnL model: Exact versus Direct"},
     "C189-C96": {"left": "C189", "right": "C96", "description": "CI R40 rank plus DL Positive Exact versus same-P16 no-DL control"},
     "C190-C96": {"left": "C190", "right": "C96", "description": "CI R40 rank plus DL Positive Direct versus same-P16 no-DL control"},
     "C189-C190": {"left": "C189", "right": "C190", "description": "Same CI R40 rank and independent DL Positive: Exact versus Direct"},

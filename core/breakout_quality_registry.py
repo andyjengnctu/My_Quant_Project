@@ -411,6 +411,7 @@ DAILY_UNIVERSAL_COUNTERFACTUAL_MINTRADE40_NETR_PAIRWISE_PROFILE = "daily_univers
 DAILY_UNIVERSAL_FORMAL_MINTRADE40_NETR_PAIRWISE_PROFILE = "daily_universal_formal_mintrade40_netr_per_seed_full_list_ndcg_pairwise"
 DAILY_UNIVERSAL_FORMAL_MINTRADE_FULLCYCLE_NETR_PAIRWISE_PROFILE = "daily_universal_formal_mintrade_fullcycle_netr_per_seed_full_list_ndcg_pairwise"
 DAILY_UNIVERSAL_FORMAL_MINTRADE_FULLCYCLE_NETPNL_PAIRWISE_PROFILE = "daily_universal_formal_mintrade_fullcycle_netpnl_per_seed_full_list_ndcg_pairwise"
+FORMAL_MINTRADE_NETPNL_DECISION_CONTEXT_PROFILE = "daily_formal_mintrade_fullcycle_netpnl_decision_context_full_list_ndcg_pairwise"
 DAILY_UNIVERSAL_JOINT_MFE_D40_QUADRANT_PROFILE = "daily_universal_joint_mfe_d40_quadrant_cross_entropy"
 DAILY_UNIVERSAL_NETPNL_POSITIVE_BINARY_PROFILE = "daily_universal_formal_mintrade_fullcycle_netpnl_positive_binary"
 FULLTRADE_NETPNL_POSITIVE_PROFILE = "daily_universal_formal_fulltrade_fullcycle_netpnl_positive_binary"
@@ -1785,6 +1786,18 @@ _EXPERIMENT_PROFILES = {
         training_label_scope=TRAINING_LABEL_SCOPE_ALL,
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
         model_architecture="inception_time_v1",
+    ),
+    FORMAL_MINTRADE_NETPNL_DECISION_CONTEXT_PROFILE: BreakoutQualityExperimentProfile(
+        name=FORMAL_MINTRADE_NETPNL_DECISION_CONTEXT_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
+        continuous_target_id="daily_formal_mintrade_fullcycle_netpnl_per_seed_v1",
+        loss_name="pairwise_logistic",
+        epoch_selection_metric="mean_daily_spearman",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+        model_architecture="inception_time_trade_decision_context_v1",
     ),
     DAILY_UNIVERSAL_NETPNL_POSITIVE_BINARY_PROFILE: BreakoutQualityExperimentProfile(
         name=DAILY_UNIVERSAL_NETPNL_POSITIVE_BINARY_PROFILE,
@@ -3681,6 +3694,30 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
             "Original per-seed canonical historical Optimizer + 2021+ Min P16, "
             "information-time source attestation and mature-label masking; "
             "single-head 300x10 InceptionTime, full-list Delta-NDCG pairwise. "
+            "No retired MR-13CL teacher or hindsight Oracle scores enter FIT."
+        ),
+        metric_scope="all_stock_days_formal_mintrade_fullcycle_netpnl_per_seed",
+        score_semantic_id="daily_formal_mintrade_fullcycle_netpnl_rank",
+        pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        selection_pit_authorized=True,
+        current_time_validation_authorized=True,
+    ),
+    FORMAL_MINTRADE_NETPNL_DECISION_CONTEXT_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=FORMAL_MINTRADE_NETPNL_DECISION_CONTEXT_PROFILE,
+        model_research_id="MR-13DM",
+        experiment_name="MR-13DM Formal MinTrade Full-cycle NetPnL Decision-context Full-list Ranker",
+        phase="13DM",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description=(
+            "Same-seed formal Min ROOS full-cycle realized broker NetPnL; "
+            "natural exit or Research-end closeout, no 40/60-day cap; "
+            "unknown/unfilled are NULL, never 0"
+        ),
+        objective_description=(
+            "Original per-seed canonical historical Optimizer + 2021+ Min P16, "
+            "information-time source attestation and mature-label masking; "
+            "same 300x10 InceptionTime trunk with bilinear decision-context fusion; "
+            "same full-list Delta-NDCG pairwise and CO training cohort. "
             "No retired MR-13CL teacher or hindsight Oracle scores enter FIT."
         ),
         metric_scope="all_stock_days_formal_mintrade_fullcycle_netpnl_per_seed",

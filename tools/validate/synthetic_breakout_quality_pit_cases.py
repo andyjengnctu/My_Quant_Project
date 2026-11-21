@@ -239,8 +239,9 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
     from .check_result_utils import run_unittest_capability_cases
     from .synthetic_positive_netpnl_contract_cases import ScoreOutputCompletenessCases
     from .test_categorical_decision import PayoffDecisionCases
+    from .synthetic_trade_decision_context_cases import TradeDecisionContextCases
     output_checks, _details = run_unittest_capability_cases(
-        case_id, "synthetic_breakout_quality", (ScoreOutputCompletenessCases, PayoffDecisionCases),
+        case_id, "synthetic_breakout_quality", (ScoreOutputCompletenessCases, PayoffDecisionCases, TradeDecisionContextCases),
     )
     results.extend(output_checks)
 

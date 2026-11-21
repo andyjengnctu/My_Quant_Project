@@ -1046,3 +1046,22 @@ The canonical `config/research_summary.py` roster alone determines current Model
 - Exact／Direct 共用逐 fold／seed 的新 DL FIT/PIT；CI、P16 及其他原合法工件依完整身分 REUSE，不因新增策略升版。新模型可由既有七項工作操作；Summary 同源派生模型比較、策略 Forward／Rolling 及 end_to_end_v1 四 seed Robustness，不新增選單。
 - Oracle 將同一 R40 canonical daily percentile 作 Rank、同一原始 R40 的 strict >0 作完美二類輸出，經正式雙分數入口注入；不以 rank percentile>0.5 取代 raw R40>0，不在候選端加未來真值 gate。沿用既有 40D Oracle 資格／cutoff／尾端處理與 P16 交易條件；R40_Positive／_Direct 各有獨立 Replay 身分。合成 parity 不代表全市場 Oracle 已完成；未取得正式簽章結果前不填 Oracle RoMD／Win Rate。
 - 舊 C106／C118 R40 無 Positive 控制、C125／C126 及 DJ／C186 保留。未取得新市場 FIT、Rolling／四 seed 或策略績效，不追加 Experiment Log 結果。
+
+
+## 2026-11-12：同 NetPnL Target 的 Breakout 決策條件輸入對照
+
+使用者依上一輪建議授權先執行 CO 與條件化 NetPnL 排序的受控比較；本輪範圍是模型輸入，不包含樹模型、擴樣、成交輔助任務或新 Positive 分類器。
+
+| 身分 | 定義 | 狀態 |
+|---|---|---|
+| `MR-13DM` / `DL-CONT13DM_ROLL` | `daily_formal_mintrade_fullcycle_netpnl_decision_context_full_list_ndcg_pairwise`；原 CO 的同 Seed／自然成熟 full-cycle Broker NetPnL Target、樣本、Adam、full-list Delta-NDCG pairwise、epoch selection、Fold／四 Seed，只新增下述決策條件輸入 | AUTHORIZED / FIT v1 / MARKET_RESULTS_PENDING / NO_TRADING |
+| `ARCH-inception_time_trade_decision_context_v1` | 原 300×10 InceptionTime trunk／GAP，串接 14 維 numeric context 及 embedding×context 雙線性交互基底，再由原二類線性 rank head 輸出；交互項使同日共同 P16 可改變個股比較，而非只加上會於 pairwise 抵銷的共同截距。無新 hidden-width／lambda | AUTHORIZED / INPUT_TOPOLOGY_V1 |
+| `SR-C191` | MR-13DM × Breakout (Min/P16) NetPnL Exact K/R0；逐日參數、費稅、風控、資金與 C123 一致 | AUTHORIZED / REPLAY v1 / RESULTS_PENDING |
+| `SR-C192` | 同一 MR-13DM FIT／PIT 分數與 P16，使用 Direct No-K/No-R0，對照 C124 | AUTHORIZED / REPLAY v1 / RESULTS_PENDING |
+
+- **唯一比較變數**：`C191−C123`、`C192−C124` 隔離新增條件輸入／必要融合拓樸；`C191−C192` 比較同模型兩種原有 Selector。CO／CP、C123～C126 原身分與既有成果保留；本輪先驗證無 Positive 的排序作用，不新增 CP 配對策略。
+- **Input owner**：`filters/breakout_quality/trade_decision_context.py`。14 欄依序為 teacher_available、geometry_available、log1p(high_len)、log1p(atr_len)、atr_buy_tol、atr_times_init、atr_times_trail、fixed_risk、max_position_cap_pct、ATR/Close、prior_breakout_high/Close−1、new_setup_today、prior_setup_available、log1p(sessions_since_setup)。ATR／突破線與訊號重用 canonical signal owner；價格比例對正值等比例 OHLC 縮放不變，不輸入 tick 取整後價格、事後成交／損益、持倉／現金或未來參數。
+- **PIT／缺值**：只用資訊日及以前行情，逐日解析次一市場交易日有效且資訊日已發布的 same-seed canonical teacher；未發布／不存在 teacher、指標不足、沒有先前訊號以明確 mask＋0 表示，不能改變 CO 的 FIT 樣本或 score eligibility。最近訊號距離是在當日已知政策下回算的 raw setup history，**不是原始掛單／續掛仍有效的狀態**；尚未取得 PIT 合法的 rounded execution-state 表示前，不將其當作模型特徵。
+- **FIT／REUSE**：新 architecture/profile 具獨立 FIT／score；共用原 Target、價格與 canonical teacher。新 FIT source 同時保存 context contract 與實際 ordered FIT rows 的 context SHA；未參與 FIT 的未來 score rows 不得使過往 Fold 失效。舊 CO／CP fitting payload 不增欄、不升版。精確內容的 additive declaration execution-equivalence 證明僅用於保留原 broker execution cache，不放寬新模型 FIT 身分驗證。
+- **整合／Oracle**：Training Model 指向 DM；既有七項模型工作、Summary、模型比較、Forward／Rolling 策略及 end_to_end_v1 四 Seed 同源。DM 不改 Target、分數尺度、score cohort 或交易契約，因此 C191／C192 分別綁既有 NetPnL Exact／Direct Oracle recipe；不建立新 Target 或借用不同條件的 Oracle。既有 Oracle 結果是否有效仍依原簽章與 parity 證據；沒有新市場 FIT／Replay／RoMD 或 promotion 宣稱。
+- **驗收決策**：在共同合法樣本與配對 Seed 比較排序／前段淨損益及 RoMD、MDD、曝險；Train／Validation 決定 epoch 與設定。2021-01-01～2026-03-02 為迭代研究 OOS，不回饋 computational fitting。取得市場結果前不追加 Experiment Log 成果。

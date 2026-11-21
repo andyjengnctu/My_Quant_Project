@@ -87,6 +87,15 @@ def mintrade40_fit_sample_sha256(bundle: Any, ordered_group_ids: Any) -> str | N
         digest.update(text.encode('utf-8'))
         digest.update(np.float32(raw).tobytes())
         digest.update(b'\n')
+    context_contract = bundle.summary.get("input_decision_context")
+    if context_contract is not None:
+        context = np.asarray(bundle.group_context, dtype=np.float32)[ids]
+        if (context.shape != (len(ids), len(context_contract["features"]))
+                or not np.isfinite(context).all()):
+            raise ValueError("invalid decision context in ordered FIT rows")
+        digest.update(b"decision_context_ordered_fit_values_v1\n")
+        digest.update(json.dumps(context_contract, sort_keys=True).encode("utf-8"))
+        digest.update(context.astype("<f4", copy=False).tobytes())
     return digest.hexdigest()
 
 
@@ -145,6 +154,7 @@ class FitDataDependencies:
             "source_data_inventory": summary.get("source_data_inventory"),
             **({"input_price_source": summary["input_price_source"]} if "input_price_source" in summary else {}),
             **({"input_trade_count_source": summary["input_trade_count_source"]} if "input_trade_count_source" in summary else {}),
+            **({"input_decision_context": summary["input_decision_context"]} if "input_decision_context" in summary else {}),
             "source_dataset_artifacts": canonical_source_dataset_artifacts(summary),
             "source_target_artifacts": target.get("artifacts"),
             "target_id": target.get("target_id"),
@@ -169,6 +179,7 @@ class FitDataDependencies:
             "source_data_inventory": summary.get("source_data_inventory"),
             **({"input_price_source": summary["input_price_source"]} if "input_price_source" in summary else {}),
             **({"input_trade_count_source": summary["input_trade_count_source"]} if "input_trade_count_source" in summary else {}),
+            **({"input_decision_context": summary["input_decision_context"]} if "input_decision_context" in summary else {}),
             "dataset_artifacts": canonical_source_dataset_artifacts(summary),
             "target_schema_version": target.get("schema_version"),
             "target_contract": self._asof_target_contract(fit_cutoff),

@@ -200,6 +200,16 @@ def _certified_summary_membership_policy_sha256(relative: str, actual: str) -> s
     return actual
 
 
+# AI: Same-target decision-context declarations add no broker execution rule.
+# Exact bytes preserve disposable Min execution caches; FIT/source contracts
+# still bind the new architecture, context schema and ordered FIT inputs.
+_REVIEWED.setdefault('core/breakout_quality_registry.py', {"file_sha256": '6a2cfba976968888746115b8ed218bc5690343652fa4175a8195b4db96d10e5b', "original_file_sha256": 'f46267b9342f03680f0ec76ebe5c3ba50fa4f0217c541a560055d1e4544ecec3', "calculations": {}}).setdefault(
+    "reviewed_model_only_revisions", {})['6a2cfba976968888746115b8ed218bc5690343652fa4175a8195b4db96d10e5b'] = 'f46267b9342f03680f0ec76ebe5c3ba50fa4f0217c541a560055d1e4544ecec3'
+_REVIEWED.setdefault('filters/breakout_quality/models/architectures.py', {"file_sha256": 'f21154817d201a9a685287fce277653f413108bea1f05f7214a236b03ad1515e', "original_file_sha256": '7759ecf25673d4e1709376f19f1dffb885e00fa8294b3275d718d1dda473f302', "calculations": {}}).setdefault(
+    "reviewed_model_only_revisions", {})['f21154817d201a9a685287fce277653f413108bea1f05f7214a236b03ad1515e'] = '7759ecf25673d4e1709376f19f1dffb885e00fa8294b3275d718d1dda473f302'
+_REVIEWED.setdefault('config/research_summary.py', {"file_sha256": 'cac2cb2835358f193c83fc42a8847f7bb093ca486d2b8929d4becaf1795477e3', "original_file_sha256": '9280b09d88652ccfffeb3d4f9a73270ee2b15cbf58e8d7e90b8cc9c7599b38fb', "calculations": {}}).setdefault(
+    "reviewed_model_only_revisions", {})['cac2cb2835358f193c83fc42a8847f7bb093ca486d2b8929d4becaf1795477e3'] = '9280b09d88652ccfffeb3d4f9a73270ee2b15cbf58e8d7e90b8cc9c7599b38fb'
+
 def reviewed_execution_source_sha256(relative: str, actual: str) -> str:
     normalized = _certified_model_selection_only_config_sha256(relative, actual)
     if normalized == actual:

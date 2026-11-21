@@ -5,14 +5,30 @@ from __future__ import annotations
 from filters.breakout_quality.models.architectures import get_architecture_descriptor
 
 
+def fuse_decision_context(encoded, context, torch):
+    """Bilinear feature basis: same-day policy can change stock ordering.
+
+    Concatenating a common policy into a linear rank head alone would cancel
+    its contribution in every same-date pair. These deterministic interactions
+    condition the stock representation without a new hidden-width/lambda knob.
+    """
+    interaction = (encoded[:, :, None] * context[:, None, :]).reshape(len(encoded), -1)
+    return torch.cat([encoded, context, interaction], dim=1)
+
+
 def build_inception_time(nn, torch, *, feature_count: int, context_count: int, spec):
     descriptor = get_architecture_descriptor(spec.architecture)
     use_risk_context = descriptor.has_capability("risk_context")
+    use_trade_context = descriptor.has_capability("trade_decision_context")
     use_predicted_upside_context = descriptor.has_capability("predicted_upside_context")
     use_predicted_safety_context = descriptor.has_capability("predicted_safety_context")
     use_predicted_scalar_context = bool(
         use_predicted_upside_context or use_predicted_safety_context
     )
+    if use_trade_context:
+        from filters.breakout_quality.trade_decision_context import CONTEXT_FEATURES
+        if int(context_count) != len(CONTEXT_FEATURES):
+            raise ValueError("trade decision context tensor width does not match schema")
     use_conditional_mfe_safety = descriptor.has_capability("conditional_mfe_safety")
     use_safety_conditional_mfe = descriptor.has_capability("safety_conditional_mfe")
     use_shared_safety_mfe = descriptor.has_capability("shared_safety_mfe")
@@ -74,7 +90,7 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
     use_safety_raw_mfe_hmhs = descriptor.has_capability("safety_raw_mfe_hmhs")
     use_nonlinear_hmhs_head = descriptor.has_capability("nonlinear_hmhs_head")
     use_joint_attention_pool = descriptor.has_capability("joint_attention_pool")
-    if bool(spec.use_dataset_context) != bool(use_risk_context or use_predicted_scalar_context):
+    if bool(spec.use_dataset_context) != bool(use_risk_context or use_predicted_scalar_context or use_trade_context):
         raise ValueError("InceptionTime dataset context contract與architecture不一致")
     if use_risk_context and int(context_count) != 5:
         raise ValueError("MR-13J InceptionTime risk context固定需要5個universal geometry features")
@@ -221,7 +237,8 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
                 self.mfe_residual_projections = nn.ModuleList()
             self.residual_activation = nn.ReLU()
             self.dropout = nn.Dropout(float(spec.dropout))
-            self.direct_context_concat = bool(use_predicted_scalar_context)
+            self.direct_context_concat = bool(use_predicted_scalar_context or use_trade_context)
+            self.decision_context_interactions = bool(use_trade_context)
             if use_risk_context:
                 context_width = int(spec.head_width or 16)
                 self.context_network = nn.Sequential(
@@ -232,9 +249,12 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
                     nn.ReLU(),
                 )
                 classifier_input = module_output_channels + context_width
-            elif use_predicted_scalar_context:
+            elif self.direct_context_concat:
                 self.context_network = None
-                classifier_input = module_output_channels + 1
+                classifier_input = (
+                    module_output_channels * (1 + int(context_count)) + int(context_count)
+                    if use_trade_context else module_output_channels + int(context_count)
+                )
             else:
                 self.context_network = None
                 classifier_input = module_output_channels
@@ -620,11 +640,14 @@ def build_inception_time(nn, torch, *, feature_count: int, context_count: int, s
                     raise ValueError("MR-13J risk context tensor shape不一致")
                 return torch.cat([encoded, self.context_network(context)], dim=1), encoded
             if self.direct_context_concat:
-                if context is None or context.ndim != 2 or int(context.shape[1]) != 1:
-                    raise ValueError("MR-13AC/AD predicted context tensor shape不一致")
+                if context is None or context.ndim != 2 or int(context.shape[1]) != int(context_count):
+                    raise ValueError("numeric context tensor shape不一致")
                 if not bool(torch.isfinite(context).all()):
                     raise ValueError("MR-13AC/AD predicted context不得含non-finite value")
-                return torch.cat([encoded, context.to(encoded.dtype)], dim=1), encoded
+                typed_context = context.to(encoded.dtype)
+                if self.decision_context_interactions:
+                    return fuse_decision_context(encoded, typed_context, torch), encoded
+                return torch.cat([encoded, typed_context], dim=1), encoded
             return encoded, encoded
 
         def forward_conditional_heads(self, x, context):

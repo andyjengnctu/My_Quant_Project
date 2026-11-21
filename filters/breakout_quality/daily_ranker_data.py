@@ -1389,6 +1389,16 @@ def load_daily_universal_ranker_data(
         if not isinstance(data_dir, Path) or not data_dir.is_dir():
             raise ValueError("DL raw input feature source dataset dir不可用")
     use_risk_context = architecture_descriptor.has_capability("risk_context")
+    use_trade_context = architecture_descriptor.has_capability("trade_decision_context")
+    if use_trade_context:
+        from filters.breakout_quality.trade_decision_context import (
+            CONTEXT_FEATURES, CONTEXT_CONTRACT, build_trade_decision_context,
+        )
+        if not trade_path_mode:
+            raise ValueError("decision context requires a verified real-path teacher")
+        context_source = getattr(target_materializer, "keywords", {}).get("source")
+        if context_source is None:
+            raise ValueError("decision context lacks the canonical target teacher")
     architecture_uses_predicted_upside_context = architecture_descriptor.has_capability(
         "predicted_upside_context"
     )
@@ -1407,7 +1417,7 @@ def load_daily_universal_ranker_data(
         use_predicted_upside_context or use_predicted_safety_context
     )
     if bool(model_spec.use_dataset_context) != bool(
-        use_risk_context or use_predicted_scalar_context
+        use_risk_context or use_predicted_scalar_context or use_trade_context
     ):
         raise ValueError("daily universal ranker architecture/context contract不一致")
     if (
@@ -1633,7 +1643,9 @@ def load_daily_universal_ranker_data(
         # eligibility rule. MR-13I/J keep the MR-13E daily-universal stock-day universe;
         # Min ROOS contributes only historical-effective risk calibration.
         context_width = (
-            len(RISK_GEOMETRY_CONTEXT_FEATURES)
+            len(CONTEXT_FEATURES)
+            if use_trade_context
+            else len(RISK_GEOMETRY_CONTEXT_FEATURES)
             if use_risk_context
             else 1
             if use_predicted_scalar_context
@@ -1642,6 +1654,11 @@ def load_daily_universal_ranker_data(
         local_context = np.full(
             (len(local_positions), context_width), np.nan, dtype=np.float32
         )
+        if use_trade_context:
+            local_context = build_trade_decision_context(
+                source=context_source, frame=frame, positions=local_positions,
+                ticker=ticker, exchange_calendar=exchange_calendar,
+            )
         local_favorable = np.full(len(local_positions), np.nan, dtype=np.float32)
         local_adverse = np.full(len(local_positions), np.nan, dtype=np.float32)
         local_opportunity_bar = np.full(len(local_positions), -1, dtype=np.int16)
@@ -1949,7 +1966,9 @@ def load_daily_universal_ranker_data(
             )
         )
     context_width = (
-        len(RISK_GEOMETRY_CONTEXT_FEATURES)
+        len(CONTEXT_FEATURES)
+        if use_trade_context
+        else len(RISK_GEOMETRY_CONTEXT_FEATURES)
         if use_risk_context
         else 1
         if use_predicted_scalar_context
@@ -2311,8 +2330,11 @@ def load_daily_universal_ranker_data(
         },
         "feature_storage": "lazy_from_canonical_ohlcv_no_expanded_daily_feature_bank",
         "input_window_bars": input_window_bars,
+        **({"input_decision_context": dict(CONTEXT_CONTRACT)} if use_trade_context else {}),
         "context_features": (
-            list(RISK_GEOMETRY_CONTEXT_FEATURES)
+            list(CONTEXT_FEATURES)
+            if use_trade_context
+            else list(RISK_GEOMETRY_CONTEXT_FEATURES)
             if use_risk_context
             else [predicted_context_spec.context_column]
             if use_predicted_scalar_context and predicted_context_spec is not None
@@ -2354,8 +2376,11 @@ def load_daily_universal_ranker_data(
         "ticker_count": int(len(tickers)),
         "skipped_ticker_count": int(skipped_tickers),
         "feature_storage": "lazy",
+        **({"input_decision_context": dict(CONTEXT_CONTRACT)} if use_trade_context else {}),
         "context_features": (
-            list(RISK_GEOMETRY_CONTEXT_FEATURES)
+            list(CONTEXT_FEATURES)
+            if use_trade_context
+            else list(RISK_GEOMETRY_CONTEXT_FEATURES)
             if use_risk_context
             else [predicted_context_spec.context_column]
             if use_predicted_scalar_context and predicted_context_spec is not None

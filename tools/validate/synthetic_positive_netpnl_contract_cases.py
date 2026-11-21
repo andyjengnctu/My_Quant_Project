@@ -241,7 +241,8 @@ class PositiveNetPnlContractCases(TestCase):
         published = {arm_id: float(i + 1) for i, (*_, arm_id, rank, classifier) in enumerate(cases)}
         with patch('services.research.target_dl_overview._strategy_rolling_metrics', return_value=published):
             report = collect_target_dl_overview(ROOT)
-        keys = lambda row: (row['target'], row['entry_strategy'], row['selector'])
+        # Several models may consume one immutable Target; strategy ID owns the row.
+        keys = lambda row: (row['target'], row['entry_strategy'], row['selector'], row['strategy'])
         group = {keys(row): [] for row in report['rows']}
         for row in report['rows']:
             group[keys(row)].append(row)
@@ -249,8 +250,8 @@ class PositiveNetPnlContractCases(TestCase):
             self.assertNotIn(retired_arm, {row["strategy"] for row in report["rows"]})
         for target, strategy, selector, arm_id, rank, classifier in cases:
             with self.subTest(arm=arm_id):
-                matched = group[(target, strategy, selector)]
-                self.assertEqual(len(matched), 1, "one Target/Strategy/Selector is one strategy comparison")
+                matched = group[(target, strategy, selector, arm_id)]
+                self.assertEqual(len(matched), 1, "one strategy arm has exactly one Target/Strategy/Selector row")
                 row = matched[0]
                 self.assertEqual((row['strategy'], row['model'], row['positive_model']),
                                  (arm_id, rank, classifier))
