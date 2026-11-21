@@ -76,8 +76,18 @@ _REVIEWED = {
     "filters/breakout_quality/daily_ranker_data.py": {
         "file_sha256": "32a6c04a2e7024fb128e459b9d87e5ba9f3c58db73034173103cdada72b0a20e",
         "original_file_sha256": "65338ef9511e2739fccda5db90bbdc65893f63d5b97c968ef3e50fa51963c2c6",
-        "calculations": {}
-    }
+        "calculations": {},
+        # AI: Compared with a3d9a7e4: the additional daily model input hook
+        # leaves the existing Oracle cohort, target and eligibility path intact.
+        # Bridge this one loader revision for both encodings; later feature
+        # extensions live in the separate model-input provider.
+        "reviewed_model_only_revisions": {
+            "3ba49651c71a28574431646146c62fcfe0b2ae9ec88d467b9224e2eab44df00e":
+                "d4d31e387030656aa1609dfcff5de66345a7158d687d74a9510785c88114f4d2",
+            "121be1928f6f1538e9678ace4f036bfff17d48688a6d84e3e0e95d8c40c34a0f":
+                "b40485ed13310be47261d9b504c874e15254ec30d3e9e423b657b644a7b91bdf",
+        },
+    },
 }
 
 # Newly imported solely to bound execution resources. Neither module supplies

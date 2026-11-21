@@ -1389,16 +1389,6 @@ def load_daily_universal_ranker_data(
         if not isinstance(data_dir, Path) or not data_dir.is_dir():
             raise ValueError("DL raw input feature source dataset dir不可用")
     use_risk_context = architecture_descriptor.has_capability("risk_context")
-    use_trade_context = architecture_descriptor.has_capability("trade_decision_context")
-    if use_trade_context:
-        from filters.breakout_quality.trade_decision_context import (
-            CONTEXT_FEATURES, CONTEXT_CONTRACT, build_trade_decision_context,
-        )
-        if not trade_path_mode:
-            raise ValueError("decision context requires a verified real-path teacher")
-        context_source = getattr(target_materializer, "keywords", {}).get("source")
-        if context_source is None:
-            raise ValueError("decision context lacks the canonical target teacher")
     architecture_uses_predicted_upside_context = architecture_descriptor.has_capability(
         "predicted_upside_context"
     )
@@ -1416,9 +1406,18 @@ def load_daily_universal_ranker_data(
     use_predicted_scalar_context = bool(
         use_predicted_upside_context or use_predicted_safety_context
     )
-    if bool(model_spec.use_dataset_context) != bool(
-        use_risk_context or use_predicted_scalar_context or use_trade_context
-    ):
+    has_shared_context = use_risk_context or use_predicted_scalar_context
+    model_input_context = None
+    if model_spec.use_dataset_context and not has_shared_context:
+        # AI: Bind input-only providers outside target/eligibility logic.
+        # Only architectures that ask for this context can import its provider.
+        from filters.breakout_quality.daily_model_input_context import bind_daily_model_input_context
+
+        model_input_context = bind_daily_model_input_context(
+            architecture_descriptor, trade_path_mode=trade_path_mode,
+            target_materializer=target_materializer,
+        )
+    if bool(model_spec.use_dataset_context) != (has_shared_context or model_input_context is not None):
         raise ValueError("daily universal ranker architecture/context contract不一致")
     if (
         use_risk_context
@@ -1430,6 +1429,16 @@ def load_daily_universal_ranker_data(
         raise ValueError("predicted-upside architecture與runtime context policy不一致")
     if architecture_uses_predicted_safety_context != use_predicted_safety_context:
         raise ValueError("predicted-safety architecture與runtime context policy不一致")
+
+    context_width = (
+        len(model_input_context.features)
+        if model_input_context is not None
+        else len(RISK_GEOMETRY_CONTEXT_FEATURES)
+        if use_risk_context
+        else 1
+        if use_predicted_scalar_context
+        else 0
+    )
 
     # The existing official event dataset remains the source-selection/inventory truth.
     summary, _indexed_features, _context, _labels, event_rows = load_validated_dataset_bundle(
@@ -1642,22 +1651,14 @@ def load_daily_universal_ranker_data(
         # Future target completion is a training/evaluation property, not an inference
         # eligibility rule. MR-13I/J keep the MR-13E daily-universal stock-day universe;
         # Min ROOS contributes only historical-effective risk calibration.
-        context_width = (
-            len(CONTEXT_FEATURES)
-            if use_trade_context
-            else len(RISK_GEOMETRY_CONTEXT_FEATURES)
-            if use_risk_context
-            else 1
-            if use_predicted_scalar_context
-            else 0
-        )
-        local_context = np.full(
-            (len(local_positions), context_width), np.nan, dtype=np.float32
-        )
-        if use_trade_context:
-            local_context = build_trade_decision_context(
-                source=context_source, frame=frame, positions=local_positions,
-                ticker=ticker, exchange_calendar=exchange_calendar,
+        if model_input_context is None:
+            local_context = np.full(
+                (len(local_positions), context_width), np.nan, dtype=np.float32
+            )
+        else:
+            local_context = model_input_context.materialize(
+                frame=frame, positions=local_positions, ticker=ticker,
+                exchange_calendar=exchange_calendar,
             )
         local_favorable = np.full(len(local_positions), np.nan, dtype=np.float32)
         local_adverse = np.full(len(local_positions), np.nan, dtype=np.float32)
@@ -1965,15 +1966,6 @@ def load_daily_universal_ranker_data(
                 valid_dates,
             )
         )
-    context_width = (
-        len(CONTEXT_FEATURES)
-        if use_trade_context
-        else len(RISK_GEOMETRY_CONTEXT_FEATURES)
-        if use_risk_context
-        else 1
-        if use_predicted_scalar_context
-        else 0
-    )
     valid_context = np.concatenate(valid_context_chunks, axis=0)
 
     if inference_source_pos_chunks:
@@ -2330,10 +2322,11 @@ def load_daily_universal_ranker_data(
         },
         "feature_storage": "lazy_from_canonical_ohlcv_no_expanded_daily_feature_bank",
         "input_window_bars": input_window_bars,
-        **({"input_decision_context": dict(CONTEXT_CONTRACT)} if use_trade_context else {}),
+        **({"input_decision_context": dict(model_input_context.contract)}
+           if model_input_context is not None else {}),
         "context_features": (
-            list(CONTEXT_FEATURES)
-            if use_trade_context
+            list(model_input_context.features)
+            if model_input_context is not None
             else list(RISK_GEOMETRY_CONTEXT_FEATURES)
             if use_risk_context
             else [predicted_context_spec.context_column]
@@ -2376,10 +2369,11 @@ def load_daily_universal_ranker_data(
         "ticker_count": int(len(tickers)),
         "skipped_ticker_count": int(skipped_tickers),
         "feature_storage": "lazy",
-        **({"input_decision_context": dict(CONTEXT_CONTRACT)} if use_trade_context else {}),
+        **({"input_decision_context": dict(model_input_context.contract)}
+           if model_input_context is not None else {}),
         "context_features": (
-            list(CONTEXT_FEATURES)
-            if use_trade_context
+            list(model_input_context.features)
+            if model_input_context is not None
             else list(RISK_GEOMETRY_CONTEXT_FEATURES)
             if use_risk_context
             else [predicted_context_spec.context_column]

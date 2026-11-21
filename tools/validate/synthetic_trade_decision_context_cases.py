@@ -111,25 +111,80 @@ class TradeDecisionContextCases(unittest.TestCase):
         from unittest.mock import patch
         from functools import partial
         from pathlib import Path
-        from filters.breakout_quality.daily_ranker_data import load_daily_universal_ranker_data
-        from core.breakout_quality_registry import FORMAL_MINTRADE_NETPNL_DECISION_CONTEXT_PROFILE as P
-        days,frame,params,period=fixture(count=520,start='2018-01-01')
-        source=FormalMinTrade40PITSource(42,'a'*64,(period,),('2017-12-31',))
-        def outcomes(*,source,frame,positions,**kw):
-         n=len(positions);valid=positions%2==0
-         return SimpleNamespace(raw_net_r=np.where(valid,positions/100.,np.nan),raw_net_pnl=np.where(valid,positions*10.,np.nan),completed=valid,maturity_dates=frame.index.take(positions+1).to_numpy(dtype='datetime64[D]'))
-        kwargs=dict(filter_id='breakout_quality_v1',preload_feature_bank=False,allow_stale_source=False,project_root=Path.cwd(),target_materializer=partial(outcomes,source=source),target_lineage=dict(contract='formal_mintrade40_seed_historical_plus_p16_v1',seed=42,source_sha256='a'*64,first_effective_date=str(days[0].date()),teacher_periods=[],value_field='raw_net_pnl',target_kind='formal_seed_mintrade_fullcycle_broker_net_pnl'))
-        with patch('filters.breakout_quality.daily_ranker_data.load_validated_dataset_bundle',return_value=({'dataset':'full','source_data_date_range':{'end':str(days[-1].date())}},None,None,None,pd.DataFrame())),patch('filters.breakout_quality.daily_ranker_data.resolve_breakout_quality_outer_policy',return_value={'effective_oos_end_date':str(days[-1].date()),'oos_start_date':'2019-01-01'}),patch('filters.breakout_quality.daily_ranker_data.discover_dataset_csv_inputs',return_value=((('0050',Path('0050.csv')),('2330',Path('2330.csv'))),[])),patch('filters.breakout_quality.daily_ranker_data.load_dataset_frame',return_value=frame),patch('filters.breakout_quality.daily_trade40_target.collect_canonical_exchange_sessions',return_value=days):
-         a=load_daily_universal_ranker_data(model_architecture='inception_time_v1',experiment_profile='daily_universal_formal_mintrade_fullcycle_netpnl_per_seed_full_list_ndcg_pairwise',**kwargs)
-         b=load_daily_universal_ranker_data(model_architecture='inception_time_trade_decision_context_v1',experiment_profile=P,**kwargs)
-         np.testing.assert_array_equal(a.target_valid,b.target_valid)
-         np.testing.assert_array_equal(a.raw_target,b.raw_target)
-         pd.testing.assert_frame_equal(a.group_table,b.group_table)
-         assert a.target_manifest['target_contract']==b.target_manifest['target_contract']
-         assert a.feature_bank.shape==b.feature_bank.shape
-         assert b.group_context.shape==(len(a.group_table),len(CONTEXT_FEATURES))
-         np.testing.assert_array_equal(a.feature_bank[:3],b.feature_bank[:3])
-         self.assertEqual(b.group_context.shape[1], len(CONTEXT_FEATURES))
+        from core.breakout_quality_registry import FORMAL_MINTRADE_NETPNL_DECISION_CONTEXT_PROFILE
+        from filters.breakout_quality import daily_ranker_data as loader
+        from filters.breakout_quality import daily_model_input_context as model_inputs
+        from filters.breakout_quality import daily_trade40_target as target
+        from filters.breakout_quality import trade_decision_context
+
+        days, frame, _, period = fixture(count=520, start="2018-01-01")
+        source = FormalMinTrade40PITSource(42, "a" * 64, (period,), ("2017-12-31",))
+
+        def outcomes(*, source, frame, positions, **kwargs):
+            valid = positions % 2 == 0
+            return SimpleNamespace(
+                raw_net_r=np.where(valid, positions / 100.0, np.nan),
+                raw_net_pnl=np.where(valid, positions * 10.0, np.nan),
+                completed=valid,
+                maturity_dates=frame.index.take(positions + 1).to_numpy(dtype="datetime64[D]"),
+            )
+
+        kwargs = dict(
+            filter_id="breakout_quality_v1", preload_feature_bank=False, allow_stale_source=False,
+            project_root=Path.cwd(), target_materializer=partial(outcomes, source=source),
+            target_lineage={
+                "contract": "formal_mintrade40_seed_historical_plus_p16_v1", "seed": 42,
+                "source_sha256": "a" * 64, "first_effective_date": str(days[0].date()),
+                "teacher_periods": [], "value_field": "raw_net_pnl",
+                "target_kind": "formal_seed_mintrade_fullcycle_broker_net_pnl",
+            },
+        )
+        dataset = {"dataset": "full", "source_data_date_range": {"end": str(days[-1].date())}}
+        policy = {"effective_oos_end_date": str(days[-1].date()), "oos_start_date": "2019-01-01"}
+        csv_inputs = ((("0050", Path("0050.csv")), ("2330", Path("2330.csv"))), [])
+
+        def load_context():
+            return loader.load_daily_universal_ranker_data(
+                model_architecture="inception_time_trade_decision_context_v1",
+                experiment_profile=FORMAL_MINTRADE_NETPNL_DECISION_CONTEXT_PROFILE,
+                **kwargs,
+            )
+
+        def changed_input(*, positions, **kwargs):
+            return np.full((len(positions), len(CONTEXT_FEATURES)), 2.0, dtype=np.float32)
+
+        with (
+            patch.object(loader, "load_validated_dataset_bundle",
+                         return_value=(dataset, None, None, None, pd.DataFrame())),
+            patch.object(loader, "resolve_breakout_quality_outer_policy", return_value=policy),
+            patch.object(loader, "discover_dataset_csv_inputs", return_value=csv_inputs),
+            patch.object(loader, "load_dataset_frame", return_value=frame),
+            patch.object(target, "collect_canonical_exchange_sessions", return_value=days),
+            patch.object(model_inputs, "bind_daily_model_input_context",
+                         wraps=model_inputs.bind_daily_model_input_context) as bind,
+        ):
+            original = loader.load_daily_universal_ranker_data(
+                model_architecture="inception_time_v1",
+                experiment_profile="daily_universal_formal_mintrade_fullcycle_netpnl_per_seed_full_list_ndcg_pairwise",
+                **kwargs,
+            )
+            bind.assert_not_called()
+            context = load_context()
+            bind.assert_called_once()
+            with patch.object(trade_decision_context, "build_trade_decision_context", side_effect=changed_input):
+                changed = load_context()
+
+        for bundle in (context, changed):
+            np.testing.assert_array_equal(original.target_valid, bundle.target_valid)
+            np.testing.assert_array_equal(original.raw_target, bundle.raw_target)
+            pd.testing.assert_frame_equal(original.group_table, bundle.group_table)
+            self.assertEqual(original.target_manifest["target_contract"], bundle.target_manifest["target_contract"])
+            self.assertEqual(original.feature_bank.shape, bundle.feature_bank.shape)
+            self.assertEqual(bundle.group_context.shape, (len(original.group_table), len(CONTEXT_FEATURES)))
+            self.assertEqual(bundle.summary["input_decision_context"], CONTEXT_CONTRACT)
+            np.testing.assert_array_equal(original.feature_bank[:3], bundle.feature_bank[:3])
+        np.testing.assert_array_equal(changed.group_context, 2.0)
+        self.assertFalse(np.array_equal(context.group_context, changed.group_context))
 
     def test_common_same_date_policy_can_change_pairwise_stock_ordering(self):
         from filters.breakout_quality.models.inception_time import fuse_decision_context

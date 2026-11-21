@@ -7794,6 +7794,44 @@ class OracleEffectiveArtifactContractCases(TestCase):
                 for fn in (contracts.source_implementation_sha256, contracts._source_implementation_encodings):
                     fn.cache_clear()
 
+    def test_input_context_extension_preserves_certified_daily_oracle_truth(self):
+        from services.audit import daily_trade40_oracle as daily
+        from services.audit import oracle_score_artifacts as sources
+
+        shared_loader = ROOT / "filters/breakout_quality/daily_ranker_data.py"
+        model_input_files = {
+            ROOT / "filters/breakout_quality/daily_model_input_context.py",
+            ROOT / "filters/breakout_quality/trade_decision_context.py",
+        }
+        hash_file = sources.compute_file_sha256
+
+        def fingerprints(loader_sha):
+            def hash_source(path):
+                self.assertNotIn(path, model_input_files)
+                return loader_sha if path == shared_loader else hash_file(path)
+            with patch.object(sources, "compute_file_sha256", side_effect=hash_source):
+                return sources.oracle_daily_source_fingerprint(), daily._truth_source_sha(
+                    ROOT, outcome_metric="net_pnl",
+                )
+
+        tested_revisions = (
+            (
+                "d4d31e387030656aa1609dfcff5de66345a7158d687d74a9510785c88114f4d2",
+                "3ba49651c71a28574431646146c62fcfe0b2ae9ec88d467b9224e2eab44df00e",
+            ),
+            (
+                "b40485ed13310be47261d9b504c874e15254ec30d3e9e423b657b644a7b91bdf",
+                "121be1928f6f1538e9678ace4f036bfff17d48688a6d84e3e0e95d8c40c34a0f",
+            ),
+        )
+        unreviewed_fingerprints = fingerprints("f" * 64)
+        for predecessor, reviewed in tested_revisions:
+            with self.subTest(revision=reviewed):
+                expected = fingerprints(predecessor)
+                self.assertEqual(fingerprints(reviewed), expected)
+                for unknown, certified in zip(unreviewed_fingerprints, expected):
+                    self.assertNotEqual(unknown, certified)
+
     def _implementations(self):
         from services.research.oracle_artifact_contract import source_implementation_sha256
         plan = oracle._oracle_comparison_plan(_ACTIVE_ORACLE_DEFINITION)
