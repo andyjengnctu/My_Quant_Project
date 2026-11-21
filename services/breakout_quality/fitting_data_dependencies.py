@@ -87,7 +87,8 @@ def mintrade40_fit_sample_sha256(bundle: Any, ordered_group_ids: Any) -> str | N
         digest.update(text.encode('utf-8'))
         digest.update(np.float32(raw).tobytes())
         digest.update(b'\n')
-    context_contract = bundle.summary.get("input_decision_context")
+    # Label-only callers predate the optional decision-context evidence.
+    context_contract = (getattr(bundle, "summary", None) or {}).get("input_decision_context")
     if context_contract is not None:
         context = np.asarray(bundle.group_context, dtype=np.float32)[ids]
         if (context.shape != (len(ids), len(context_contract["features"]))
