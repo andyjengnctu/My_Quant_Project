@@ -5317,3 +5317,53 @@ Assessment: `USER_REPORTED_ROLLING_RESULT_AVAILABLE / FULL_HORIZON_MAE_SMALL_PAI
 
 - **決策／限制**：DK 在兩個 Selector 的 Rolling、四 Seed Robustness 與加權 Mean RoMD 均低於 CP 對照。使用者明確指示退役 C187／C188；其唯一專用 Positive 模型 MR-13DK／DL-CONT13DK_ROLL 一併退出 current training／compare。ID 與本次負面觀測永久保留，原工件保留唯讀；不以這些迭代研究 OOS 重新擬合門檻或修改訓練。未提供 Exposure、MDD 或逐 Seed 分布，不能推斷退步原因或否決其他參數家族的 payoff 能力。
 - **P21 獨立觀測**：同份 Summary 的 C186（DH＋DJ）Rolling／4S Robustness／Mean RoMD 為 13.73／4.67／6.49；C183（DH＋DI）為 12.80／2.66／4.69。這是 P21 的原有對照，不與 P16 混為同條件比較，也不構成升格；DJ／C186 保留。兩組 payoff action 的 Oracle 欄位未提供有效數值，不補造。
+
+### 2026-11-21 — Breakout (Min/P16) 決策條件排序實測與 C191／C192 退役
+
+使用者提供本機 Model SOP、Strategy Robustness 與 Summary 的 Console 記錄 `貼上的文字 (1)(20261121-061125).txt`（SHA256 `c35aad78aa69fdb9adbdf5c992c6d0cfb417958d72d0340f2fbba98cedc1a257`）。對應程式基準為 `test-branch-1_20261121_122246_905ccf45(1).zip`（SHA256 `e86ac20a447042f3991c427af52b7d3d538ef870325c667e8efa6be26c9c93b8`）。同一迭代研究 OOS 為 2021-01-01～2026-03-02。Rolling 使用 seed 42。Robustness 採 `end_to_end_v1`，S1～S4 依序為 693545351、2014432738、104504529、762252050。本次 35 個策略共 140 個 arm×seed，132 個沿用既有結果，新增 8 個均為 C191／C192 以既有同 seed 的 P16 參數與 PIT 分數完成的回放。
+
+**受控比較。** C191／C123 同為 Exact K/R0，C192／C124 同為 Direct No-K/No-R0。兩組皆使用同 seed、同樣本、自然成熟的 MinTrade_NetPnL、相同 loss、P16、費稅及資金規則。唯一模型差別是 MR-13DM 在 MR-13CO 的價量序列上增加 14 項決策時可知的條件與對應融合層。下表順序均為 DM／CO，ΔRoMD 取 DM 減 CO。
+
+| 策略對照 | DM 同 seed 勝數 | 配對 ΔRoMD 均值／中位數 | 四 seed 總報酬均值 | 四 seed MDD 均值 | 平均曝險 | 實際交易勝率 | EV(A) |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| C191／C123（Exact） | 0/4 | −1.90／−1.82 | 131.07%／146.88% | 14.86%／13.75% | 91.72%／91.70% | 42.31%／43.04% | 0.77 R／1.00 R |
+| C192／C124（Direct） | 1/4 | −1.51／−1.17 | 60.28%／79.41% | 20.02%／18.56% | 77.11%／79.82% | 34.22%／37.87% | 0.42 R／0.57 R |
+
+- 回放逐 seed RoMD（S1～S4）為 C191 **7.20、11.50、8.80、8.15**，C192 **3.11、4.24、3.16、2.08**。兩組原有 Oracle（RoMD／Oracle 勝率）為 Exact 25.81／53.66%、Direct 131.66／72.14%。Oracle 是同 Target／Selector 的完美分數對照。表中的實際交易勝率取自 Strategy SOP 的 Trade Quality。
+- 模型的 Rolling Global Daily ρ 由 CO 的 0.0672 升至 DM 的 0.1056。四 seed Global（67,396 Groups）則由 0.0859 降至 0.0832，Pair 由 51.38% 降至 50.84%。Breakout（9,436 Groups）的 Daily ρ 由 0.0494 降至 0.0443，Pair 由 51.48% 降至 50.95%。Breakout 前後十分位 NetPnL 差確有擴大（491.4202 → 1,482.0197），但前十分位本身由 5,255.6887 降至 4,922.3021，後十分位由 4,764.2685 降至 3,440.2824。拉大的差距主要來自後段下滑。
+- **決策。** 兩種 Selector 的 Rolling 與四 seed 平均 RoMD 都低於對照。Exact 曝險幾乎相同，DM 的總報酬仍較低、MDD 較大。依使用者決定退役 C191、C192，保留原研究身分與逐 seed 結果。
+- 同期的 **R40_Positive** 首度登錄。固定 CI Rank，只加入 MR-13DL 對 raw R40 > 0 的分類。Exact 的 C189 相對 C106 四 seed 配對 ΔRoMD 為 −3.72（1/4 勝），Direct 的 C190 相對 C118 為 +0.87（3/4 勝），兩策略維持現行研究。其 Oracle RoMD／Oracle 勝率分別為 53.55／63.90%、128.35／67.19%。獨立 Positive 模型 MR-13DL 的四 seed Global Daily ρ 為 0.0602，Summary 同列的 0.0337 則屬 Rank 模型 MR-13CI。
+- 同一份 Strategy SOP 中，C106（CI 的 R40 Exact）相對 C96（P16 無 DL Default）四 seed 全勝，配對 ΔRoMD 均值 +2.99、中位數 +2.76。相同 CI 分數改用 Direct（C118）時，四 seed 全部低於 C106，配對差均值 −7.18。CI 在 Breakout 的四 seed Daily ρ 為 0.0043。此證據能區分策略組合的績效，單憑此組對照仍無法量化個股分數配對與 Exact 約束各自的貢獻。
+
+**本次 Summary 登錄（退役前的 35 個策略）。** 每格依序列出策略編號、Rolling RoMD／四 seed Robustness RoMD／Summary 加權 Mean RoMD。Mean 由正式 Summary 取值，單一 Rolling 與四個 Robustness seed 各占一份。各列屬原參數家族及 Selector，其他 REUSE 列僅供定位當次對照。
+
+| 策略家族 | DL Target 與模型 | Default | Exact | Direct |
+|---|---|---|---|---|
+| Breakout (Min/P16) | 無 DL | C96　8.36／9.18／9.01 | — | — |
+| Breakout (Min/P16) | D40 Safety + Conditional MFE · MR-13CG | — | C103　8.33／9.21／9.03 | — |
+| Breakout (Min/P16) | R40 · MR-13CI | — | C106　8.04／12.17／11.34 | C118　4.45／4.99／4.88 |
+| Breakout (Min/P16) | T40 · MR-13CJ | — | C107　11.05／10.45／10.57 | C109　7.19／5.08／5.50 |
+| Breakout (Min/P16) | MFE40 · MR-13K | — | C111　8.15／10.82／10.29 | C112　2.25／2.73／2.64 |
+| Breakout (Min/P16) | MinTrade_NetPnL · MR-13CO | — | C123　10.88／10.81／10.83 | C124　3.71／4.66／4.47 |
+| Breakout (Min/P16) | MinTrade_NetPnL_Positive · MR-13CO＋MR-13CP | — | C125　11.11／10.81／10.87 | C126　13.01／7.12／8.30 |
+| Breakout (Min/P16) | T40 · MR-13CX | — | C147　8.92／10.58／10.24 | C148　9.06／5.70／6.37 |
+| Breakout (Min/P16) | R40_Positive · MR-13CI＋MR-13DL | — | C189　5.12／8.46／7.79 | C190　6.57／5.86／6.00 |
+| Breakout (Min/P16) | MinTrade_NetPnL · MR-13DM | — | C191　5.08／8.91／8.15 | C192　3.54／3.15／3.23 |
+| Breakout (Full/P17) | 無 DL | C97　14.48／6.44／8.05 | — | — |
+| Breakout (Full/P17) | T40 · MR-13CJ | — | C153　13.30／6.22／7.64 | C154　10.22／5.09／6.11 |
+| Breakout (Full/P17) | FullTrade_NetPnL_Positive · MR-13CZ＋MR-13DA | — | C155　5.78／6.31／6.20 | C156　5.68／5.81／5.78 |
+| Breakout (Full/P17) | FullTrade_NetPnL · MR-13CZ | — | C157　14.04／7.20／8.57 | C158　7.79／5.06／5.61 |
+| Breakout (Full/P15) | 無 DL | C98　7.62／5.81／6.17 | — | — |
+| Daily (Min/P21) | 無 DL | C179　5.32／4.06／4.31 | — | — |
+| Daily (Min/P21) | T40 · MR-13CJ | — | — | C181　7.38／7.43／7.42 |
+| Daily (Min/P21) | Daily_MinTrade_NetPnL · MR-13DH | — | — | C182　5.79／7.00／6.76 |
+| Daily (Min/P21) | Daily_MinTrade_NetPnL_Positive · MR-13DH＋MR-13DI | — | — | C183　12.80／2.66／4.69 |
+| Daily (Min/P21) | Daily_MinTrade_NetPnL_Positive · MR-13DH＋MR-13DJ | — | — | C186　13.73／4.67／6.49 |
+| Daily (Full/P20) | 無 DL | C168　6.29／3.90／4.38 | — | — |
+| Daily (Full/P20) | T40 · MR-13CJ | — | — | C169　3.71／2.51／2.75 |
+| Daily (Full/P20) | Daily_FullTrade_NetPnL_Positive · MR-13DB＋MR-13DC | — | — | C172　3.28／3.42／3.39 |
+| Daily (Full/P20) | Daily_FullTrade_NetPnL · MR-13DB | — | — | C173　3.35／3.44／3.42 |
+
+同批 Daily Oracle 回報值（RoMD／Oracle 交易勝率）為 P20 的 C169 6087.97／88.38%、C172 2450.16／100.00%、C173 2298.24／93.08%，以及 P21 的 C181 3196.59／90.62%、C182 1562.92／92.98%、C183 1460.17／100.00%。
+
+**工件定位與證據範圍。** 模型比較由 `outputs/filters/breakout_quality/breakout_quality_v1/standard_model_comparison/rolling_oos_robustness/standard_model_comparison.json` 發布。策略原始目錄為 `outputs/strategy_compare/robustness/broker_cash_dl_conversion/rolling_2021_forward/ce59086dd0346870/`，含 `robustness_report.md`、`robustness_summary.json` 與 `seed_results.csv`。本筆依附件 Console 的原始精度登錄。附件未包含這些簽章工件、Checkpoint 或逐筆成交檔，Oracle parity 與市場回放尚未獨立複驗。C186 的 Oracle 仍為缺值。
