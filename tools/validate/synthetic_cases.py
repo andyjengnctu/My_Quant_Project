@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-import time
 from typing import Callable
 
 from .synthetic_param_cases import (
@@ -756,28 +755,6 @@ def run_synthetic_consistency_suite(base_params):
 
 
 def _run_synthetic_validators(base_params):
-    all_results = []
-    summaries = []
-    validator_entries = get_synthetic_validator_entries()
+    from .validator_execution import run_entries
 
-    for entry in validator_entries:
-        started = time.perf_counter()
-        try:
-            results, summary = entry.validator(base_params)
-        except Exception as exc:
-            # AI: Preserve formal fail-fast semantics but include the exact
-            # synthetic validator identity so a coverage-only crash is diagnosable
-            # from the failure bundle without reproducing the whole suite.
-            raise RuntimeError(
-                f"synthetic validator crashed: {entry.name}: {type(exc).__name__}: {exc}"
-            ) from exc
-        duration_sec = round(time.perf_counter() - started, 6)
-        all_results.extend(results)
-        summary_payload = dict(summary)
-        summary_payload["validator_name"] = entry.name
-        summary_payload["layer"] = entry.layer
-        summary_payload["cost_class"] = entry.cost_class
-        summary_payload["duration_sec"] = duration_sec
-        summaries.append(summary_payload)
-
-    return all_results, summaries
+    return run_entries(base_params, get_synthetic_validator_entries())

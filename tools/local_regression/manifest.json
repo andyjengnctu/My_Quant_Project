@@ -7,6 +7,7 @@
   "coverage_line_min_percent": 55,
   "dataset": "reduced",
   "test_cpu_threads": 1,
+  "synthetic_workers": 4,
   "detail_tools_keep_last_n": 5,
   "detail_tools_max_age_days": 14,
   "local_regression_keep_last_n": 20,

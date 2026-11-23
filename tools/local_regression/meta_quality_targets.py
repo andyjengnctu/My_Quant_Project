@@ -170,6 +170,7 @@ FORMAL_STEP_ENTRY_COVERAGE_TARGETS = [
     "tools/validate/cli.py",
 ]
 FORMAL_STEP_IMPLEMENTATION_COVERAGE_TARGETS = [
+    "tools/validate/validator_execution.py",
     "tools/validate/main.py",
 ]
 # Formal coverage measures production/runtime and formal-runner code exercised by

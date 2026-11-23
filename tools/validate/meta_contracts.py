@@ -10,6 +10,7 @@ from .source_index import (
     read_source_import_nodes,
     read_source_text,
     read_source_top_level_function_names,
+    read_source_top_level_bindings,
 )
 
 ARCHITECTURE_SINGLE_ENTRY_TEXT = "`apps/run_bundle.py` 是日常唯一建議使用的本機 double check 與交付打包入口"
@@ -522,21 +523,7 @@ def summarize_synthetic_cases_import_target_resolution_contract(project_root: Pa
         if not target_path.exists():
             invalid_imports.append(f"{node.module}:missing_module")
             continue
-        target_tree = _read_python_ast(target_path)
-        exported: Set[str] = set()
-        for target_node in target_tree.body:
-            if isinstance(target_node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-                exported.add(target_node.name)
-            elif isinstance(target_node, ast.Assign):
-                for target in target_node.targets:
-                    if isinstance(target, ast.Name):
-                        exported.add(target.id)
-            elif isinstance(target_node, ast.ImportFrom):
-                for alias in target_node.names:
-                    exported.add(alias.asname or alias.name)
-            elif isinstance(target_node, ast.Import):
-                for alias in target_node.names:
-                    exported.add(alias.asname or alias.name.split(".")[-1])
+        exported = read_source_top_level_bindings(target_path)["exports"]
         for alias in node.names:
             if alias.name == "*":
                 continue
@@ -592,10 +579,8 @@ def load_defined_validate_names_from_synthetic_case_modules(project_root: Path) 
     validate_dir = project_root / "tools" / "validate"
     defined_names: Set[str] = set()
     for path in sorted(validate_dir.glob("synthetic*_cases.py")):
-        tree = _read_python_ast(path)
-        for node in tree.body:
-            if isinstance(node, ast.FunctionDef) and node.name.startswith("validate_"):
-                defined_names.add(node.name)
+        defined_names.update(name for name in read_source_top_level_bindings(path)["functions"]
+                             if name.startswith("validate_"))
     return defined_names
 
 

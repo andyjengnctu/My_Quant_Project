@@ -38,6 +38,7 @@ MANIFEST_DEFAULTS: Dict[str, Any] = {
     "bundle_name": "to_chatgpt_bundle.zip",
     "dataset": "reduced",
     "test_cpu_threads": 1,
+    "synthetic_workers": 4,
     "detail_tools_keep_last_n": 5,
     "detail_tools_max_age_days": 14,
     "local_regression_keep_last_n": 20,
@@ -67,6 +68,7 @@ MANIFEST_DEFAULTS: Dict[str, Any] = {
 }
 MANIFEST_INT_FIELDS = {
     "test_cpu_threads",
+    "synthetic_workers",
     "detail_tools_keep_last_n",
     "detail_tools_max_age_days",
     "local_regression_keep_last_n",
@@ -279,6 +281,8 @@ def load_manifest(path: Optional[Path] = None) -> Dict[str, Any]:
 
     if merged["test_cpu_threads"] < 1:
         raise LocalRegressionError("manifest 欄位 test_cpu_threads 需要 >= 1")
+    if merged["synthetic_workers"] < 1:
+        raise LocalRegressionError("manifest 欄位 synthetic_workers 需要 >= 1")
 
     for field_name in sorted(MANIFEST_STR_FIELDS):
         raw_value = str(merged[field_name]).strip()

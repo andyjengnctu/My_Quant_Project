@@ -2,6 +2,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import tempfile
 import time
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -142,7 +143,9 @@ def print_progress(idx, total_tickers, ticker, ticker_pass_count, ticker_skip_co
 
 
 
-def _run_synthetic_suite_with_optional_coverage(run_dir, base_params, validator_runner, recoverable_exceptions):
+def _run_synthetic_suite_with_optional_coverage(
+    run_dir, base_params, validator_runner, recoverable_exceptions, *, validator_entries=None,
+):
     if not run_dir:
         return validator_runner(base_params)
 
@@ -157,6 +160,18 @@ def _run_synthetic_suite_with_optional_coverage(run_dir, base_params, validator_
     data_file = os.path.join(coverage_dir, ".coverage.synthetic")
     json_file = os.path.join(coverage_dir, "coverage_synthetic.json")
     run_info_file = os.path.join(coverage_dir, "coverage_run_info.json")
+    # A retry may share the staging directory, but never an earlier PASS report.
+    Path(json_file).unlink(missing_ok=True)
+
+    from tools.local_regression.common import load_manifest
+    from tools.validate.validator_execution import describe_entries, run_parallel, worker_count, merge_coverage
+
+    manifest = load_manifest()
+    entries = list(validator_entries or ())
+    workers = worker_count(manifest["synthetic_workers"], len(entries),
+                           threads=manifest["test_cpu_threads"]) if entries else 1
+    batch_directory = tempfile.mkdtemp(prefix="synthetic_workers_", dir=coverage_dir) if workers > 1 else None
+    worker_data_files = []
 
     cov = coverage.Coverage(
         data_file=data_file,
@@ -185,11 +200,22 @@ def _run_synthetic_suite_with_optional_coverage(run_dir, base_params, validator_
         "coverage_core_requested": selected_core,
         "suite_completed": False,
         "json_generated": False,
+        "synthetic_workers": workers,
     }
 
     try:
         cov.start()
-        results, summaries = validator_runner(base_params)
+        if workers > 1:
+            results, summaries, worker_data_files = run_parallel(
+                base_params, describe_entries(entries), workers=workers,
+                timeout=manifest["subprocess_timeout_sec"], threads=manifest["test_cpu_threads"],
+                coverage_options={"branch": True, "include": build_coverage_include_paths(PROJECT_ROOT),
+                                  "omit": HEADLESS_COVERAGE_OMIT_PATTERNS},
+                coverage_dir=batch_directory,
+            )
+        else:
+            results, summaries = validator_runner(base_params)
+        run_info["worker_coverage_files"] = [os.path.relpath(path, coverage_dir) for path in worker_data_files]
         run_info["suite_completed"] = True
         synthetic_fail_count = sum(1 for row in results if row.get("status") == "FAIL")
         run_info["returncode"] = 0 if synthetic_fail_count == 0 else 1
@@ -205,9 +231,11 @@ def _run_synthetic_suite_with_optional_coverage(run_dir, base_params, validator_
     except recoverable_exceptions as exc:
         raised_exc = exc
         run_info["stderr"] = f"{type(exc).__name__}: {exc}"
+        run_info["timed_out"] = isinstance(exc, TimeoutError)
     finally:
         try:
             cov.stop()
+            merge_coverage(cov, worker_data_files)
             cov.save()
             if os.path.exists(data_file):
                 try:
@@ -217,7 +245,12 @@ def _run_synthetic_suite_with_optional_coverage(run_dir, base_params, validator_
                     run_info["stderr"] = (run_info["stderr"] + "\n" if run_info["stderr"] else "") + f"json_report: {type(exc).__name__}: {exc}"
         except Exception as exc:  # pragma: no cover - defensive artifact reporting
             run_info["stderr"] = (run_info["stderr"] + "\n" if run_info["stderr"] else "") + f"coverage_artifact: {type(exc).__name__}: {exc}"
-        write_json(Path(run_info_file), run_info)
+            run_info["returncode"] = 1
+            if raised_exc is None:
+                raised_exc = RuntimeError(f"coverage_artifact: {type(exc).__name__}: {exc}")
+        finally:
+            # The normal staging/bundle retention owns worker evidence too.
+            write_json(Path(run_info_file), run_info)
 
     if raised_exc is not None:
         raise raised_exc
@@ -245,7 +278,7 @@ def main(argv=None, environ=None):
         )
         from tools.validate.real_cases import run_real_ticker_scan
         from tools.validate.reporting import print_console_summary, write_issue_excel_report, write_local_regression_summary
-        from tools.validate.synthetic_cases import run_synthetic_consistency_suite
+        from tools.validate.synthetic_cases import run_synthetic_consistency_suite, get_synthetic_validator_entries
         from tools.validate.tool_adapters import VALIDATION_RECOVERABLE_EXCEPTIONS
 
         suite_run_dir = environ.get(LOCAL_REGRESSION_RUN_DIR_ENV, "").strip()
@@ -353,6 +386,7 @@ def main(argv=None, environ=None):
                 base_params,
                 run_synthetic_consistency_suite,
                 VALIDATION_RECOVERABLE_EXCEPTIONS,
+                validator_entries=get_synthetic_validator_entries(),
             )
             all_results.extend(synthetic_results)
             summaries.extend(synthetic_summaries)

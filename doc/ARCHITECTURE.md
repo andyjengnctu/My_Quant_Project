@@ -225,6 +225,8 @@ project/
 
 - `run_meta_quality.py`：meta quality 工具；負責 formal contract、coverage、摘要與結構一致性檢查。
 - Formal suite 的 `tools/local_regression/manifest.json:test_cpu_threads` 統一限制測試子程序的 native CPU pools（預設 1）；synthetic runner 同時限制已載入的 PyTorch，結束／失敗均恢復原執行緒數。只影響隔離測試，不改 Research／Trading 訓練設定。Quick Gate、Consistency、Chain Checks、ML Smoke 依 CPU 數有界並行，Meta Quality 等待全部 producer 完成後消費本輪 coverage；不重用前輪 PASS、不減少 validator、coverage targets 或門檻。
+- Consistency 的 synthetic execution 由 `tools/validate/validator_execution.py` 負責；`manifest.json:synthetic_workers` 是子程序數上限（預設 4，1 為原循序路徑），依 CPU／native threads 與其他 formal producers 保留容量。以 registry 的實作 module 分組，保留同 owner 的快取共用與組內順序，再依原 registry 順序彙整全部結果。每次使用全新的 worker coverage 目錄，各程序獨立收集 branch coverage，父程序逐份驗證後合併，只產生一次 JSON；Meta Quality 沿用同輪成果。缺少／重複／錯誤身分的 receipt、程序異常、硬逾時或 coverage 缺損皆不得 PASS。此分工讓大型靜態 AST 快取留在個別 worker，避免拖累父程序的 coverage 報告輸出；不改 Research／Trading／FIT／Replay 身分。
+- `source_index.py` 的結構掃描共用當前檔案簽章下的 imports／exception handlers／top-level bindings；只為結構索引解析的完整 AST 在提取後釋放，只有明確要求完整 AST 的 consumer 才保留原有 AST cache。檔案變更或刪除仍重新驗證，不快取驗收結果；registry 匯入符號與已定義 validator 的檢查共用同一輕量索引，避免保留全專案函式本文造成 GC 成本。
 - Strategy Compare 的純計畫顯示／score-reuse synthetic 使用隔離的缺少 teacher 工件狀態，保留 registry dependencies 及真實逐 seed planner，避免每個顯示案例重查全部 Optimizer publication。Teacher inspection／build／PIT、授權與 seed 去重仍由原有獨立行為案例驗證。
 
 

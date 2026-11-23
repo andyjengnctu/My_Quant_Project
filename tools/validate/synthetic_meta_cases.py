@@ -1185,6 +1185,13 @@ def validate_synthetic_registry_metadata_contract_case(_base_params):
         layer_counts[entry["layer"]] = layer_counts.get(entry["layer"], 0) + 1
     summary["validator_count"] = len(entries)
     summary["layer_counts"] = layer_counts
+    from .check_result_utils import run_unittest_capability_cases
+    from .test_synthetic_execution import SyntheticExecutionContractTests, SyntheticExecutionSpawnTests
+
+    execution_results, execution_summary = run_unittest_capability_cases(
+        case_id, "meta_registry", [SyntheticExecutionContractTests, SyntheticExecutionSpawnTests])
+    results.extend(execution_results)
+    summary["execution_contract"] = execution_summary
     return results, summary
 
 
