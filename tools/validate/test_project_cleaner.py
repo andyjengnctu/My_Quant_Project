@@ -734,6 +734,49 @@ class CleanupTest(unittest.TestCase):
         self.assertTrue(all(p.exists() for p in keep))
 
 
+    def test_present_details_use_directory_inventory_without_provenance_probes(self):
+        from core.compare_csv_storage import DETAIL_NAMES
+        from services.research.strategy_compare_pair_integrity import _tracked_pair_files
+        from services.research.strategy_compare_reuse import _required_pair_files_present
+        a = self.publish("a")
+        b = self.publish("b", source=a)
+        for pair in (a.parent, b.parent):
+            for name in DETAIL_NAMES:
+                self.write(pair / name, self.payload)
+        with patch.object(Path, "is_file", side_effect=AssertionError("redundant pair-file stat")), \
+             patch("core.compare_csv_storage.reused_detail_source", side_effect=AssertionError("unneeded provenance probe")):
+            for pair in (a.parent, b.parent):
+                inventory = _tracked_pair_files(pair)
+                self.assertTrue(DETAIL_NAMES.issubset(inventory))
+                self.assertTrue(_required_pair_files_present(pair, tuple(pair / n for n in DETAIL_NAMES)))
+
+    def test_only_absent_details_resolve_provenance_and_directories_stay_invalid(self):
+        from core import compare_csv_storage as storage
+        from services.research.strategy_compare_pair_integrity import _tracked_pair_files
+        from services.research.strategy_compare_reuse import _required_pair_files_present
+        a = self.publish("a")
+        b = self.publish("b", source=a)
+        for name in storage.DETAIL_NAMES:
+            self.write(a.parent / name, self.payload)
+            self.write(b.parent / name, self.payload)
+        b.unlink()
+        present = {b.parent / name for name in storage.DETAIL_NAMES if name != b.name}
+        is_file = Path.is_file
+        def guard(path):
+            if path in present:
+                raise AssertionError("already listed detail was queried again")
+            return is_file(path)
+        with patch.object(Path, "is_file", guard), \
+             patch.object(storage, "reused_detail_source", wraps=storage.reused_detail_source) as inherited:
+            inventory = _tracked_pair_files(b.parent)
+            self.assertTrue(storage.DETAIL_NAMES.issubset(inventory))
+            self.assertTrue(_required_pair_files_present(b.parent, tuple(b.parent / n for n in storage.DETAIL_NAMES)))
+        self.assertEqual([Path(c.args[0]) for c in inherited.call_args_list], [b, b])
+        self.assertFalse(b.exists())
+        b.mkdir()
+        self.assertNotIn(b.name, _tracked_pair_files(b.parent))
+        self.assertFalse(_required_pair_files_present(b.parent, (b,)))
+
     def test_absolute_legacy_source_and_changed_lineage_keep_the_copy(self):
         a = self.publish("a")
         b = self.publish("b", source=a)

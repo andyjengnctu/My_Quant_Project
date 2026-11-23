@@ -108,10 +108,25 @@ def detail_sha256(path, *, file_hasher=None):
     return (file_hasher or compute_file_sha256)(detail_read_path(path))
 
 
-def inherited_detail_files(pair_dir):
-    """Only existing REUSE links may supply missing published detail filenames."""
-    return {name: Path(pair_dir) / name for name in DETAIL_NAMES
-            if detail_exists(Path(pair_dir) / name)}
+def inherited_detail_files(pair_dir, *, present_names):
+    """Resolve only names absent from the caller's fresh directory inventory."""
+    pair_dir = Path(pair_dir)
+    missing = DETAIL_NAMES.difference(present_names)
+    if not missing or compare_root(pair_dir / "strategy_comparison.json") is None:
+        return {}
+    # An original pair may legitimately omit optional diagnostics. Without
+    # recorded REUSE provenance there is nothing to inherit. Do not re-stat
+    # files whose presence/type the caller already obtained from scandir.
+    try:
+        payload = json.loads((pair_dir / "strategy_comparison.json").read_text(encoding="utf-8-sig"))
+    except FileNotFoundError:
+        return {}
+    metadata = payload.get("metadata") if isinstance(payload, dict) else None
+    source = metadata.get("cache_reused_from") if isinstance(metadata, dict) else None
+    if not isinstance(source, str) or not source.strip():
+        return {}
+    return {name: pair_dir / name for name in missing
+            if detail_exists(pair_dir / name)}
 
 
 @contextmanager

@@ -29,19 +29,21 @@ _PRIMARY_PAIR_JSON = "strategy_comparison.json"
 def _tracked_pair_files(pair_dir: Path) -> dict[str, Path]:
     """Only direct, independently published pair files may enter the digest set."""
     files: dict[str, Path] = {}
+    present_names: set[str] = set()
     # scandir preserves Path.is_symlink/is_file semantics but avoids separate
     # per-file stat requests on platforms where directory entries carry type
     # metadata.  A fresh listing is taken for every integrity decision.
     with os.scandir(pair_dir) as entries:
         for entry in entries:
             name = entry.name
+            present_names.add(name)
             if Path(name).suffix.lower() not in _INTEGRITY_SUFFIXES or name == _PRIMARY_PAIR_JSON:
                 continue
             if entry.is_symlink():
                 raise ValueError(f"pair integrity 不允許符號連結: {name}")
             if entry.is_file():
                 files[name] = pair_dir / name
-    files.update(inherited_detail_files(pair_dir))
+    files.update(inherited_detail_files(pair_dir, present_names=present_names))
     return dict(sorted(files.items()))
 
 

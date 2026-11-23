@@ -456,7 +456,7 @@ def _required_pair_files_present(
         # Keep the original semantics for any future non-direct-child paths.
         return all(detail_exists(path) for path in required_paths)
 
-    remaining = {path.name for path in required_paths if not (path.name in DETAIL_NAMES and detail_exists(path))}
+    remaining = {path.name for path in required_paths}
     if not remaining:
         return True
     try:
@@ -472,7 +472,9 @@ def _required_pair_files_present(
     except OSError:
         # Missing/unreadable pair folder cannot authorize any completed pair.
         return False
-    return False
+    # Only physically absent CSVs need provenance lookup. Already listed files
+    # retain the single-scandir fast path, including rejection of non-files.
+    return all(name in DETAIL_NAMES and detail_exists(pair_dir / name) for name in remaining)
 
 
 def _pair_json_matches_recorded_result(
