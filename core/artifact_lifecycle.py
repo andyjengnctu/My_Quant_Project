@@ -124,9 +124,10 @@ def _parse_lifecycle(marker: Path, payload: dict, revision: tuple) -> StorageLif
     workspace = relative_path(payload.get("workspace"))
     # Explicit, bounded workspace ownership. Never allow a broad output domain
     # or a scientific model directory to become disposable through a sidecar.
-    if (len(workspace.parts) < 4 or workspace.parts[0] != "outputs"
-            or "trading" in workspace.parts[:3]
-            or workspace.parts[1] == "project_cleanup"
+    scope = tuple(part.casefold() for part in workspace.parts)
+    if (len(scope) < 4 or scope[0] != "outputs"
+            or "trading" in scope[:3]
+            or scope[1] == "project_cleanup"
             or marker != workspace / MANIFEST_NAME):
         raise ValueError("生命週期範圍必須是獨立 outputs 工作目錄")
     rows = payload.get("artifacts")

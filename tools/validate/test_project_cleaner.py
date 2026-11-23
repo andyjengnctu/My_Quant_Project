@@ -126,6 +126,52 @@ class CleanupTest(unittest.TestCase):
                 self.menu(["2", "0"])
                 self.assertFalse(source.exists())
 
+    def test_untracked_source_bytecode_is_rebuildable_in_tracked_project(self):
+        self.git("add", "doc/PROJECT_SETTINGS.md")
+        source = self.write("services/local_extension.py", b"value = 42\n")
+        pyc = Path(py_compile.compile(str(source), doraise=True))
+        self.menu(["1", "0"])
+        self.assertTrue(pyc.is_file())
+        self.assertEqual(self.summary("preview")[0]["counts"].get("PLAN_DELETE"), 1)
+        self.menu(["2", "0"])
+        self.assertFalse(pyc.exists())
+        self.assertEqual(source.read_bytes(), b"value = 42\n")
+
+    def test_bytecode_requires_regular_source_and_valid_current_header(self):
+        source = self.write("services/local_extension.py", b"value = 42\n")
+        pyc = Path(py_compile.compile(str(source), doraise=True))
+        rel = pyc.relative_to(self.root)
+        tracked = {Path("doc/PROJECT_SETTINGS.md")}
+        original = pyc.read_bytes()
+        self.assertTrue(rules.generated_bytecode(self.root, rel, tracked))
+        self.assertFalse(rules.generated_bytecode(self.root, rel, tracked | {rel}))
+        for payload in (b"not bytecode", b"BAD!" + original[4:],
+                        original[:4] + (2).to_bytes(4, "little") + original[8:]):
+            with self.subTest(payload=payload[:16]):
+                pyc.write_bytes(payload)
+                self.assertFalse(rules.generated_bytecode(self.root, rel, tracked))
+        pyc.write_bytes(original)
+        source.unlink()
+        self.assertFalse(rules.generated_bytecode(self.root, rel, tracked))
+        source.mkdir()
+        self.assertFalse(rules.generated_bytecode(self.root, rel, tracked))
+        self.assertFalse(rules.generated_bytecode(self.root, pyc, tracked))
+        self.assertFalse(rules.generated_bytecode(self.root, Path("../outside") / rel, tracked))
+
+    def test_bytecode_link_or_reparse_paths_cannot_prove_rebuildability(self):
+        import stat
+        source = self.write("services/local_extension.py", b"value = 42\n")
+        pyc = Path(py_compile.compile(str(source), doraise=True))
+        rel = pyc.relative_to(self.root)
+        original_lstat = Path.lstat
+        for unsafe in (source, pyc):
+            for mode, attributes in ((stat.S_IFLNK, 0),
+                                     (stat.S_IFREG, stat.FILE_ATTRIBUTE_REPARSE_POINT)):
+                with self.subTest(unsafe=unsafe.name, mode=mode, attributes=attributes):
+                    unsafe_info = SimpleNamespace(st_mode=mode, st_file_attributes=attributes)
+                    with patch.object(Path, "lstat", lambda path: unsafe_info if path == unsafe else original_lstat(path)):
+                        self.assertFalse(rules.generated_bytecode(self.root, rel, set()))
+
     def test_existing_shared_copies_are_deleted_and_all_reuse_bytes_survive(self):
         a = self.publish("a", pinned=True)
         b = self.publish("b", pinned=True, source=a)
@@ -384,9 +430,17 @@ class CleanupTest(unittest.TestCase):
                 self.assertTrue(empty.is_dir())
             worker, rows = self.scanned_cleaner()
             empty.rmdir()
-            empty.symlink_to(unrelated, target_is_directory=True)
+            try:
+                empty.symlink_to(unrelated, target_is_directory=True)
+            except OSError as exc:
+                if os.name != "nt" or getattr(exc, "winerror", None) != 1314:
+                    raise
+                # Junctions exercise the real Windows reparse boundary without
+                # requiring the optional symbolic-link creation privilege.
+                subprocess.run(["cmd", "/c", "mklink", "/J", str(empty), str(unrelated)],
+                               capture_output=True, check=True)
             worker.clear_unused()
-        self.assertTrue(empty.is_symlink())
+        self.assertTrue(empty.is_symlink() or empty.is_junction())
         self.assertTrue(unrelated.is_dir())
 
     def test_newly_tracked_candidate_is_preserved(self):

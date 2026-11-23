@@ -41,17 +41,28 @@ def tracking_snapshot(root):
 
 
 def generated_bytecode(root, rel, tracked):
-    if rel.parent.name != "__pycache__" or rel.suffix != ".pyc":
+    from core.compare_csv_storage import plain
+
+    if (rel.is_absolute() or ".." in rel.parts or rel.parent.name != "__pycache__"
+            or rel.suffix != ".pyc" or rel in tracked):
         return False
     try:
         source = Path(source_from_cache(str(rel)))
     except ValueError:
         return False
-    if ((tracked and source not in tracked) or rel in tracked or not clean_path(root / source)
-            or not (root / source).is_file()):
+    # A local source is enough to rebuild its cache, whether or not Git tracks
+    # that source. Both files must still be ordinary files inside this project.
+    path = root / rel
+    source = root / source
+    if not clean_path(path) or not clean_path(source):
         return False
-    with (root / rel).open("rb") as stream:
-        header = stream.read(16)
+    try:
+        if not plain(source.lstat()) or not plain(path.lstat()):
+            return False
+        with path.open("rb") as stream:
+            header = stream.read(16)
+    except OSError:
+        return False
     return (len(header) == 16 and header[:4] == MAGIC_NUMBER
             and int.from_bytes(header[4:8], "little") in {0, 1, 3})
 

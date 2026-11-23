@@ -51,6 +51,7 @@ class LifecycleCleanup:
         self.verified_records = set()
         self.bundle_directory_revision = None
         self.bundle_kept_revisions = {}
+        self.deletion_evidence = {}
 
     def observe_directory(self, relative):
         self.directories.add(relative)
@@ -233,12 +234,16 @@ class LifecycleCleanup:
             raise ValueError("缺少已完成或替代成果的發布證據")
         if record.state == "SUPERSEDED" and record.subject in self.active:
             raise ValueError("被取代工作仍由現行設定引用")
+        evidence = {record.marker: record.revision}
         for path, digest in record.publication:
             file = self.root / path
+            evidence[path] = file_change_signature(file)
             if not clean_path(file) or not plain(file.lstat()) or worker.hash_file(file) != digest:
                 raise ValueError("正式／替代成果缺少或內容已變更")
+        return evidence
 
     def proof(self, worker, relative: Path):
+        self.deletion_evidence.pop(relative, None)
         if relative in self.bundles:
             if not self.candidate(relative):
                 return ""
@@ -258,23 +263,40 @@ class LifecycleCleanup:
                 summary = json.loads(archive.read("master_summary.json"))
                 if not isinstance(summary, dict) or not summary:
                     raise ValueError("診斷封包缺少結果紀錄")
+            self.deletion_evidence[relative] = {
+                relative: self.revisions[relative], **self.bundle_kept_revisions,
+                config.relative_to(self.root): revision,
+                self.bundle_rule.target_dir.relative_to(self.root): self.bundle_directory_revision,
+            }
             return "超過設定保留範圍的已發布測試診斷封包"
         record, artifact = self.artifacts[relative]
         if not self.candidate(relative):
             return ""
-        self._verify_publication(worker, record)
+        evidence = self._verify_publication(worker, record)
         if worker.hash_file(self.root / relative) != artifact.sha256:
             raise ValueError("工作檔內容與產生者的用途紀錄不同")
         if artifact.role == "replica":
             if artifact.replacement is None or artifact.replacement == relative:
                 raise ValueError("副本缺少可保留的替代來源")
             replacement = self.root / artifact.replacement
+            evidence.setdefault(artifact.replacement, file_change_signature(replacement))
             if (not clean_path(replacement) or not plain(replacement.lstat())
                     or worker.hash_file(replacement) != artifact.sha256):
                 raise ValueError("副本與替代來源內容不一致")
+        self.deletion_evidence[relative] = evidence
         return {"COMPLETED": "已完成工作且沒有保留依賴的中間檔／副本",
                 "SUPERSEDED": "產生者確認已取代且沒有保留依賴的工作檔／快取",
                 "ABANDONED": "產生者確認已結案且不需續跑的工作殘留"}[record.state]
+
+    def verify_before_delete(self, worker, relative: Path):
+        """Recheck this deletion's evidence at the unlink boundary, under lease."""
+        evidence = self.deletion_evidence.get(relative)
+        if not evidence:
+            raise ValueError("缺少本次刪除的用途驗證")
+        for path, revision in evidence.items():
+            file = self.root / path
+            if not clean_path(file) or file_change_signature(file) != revision:
+                raise ValueError("用途、發布成果或替代來源在驗證後變動")
 
     @contextmanager
     def session(self, worker):
@@ -297,6 +319,7 @@ class LifecycleCleanup:
             yield
 
     def removed(self, relative):
+        self.deletion_evidence.pop(relative, None)
         self.files.pop(relative, None)
         self.revisions.pop(relative, None)
         self.directory_revisions.pop(relative, None)
@@ -325,13 +348,13 @@ class LifecycleCleanup:
             directories.update(parent for parent in path.parents
                                if parent != workspace and parent.is_relative_to(workspace))
         for relative in sorted(directories, key=lambda p: (-len(p.parts), p.as_posix())):
-            path = self.root / relative
             try:
+                path = worker.deletion_path(relative)
                 if (relative in self.directories and clean_path(path)
                         and path.is_dir() and not worker.protected_by_git(relative)
                         and not self.protected(relative) and not any(path.iterdir())):
                     path.rmdir()
                     self.removed(relative)
                     worker.note("RMDIR", relative, 0, "已完成清理的空工作目錄")
-            except OSError as exc:
+            except (OSError, ValueError) as exc:
                 worker.note("SKIP", relative, 0, exc)

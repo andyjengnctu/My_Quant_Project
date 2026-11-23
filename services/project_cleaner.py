@@ -17,6 +17,7 @@ from core.file_integrity import (compute_observed_file_sha256, exclusive_file_lo
 from services import cleanup_rules as rules
 from services.cleanup_report import LABEL, receipt, recover, report_path, show_summary
 from services.cleanup_lifecycle import LifecycleCleanup
+from core.artifact_lifecycle import relative_path
 
 PROTECTED = {
     "apps": "專案程式", "services": "專案程式", "core": "專案程式",
@@ -71,7 +72,7 @@ def regular(path):
 
 
 def retained(rel, live):
-    parts = rel.parts
+    parts = tuple(part.casefold() for part in rel.parts)
     if parts[0] in PROTECTED:
         return "KEEP", PROTECTED[parts[0]]
     if "trading" in parts[:3]:
@@ -79,7 +80,7 @@ def retained(rel, live):
     if len(parts) >= 2 and parts[:2] == ("outputs", "project_cleanup"):
         return "KEEP", "清理服務紀錄"
     if parts[0] in {"models", "outputs"}:
-        if live.intersection(parts):
+        if {value.casefold() for value in live}.intersection(parts):
             return "KEEP", "現行研究設定所用模型目錄"
         if SCIENTIFIC.intersection(parts) or rel.name in {"manifest.json", "model.pt", "scores.csv"}:
             return "KEEP", "正式研究、歷史證據或可續跑工件"
@@ -106,6 +107,7 @@ class Cleaner:
         self.groups = defaultdict(list)
         self.deletes = defaultdict(list)
         self.work_dirs = defaultdict(set)
+        self.cleared_bytecode_dirs = set()
         self.git_ok = True
         self.lifecycle = LifecycleCleanup(root, self.progress)
         self.lifecycle_candidates = []
@@ -127,6 +129,14 @@ class Cleaner:
         if self.git_ok and file_change_signature(self.index_path) != self.index_revision:
             self.refresh_tracking()
         return not self.git_ok or rel in self.tracked
+
+    def deletion_path(self, rel):
+        """Every destructive operation must stay in this physical project tree."""
+        rel = relative_path(Path(rel).as_posix())
+        path = self.root / rel
+        if not clean_path(path) or not path.resolve().is_relative_to(self.root):
+            raise ValueError("刪除路徑離開專案或經過連結／重新解析點")
+        return path
 
     def lookup(self, fn, rel):
         try:
@@ -231,7 +241,8 @@ class Cleaner:
             return "legacy", None
         if rel in self.retired:
             return "retired_cache", None
-        if rel.suffix == ".pyc" and rel.parent.name == "__pycache__" and rel.parts[0] not in {"models","outputs","state","data",".git"}:
+        if (rel.suffix == ".pyc" and rel.parent.name == "__pycache__"
+                and rel.parts[0].casefold() not in {"models", "outputs", "state", "data", ".git"}):
             return "pyc", None
         if rel.is_relative_to(rules.STAGING):
             local = rel.relative_to(rules.STAGING)
@@ -359,6 +370,23 @@ class Cleaner:
                     self.note("SKIP", rel, size, f"工作仍在使用或無法驗證：{exc}")
                 if not rows:
                     self.note("SKIP", lease, 0, f"工作仍在使用或無法驗證：{exc}")
+        if self.apply:
+            self.empty_bytecode_dirs()
+
+    def empty_bytecode_dirs(self):
+        # Only folders from which this invocation removed proven bytecode.
+        # rmdir is nonrecursive, so a concurrent writer or an unknown file wins.
+        for rel in sorted(self.cleared_bytecode_dirs):
+            try:
+                path = self.deletion_path(rel)
+                if (self.protected_by_git(rel) or self.lifecycle.protected(rel)
+                        or not stat.S_ISDIR(path.lstat().st_mode) or any(path.iterdir())):
+                    continue
+                path.rmdir()
+                self.lifecycle.removed(rel)
+                self.note("RMDIR", rel, 0, "可重建 Python 快取清除後的空目錄")
+            except FAILURES as exc:
+                self.note("SKIP", rel, 0, exc)
 
     def empty_robust_work(self, unit, scope):
         # The same completed-run proof and writer lease cover files and empty
@@ -368,8 +396,8 @@ class Cleaner:
             parts = rel.relative_to(unit / "work").parts
             if parts and parts[0] not in scope:
                 continue
-            path = self.root / rel
             try:
+                path = self.deletion_path(rel)
                 info = path.lstat()
                 if (not self.protected_by_git(rel) and clean_path(path)
                         and stat.S_ISDIR(info.st_mode)
@@ -379,7 +407,7 @@ class Cleaner:
                     path.rmdir()
                     self.lifecycle.removed(rel)
                     self.note("RMDIR", rel, 0, "已完成 Robustness 的空工作資料夾")
-            except OSError as exc:
+            except FAILURES as exc:
                 self.note("SKIP", rel, 0, exc)
 
     def empty_fixtures(self, staging):
@@ -391,20 +419,22 @@ class Cleaner:
                         "export_only_empty_db/ml_optimizer/study_db", "export_only_missing_db/ml_optimizer/study_db"):
                 p = child / sub
                 while p != child:
-                    if (clean_path(p) and p.is_dir() and not self.lifecycle.protected(p.relative_to(self.root))
+                    if (clean_path(p) and p.is_dir() and not self.protected_by_git(p.relative_to(self.root))
+                            and not self.lifecycle.protected(p.relative_to(self.root))
                             and not any(p.iterdir())):
-                        p.rmdir()
+                        self.deletion_path(p.relative_to(self.root)).rmdir()
                         self.lifecycle.removed(p.relative_to(self.root))
                         self.note("RMDIR", p.relative_to(self.root), 0, "已結束測試的空資料夾")
                     p = p.parent
-            if not self.lifecycle.protected(child.relative_to(self.root)) and not any(child.iterdir()):
-                child.rmdir()
+            if (not self.protected_by_git(child.relative_to(self.root))
+                    and not self.lifecycle.protected(child.relative_to(self.root)) and not any(child.iterdir())):
+                self.deletion_path(child.relative_to(self.root)).rmdir()
                 self.lifecycle.removed(child.relative_to(self.root))
                 self.note("RMDIR", child.relative_to(self.root), 0, "已結束測試的空資料夾")
 
     def remove_one(self, kind, rel, size, scope):
-        path = self.root / rel
         try:
+            path = self.deletion_path(rel)
             if self.lifecycle.protected(rel):
                 self.note("KEEP", rel, size, "被正式成果、續跑或其他保留工件引用")
                 return
@@ -424,9 +454,13 @@ class Cleaner:
                 if (self.protected_by_git(rel) or not clean_path(path)
                         or file_change_signature(path) != revision):
                     raise ValueError("檔案已變動")
+                if kind == "lifecycle":
+                    scope.verify_before_delete(self, rel)
                 self.note("INTENT", rel, size, reason)
                 path.unlink()
                 self.lifecycle.removed(rel)
+                if kind == "pyc":
+                    self.cleared_bytecode_dirs.add(rel.parent)
             self.note("DELETE" if self.apply else "PLAN_DELETE", rel, size, reason, space)
         except FAILURES as exc:
             self.note("SKIP", rel, size, exc)
@@ -450,6 +484,7 @@ class Cleaner:
             source = None
             lineage_revisions = {}
             try:
+                path = self.deletion_path(rel)
                 if self.lifecycle.protected(rel):
                     self.note("KEEP", rel, self.lifecycle.files.get(rel, 0), "被正式成果、續跑或其他保留工件引用")
                     continue

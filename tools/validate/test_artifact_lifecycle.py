@@ -170,6 +170,64 @@ class LifecycleCleanupTest(unittest.TestCase):
         self.menu(["2", "0"])
         self.assertTrue(files["copy.csv"].exists())
 
+    def test_lifecycle_evidence_changes_after_proof_preserve_the_candidate(self):
+        for changed in ("replacement", "publication", "marker"):
+            with self.subTest(changed=changed):
+                original = self.write(f"outputs/research/published/{changed}.csv", b"value\n1\n")
+                workspace, files, result, marker = self.storage(
+                    changed, roles={"copy.csv": "replica"},
+                    replacements={"copy.csv": original.relative_to(self.root)},
+                )
+                worker, rows = self.scanned_cleaner()
+                before = files["copy.csv"].read_bytes()
+                relative = workspace / "copy.csv"
+                original_proof = worker.proof
+                mutations = []
+
+                def change_after_proof(kind, path, scope):
+                    reason = original_proof(kind, path, scope)
+                    if path == relative and reason:
+                        if changed == "replacement":
+                            original.unlink()
+                        elif changed == "publication":
+                            result.write_text(json.dumps({"result": 2}))
+                        else:
+                            payload = json.loads(marker.read_text())
+                            payload["state"] = "RUNNING"
+                            marker.write_text(json.dumps(payload))
+                        mutations.append(changed)
+                    return reason
+
+                with patch.object(worker, "proof", side_effect=change_after_proof):
+                    worker.clear_unused()
+                self.assertEqual(mutations, [changed])
+                self.assertEqual(files["copy.csv"].read_bytes(), before)
+                self.assertTrue(any(row[0] == "SKIP" and row[1] == relative for row in rows))
+
+    def test_replacement_changed_during_hash_is_not_a_retained_copy(self):
+        original = self.write("outputs/research/published/source.csv", b"value\n1\n")
+        _, files, _, _ = self.storage(
+            roles={"copy.csv": "replica"},
+            replacements={"copy.csv": original.relative_to(self.root)},
+        )
+        worker, _ = self.scanned_cleaner()
+        original_hash = worker.hash_file
+        mutations = []
+
+        def change_after_hash(path):
+            digest = original_hash(path)
+            if path == original:
+                timestamp = original.stat()
+                original.write_bytes(b"value\n2\n")
+                os.utime(original, ns=(timestamp.st_atime_ns, timestamp.st_mtime_ns))
+                mutations.append(path)
+            return digest
+
+        with patch.object(worker, "hash_file", side_effect=change_after_hash):
+            worker.clear_unused()
+        self.assertEqual(mutations, [original])
+        self.assertEqual(files["copy.csv"].read_bytes(), b"value\n1\n")
+
     def test_abandoned_work_needs_a_terminal_record_and_no_active_writer(self):
         _, files, _, _ = self.storage(state="ABANDONED", roles={"temp.bin": "work"}, active_pid=os.getpid())
         self.menu(["2", "0"])
@@ -202,15 +260,38 @@ class LifecycleCleanupTest(unittest.TestCase):
                               publication=(result.relative_to(self.root),))
         self.assertEqual(marker.read_bytes(), before)
 
-    def test_symlink_and_shared_work_file_are_not_unlinked(self):
-        _, files, _, _ = self.storage(roles={"linked.csv": "work", "shared.csv": "work"})
+    def test_protected_domains_reject_case_variants_in_lifecycle_records(self):
+        for workspace in ("outputs/Trading/accounts/run", "outputs/domain/TRADING/run",
+                          "outputs/PROJECT_CLEANUP/private/run"):
+            with self.subTest(workspace=workspace):
+                path = self.write(Path(workspace) / "original.bin", b"original")
+                with self.assertRaises(ValueError):
+                    publish_lifecycle(
+                        self.root, workspace=Path(workspace), producer="owner", state="ABANDONED",
+                        roles={path.relative_to(self.root): "work"}, publication=(),
+                    )
+                self.assertEqual(path.read_bytes(), b"original")
+
+    def test_symlink_work_file_is_not_unlinked(self):
+        _, files, _, _ = self.storage(roles={"linked.csv": "work"})
         original = self.write("data/real.csv", b"value\n1\n")
         files["linked.csv"].unlink()
-        files["linked.csv"].symlink_to(original)
+        try:
+            files["linked.csv"].symlink_to(original)
+        except OSError as exc:
+            if getattr(exc, "winerror", None) == 1314:
+                self.skipTest("Windows 未授予建立符號連結權限")
+            raise
+        self.menu(["2", "0"])
+        self.assertTrue(files["linked.csv"].is_symlink())
+        self.assertEqual(original.read_bytes(), b"value\n1\n")
+
+    def test_shared_work_file_is_not_unlinked(self):
+        _, files, _, _ = self.storage(roles={"shared.csv": "work"})
+        original = self.write("data/real.csv", b"value\n1\n")
         files["shared.csv"].unlink()
         os.link(original, files["shared.csv"])
         self.menu(["2", "0"])
-        self.assertTrue(files["linked.csv"].is_symlink())
         self.assertTrue(files["shared.csv"].exists() and original.exists())
 
     def bundle(self, name, timestamp):
