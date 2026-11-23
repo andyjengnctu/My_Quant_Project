@@ -6282,6 +6282,63 @@ def _prepare_strategy_only_baseline_units(
     return benchmark_baseline_dirs, strategy_only_actions, rows, yearly_rows
 
 
+def _transient_work_scopes(*, keep_scores: bool, keep_replay_details: bool,
+                           selection_score_tree: bool) -> set[str]:
+    """Single retention policy for producer cleanup and the standalone cleaner."""
+    scopes = {"results", "baselines"}
+    if not keep_replay_details:
+        scopes.add("replay")
+    if selection_score_tree or not keep_scores:
+        scopes.add("training")
+        if not keep_replay_details:
+            scopes.add("benchmark_baselines")
+    return scopes
+
+
+def completed_robustness_cleanup_scopes(run_root: Path) -> set[str]:
+    """Read-only deletion proof; preserve dependencies of historical REUSE."""
+    result = _validate_completed_run(run_root, backfill_integrity=False)
+    if result is None:
+        return set()
+    contract = result["contract"]
+    retention = dict(contract.get("retention") or {})
+    model_ids = set(contract.get("model_seed_sensitive_arm_ids") or ())
+    selection_score_tree = False
+    for arm in contract.get("stochastic_arms") or ():
+        if arm.get("arm_id") not in model_ids:
+            continue
+        for source in arm.get("runtime_dl_sources") or ():
+            if not isinstance(source, dict):
+                raise ValueError("Robustness 模型來源紀錄格式不完整，保留工作檔")
+            if source.get("dl_id") == arm.get("dl_id") and source.get("score_source") == "selection_point_in_time":
+                selection_score_tree = True
+    scopes = _transient_work_scopes(
+        keep_scores=retention.get("keep_scores") is not False,
+        keep_replay_details=retention.get("keep_replay_details") is not False,
+        selection_score_tree=selection_score_tree,
+    )
+    # Exact-run REUSE can upgrade old reports from the fixed baseline without
+    # replaying strategies. COMPLETED alone does not make that source disposable.
+    if not result["summary"].get("benchmark_yearly"):
+        scopes.discard("baselines")
+    # Historical provenance may reference a work file. Keep its entire scope;
+    # do not erase a currently valid receipt's backing bytes based on its name.
+    attribution = _attribution_source_root(run_root)
+    if attribution.exists():
+        for marker in attribution.rglob(MANIFEST_FILENAME):
+            payload = _read_json(marker)
+            records = payload.get("files", {})
+            if not isinstance(records, dict):
+                raise ValueError("Robustness 來源證據格式不完整，保留工作檔")
+            for record in records.values():
+                if not isinstance(record, dict) or not isinstance(record.get("path"), str) or not record["path"]:
+                    raise ValueError("Robustness 來源路徑不完整，保留工作檔")
+                source = (PROJECT_ROOT / record["path"]).resolve()
+                if source.is_relative_to(run_root / "work"):
+                    scopes.discard(source.relative_to(run_root / "work").parts[0])
+    return scopes
+
+
 def _cleanup_completed_robustness_transients(
     *, cfg: Any, settings: Any, run_root: Path, model_root: Path,
     model_arms: tuple[StrategyComparisonArm, ...],
@@ -6303,12 +6360,11 @@ def _cleanup_completed_robustness_transients(
         str(settings.dl_sources[str(arm.dl_id)].score_source) == "selection_point_in_time"
         for arm in model_arms
     )
-    if not cfg.keep_replay_details:
-        shutil.rmtree(run_root / "work" / "replay", ignore_errors=True)
-    shutil.rmtree(run_root / "work" / "results", ignore_errors=True)
-    shutil.rmtree(run_root / "work" / "baselines", ignore_errors=True)
-    if selection_score_tree or not cfg.keep_scores:
-        shutil.rmtree(run_root / "work" / "training", ignore_errors=True)
+    for scope in _transient_work_scopes(
+        keep_scores=cfg.keep_scores, keep_replay_details=cfg.keep_replay_details,
+        selection_score_tree=selection_score_tree,
+    ):
+        shutil.rmtree(run_root / "work" / scope, ignore_errors=True)
     if not cfg.keep_checkpoints and (not selection_score_tree or not cfg.keep_scores):
         shutil.rmtree(model_root, ignore_errors=True)
     if not cfg.keep_replay_details and (selection_score_tree or not cfg.keep_scores):

@@ -1,6 +1,6 @@
 """One pass over the live project. Only producer-proven disposables can be removed."""
 from collections import defaultdict
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 import os
 from pathlib import Path
 import sqlite3
@@ -356,27 +356,45 @@ class Cleaner:
                     for name in members:
                         self.note("KEEP", name, size, "保留已驗證實體資料")
                     continue
-                if len(members) != 1:
-                    for name in members:
-                        self.note("KEEP", name, size, "既有獨立共用群組")
-                    continue
-                self.link_one(masters[key], members[0], size, before, info)
+                self.link_group(masters[key], members, size, before, info)
             except FAILURES as exc:
                 for name in members:
                     self.note("SKIP", name, size, exc)
 
-    def link_one(self, master, rel, size, expected, info):
+    def link_group(self, master, members, size, expected, info):
+        # Replacing one alias preserves the old physical data until its last
+        # alias is replaced. Only that last operation releases disk allocation.
+        # One writer lease spans the group; CSV publication cannot replace an
+        # unprocessed alias between our unlink and the next revision snapshot.
+        with storage_lock(self.root) if self.apply else nullcontext():
+            original = expected[:4]
+            for index, rel in enumerate(members):
+                remaining = len(members) - index
+                try:
+                    if self.apply and index:
+                        next_path = self.root / rel
+                        info = regular(next_path)
+                        expected = file_change_signature(next_path)
+                    if expected[:4] != original:
+                        raise ValueError("共用群組在盤點後變動")
+                    self.link_one(master, rel, size, expected, info, expected_links=remaining, locked=True)
+                except FAILURES as exc:
+                    for name in members[index:]:
+                        self.note("SKIP", name, size, exc)
+                    return
+
+    def link_one(self, master, rel, size, expected, info, *, expected_links=1, locked=False):
         path = self.root / rel
         source, source_revision = master
         source_rel = source.relative_to(self.root)
-        space = disk_bytes(path, info)
+        space = disk_bytes(path, info) if expected_links == 1 else 0
         reason = "已發布且內容、修改時間、存取權限一致"
         if self.apply:
-            with storage_lock(self.root):
+            with nullcontext() if locked else storage_lock(self.root):
                 if (not clean_path(source) or not clean_path(path)
                         or self.protected_by_git(source_rel) or self.protected_by_git(rel)
                         or file_change_signature(source) != source_revision
-                        or file_change_signature(path) != expected or regular(path).st_nlink != 1
+                        or file_change_signature(path) != expected or regular(path).st_nlink != expected_links
                         or not self.published(source_rel) or not self.published(rel)):
                     raise ValueError("檔案在盤點後變動")
                 stage = self.root / "outputs/project_cleanup/pending.link"

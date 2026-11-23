@@ -131,8 +131,23 @@ def legacy_parameters(root):
     plan = collect_legacy_root_strategy_parameter_cleanup_plan(root)
     if plan["status"] != "READY":
         return {}
+    # Migration proves a replacement exists, not that every current consumer
+    # has switched to it. Resolve active overrides/templates through their owners.
+    from core import model_paths
+    from core.strategy_compare_policy import get_strategy_comparison_menu_profiles, get_strategy_comparison_settings
+    from core.strategy_comparison import resolve_strategy_comparison_arm_param_policy
+    from filters.breakout_quality.strategy_compare_sources import resolve_param_source_path
+    live = {Path(resolver(str(root))).resolve() for resolver in (
+        model_paths.resolve_run_best_params_path, model_paths.resolve_candidate_best_params_path,
+        model_paths.resolve_candidate_retention_best_params_path, model_paths.resolve_candidate_val_score_best_params_path,
+    )}
+    for menu in get_strategy_comparison_menu_profiles():
+        settings = get_strategy_comparison_settings(menu["profile_id"])
+        for arm in settings.enabled_arms:
+            live.add(resolve_param_source_path(root, settings, arm.param_source,
+                     param_policy=resolve_strategy_comparison_arm_param_policy(settings, arm)).resolve())
     return {Path(r["source"]): r["evidence"] for r in plan["removable"]
-            if Path(r["source"]).parts[:1] == ("models",)}
+            if Path(r["source"]).parts[:1] == ("models",) and (root / r["source"]).resolve() not in live}
 
 
 def fixture_reason(root, rel):
@@ -165,20 +180,14 @@ def fixture_reason(root, rel):
 def robust_unit(rel):
     if rel.is_relative_to(ROBUST):
         p = rel.relative_to(ROBUST).parts
-        if len(p) >= 6 and p[3] == "work" and p[4] in {"results", "baselines", "replay"}:
+        if len(p) >= 6 and p[3] == "work":
             return ROBUST.joinpath(*p[:3])
     return None
 
 
 def robust_disposable(run):
-    from services.research.strategy_multi_seed_robustness import _validate_completed_run
-    result = _validate_completed_run(run, backfill_integrity=False)
-    if not result:
-        return set()
-    scopes = {"results", "baselines"}
-    if result["contract"].get("retention", {}).get("keep_replay_details") is False:
-        scopes.add("replay")
-    return scopes
+    from services.research.strategy_multi_seed_robustness import completed_robustness_cleanup_scopes
+    return completed_robustness_cleanup_scopes(run)
 
 
 @contextmanager

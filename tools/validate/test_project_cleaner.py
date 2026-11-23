@@ -79,6 +79,227 @@ class CleanupTest(unittest.TestCase):
             worker.scan()
         return worker, rows
 
+    def migrated_parameter(self, name="run_best_params.json"):
+        from core.file_integrity import compute_file_sha256
+        from core.strategy_param_artifacts import resolve_strategy_param_manifest_path
+        source = self.write(Path("models") / name, {"params": {"value": 1}})
+        target = self.write(Path("models/strategy_params/canonical") / name, source.read_bytes())
+        state = {"run_best_params.json": "active", "candidate_best_params.json": "candidate_best",
+                 "candidate_retention_best_params.json": "candidate_retention_best",
+                 "candidate_val_score_best_params.json": "candidate_val_score_best"}[name]
+        self.write(resolve_strategy_param_manifest_path(self.root, family="full", evaluation_mode="trade"), {
+            "producer": "optimizer", "family": "full", "evaluation_mode": "trade",
+            "state_artifacts": {state: {"path": target.relative_to(self.root).as_posix(),
+                                         "sha256": compute_file_sha256(target)}},
+        })
+        return source, target
+
+    def test_current_parameter_overrides_survive_migration_cleanup(self):
+        from core import model_paths
+        from services.optimizer.strategy_param_service import collect_legacy_root_strategy_parameter_cleanup_plan
+        cases = (
+            ("run_best_params.json", model_paths.RUN_BEST_PARAMS_PATH_ENV_VAR, model_paths.resolve_run_best_params_path),
+            ("candidate_best_params.json", model_paths.CANDIDATE_BEST_PARAMS_PATH_ENV_VAR, model_paths.resolve_candidate_best_params_path),
+            ("candidate_retention_best_params.json", model_paths.CANDIDATE_RETENTION_BEST_PARAMS_PATH_ENV_VAR, model_paths.resolve_candidate_retention_best_params_path),
+            ("candidate_val_score_best_params.json", model_paths.CANDIDATE_VAL_SCORE_BEST_PARAMS_PATH_ENV_VAR, model_paths.resolve_candidate_val_score_best_params_path),
+        )
+        for name, variable, resolver in cases:
+            with self.subTest(name=name):
+                source, target = self.migrated_parameter(name)
+                self.assertEqual(collect_legacy_root_strategy_parameter_cleanup_plan(self.root)["status"], "READY")
+                with patch.dict(os.environ, {variable: str(source)}):
+                    self.menu(["2", "0"])
+                    self.assertEqual(Path(resolver(str(self.root))).read_bytes(), target.read_bytes())
+                self.menu(["2", "0"])
+                self.assertFalse(source.exists())
+
+    def test_duplicate_link_groups_merge_without_changing_reuse_bytes(self):
+        from core.compare_csv_storage import disk_bytes
+        a, b, c, d = [self.publish(name, pinned=True) for name in ("a", "b", "c", "d")]
+        b.unlink(); os.link(a, b)
+        d.unlink(); os.link(c, d)
+        saving = disk_bytes(c, c.stat())
+        self.menu(["1", "0"])
+        self.assertEqual(sum(self.summary("preview")[0]["saved"].values()), saving)
+        self.assertFalse(a.samefile(c))
+        self.menu(["2", "0"])
+        self.assertTrue(all(a.samefile(p) for p in (b, c, d)))
+        self.assertEqual(sum(self.summary("apply")[0]["saved"].values()), saving)
+        for p in (a, b, c, d):
+            run = p.parents[2]
+            self.assertTrue(completed_strategy_run_publication_matches(
+                run_dir=run, project_root=self.root,
+                run_payload=json.loads((run / "strategy_comparison.json").read_text())))
+        self.menu(["2", "0"])
+        self.assertEqual(sum(self.summary("apply")[0]["saved"].values()), 0)
+
+    def test_active_strategy_template_protects_migrated_parameter(self):
+        from dataclasses import replace
+        from core import strategy_compare_policy as policy
+        from filters.breakout_quality.strategy_compare_sources import resolve_param_source_path
+        source, target = self.migrated_parameter()
+        settings = policy.get_strategy_comparison_settings()
+        arm = settings.enabled_arms[0]
+        sources = dict(settings.parameter_sources)
+        sources[arm.param_source] = replace(sources[arm.param_source],
+            canonical_family=None, canonical_evaluation_mode=None,
+            path_template=source.relative_to(self.root).as_posix())
+        settings = replace(settings, parameter_sources=sources)
+        with patch.object(policy, "get_strategy_comparison_settings", return_value=settings):
+            self.assertEqual(resolve_param_source_path(self.root, settings, arm.param_source), source)
+            self.menu(["2", "0"])
+            self.assertEqual(source.read_bytes(), target.read_bytes())
+        self.menu(["2", "0"])
+        self.assertFalse(source.exists())
+
+    def test_partial_group_merge_can_resume_without_overstating_savings(self):
+        a, b, c, d = [self.publish(name, pinned=True) for name in ("a", "b", "c", "d")]
+        b.unlink(); os.link(a, b)
+        d.unlink(); os.link(c, d)
+        original_replace = os.replace
+        def fail_last(src, dst):
+            if Path(dst) == d:
+                raise PermissionError("injected final alias busy")
+            return original_replace(src, dst)
+        with patch("services.project_cleaner.os.replace", side_effect=fail_last):
+            self.menu(["2", "0"])
+        self.assertTrue(a.samefile(c))
+        self.assertFalse(a.samefile(d))
+        self.assertTrue(all(p.read_bytes() == self.payload for p in (a, b, c, d)))
+        self.assertEqual(sum(self.summary("apply")[0]["saved"].values()), 0)
+        self.menu(["2", "0"])
+        self.assertTrue(a.samefile(d))
+        self.assertGreater(sum(self.summary("apply")[0]["saved"].values()), 0)
+
+    def test_group_merge_preserves_replaced_alias(self):
+        a, b, c, d = [self.publish(name) for name in ("a", "b", "c", "d")]
+        b.unlink(); os.link(a, b)
+        d.unlink(); os.link(c, d)
+        replacement = self.write("new.csv", b"updated independent content")
+        original_replace = os.replace
+        def replace_next_alias(src, dst):
+            original_replace(src, dst)
+            if Path(dst) == c:
+                original_replace(replacement, d)
+        with patch("services.project_cleaner.os.replace", side_effect=replace_next_alias):
+            self.menu(["2", "0"])
+        self.assertEqual(d.read_bytes(), b"updated independent content")
+        self.assertTrue(a.samefile(c))
+        self.assertFalse(a.samefile(d))
+
+    def completed_robustness(self, *, benchmark=True):
+        import pandas as pd
+        from services.research import strategy_multi_seed_robustness as owner
+        from core.strategy_compare_policy import get_strategy_comparison_settings
+        settings = get_strategy_comparison_settings()
+        arm = next(iter(settings.enabled_arms))
+        fixed = next(a for a in settings.arms.values() if not a.dl_enabled)
+        run = self.root / rules.ROBUST / "suite/rolling/1234567890abcdef"
+        period = {"start": "2021-01-01", "end": "2021-12-31"}
+        contract = {"fingerprint": run.name, "profile_id": settings.profile_id,
+                    "resolved_seeds": [42], "stochastic_arms": [{"arm_id": arm.arm_id}],
+                    "fixed_arms": [{"arm_id": fixed.arm_id}], "comparison_period": period,
+                    "retention": {"keep_scores": False, "keep_replay_details": False}}
+        metrics = {key: 1.0 for _, key, _ in owner.MEAN_METRICS}
+        self.write(run / owner.SEED_RESULTS_FILENAME, pd.DataFrame([{
+            "arm_id": arm.arm_id, "seed": 42, "arm_order": 1, "seed_order": 1, **metrics,
+        }]).to_csv(index=False).encode())
+        self.write(run / owner.SEED_YEARLY_RESULTS_FILENAME, pd.DataFrame([{
+            "arm_id": arm.arm_id, "seed": 42, "arm_order": 1, "seed_order": 1,
+            "year": 2021, "return_pct": 1.0, "is_complete_year": True,
+        }]).to_csv(index=False).encode())
+        summary = {"schema_version": owner.ROBUSTNESS_SCHEMA_VERSION, "contract": contract,
+                   "paired_comparisons": [], "common_strategy_report": [],
+                   "mean_strategy_metrics": [{"arm_id": arm.arm_id, "type": "Multi-seed", "n": 1, **metrics}]}
+        if benchmark:
+            summary["benchmark_yearly"] = [{"year": 2021, "year_return_pct": 1.0}]
+        self.write(run / owner.SUMMARY_FILENAME, summary)
+        self.write(run / owner.REPORT_FILENAME, b"historical report")
+        with patch.object(owner, "PROJECT_ROOT", self.root):
+            self.write(run / owner.MANIFEST_FILENAME, {"status": "COMPLETED", "contract": contract,
+                       "durable_artifacts": owner._build_durable_result_artifacts(run)})
+            self.assertIsNotNone(owner._validate_completed_run(run, backfill_integrity=False))
+        return owner, settings, fixed, run, contract
+
+    def test_legacy_robustness_report_keeps_baseline_needed_by_reuse(self):
+        from core.strategy_comparison import resolve_strategy_comparison_arm_param_policy, strategy_comparison_param_artifact_key
+        owner, settings, arm, run, contract = self.completed_robustness(benchmark=False)
+        policy = resolve_strategy_comparison_arm_param_policy(settings, arm)
+        all_off = arm.rule_policy == "all_off"
+        metadata = {"dataset": settings.dataset, "params_file_sha256": "a" * 64,
+                    "requested_param_policy": policy,
+                    "param_evaluation_mode": settings.parameter_sources[arm.param_source].canonical_evaluation_mode or "rolling",
+                    "optional_entry_filter_policy": owner.OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF if all_off else owner.OPTIONAL_ENTRY_FILTER_POLICY_CURRENT,
+                    "shared_param_overrides": dict(owner.ALL_RULE_FILTERS_OFF_OVERRIDES) if all_off else {},
+                    "max_positions": settings.max_positions, "enable_rotation": settings.rotation == "on",
+                    "comparison_period": contract["comparison_period"]}
+        folder = owner._baseline_work_dir(run, arm)
+        self.write(folder / "strategy_comparison.json", {"metadata": metadata, "no_filter": {"return_pct": 1.0},
+                   "benchmark_yearly": [{"year": 2021, "year_return_pct": 1.0}]})
+        for name in ("yearly_returns_comparison.csv", "no_filter_equity.csv", "no_filter_trades.csv",
+                     "no_filter_daily_capacity.csv", "no_filter_orderable_candidates.csv"):
+            self.write(folder / name, b"col\n1\n")
+        status = {"comparison_period": contract["comparison_period"],
+                  "resolved_arm_parameter_paths": {arm.arm_id: "params.json"},
+                  "artifact_identities": {strategy_comparison_param_artifact_key(arm.param_source, policy): {"sha256": "a" * 64}}}
+        with patch.object(owner, "PROJECT_ROOT", self.root), contextlib.redirect_stdout(io.StringIO()):
+            before = owner._run_fixed_baselines(settings=settings, status=status, run_root=run, fixed_arms=(arm,), allow_replay=False)
+            self.menu(["2", "0"])
+            after = owner._run_fixed_baselines(settings=settings, status=status, run_root=run, fixed_arms=(arm,), allow_replay=False)
+        self.assertEqual(before, after)
+
+    def test_completed_robustness_cleans_all_disposable_work_and_remains_reusable(self):
+        owner, settings, arm, run, contract = self.completed_robustness()
+        trash = [self.write(run / "work" / scope / "leftover.json", b"transient")
+                 for scope in ("results", "baselines", "replay", "training", "benchmark_baselines")]
+        keep = [self.write(run / "work/custom/unknown.txt", b"unknown"),
+                self.write("models/research/shared_fitting_checkpoints/fit/model.pt", b"fit"),
+                self.write(run.parent / "scientific_units/unit/manifest.json", b"evidence")]
+        durable = {p: p.read_bytes() for p in run.iterdir() if p.is_file()}
+        with patch.object(owner, "PROJECT_ROOT", self.root):
+            self.menu(["2", "0"])
+            result = owner._validate_completed_run(run, expected_contract=contract, backfill_integrity=False)
+            with patch.object(owner, "_print_report_tables"), \
+                 patch.object(owner, "_train_one_unit", side_effect=AssertionError("unexpected FIT")), \
+                 patch.object(owner, "_replay_one_unit", side_effect=AssertionError("unexpected replay")), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                reused = owner._reuse_completed_robustness_run(
+                    cfg=SimpleNamespace(reuse_completed=True), settings=settings,
+                    run_root=run, contract=contract, status={}, fixed_arms=())
+        self.assertIsNotNone(result)
+        self.assertEqual(reused, result["summary"])
+        self.assertTrue(all(not p.exists() for p in trash))
+        self.assertTrue(all(p.is_file() for p in keep))
+        self.assertTrue(all(p.read_bytes() == data for p, data in durable.items()))
+
+    def test_robustness_retention_and_incomplete_work_are_preserved(self):
+        owner, settings, arm, run, contract = self.completed_robustness()
+        for state in ("RUNNING", "FAILED", "COMPLETED"):
+            with self.subTest(state=state):
+                contract["retention"].update(keep_scores=True, keep_replay_details=True)
+                summary = json.loads((run / owner.SUMMARY_FILENAME).read_text())
+                summary["contract"] = contract
+                self.write(run / owner.SUMMARY_FILENAME, summary)
+                with patch.object(owner, "PROJECT_ROOT", self.root):
+                    self.write(run / owner.MANIFEST_FILENAME, {"status": state, "contract": contract,
+                        "durable_artifacts": owner._build_durable_result_artifacts(run)})
+                    files = {scope: self.write(run / "work" / scope / "keep.json", b"preserve")
+                             for scope in ("results", "baselines", "replay", "training", "benchmark_baselines")}
+                    self.menu(["2", "0"])
+                for scope, file in files.items():
+                    self.assertEqual(file.exists(), state != "COMPLETED" or scope not in {"results", "baselines"})
+
+    def test_robustness_work_referenced_by_provenance_is_preserved(self):
+        owner, settings, arm, run, contract = self.completed_robustness()
+        protected = self.write(run / "work/replay/evidence.csv", b"historical backing bytes")
+        self.write(run / owner.ATTRIBUTION_SOURCE_DIRNAME / "unit/manifest.json", {
+            "files": {"trades": {"path": protected.relative_to(self.root).as_posix()}}})
+        disposable = self.write(run / "work/results/result.json", b"transient")
+        with patch.object(owner, "PROJECT_ROOT", self.root):
+            self.menu(["2", "0"])
+        self.assertTrue(protected.exists())
+        self.assertFalse(disposable.exists())
+
     def test_newly_tracked_candidate_is_preserved(self):
         a, b, c = [self.publish(name) for name in ("a", "b", "c")]
         worker, rows = self.scanned_cleaner()
@@ -329,7 +550,7 @@ class CleanupTest(unittest.TestCase):
         self.menu(["2", "0"])
         self.assertTrue(work.is_file())
         from services.research import strategy_multi_seed_robustness as owner
-        with patch.object(owner, "_validate_completed_run", return_value={"contract": {"retention": {"keep_replay_details": True}}}):
+        with patch.object(owner, "_validate_completed_run", return_value={"contract": {"retention": {"keep_replay_details": True}}, "summary": {}}):
             with exclusive_file_lock(sibling_publication_lock_path(self.root / run)):
                 self.menu(["2", "0"])
                 self.assertTrue(work.is_file())
