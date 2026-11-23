@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import py_compile
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -115,6 +116,29 @@ class CleanupTest(unittest.TestCase):
         self.assertFalse(os.path.samefile(a,replay))
         self.assertEqual(a.read_bytes(), self.payload)
         self.assertEqual(b.read_bytes(), self.payload)
+
+    def test_reuse_copies_independently_and_traces_why_link_was_skipped(self):
+        source = self.publish("original")
+        for run, metadata, link_error, reason in (
+            ("link_error", [True, True], OSError("link unavailable"), "link unavailable"),
+            ("different_acl", [True, False], None, "不同檔案安全屬性"),
+        ):
+            with self.subTest(run=run):
+                pair = self.root / self.base / run / "pairs/arm"
+                dest = pair / source.name
+                with patch("core.compare_csv_storage.file_metadata", side_effect=metadata), \
+                     patch("core.compare_csv_storage.os.link", side_effect=link_error) as link, \
+                     self.assertLogs("core.compare_csv_storage", level="DEBUG") as log:
+                    shutil.copytree(source.parent, pair, copy_function=copy_reused_detail)
+                self.assertEqual(link.call_count, int(link_error is not None))
+                message, = log.output
+                for fragment in (reason, source.relative_to(self.root).as_posix(), dest.relative_to(self.root).as_posix()):
+                    self.assertIn(fragment, message)
+                self.assertEqual(dest.read_bytes(), self.payload)
+                self.assertEqual(dest.stat().st_mtime_ns, source.stat().st_mtime_ns)
+                self.assertFalse(dest.samefile(source))
+                dest.write_bytes(b"changed")
+                self.assertEqual(source.read_bytes(), self.payload)
 
     def test_refuse_unmanaged_links_corruption_active_work_and_tracked(self):
         a, b = self.publish("a", pinned=True), self.publish("b", pinned=True)

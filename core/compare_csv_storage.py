@@ -1,5 +1,6 @@
 """Storage operations for immutable, published Strategy Compare detail CSVs."""
 from contextlib import contextmanager
+import logging
 import os
 from pathlib import Path
 import shutil
@@ -7,6 +8,7 @@ import stat
 import tempfile
 import time
 
+_LOG = logging.getLogger(__name__)
 RETIRED_PAIR_EXPORTS = ("strategy_comparison.html",)
 
 DETAIL_NAMES = frozenset(
@@ -125,9 +127,13 @@ def copy_reused_detail(src, dst):
                     raise ValueError("來源已變更")
                 os.link(source, dest)
             return str(dest)
-        except (OSError, ValueError):
-            # Copy semantics are always available where the filesystem rejects links.
-            pass
+        except (OSError, ValueError) as exc:
+            _LOG.debug(
+                "策略比較 CSV 改用複製：%s → %s (%s: %s)",
+                source.absolute().relative_to(root).as_posix(),
+                dest.absolute().relative_to(root).as_posix(),
+                type(exc).__name__, str(exc).replace(str(root), "."),
+            )
     if dest.exists() and dest.name in DETAIL_NAMES and compare_root(dest):
         with tempfile.TemporaryDirectory(dir=dest.parent) as work:
             tmp = Path(work) / dest.name
