@@ -13,7 +13,7 @@ import unittest
 from unittest.mock import patch
 from zipfile import ZipFile
 
-from app import cleaner
+from apps import cleaner
 from core.compare_csv_storage import copy_reused_detail, publish_detail_csv
 from core.regression_fixture_access import fixture_access
 from services import cleanup_rules as rules, project_cleaner as service

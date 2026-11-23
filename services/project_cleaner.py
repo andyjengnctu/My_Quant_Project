@@ -18,7 +18,7 @@ from services import cleanup_rules as rules
 from services.cleanup_report import LABEL, receipt, recover, report_path, show_summary
 
 PROTECTED = {
-    "app": "專案程式", "apps": "專案程式", "services": "專案程式", "core": "專案程式",
+    "apps": "專案程式", "services": "專案程式", "core": "專案程式",
     "filters": "專案程式", "strategies": "專案程式", "tools": "專案工具與測試",
     "requirements": "專案相依設定", ".git": "Git 工作紀錄", "data": "原始／正式資料", "state": "狀態與可接續工作",
     "doc": "文件與研究證據", "config": "專案設定",

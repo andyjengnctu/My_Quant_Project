@@ -194,6 +194,7 @@ project/
 - Layered Oracle reuse: Oracle receives **perfect independent NetPnL ranks and NetPnL-positive flags**, independent of the real predictor topology, and retains signed per-seed receipts only under verified effective inputs, P16, cash, selector, cutoff, score-membership, and a reviewed identical positive-admission producer. Legacy receipt versions are never directly reused for revised *actual* DL strategy runs. Model PIT manifests and score columns must include the independent classifier output; when either score is missing the shared selector fails closed. Source numerical/input contracts are not a target identity rename. Signed perfect-score Oracle and actual DL results have separate evidence and REUSE checks.
 - `apps/workbench.py`：GUI / workbench 正式入口，`apps/workbench.py` 為單一 GUI 啟用入口；單股檢視為 K 線圖、交易明細、Console 三個分頁。
 - `apps/smart_downloader.py`：Market Data 更新、Preflight／Bootstrap 入口。
+- `apps/cleaner.py`：專案檔案清理的獨立選單，可預覽、執行清理及查閱最近一次紀錄。
 - `apps/portfolio_sim.py`：投組模擬入口；`apps/vip_scanner.py`：掃描器入口。
 
 ## 主要資料夾、持久來源與相容邊界

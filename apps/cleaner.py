@@ -12,7 +12,7 @@ from services.project_cleaner import FAILURES, run, show_history
 
 def main():
     if not (ROOT / "doc/PROJECT_SETTINGS.md").is_file():
-        raise SystemExit("請將程式放在專案的 app/ 目錄。")
+        raise SystemExit("請將程式放在專案的 apps/ 目錄。")
     while True:
         print("\n專案檔案清理\n[1] 分析檔案與預估可釋放空間（預設）"
               "\n[2] 一鍵清理\n[3] 查看最近一次清理紀錄\n[0] 離開")
