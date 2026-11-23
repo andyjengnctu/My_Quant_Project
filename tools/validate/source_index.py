@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import ast
+import gc
 from collections import deque
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Tuple
@@ -13,12 +15,29 @@ class _FileSignature:
     size: int
 
 
+@dataclass(frozen=True)
+class SourceDefinition:
+    name: str
+    kind: str
+    lineno: int
+    end_lineno: int
+    decorated: bool
+
+
+@dataclass(frozen=True)
+class _SourceStructure:
+    imports: tuple
+    function_names: tuple[str, ...]
+    exception_handlers: tuple
+    bindings: dict
+    definitions: tuple[SourceDefinition, ...]
+    branch_literals: tuple | None
+
+
 _TEXT_CACHE: Dict[Path, Tuple[_FileSignature, str]] = {}
 _AST_CACHE: Dict[Path, Tuple[_FileSignature, ast.AST]] = {}
-_IMPORT_NODE_CACHE: Dict[Path, Tuple[_FileSignature, Tuple[ast.Import | ast.ImportFrom, ...]]] = {}
-_TOP_LEVEL_FUNCTION_CACHE: Dict[Path, Tuple[_FileSignature, Tuple[str, ...]]] = {}
-_EXCEPTION_HANDLER_CACHE: Dict[Path, Tuple[_FileSignature, Tuple[ast.ExceptHandler, ...]]] = {}
-_TOP_LEVEL_BINDING_CACHE: Dict[Path, Tuple[_FileSignature, dict]] = {}
+_STRUCTURE_CACHE: Dict[Path, Tuple[_FileSignature, _SourceStructure]] = {}
+_STATEMENT_CHILD_FIELDS: dict[type, tuple[str, ...]] = {}
 
 
 def _normalize_path(path: Path | str) -> Path:
@@ -39,10 +58,7 @@ def _source_text_at_signature(normalized: Path, signature: _FileSignature, *, en
     text = normalized.read_text(encoding=encoding)
     _TEXT_CACHE[normalized] = (signature, text)
     _AST_CACHE.pop(normalized, None)
-    _IMPORT_NODE_CACHE.pop(normalized, None)
-    _TOP_LEVEL_FUNCTION_CACHE.pop(normalized, None)
-    _EXCEPTION_HANDLER_CACHE.pop(normalized, None)
-    _TOP_LEVEL_BINDING_CACHE.pop(normalized, None)
+    _STRUCTURE_CACHE.pop(normalized, None)
     return text
 
 
@@ -52,6 +68,23 @@ def read_source_text(path: Path | str, *, encoding: str = "utf-8") -> str:
     return _source_text_at_signature(normalized, _signature(normalized), encoding=encoding)
 
 
+@contextmanager
+def _defer_source_cycle_collection():
+    # A freshly parsed AST has only child references, not cycles. Its many
+    # short-lived nodes need reference counting, but not repeated cyclic-GC
+    # scans of every older cached tree during construction. Defer only that
+    # bounded source inspection; restore the caller's GC state on every exit.
+    collect_cycles = gc.isenabled()
+    if collect_cycles:
+        gc.disable()
+    try:
+        yield
+    finally:
+        if collect_cycles:
+            gc.enable()
+
+
+@_defer_source_cycle_collection()
 def _source_ast_at_signature(normalized: Path, signature: _FileSignature, *, encoding: str, retain: bool = True) -> ast.AST:
     cached = _AST_CACHE.get(normalized)
     if cached is not None and cached[0] == signature:
@@ -64,40 +97,46 @@ def _source_ast_at_signature(normalized: Path, signature: _FileSignature, *, enc
     return tree
 
 
-def read_source_ast(path: Path | str, *, encoding: str = "utf-8") -> ast.AST:
+def read_source_ast(path: Path | str, *, encoding: str = "utf-8", retain: bool = True) -> ast.AST:
     """Return a cached immutable-by-contract AST for an unchanged Python file."""
     normalized = _normalize_path(path)
-    return _source_ast_at_signature(normalized, _signature(normalized), encoding=encoding)
+    return _source_ast_at_signature(normalized, _signature(normalized), encoding=encoding, retain=retain)
 
 
-def _populate_source_structure(path: Path | str, *, encoding: str = "utf-8") -> tuple[
-    _FileSignature,
-    Tuple[ast.Import | ast.ImportFrom, ...],
-    Tuple[str, ...],
-    Tuple[ast.ExceptHandler, ...],
-]:
+def _iter_statement_nodes(tree):
+    queue = deque([tree])
+    while queue:
+        node = queue.popleft()
+        yield node
+        node_type = type(node)
+        fields = _STATEMENT_CHILD_FIELDS.get(node_type)
+        if fields is None:
+            fields = tuple(name for name in node._fields
+                           if name in {"body", "orelse", "finalbody", "handlers", "cases"})
+            _STATEMENT_CHILD_FIELDS[node_type] = fields
+        for name in fields:
+            queue.extend(getattr(node, name))
+
+
+def _iter_structure_nodes(tree):
+    """Full expression reachability, excluding leaves that cannot hold a branch."""
+    queue = deque([tree])
+    leaves = (ast.Name, ast.Constant, ast.expr_context, ast.operator, ast.unaryop,
+              ast.boolop, ast.cmpop, ast.alias)
+    while queue:
+        node = queue.popleft()
+        yield node
+        queue.extend(child for child in ast.iter_child_nodes(node) if not isinstance(child, leaves))
+
+
+@_defer_source_cycle_collection()
+def _populate_source_structure(path: Path | str, *, encoding: str = "utf-8", include_branches: bool = False) -> _SourceStructure:
     normalized = _normalize_path(path)
     signature = _signature(normalized)
-    cached_imports = _IMPORT_NODE_CACHE.get(normalized)
-    cached_functions = _TOP_LEVEL_FUNCTION_CACHE.get(normalized)
-    cached_exception_handlers = _EXCEPTION_HANDLER_CACHE.get(normalized)
-    cached_bindings = _TOP_LEVEL_BINDING_CACHE.get(normalized)
-    if (
-        cached_imports is not None
-        and cached_imports[0] == signature
-        and cached_functions is not None
-        and cached_functions[0] == signature
-        and cached_exception_handlers is not None
-        and cached_exception_handlers[0] == signature
-        and cached_bindings is not None
-        and cached_bindings[0] == signature
-    ):
-        return (
-            signature,
-            cached_imports[1],
-            cached_functions[1],
-            cached_exception_handlers[1],
-        )
+    cached = _STRUCTURE_CACHE.get(normalized)
+    if cached is not None and cached[0] == signature:
+        if not include_branches or cached[1].branch_literals is not None:
+            return cached[1]
 
     # Structural scans need imports, handlers and declarations, not all of the
     # function bodies. Retaining every project AST makes later allocations pay
@@ -105,26 +144,31 @@ def _populate_source_structure(path: Path | str, *, encoding: str = "utf-8") -> 
     tree = _source_ast_at_signature(normalized, signature, encoding=encoding, retain=False)
     import_nodes = []
     exception_handlers = []
+    branch_literals = []
 
     # Imports and exception handlers can only occur in statement-bearing AST
     # containers.  ast.walk() also traverses every expression, constant,
     # argument and operator node; that work dominates project-wide source
     # contracts under coverage.  Keep the same breadth-first ordering as
     # ast.walk(), but do not enqueue branches that cannot contain statements.
-    queue = deque([tree])
-    statement_container_types = (ast.stmt, ast.ExceptHandler)
-    match_case_type = getattr(ast, "match_case", None)
-    while queue:
-        node = queue.popleft()
+    # An expression-level inspection requests the full walk once, while also
+    # populating the import/declaration facts used by the remaining consumers.
+    nodes = _iter_structure_nodes(tree) if include_branches else _iter_statement_nodes(tree)
+    for node in nodes:
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             import_nodes.append(node)
         if isinstance(node, ast.ExceptHandler):
             exception_handlers.append(node)
-        for child in ast.iter_child_nodes(node):
-            if isinstance(child, statement_container_types) or (
-                match_case_type is not None and isinstance(child, match_case_type)
-            ):
-                queue.append(child)
+        if include_branches:
+            if isinstance(node, ast.Match):
+                tests = [case.pattern for case in node.cases]
+            elif isinstance(node, (ast.If, ast.IfExp, ast.While)):
+                tests = [node.test]
+            else:
+                continue
+            literals = tuple(child.value for test in tests for child in ast.walk(test)
+                             if isinstance(child, ast.Constant) and isinstance(child.value, str))
+            branch_literals.append((int(node.lineno), literals))
 
     function_names = tuple(
         node.name
@@ -133,9 +177,12 @@ def _populate_source_structure(path: Path | str, *, encoding: str = "utf-8") -> 
     )
     exports = set()
     functions = []
+    definitions = []
     for node in tree.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             exports.add(node.name)
+            definitions.append(SourceDefinition(node.name, type(node).__name__, node.lineno,
+                                                node.end_lineno, bool(node.decorator_list)))
             if isinstance(node, ast.FunctionDef):
                 functions.append(node.name)
         elif isinstance(node, ast.Assign):
@@ -144,49 +191,46 @@ def _populate_source_structure(path: Path | str, *, encoding: str = "utf-8") -> 
             exports.update(alias.asname or alias.name for alias in node.names)
         elif isinstance(node, ast.Import):
             exports.update(alias.asname or alias.name.split(".")[-1] for alias in node.names)
-    import_nodes_tuple = tuple(import_nodes)
-    exception_handlers_tuple = tuple(exception_handlers)
-    _IMPORT_NODE_CACHE[normalized] = (signature, import_nodes_tuple)
-    _TOP_LEVEL_FUNCTION_CACHE[normalized] = (signature, function_names)
-    _EXCEPTION_HANDLER_CACHE[normalized] = (signature, exception_handlers_tuple)
-    _TOP_LEVEL_BINDING_CACHE[normalized] = (signature, {"exports": frozenset(exports), "functions": tuple(functions)})
-    return signature, import_nodes_tuple, function_names, exception_handlers_tuple
+    structure = _SourceStructure(
+        tuple(import_nodes), function_names, tuple(exception_handlers),
+        {"exports": frozenset(exports), "functions": tuple(functions)},
+        tuple(definitions), tuple(branch_literals) if include_branches else None,
+    )
+    _STRUCTURE_CACHE[normalized] = (signature, structure)
+    return structure
 
 
 def read_source_import_nodes(path: Path | str, *, encoding: str = "utf-8") -> Tuple[ast.Import | ast.ImportFrom, ...]:
     """Return cached static import nodes for an unchanged Python file."""
 
-    _signature_value, import_nodes, _function_names, _exception_handlers = _populate_source_structure(
-        path,
-        encoding=encoding,
-    )
-    return import_nodes
+    return _populate_source_structure(path, encoding=encoding).imports
 
 
 def read_source_top_level_function_names(path: Path | str, *, encoding: str = "utf-8") -> Tuple[str, ...]:
     """Return cached top-level function names for an unchanged Python file."""
 
-    _signature_value, _import_nodes, function_names, _exception_handlers = _populate_source_structure(
-        path,
-        encoding=encoding,
-    )
-    return function_names
+    return _populate_source_structure(path, encoding=encoding).function_names
 
 
 def read_source_exception_handlers(path: Path | str, *, encoding: str = "utf-8") -> Tuple[ast.ExceptHandler, ...]:
     """Return cached exception-handler nodes for an unchanged Python file."""
 
-    _signature_value, _import_nodes, _function_names, exception_handlers = _populate_source_structure(
-        path,
-        encoding=encoding,
-    )
-    return exception_handlers
+    return _populate_source_structure(path, encoding=encoding).exception_handlers
 
 
 def read_source_top_level_bindings(path: Path | str, *, encoding: str = "utf-8") -> dict:
     """Small immutable values; no retained function body or cached PASS result."""
-    _populate_source_structure(path, encoding=encoding)
-    return dict(_TOP_LEVEL_BINDING_CACHE[_normalize_path(path)][1])
+    return dict(_populate_source_structure(path, encoding=encoding).bindings)
+
+
+def read_source_definitions(path: Path | str, *, encoding: str = "utf-8") -> Tuple[SourceDefinition, ...]:
+    """Top-level declaration locations, without retaining their function bodies."""
+    return _populate_source_structure(path, encoding=encoding).definitions
+
+
+def read_source_branch_literals(path: Path | str, *, encoding: str = "utf-8") -> tuple:
+    """Branch locations/literal strings, including nested ternaries and match patterns."""
+    return _populate_source_structure(path, encoding=encoding, include_branches=True).branch_literals
 
 
 def clear_source_index_cache() -> None:
@@ -194,7 +238,4 @@ def clear_source_index_cache() -> None:
 
     _TEXT_CACHE.clear()
     _AST_CACHE.clear()
-    _IMPORT_NODE_CACHE.clear()
-    _TOP_LEVEL_FUNCTION_CACHE.clear()
-    _EXCEPTION_HANDLER_CACHE.clear()
-    _TOP_LEVEL_BINDING_CACHE.clear()
+    _STRUCTURE_CACHE.clear()

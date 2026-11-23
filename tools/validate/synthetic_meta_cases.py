@@ -25,7 +25,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CHECKLIST_PATH = PROJECT_ROOT / "doc" / "TEST_SUITE_CHECKLIST.md"
 SYNTHETIC_VALIDATE_DIR = PROJECT_ROOT / "tools" / "validate"
 
-from .source_index import read_source_ast, read_source_exception_handlers, read_source_text
+from .source_index import read_source_ast, read_source_exception_handlers, read_source_text, read_source_top_level_function_names
 from .meta_contracts import (
     extract_markdown_table_rows,
     load_defined_validate_names_from_synthetic_case_modules,
@@ -992,9 +992,8 @@ def validate_synthetic_registry_metadata_contract_case(_base_params):
         path
         for path in SYNTHETIC_VALIDATE_DIR.glob("synthetic_breakout_quality_*_cases.py")
         if any(
-            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-            and node.name.startswith("validate_")
-            for node in read_source_ast(path).body
+            name.startswith("validate_")
+            for name in read_source_top_level_function_names(path)
         )
     )
     breakout_quality_case_modules = tuple(path.stem for path in breakout_quality_module_paths)
@@ -1002,11 +1001,10 @@ def validate_synthetic_registry_metadata_contract_case(_base_params):
     # also caught by the generic registry-versus-defined-name audit below.
     missing_breakout_quality_case_modules = []
     declared_breakout_quality_validators = [
-        node.name
+        name
         for path in breakout_quality_module_paths
-        for node in read_source_ast(path).body
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        and node.name.startswith("validate_")
+        for name in read_source_top_level_function_names(path)
+        if name.startswith("validate_")
     ]
     duplicate_breakout_quality_validator_owners = sorted(
         name
@@ -1187,9 +1185,11 @@ def validate_synthetic_registry_metadata_contract_case(_base_params):
     summary["layer_counts"] = layer_counts
     from .check_result_utils import run_unittest_capability_cases
     from .test_synthetic_execution import SyntheticExecutionContractTests, SyntheticExecutionSpawnTests
+    from .test_source_inspection import SourceInspectionContractTests, MaintenanceInspectionContractTests
 
     execution_results, execution_summary = run_unittest_capability_cases(
-        case_id, "meta_registry", [SyntheticExecutionContractTests, SyntheticExecutionSpawnTests])
+        case_id, "meta_registry", [SyntheticExecutionContractTests, SyntheticExecutionSpawnTests,
+                                  SourceInspectionContractTests, MaintenanceInspectionContractTests])
     results.extend(execution_results)
     summary["execution_contract"] = execution_summary
     return results, summary

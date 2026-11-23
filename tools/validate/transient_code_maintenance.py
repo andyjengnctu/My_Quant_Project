@@ -15,7 +15,10 @@ from collections import defaultdict, deque
 from pathlib import Path
 from typing import Any
 
-from tools.validate.source_index import read_source_ast, read_source_text
+from tools.validate.source_index import (
+    read_source_ast, read_source_branch_literals, read_source_definitions,
+    read_source_import_nodes, read_source_text,
+)
 
 TRANSIENT_MODULE_PREFIXES = (
     "tools.audit",
@@ -32,6 +35,9 @@ SOURCE_SHAPE_DELTA_REVIEW = 250
 SOURCE_SHAPE_NEW_VALIDATOR_REVIEW = 120
 EXPERIMENT_VALIDATOR_PATTERN = re.compile(r"(?:^|_)(?:mr\d+[a-z]?|sr(?:_|\d)|c\d+)(?:_|$)", re.IGNORECASE)
 EXPERIMENT_ID_PATTERN = re.compile(r"\b(?:MR|SR)-\d+[A-Z]?\b|\bC\d+\b")
+_POSSIBLY_ADJACENT_STRING_LITERALS = re.compile(
+    r'''(?<!['"])(?:'{3}|"{3}|'|")(?!['"])(?:\s|\#[^\n]*\n)*[rRuUbBfFtT]*(?:'{3}|"{3}|'|")'''
+)
 SOURCE_SHAPE_TOKENS = (
     "read_text(",
     "read_source_text(",
@@ -77,7 +83,7 @@ def _analyze_static_python_tree(
     project_root: Path,
     index: dict[str, Path],
 ) -> tuple[dict[str, set[str]], list[dict[str, Any]]]:
-    """Build import reachability and execution-identity findings in one AST walk."""
+    """Use compact import facts; inspect expressions only in runtime modules."""
 
     names = set(index)
     graph: dict[str, set[str]] = {name: set() for name in names}
@@ -85,11 +91,20 @@ def _analyze_static_python_tree(
 
     for module, path in index.items():
         try:
-            tree = read_source_ast(path)
+            branches = ()
+            if module.startswith(("core.", "filters.", "services.")):
+                text = read_source_text(path)
+                # Only exclude a file when no matching decoded literal can
+                # exist. Escapes and implicit string concatenation can hide
+                # the spelling in source, so both always take the full AST
+                # path (including comments, multiline and prefixed literals).
+                if (EXPERIMENT_ID_PATTERN.search(text) or "\\" in text
+                        or _POSSIBLY_ADJACENT_STRING_LITERALS.search(text)):
+                    branches = read_source_branch_literals(path)
+            imports = read_source_import_nodes(path)
         except (OSError, UnicodeDecodeError, SyntaxError):
             continue
-        scan_experiment_branches = module.startswith(("core.", "filters.", "services."))
-        for node in ast.walk(tree):
+        for node in imports:
             if isinstance(node, ast.Import):
                 for alias in node.names:
                     if alias.name in names:
@@ -107,18 +122,7 @@ def _analyze_static_python_tree(
                     elif base in names:
                         graph[module].add(base)
 
-            if not scan_experiment_branches:
-                continue
-            if isinstance(node, ast.Match):
-                literals = [
-                    value
-                    for case in node.cases
-                    for value in _literal_strings(case.pattern)
-                ]
-            elif isinstance(node, (ast.If, ast.IfExp, ast.While)):
-                literals = _literal_strings(node.test)
-            else:
-                continue
+        for lineno, literals in branches:
             hits = sorted({
                 hit
                 for value in literals
@@ -127,7 +131,7 @@ def _analyze_static_python_tree(
             if hits:
                 experiment_branches.append({
                     "path": path.relative_to(project_root).as_posix(),
-                    "line": int(node.lineno),
+                    "line": lineno,
                     "identities": hits,
                     "reason": "experiment_identity_literal_controls_execution_branch",
                 })
@@ -190,7 +194,7 @@ def _is_explicit_compatibility_alias(path: Path) -> bool:
     """
 
     try:
-        tree = read_source_ast(path)
+        tree = read_source_ast(path, retain=False)
     except (OSError, UnicodeDecodeError, SyntaxError):
         return False
     for node in tree.body:
@@ -263,11 +267,11 @@ def _retired_dedicated_test_candidates(
         if not module.startswith("tools.validate"):
             continue
         try:
-            tree = read_source_ast(path)
+            definitions = read_source_definitions(path)
         except (OSError, UnicodeDecodeError, SyntaxError):
             continue
-        for node in tree.body:
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        for node in definitions:
+            if node.kind in {"FunctionDef", "AsyncFunctionDef"}:
                 function_paths[node.name] = path.relative_to(project_root).as_posix()
 
     candidates: list[dict[str, str]] = []
@@ -307,7 +311,9 @@ def _private_zero_caller_candidates(project_root: Path) -> list[dict[str, Any]]:
     """
 
     paths = _iter_python_paths(project_root)
-    token_re = re.compile(r"\b[A-Za-z_]\w*\b")
+    # Only these names can become candidates below. Counting unrelated public
+    # identifiers allocated millions of unused strings on every formal run.
+    token_re = re.compile(r"\b_(?!_)\w*\b")
     counts: Counter[str] = Counter()
     sources: dict[Path, str] = {}
     for path in paths:
@@ -321,15 +327,13 @@ def _private_zero_caller_candidates(project_root: Path) -> list[dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
     for path, text in sources.items():
         try:
-            tree = read_source_ast(path)
+            definitions = read_source_definitions(path)
         except (OSError, UnicodeDecodeError, SyntaxError):
             continue
-        for node in tree.body:
-            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-                continue
+        for node in definitions:
             if not node.name.startswith("_") or node.name.startswith("__"):
                 continue
-            if getattr(node, "decorator_list", None) or counts[node.name] != 1:
+            if node.decorated or counts[node.name] != 1:
                 continue
             candidates.append({
                 "path": path.relative_to(project_root).as_posix(),
@@ -340,15 +344,6 @@ def _private_zero_caller_candidates(project_root: Path) -> list[dict[str, Any]]:
     return candidates
 
 
-def _literal_strings(node: ast.AST) -> list[str]:
-    values: list[str] = []
-    for child in ast.walk(node):
-        if isinstance(child, ast.Constant) and isinstance(child.value, str):
-            values.append(child.value)
-    return values
-
-
-
 def _source_shape_validator_inventory(project_root: Path) -> dict[str, Any]:
     functions: dict[str, dict[str, Any]] = {}
     total_loc = 0
@@ -356,12 +351,12 @@ def _source_shape_validator_inventory(project_root: Path) -> dict[str, Any]:
     for path in sorted(validate_root.glob("synthetic*_cases.py")):
         try:
             text = read_source_text(path)
-            tree = read_source_ast(path)
+            definitions = read_source_definitions(path)
         except (OSError, UnicodeDecodeError, SyntaxError):
             continue
         lines = text.splitlines()
-        for node in tree.body:
-            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or not node.name.startswith("validate_"):
+        for node in definitions:
+            if node.kind not in {"FunctionDef", "AsyncFunctionDef"} or not node.name.startswith("validate_"):
                 continue
             source = "\n".join(lines[node.lineno - 1:node.end_lineno])
             if not any(token in source for token in SOURCE_SHAPE_TOKENS):
@@ -468,12 +463,12 @@ def _git_growth_summary(project_root: Path, current_source_shape: dict[str, Any]
             continue
         try:
             text = read_source_text(path)
-            tree = read_source_ast(path)
+            definitions = read_source_definitions(path)
         except (OSError, UnicodeDecodeError, SyntaxError):
             continue
         lines = text.splitlines()
-        for node in tree.body:
-            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or not node.name.startswith("validate_"):
+        for node in definitions:
+            if node.kind not in {"FunctionDef", "AsyncFunctionDef"} or not node.name.startswith("validate_"):
                 continue
             source = "\n".join(lines[node.lineno - 1:node.end_lineno])
             is_source_shape = any(token in source for token in SOURCE_SHAPE_TOKENS)
