@@ -8,6 +8,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from services.project_cleaner import FAILURES, run, show_history
+from services.project_backup import backup_project
 
 
 def main():
@@ -15,17 +16,20 @@ def main():
         raise SystemExit("請將程式放在專案的 apps/ 目錄。")
     while True:
         print("\n專案檔案清理\n[1] 分析檔案與預估可釋放空間（預設）"
-              "\n[2] 一鍵清理\n[3] 查看最近一次清理紀錄\n[0] 離開")
+              "\n[2] 一鍵清理\n[3] 查看最近一次清理紀錄"
+              "\n[4] 備份整個專案至 D 槽並驗證\n[0] 離開")
         try:
             answer = input("請選擇：").strip() or "1"
             if answer == "0":
                 return
             if answer == "3":
                 show_history(ROOT)
+            elif answer == "4":
+                backup_project(ROOT)
             elif answer in {"1", "2"}:
                 run(ROOT, apply=answer == "2")
             else:
-                print("請輸入 0～3。")
+                print("請輸入 0～4。")
         except EOFError:
             return
         except KeyboardInterrupt:
