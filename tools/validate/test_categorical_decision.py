@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import sys
+import tempfile
 from pathlib import Path
 from unittest import TestCase, main
 
@@ -105,8 +106,17 @@ class PayoffDecisionCases(TestCase):
         from services.research.target_dl_overview import collect_target_dl_overview
         from core.strategy_compare_registry import STRATEGY_COMPARE_ARMS
         from core.research_summary import unresolved_oracle_strategy_contracts
+        from core.report_contract_versions import REGISTRY_RELATIVE_PATH
         pending = unresolved_oracle_strategy_contracts(arm_registry=STRATEGY_COMPARE_ARMS)
-        report = collect_target_dl_overview(ROOT)
+        # This contract concerns registered rows with no published evidence.
+        # A user's model/Oracle history must not change its inputs or trigger
+        # real replay planning and price-inventory scans during the synthetic run.
+        with tempfile.TemporaryDirectory(prefix="payoff_summary_contract_") as temp:
+            root = Path(temp)
+            ledger = root / REGISTRY_RELATIVE_PATH
+            ledger.parent.mkdir(parents=True)
+            ledger.write_bytes((ROOT / REGISTRY_RELATIVE_PATH).read_bytes())
+            report = collect_target_dl_overview(root)
         for arm_id in pending:
             rows = [row for row in report['rows'] if row['strategy'] == arm_id]
             self.assertEqual(len(rows), 1)

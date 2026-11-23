@@ -472,12 +472,17 @@ def _summarize_formal_entry_consistency() -> Dict[str, Any]:
 
 
 def _build_coverage_summary(run_dir: Path, manifest: Dict[str, Any]) -> Dict[str, Any]:
-    from tools.validate.synthetic_cases import run_synthetic_consistency_suite
+    def run_suite(params):
+        # A full formal run already produced coverage in consistency. Import
+        # the validator registry only if the standalone fallback must run it.
+        from tools.validate.synthetic_cases import run_synthetic_consistency_suite
+
+        return run_synthetic_consistency_suite(params)
 
     return _shared_build_coverage_summary(
         run_dir,
         manifest,
-        suite_runner=run_synthetic_consistency_suite,
+        suite_runner=run_suite,
     )
 
 
@@ -503,8 +508,10 @@ def main(argv=None) -> int:
         started = time.perf_counter()
         coverage_summary = _build_coverage_summary(run_dir, manifest)
         checklist_summary = _summarize_checklist_consistency()
-        formal_entry_summary = _summarize_formal_entry_consistency()
+        # The maintenance scan populates branch and import facts together.
+        # Run it first so the formal import checks reuse the richer index.
         maintenance_summary = summarize_transient_code_maintenance(PROJECT_ROOT)
+        formal_entry_summary = _summarize_formal_entry_consistency()
         current_meta_quality_duration_sec = round(time.perf_counter() - started, 3)
         current_meta_quality_peak_process_memory_mb = tracker.snapshot_peak_mb()
         performance_summary = _build_performance_summary(

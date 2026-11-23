@@ -309,7 +309,9 @@ def run_debug_analysis(df, ticker, params, output_dir, colors, export_excel=True
     c = df['Close'].to_numpy(dtype=np.float64, copy=False)
     o = df['Open'].to_numpy(dtype=np.float64, copy=False)
     v = df['Volume'].to_numpy(dtype=np.float64, copy=False)
-    dates = df.index
+    # Box timestamps once: the replay repeatedly indexes today's/prior date.
+    # Keep Timestamp (including timezone) semantics without pandas scalar lookup.
+    dates = tuple(df.index)
     resolved_security_profile = df.attrs.get('security_profile')
     if precomputed_signals is None:
         precomputed_signals = _extract_precomputed_signals(df)

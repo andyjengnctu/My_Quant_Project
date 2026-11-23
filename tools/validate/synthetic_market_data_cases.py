@@ -2492,7 +2492,13 @@ def validate_market_data_v2_trading_workbench_sidecar_contract_case(_base_params
         set_market_data_scan_freshness_mode,
     )
 
-    with TemporaryDirectory() as state_temp_dir:
+    # Data Ops exercises the real scheduler status parser with an absent-task
+    # response. Its synthetic state must not query the host's Task Scheduler;
+    # installed/enabled/drift/mutation behavior is covered below via its runner.
+    with TemporaryDirectory() as state_temp_dir, patch(
+        "services.trading.market_data_scheduler._default_powershell_runner",
+        return_value=(0, '{"installed": false}', ""),
+    ):
         state_root = Path(state_temp_dir)
         state_path = resolve_trading_market_data_v2_dataset_state_path(state_root)
         state_now = datetime(2026, 9, 8, 2, 0, tzinfo=ZoneInfo("Asia/Taipei"))

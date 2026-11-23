@@ -39,7 +39,7 @@ MANIFEST_DEFAULTS: Dict[str, Any] = {
     "bundle_name": "to_chatgpt_bundle.zip",
     "dataset": "reduced",
     "test_cpu_threads": 1,
-    "synthetic_workers": 4,
+    "synthetic_workers": 8,
     "detail_tools_keep_last_n": 5,
     "detail_tools_max_age_days": 14,
     "local_regression_keep_last_n": 20,

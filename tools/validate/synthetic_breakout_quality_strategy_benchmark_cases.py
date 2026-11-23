@@ -742,6 +742,15 @@ def append_robustness_benchmark_plan_checks(
         "artifact_identities": {},
     }
     with (
+        # Parameter READY/revision checks use one declared dataset snapshot.
+        # Hashing the user's full source/market inventory is unrelated to this
+        # fixture; dataset identity has its own behavioral contracts.
+        patch.object(
+            robustness_plan_runtime,
+            "_dataset_identity_snapshot",
+            return_value={"dataset": rolling_robust_settings.dataset,
+                          "fingerprint": "isolated_parameter_plan_dataset"},
+        ),
         patch(
             "services.research.strategy_multi_seed_robustness._discover_registered_strategy_only_scientific_reuse",
             return_value={},

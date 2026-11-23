@@ -39,14 +39,22 @@ def describe_entries(entries):
 
 def plan_batches(specs, workers):
     # Keep each owner together so static indexes and expensive fixture imports
-    # are not rebuilt by every worker. Assign larger owners first, then restore
-    # registry order inside each batch. Scheduling never uses previous PASSes.
+    # are not rebuilt by every worker. Balance declared work rather than case
+    # counts: a model-fit contract costs much more than a scalar assertion.
+    # These relative hints affect scheduling only, never execution or verdicts.
+    # Restore registry order inside each batch; no previous result is reused.
+    weights = {"fast": 1, "medium": 5, "heavy": 25}
     owners = {}
     for index, spec in enumerate(specs):
         owners.setdefault(spec["module"], []).append((index, spec))
     batches = [[] for _ in range(min(workers, len(owners)))]
-    for group in sorted(owners.values(), key=lambda items: (-len(items), items[0][0])):
-        min(batches, key=len).extend(group)
+    loads = [0] * len(batches)
+    def cost(group):
+        return sum(weights.get(spec.get("cost_class", "fast"), 1) for _, spec in group)
+    for group in sorted(owners.values(), key=lambda items: (-cost(items), items[0][0])):
+        target = min(range(len(batches)), key=lambda i: (loads[i], len(batches[i]), i))
+        batches[target].extend(group)
+        loads[target] += cost(group)
     return [sorted(batch, key=lambda item: item[0]) for batch in batches]
 
 

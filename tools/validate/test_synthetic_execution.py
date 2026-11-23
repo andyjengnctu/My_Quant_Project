@@ -112,6 +112,20 @@ class SyntheticExecutionContractTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 execution.worker_count(bad, 10)
 
+    def test_planner_balances_expensive_owners_instead_of_case_counts(self):
+        specs = [
+            {"name": "fit_a", "module": "model_a", "cost_class": "heavy"},
+            {"name": "fit_b", "module": "model_b", "cost_class": "heavy"},
+            *[{"name": f"scalar_{i}", "module": "scalar", "cost_class": "fast"}
+              for i in range(8)],
+        ]
+        batches = execution.plan_batches(specs, 2)
+        self.assertTrue(all(sum(spec["cost_class"] == "heavy" for _, spec in batch) == 1
+                            for batch in batches))
+        self.assertEqual(sorted(i for batch in batches for i, _ in batch), list(range(len(specs))))
+        self.assertEqual(batches, execution.plan_batches(specs, 2))
+        self.assertEqual(execution.plan_batches([], 2), [])
+
     def test_thread_budget_restores_loaded_torch_and_environment_on_error(self):
         state = [7]
         fake_torch = SimpleNamespace(get_num_threads=lambda: state[0],
