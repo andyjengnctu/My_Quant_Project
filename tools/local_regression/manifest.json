@@ -12,6 +12,7 @@
   "detail_tools_max_age_days": 14,
   "local_regression_keep_last_n": 20,
   "local_regression_max_age_days": 30,
+  "local_regression_retention_mode": "count",
   "ml_smoke_timeout_sec": 300,
   "ml_smoke_trials": 1,
   "performance_chain_checks_max_sec": 60,

@@ -16,6 +16,7 @@ from core.file_integrity import (compute_observed_file_sha256, exclusive_file_lo
                                  load_json_object_or_none)
 from services import cleanup_rules as rules
 from services.cleanup_report import LABEL, receipt, recover, report_path, show_summary
+from services.cleanup_lifecycle import LifecycleCleanup
 
 PROTECTED = {
     "apps": "專案程式", "services": "專案程式", "core": "專案程式",
@@ -82,7 +83,7 @@ def retained(rel, live):
             return "KEEP", "現行研究設定所用模型目錄"
         if SCIENTIFIC.intersection(parts) or rel.name in {"manifest.json", "model.pt", "scores.csv"}:
             return "KEEP", "正式研究、歷史證據或可續跑工件"
-        return "REVIEW", "產生程式尚未證明已失去用途"
+        return "REVIEW", "尚缺產生者的逐檔用途、完成／取代證據，保留"
     return "REVIEW", "非清理規則管理的本機檔案"
 
 
@@ -103,6 +104,8 @@ class Cleaner:
         self.deletes = defaultdict(list)
         self.work_dirs = defaultdict(set)
         self.git_ok = True
+        self.lifecycle = LifecycleCleanup(root, self.progress)
+        self.lifecycle_candidates = []
         self.refresh_tracking()
         self.legacy = self.lookup(rules.legacy_parameters, Path("models"))
         self.retired = self.lookup(rules.retired_diagnostics, rules.DIAGNOSTICS)
@@ -191,8 +194,10 @@ class Cleaner:
             return "retired_cache", None
         if rel.suffix == ".pyc" and rel.parent.name == "__pycache__" and rel.parts[0] not in {"models","outputs","state","data",".git"}:
             return "pyc", None
-        if rel.is_relative_to(rules.STAGING) and len(rel.relative_to(rules.STAGING).parts) >= 2:
-            return "fixture", rules.STAGING
+        if rel.is_relative_to(rules.STAGING):
+            local = rel.relative_to(rules.STAGING)
+            if len(local.parts) >= 2 and rules.PROBE.fullmatch(local.parts[0]):
+                return "fixture", rules.STAGING
         unit = rules.robust_unit(rel)
         if unit and len(rel.relative_to(unit).parts) >= 3:
             return "robust", unit
@@ -221,16 +226,21 @@ class Cleaner:
         if kind == "old_export" and self.published(rel):
             if (path.parent / "strategy_comparison.md").is_file():
                 return "已發布比較的退役 HTML 匯出，正式報表已存在"
+        if kind == "lifecycle":
+            return scope.proof(self, rel)
         return ""
 
     def scan(self):
         print("盤點專案並核對保留依據…", flush=True)
+        deferred = []
         def visit(rel):
+            self.lifecycle.observe_directory(rel)
             unit = rules.robust_unit(rel)
             if unit and self.git_ok:
                 self.work_dirs[unit].add(rel)
                 self.deletes.setdefault(unit, [])
         for n, (rel, size) in enumerate(walk(self.root, self.note, visit), 1):
+            self.lifecycle.observe(rel, size)
             self.progress(f"已盤點 {n:,} 個檔案，目前 {rel.parts[0]}/")
             if rel in self.tracked:
                 self.note("KEEP", rel, size, "Git 追蹤檔")
@@ -248,8 +258,20 @@ class Cleaner:
                 except FAILURES as exc:
                     self.note("SKIP", rel, size, exc)
                 continue
-            action, reason = retained(rel, self.live)
-            self.note(action, rel, size, reason)
+            deferred.append((rel, size))
+        try:
+            self.lifecycle.prepare(rules.active_artifact_subjects(self.root))
+        except FAILURES as exc:
+            self.lifecycle.errors[Path("config")] = f"現行依賴解析失敗：{exc}"
+        for rel, size in deferred:
+            if self.git_ok and self.lifecycle.candidate(rel):
+                self.lifecycle_candidates.append((rel, size))
+            else:
+                reason = self.lifecycle.retained_reason(rel)
+                action, fallback = retained(rel, self.live)
+                self.note("KEEP" if reason else action, rel, size, reason or fallback)
+        for rel, reason in self.lifecycle.errors.items():
+            self.note("SKIP", rel, 0, reason)
 
     def clear_unused(self):
         if self.apply and self.git_ok:
@@ -259,6 +281,19 @@ class Cleaner:
                 return
             self.legacy = self.lookup(rules.legacy_parameters, Path("models"))
             self.retired = self.lookup(rules.retired_diagnostics, rules.DIAGNOSTICS)
+        try:
+            if self.git_ok:
+                self.lifecycle.active = rules.active_artifact_subjects(self.root)
+                with self.lifecycle.session(self):
+                    self._clear_unused()
+        except FAILURES as exc:
+            rows = list(self.lifecycle_candidates)
+            rows.extend((rel, size) for entries in self.deletes.values() for _, rel, size in entries)
+            for rel, size in rows:
+                self.note("SKIP", rel, size, f"用途或保留依賴無法驗證：{exc}")
+
+    def _clear_unused(self):
+        self.lifecycle.clear(self, self.lifecycle_candidates)
         # Also consider known empty error-probe folders. Empty arbitrary folders are kept.
         staging = self.root / rules.STAGING
         if self.git_ok and clean_path(staging) and staging.is_dir():
@@ -293,8 +328,10 @@ class Cleaner:
                 if (not self.protected_by_git(rel) and clean_path(path)
                         and stat.S_ISDIR(info.st_mode)
                         and not getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT
+                        and not self.lifecycle.protected(rel)
                         and not any(path.iterdir())):
                     path.rmdir()
+                    self.lifecycle.removed(rel)
                     self.note("RMDIR", rel, 0, "已完成 Robustness 的空工作資料夾")
             except OSError as exc:
                 self.note("SKIP", rel, 0, exc)
@@ -308,17 +345,23 @@ class Cleaner:
                         "export_only_empty_db/ml_optimizer/study_db", "export_only_missing_db/ml_optimizer/study_db"):
                 p = child / sub
                 while p != child:
-                    if clean_path(p) and p.is_dir() and not any(p.iterdir()):
+                    if (clean_path(p) and p.is_dir() and not self.lifecycle.protected(p.relative_to(self.root))
+                            and not any(p.iterdir())):
                         p.rmdir()
+                        self.lifecycle.removed(p.relative_to(self.root))
                         self.note("RMDIR", p.relative_to(self.root), 0, "已結束測試的空資料夾")
                     p = p.parent
-            if not any(child.iterdir()):
+            if not self.lifecycle.protected(child.relative_to(self.root)) and not any(child.iterdir()):
                 child.rmdir()
+                self.lifecycle.removed(child.relative_to(self.root))
                 self.note("RMDIR", child.relative_to(self.root), 0, "已結束測試的空資料夾")
 
     def remove_one(self, kind, rel, size, scope):
         path = self.root / rel
         try:
+            if self.lifecycle.protected(rel):
+                self.note("KEEP", rel, size, "被正式成果、續跑或其他保留工件引用")
+                return
             info = regular(path)
             revision = file_change_signature(path)
             reason = self.proof(kind, rel, scope)
@@ -337,11 +380,21 @@ class Cleaner:
                     raise ValueError("檔案已變動")
                 self.note("INTENT", rel, size, reason)
                 path.unlink()
+                self.lifecycle.removed(rel)
             self.note("DELETE" if self.apply else "PLAN_DELETE", rel, size, reason, space)
         except FAILURES as exc:
             self.note("SKIP", rel, size, exc)
 
     def clear_reused_details(self):
+        try:
+            with self.lifecycle.session(self):
+                self._clear_reused_details()
+        except FAILURES as exc:
+            for rows in self.groups.values():
+                for rel in rows:
+                    self.note("SKIP", rel, self.lifecycle.files.get(rel, 0), f"保留依賴無法驗證：{exc}")
+
+    def _clear_reused_details(self):
         print("核對 REUSE 來源，刪除已有完整原始資料的重複明細…", flush=True)
         candidates = sorted(rel for paths in self.groups.values() for rel in paths)
         for index, rel in enumerate(candidates, 1):
@@ -349,6 +402,9 @@ class Cleaner:
             path = self.root / rel
             size = 0
             try:
+                if self.lifecycle.protected(rel):
+                    self.note("KEEP", rel, self.lifecycle.files.get(rel, 0), "被正式成果、續跑或其他保留工件引用")
+                    continue
                 info = regular(path)
                 size = info.st_size
                 revision = file_change_signature(path)
@@ -401,6 +457,7 @@ class Cleaner:
                     if self.apply:
                         self.note("INTENT", rel, size, reason, source=source_rel)
                         path.unlink()
+                        self.lifecycle.removed(rel)
                         # Our unlink changes the shared inode's change time,
                         # not its bytes. Reuse that verified digest while the
                         # producer's publication lock is still held.
@@ -442,7 +499,7 @@ def run(root, apply=False):
     with session(root), receipt(root, "apply" if apply else "preview") as log:
         cleaner = Cleaner(root, log, apply)
         cleaner.scan()
-        print(f"進入用途驗證 {sum(map(len, cleaner.deletes.values())):,} 個檔案；"
+        print(f"進入用途驗證 {sum(map(len, cleaner.deletes.values())) + len(cleaner.lifecycle_candidates):,} 個檔案；"
               f"核對 REUSE 副本 {sum(map(len, cleaner.groups.values())):,} 個明細。", flush=True)
         cleaner.clear_unused()
         cleaner.clear_reused_details()

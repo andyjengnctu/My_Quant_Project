@@ -20,6 +20,7 @@ from zoneinfo import ZoneInfo
 
 from config.execution_policy import DEFAULT_PORTFOLIO_MAX_POSITIONS, DEFAULT_PORTFOLIO_ROTATION
 from core.file_integrity import compute_file_sha256
+from core.output_retention import LOCAL_REGRESSION_RETENTION_MODE, is_local_regression_bundle
 from core.path_utils import (
     contains_any_path_separator as _contains_any_path_separator,
     is_windows_absolute_path as _is_windows_absolute_path,
@@ -43,6 +44,7 @@ MANIFEST_DEFAULTS: Dict[str, Any] = {
     "detail_tools_max_age_days": 14,
     "local_regression_keep_last_n": 20,
     "local_regression_max_age_days": 30,
+    "local_regression_retention_mode": LOCAL_REGRESSION_RETENTION_MODE,
     "ml_smoke_timeout_sec": 300,
     "ml_smoke_trials": 1,
     "performance_quick_gate_max_sec": 45,
@@ -291,6 +293,9 @@ def load_manifest(path: Optional[Path] = None) -> Dict[str, Any]:
         merged[field_name] = raw_value
 
     merged["bundle_name"] = _normalize_bundle_name(merged["bundle_name"])
+    if (not isinstance(merged["local_regression_retention_mode"], str)
+            or merged["local_regression_retention_mode"] not in {"both", "either", "count", "age"}):
+        raise LocalRegressionError("local_regression_retention_mode 必須是 both/either/count/age")
     dataset = merged["dataset"].lower()
     if dataset != "reduced":
         raise LocalRegressionError(f"local regression 只支援 reduced，收到: {dataset}")
@@ -671,6 +676,53 @@ def archive_bundle_history(bundle_path: Path, *, prefix: str = "to_chatgpt_bundl
     archive_name = f"{prefix}_{timestamp_text()}_{uuid.uuid4().hex[:8]}.zip"
     archive_path = archive_dir / archive_name
     shutil.move(str(bundle_path), str(archive_path))
+    # AI: A completed diagnostic archive can replace its private work files.
+    # The process pin prevents cleaner from removing files still read while
+    # the producer assembles its return value. Scientific outputs are excluded.
+    workspace = bundle_path.parent
+    if workspace.is_relative_to(OUTPUT_ROOT / "_staging") and is_local_regression_bundle(archive_path):
+        from core.artifact_lifecycle import MANIFEST_NAME, publish_lifecycle, relative_path
+        from core.compare_csv_storage import clean_path, plain
+        try:
+            archive_digest = compute_file_sha256(archive_path)
+            # Consume the producer's existing inventory; never label arbitrary
+            # extra files as disposable merely because they are in staging.
+            with zipfile.ZipFile(archive_path) as archive:
+                archived_inventory = archive.read(ARTIFACTS_MANIFEST_FILENAME)
+            inventory = workspace / ARTIFACTS_MANIFEST_FILENAME
+            if (not clean_path(inventory) or not plain(inventory.lstat())
+                    or inventory.read_bytes() != archived_inventory):
+                raise ValueError("診斷工件清單與已發布封包不同")
+            payload = json.loads(archived_inventory)
+            if not isinstance(payload, dict):
+                raise ValueError("診斷工件清單必須是 object")
+            rows = payload["artifacts"]
+            if not isinstance(rows, list) or payload.get("artifact_count") != len(rows):
+                raise ValueError("診斷工件清單不完整")
+            roles = {inventory.relative_to(PROJECT_ROOT): "work"}
+            expected = {inventory.relative_to(PROJECT_ROOT): hashlib.sha256(archived_inventory).hexdigest()}
+            expected[archive_path.relative_to(PROJECT_ROOT)] = archive_digest
+            for row in rows:
+                if not isinstance(row, dict):
+                    raise ValueError("診斷逐檔紀錄必須是 object")
+                path = workspace / relative_path(row["relative_path"])
+                if path == workspace / MANIFEST_NAME:
+                    continue  # A previous engineering receipt is not a work file.
+                relative = path.relative_to(PROJECT_ROOT)
+                if relative in roles:
+                    raise ValueError("診斷工件清單有重複路徑")
+                roles[relative] = "work"
+                expected[relative] = row["sha256"]
+            if roles:
+                publish_lifecycle(
+                    PROJECT_ROOT, workspace=workspace.relative_to(PROJECT_ROOT),
+                    producer="local_regression", state="COMPLETED", roles=roles,
+                    publication=(archive_path.relative_to(PROJECT_ROOT),),
+                    active_pid=os.getpid(), expected_sha256=expected,
+                )
+        except (OSError, ValueError, RuntimeError, KeyError, TypeError, zipfile.BadZipFile) as exc:
+            reason = str(exc).replace(str(PROJECT_ROOT), ".")
+            print(f"診斷封包已發布；工作檔清理依據未完成：{type(exc).__name__}: {reason}", file=sys.stderr)
     return archive_path
 
 

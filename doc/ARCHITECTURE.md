@@ -106,7 +106,7 @@ project/
 │  ├─ runtime_utils.py                # 共用runtime／environment flag helper
 │  ├─ model_paths.py                  # models 目錄與預設參數來源解析
 │  ├─ output_paths.py                 # outputs/<category> 目錄正規化與建立 helper
-│  ├─ output_retention.py         # outputs retention 雙門檻清理 helper
+│  ├─ output_retention.py         # outputs retention 規則與唯讀候選計畫
 │  └─ display.py                      # 顯示 façade
 ├─ data/                             # Research／Trading market data，實際路徑與分區由 runtime_domains 定義
 ├─ doc/
@@ -195,6 +195,12 @@ project/
 - `apps/workbench.py`：GUI / workbench 正式入口，`apps/workbench.py` 為單一 GUI 啟用入口；單股檢視為 K 線圖、交易明細、Console 三個分頁。
 - `apps/smart_downloader.py`：Market Data 更新、Preflight／Bootstrap 入口。
 - `apps/cleaner.py`：專案檔案清理的獨立選單，可預覽、執行清理及查閱最近一次紀錄。
+  - `core/artifact_lifecycle.py` 持有共用儲存用途契約；`services/cleanup_lifecycle.py` 解析用途、工作狀態、現行設定與跨工作依賴，實際刪除仍由 `services/project_cleaner.py` 統一執行。規則不列舉目前策略、模型或實驗 ID，也不從年齡、檔名或未出現在選單推定研究工件可刪。
+  - Producer 在獨立 outputs 工作目錄發布 `artifact_lifecycle.json`，逐檔宣告 `result/evidence/resume/work/cache/replica`、SHA256、`requires` 與保留根；這是工程儲存證據，不能取代或改寫 FIT／Replay／Oracle 的 scientific manifest。`result/evidence/resume` 永遠保留；保留工件的直接、間接及目錄依賴，包含跨工作依賴，也保護原有清理規則的候選。
+  - `RUNNING/RESUMABLE` 工作保留。`COMPLETED` 必須驗證已發布成果，才移除無保留依賴的 work／replica；`SUPERSEDED` 另須有替代成果、非空工作身分且未被現行設定引用，才放行舊工作檔或 cache；`ABANDONED` 只能由 producer 明確結案，不能由 cleaner 依年齡猜測。replica 還要驗證保留來源內容相同；有程序身分時，無法確認程序已結束即保留。
+  - Producer 與 cleaner 共用生命週期鎖；發布用途或新增依賴必須經此鎖，使用工作區前先發布 RUNNING／RESUMABLE，結案後才發布終態。刪除前重查 Git、SHA、用途紀錄、既有 JSON 引用與目錄快照；盤點後新增／改寫引用、設定變動、來源異動及無法讀取的依賴證據均不能沿用舊盤點。未知檔案、連結及非預期用途保留並記錄原因。
+  - 診斷封包的 producer 與 cleaner 共用 `core/output_retention.py` 的規則。份數、天數及 `local_regression_retention_mode` 由 `tools/local_regression/manifest.json` 提供：count 依份數、age 依天數、both 須同時超過、either 任一超過。診斷預設使用 count；其它既有 RetentionRule 仍預設 both。只有可驗證的已發布診斷 ZIP 納入排名，仍被保留工件引用者另行保護。
+  - `tools/local_regression/common.py` 在診斷封包發布成功後，使用原有 `artifacts_manifest.json` 的逐檔內容證據登記暫存用途，並保留發布程序身分；未列入清單、內容改變或清單不符者不授權清理。所有可拋棄工作檔清除後，其輕量用途紀錄保留供查核，不再永久釘住診斷封包。舊工作沒有足夠證據時不補造完成紀錄；其他 producer 可接入相同契約，不需再修改 cleaner 的 ID 清單。
   - 遷移完成的舊參數仍須核對現行路徑覆寫及正式 preparation 的完整依賴解析，包含 builder 間接使用的上游參數及各來源政策；仍被使用的舊路徑保留。診斷快取的現行模型判定亦涵蓋這些間接參數的 teacher 與其他正式模型依賴。
   - Robustness 的可拋棄工作範圍由原 producer 的 retention policy 提供。清理先驗證完成工件，並保留舊報表補齊所需的 baseline 及來源收據引用的工作檔；未完成工作、正式模型／分數和原始研究證據不以退役或檔案大小判定刪除。
   - Robustness 工作區辨識不固定套用單一目錄深度，舊版輸出位置也須通過相同完成驗證。可清範圍內的空目錄與檔案共用工作鎖及刪除依據；預覽不移除目錄，未知範圍及連結保留。

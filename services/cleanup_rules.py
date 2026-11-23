@@ -56,15 +56,13 @@ def generated_bytecode(root, rel, tracked):
             and int.from_bytes(header[4:8], "little") in {0, 1, 3})
 
 
-def retired_diagnostics(root):
-    """Map only recognized historical model+seed slots of this disposable projection."""
+def active_artifact_subjects(root):
+    """Read the configured suites and their transitive canonical dependencies."""
     from config import breakout_quality, strategy_compare, trading
     from core.research_summary import get_research_summary_model_profiles
-    from core.strategy_compare_policy import (_compatibility_catalogs, get_strategy_comparison_menu_profiles,
+    from core.strategy_compare_policy import (get_strategy_comparison_menu_profiles,
                                              get_strategy_comparison_settings)
-    from core.training_policy import resolve_robustness_benchmark_seeds
     from filters.breakout_quality.strategy_compare_dl_artifacts import resolve_required_artifact_sources
-    from services.breakout_quality.real_path_diagnostic_cache import _slot
 
     def strings(item):
         if isinstance(item, str):
@@ -87,12 +85,25 @@ def retired_diagnostics(root):
     for menu in get_strategy_comparison_menu_profiles():
         settings = get_strategy_comparison_settings(menu["profile_id"])
         parameters, models, _ = resolve_required_artifact_sources(settings)
+        live.update(parameters)
+        live.update(models)
         for arm in settings.enabled_arms:
+            live.add(arm.arm_id)
             live.update(strings(arm.as_dict()))
         for source_id in parameters:
             live.update(strings(settings.parameter_sources[source_id].as_dict()))
         for dl_id in models:
             live.update(strings(settings.dl_sources[dl_id].as_dict()))
+    return live
+
+
+def retired_diagnostics(root):
+    """Map only recognized historical model+seed slots of this disposable projection."""
+    from config import breakout_quality
+    from core.strategy_compare_policy import _compatibility_catalogs
+    from core.training_policy import resolve_robustness_benchmark_seeds
+    from services.breakout_quality.real_path_diagnostic_cache import _slot
+    live = active_artifact_subjects(root)
     seeds = {*resolve_robustness_benchmark_seeds(), breakout_quality.BREAKOUT_QUALITY_RANDOM_SEED}
     historical = _compatibility_catalogs()[1]
     slots = {}
@@ -227,24 +238,5 @@ def abandoned_pid(path, rel):
     if not match or match[1][:2] != rel.parent.name:
         return False
     pid = int(match[2])
-    if pid > 0x7fffffff:
-        return False
-    if os.name == "nt":
-        import ctypes
-        from ctypes import wintypes
-        lib = ctypes.WinDLL("kernel32", use_last_error=True)
-        lib.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-        lib.OpenProcess.restype = wintypes.HANDLE
-        lib.CloseHandle.argtypes = [wintypes.HANDLE]
-        handle = lib.OpenProcess(0x1000, False, pid)
-        if handle:
-            lib.CloseHandle(handle)
-            return False
-        return ctypes.get_last_error() == 87  # ERROR_INVALID_PARAMETER for an absent PID
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return True
-    except PermissionError:
-        return False
-    return False
+    from core.artifact_lifecycle import process_is_absent
+    return process_is_absent(pid)

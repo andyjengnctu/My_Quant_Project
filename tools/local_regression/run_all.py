@@ -16,7 +16,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from core.output_paths import output_dir_path
-from core.output_retention import RetentionRule, apply_retention_rules
+from core.output_retention import RetentionRule, apply_retention_rules, local_regression_bundle_rule
 from core.model_paths import RUN_BEST_PARAMS_PATH_ENV_VAR, resolve_default_primary_param_source_path
 from core.portfolio_param_runtime import load_portfolio_primary_params_from_json
 from core.params_io import params_to_json_dict
@@ -436,13 +436,7 @@ def _finalize_early_failure(
 
 def _build_retention_rules(manifest: Dict[str, Any]) -> List[RetentionRule]:
     return [
-        RetentionRule(
-            name="local_regression_history",
-            target_dir=output_dir_path(PROJECT_ROOT, "local_regression"),
-            patterns=["to_chatgpt_bundle_*.zip"],
-            keep_last_n=int(manifest["local_regression_keep_last_n"]),
-            max_age_days=int(manifest["local_regression_max_age_days"]),
-        ),
+        local_regression_bundle_rule(PROJECT_ROOT, manifest),
         RetentionRule(
             name="validate_consistency",
             target_dir=output_dir_path(PROJECT_ROOT, "validate_consistency"),
