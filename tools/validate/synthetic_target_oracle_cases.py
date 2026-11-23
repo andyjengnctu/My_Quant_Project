@@ -5337,7 +5337,8 @@ class OracleSingleOwnerExecutionCases(TestCase):
                     preflight_approval=lambda view: prompts.append(view) or True)
             self.assertEqual(cli, ui)
             self.assertEqual(len(prompts), 1)
-            self.assertIn("REUSE 2 / RUN（需回放）0 / BLOCKED 0", prompts[0])
+            self.assertIn("Portfolio REUSE 1 / RUN（需回放）0 / BLOCKED 0", prompts[0])
+            self.assertIn("C96 (Breakout): REUSE 1 / RUN 0 / BLOCKED 0", prompts[0])
             _assert_only_reference_metadata_added(self, root, original)
 
     def test_legacy_reuse_consumes_original_without_copying_a_canonical_receipt(self):
@@ -5510,7 +5511,8 @@ class OracleSingleOwnerExecutionCases(TestCase):
                 cancelled = oracle.build_report(fixture[0], project_root=root, quiet=True,
                     preflight_approval=lambda view: prompts.append(view) or False)
                 self.assertEqual(cancelled["status"], "CANCELLED")
-                self.assertIn("REUSE 1 / RUN（需回放）1 / BLOCKED 0", prompts[-1])
+                self.assertIn("Portfolio REUSE 0 / RUN（需回放）1 / BLOCKED 0", prompts[-1])
+                self.assertIn("C96 (Breakout): REUSE 1 / RUN 0 / BLOCKED 0", prompts[-1])
                 self.assertEqual(calls, [])
                 report = oracle.build_report(fixture[0], project_root=root, quiet=True,
                     preflight_approval=lambda _view: True)
@@ -5521,7 +5523,8 @@ class OracleSingleOwnerExecutionCases(TestCase):
                 self.assertEqual(store.with_win_rate(identity, store.read(identity))["win_rate_pct"], 56.0)
                 oracle.build_report(fixture[0], project_root=root, quiet=True,
                     preflight_approval=lambda view: prompts.append(view) or False)
-                self.assertIn("REUSE 2 / RUN（需回放）0 / BLOCKED 0", prompts[-1])
+                self.assertIn("Portfolio REUSE 1 / RUN（需回放）0 / BLOCKED 0", prompts[-1])
+                self.assertIn("C96 (Breakout): REUSE 1 / RUN 0 / BLOCKED 0", prompts[-1])
                 self.assertEqual(len(calls), 1)
             evidence = store._win_rate_path(identity)
             evidence_json = json.loads(evidence.read_text(encoding="utf-8"))
@@ -7741,7 +7744,8 @@ class OracleEffectiveArtifactContractCases(TestCase):
             second.write_bytes(b"fee = 2\r\n")
             with patch.object(attest, "__file__", str(root / "services/audit/proof.py")), \
                     patch.object(attest, "_truth_source_inventory", return_value=("first.py", "second.py")), \
-                    patch.object(sources, "oracle_daily_source_fingerprint", return_value="a" * 64):
+                    patch.object(sources, "oracle_daily_source_fingerprint_proof",
+                                 return_value=("a" * 64, frozenset({"a" * 64}))):
                 def proof():
                     attest._mintrade_source_fingerprint_proof.cache_clear()
                     return attest._mintrade_source_fingerprint_proof()
@@ -7756,6 +7760,59 @@ class OracleEffectiveArtifactContractCases(TestCase):
                 self.assertNotEqual(changed, converted)
                 self.assertNotIn(original, equivalents)
                 self.assertNotIn(converted, equivalents)
+
+    def test_nested_price_and_execution_encodings_preserve_only_identical_content(self):
+        from services.audit import mintrade_truth_source_attestation as attest
+        from services.audit import oracle_score_artifacts as sources
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            contents = {
+                "price.py": b"price = 10\n", "configuration.py": b"window = 40\r\n",
+                "execution.py": b"quantity = 1\n", "fees.py": b"fee = 2\r\n",
+            }
+            for name, data in contents.items():
+                (root / name).write_bytes(data)
+            with patch.object(attest, "__file__", str(root / "services/audit/proof.py")), \
+                    patch.object(attest, "_truth_source_inventory",
+                                 return_value=("execution.py", "fees.py")), \
+                    patch.object(sources, "_DAILY_SCORE_SOURCE_MODULES",
+                                 ("price.py", "configuration.py")):
+                def proof():
+                    attest._mintrade_source_fingerprint_proof.cache_clear()
+                    return attest._mintrade_source_fingerprint_proof()
+                self.addCleanup(attest._mintrade_source_fingerprint_proof.cache_clear)
+                original_price = sources.oracle_daily_source_fingerprint(root)
+                original, _ = proof()
+                # AI: A partial checkout changes one file at *each* level.
+                (root / "configuration.py").write_bytes(b"window = 40\n")
+                (root / "execution.py").write_bytes(b"quantity = 1\r\n")
+                price, price_encodings = sources.oracle_daily_source_fingerprint_proof(root)
+                self.assertEqual(price, sources.oracle_daily_source_fingerprint(root))
+                self.assertNotEqual(price, original_price)
+                self.assertIn(original_price, price_encodings)
+                converted, equivalents = proof()
+                self.assertNotEqual(converted, original)
+                self.assertIn(original, equivalents)
+                for name, changed in (("configuration.py", b"window = 41\n"),
+                                      ("price.py", b"price = 11\n"),
+                                      ("fees.py", b"fee = 3\r\n")):
+                    with self.subTest(owner=name):
+                        previous = (root / name).read_bytes()
+                        (root / name).write_bytes(changed)
+                        _, equivalents = proof()
+                        self.assertNotIn(original, equivalents)
+                        self.assertNotIn(converted, equivalents)
+                        (root / name).write_bytes(previous)
+
+    def test_price_encoding_proof_rejects_source_changed_during_read(self):
+        from services.audit import oracle_score_artifacts as sources
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "price.py").write_bytes(b"price = 10\n")
+            with patch.object(sources, "_DAILY_SCORE_SOURCE_MODULES", ("price.py",)), \
+                    patch.object(sources, "compute_file_sha256", return_value="a" * 64):
+                with self.assertRaisesRegex(ValueError, "source changed during attestation"):
+                    sources.oracle_daily_source_fingerprint_proof(root)
 
     def test_declared_closure_encoding_projection_retains_other_source_inputs(self):
         from services.research import oracle_artifact_contract as contracts

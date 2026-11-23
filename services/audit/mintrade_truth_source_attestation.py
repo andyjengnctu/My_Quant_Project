@@ -161,18 +161,19 @@ def _mintrade_source_fingerprint_proof() -> tuple[str, frozenset[str]]:
 
     No historical SHA is accepted on its own. Every delegated source stays
     in the canonical producer's inventory; only line-ending bytes vary.
-    The nested daily-source exception is the existing exact encoding proof.
+    AI: The nested daily-source owner also proves its current byte encodings;
+    the outer closure must carry that proof through each dependency layer.
     This does not accept an unknown older formula, fee or eligibility change.
     """
     from services.audit.oracle_score_artifacts import (
-        oracle_daily_source_fingerprint,
+        oracle_daily_source_fingerprint_proof,
         _CERTIFIED_LF_PRICE_SOURCE_SHA256, _CERTIFIED_CRLF_PRICE_SOURCE_SHA256,
     )
 
     root = Path(__file__).resolve().parents[2]
     source_modules = _truth_source_inventory()
-    daily = oracle_daily_source_fingerprint(root)
-    daily_sources = {daily}
+    daily, daily_encodings = oracle_daily_source_fingerprint_proof(root)
+    daily_sources = set(daily_encodings)
     if daily in {_CERTIFIED_LF_PRICE_SOURCE_SHA256, _CERTIFIED_CRLF_PRICE_SOURCE_SHA256}:
         daily_sources.update((_CERTIFIED_LF_PRICE_SOURCE_SHA256,
                               _CERTIFIED_CRLF_PRICE_SOURCE_SHA256))

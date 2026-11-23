@@ -205,11 +205,30 @@ def oracle_daily_source_fingerprint(root: Path | None = None) -> str:
     that proof. Unknown shared-loader or price-primitive edits always produce
     a new digest, so stale prices cannot be falsely REUSEd.
     """
+    return _oracle_daily_source_fingerprints(root, prove_encodings=False)[0]
+
+
+def oracle_daily_source_fingerprint_proof(
+    root: Path | None = None,
+) -> tuple[str, frozenset[str]]:
+    """AI: Prove LF/CRLF variants using this owner's current source inventory.
+
+    Preserve the executing digest exactly. Uniform encodings and one-file
+    deviations also cover a mixed checkout/partial ZIP, without certifying
+    any historical digest unless it is reconstructed from current content.
+    """
+    return _oracle_daily_source_fingerprints(root, prove_encodings=True)
+
+
+def _oracle_daily_source_fingerprints(
+    root: Path | None, *, prove_encodings: bool,
+) -> tuple[str, frozenset[str]]:
     code_root = Path(__file__).resolve().parents[2]
     root = Path(root) if root is not None else code_root
+    current_root = root.resolve() == code_root.resolve()
     # Synthetic fixtures with a separate source root must keep ordinary strict
     # byte hashing; a project-local attestation cannot certify arbitrary files.
-    attested = root.resolve() == code_root.resolve()
+    attested = current_root
     if attested:
         try:
             attested = (
@@ -227,7 +246,7 @@ def oracle_daily_source_fingerprint(root: Path | None = None) -> str:
     # The recorded digests are those of the immediately previous, live
     # producer; therefore no existing valid receipt changes identity.
     pre_p20_attested = False
-    if root.resolve() == code_root.resolve():
+    if current_root:
         try:
             pre_p20_attested = (
                 _oracle_price_provider_contract_sha256()
@@ -237,13 +256,8 @@ def oracle_daily_source_fingerprint(root: Path | None = None) -> str:
             )
         except (ValueError, KeyError, TypeError):
             pre_p20_attested = False
-    source_digest = sha256()
-    for relative in _DAILY_SCORE_SOURCE_MODULES:
-        source_file = root / relative
-        if not source_file.is_file():
-            raise ValueError(f"Oracle price-score source implementation unavailable: {relative}")
-        physical_sha = compute_file_sha256(source_file)
-        if root.resolve() == code_root.resolve():
+    def project_source(relative: str, physical_sha: str) -> str:
+        if current_root:
             # Independently byte-pinned, model-registration-only revisions
             # do not alter any existing Oracle producer. Other edits remain
             # strict: the reviewer returns the physical SHA when unrecognized.
@@ -259,9 +273,45 @@ def oracle_daily_source_fingerprint(root: Path | None = None) -> str:
                   _AUDITED_PARALLEL_DATA_ONLY_REVISION[0],
               }):
             source_sha = _AUDITED_NETPNL_DIAGNOSTIC_ONLY_REVISION[1]
+        return source_sha
+
+    source_digest = sha256()
+    encodings = {}
+    for relative in _DAILY_SCORE_SOURCE_MODULES:
+        source_file = root / relative
+        if not source_file.is_file():
+            raise ValueError(f"Oracle price-score source implementation unavailable: {relative}")
+        physical_sha = compute_file_sha256(source_file)
+        source_sha = project_source(relative, physical_sha)
         source_digest.update(relative.encode("utf-8") + b"\0")
         source_digest.update(source_sha.encode("ascii") + b"\n")
-    return source_digest.hexdigest()
+        if prove_encodings:
+            data = source_file.read_bytes()
+            if sha256(data).hexdigest() != physical_sha:
+                raise ValueError(f"Oracle price-score source changed during attestation: {relative}")
+            lf = data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+            encodings[relative] = {
+                None: source_sha,
+                b"\n": project_source(relative, sha256(lf).hexdigest()),
+                b"\r\n": project_source(relative, sha256(lf.replace(b"\n", b"\r\n")).hexdigest()),
+            }
+    executing = source_digest.hexdigest()
+    equivalents = {executing}
+    if prove_encodings:
+        def fingerprint(values):
+            digest = sha256()
+            for relative in _DAILY_SCORE_SOURCE_MODULES:
+                digest.update(relative.encode("utf-8") + b"\0")
+                digest.update(values[relative].encode("ascii") + b"\n")
+            return digest.hexdigest()
+
+        for newline in (None, b"\n", b"\r\n"):
+            values = {name: options[newline] for name, options in encodings.items()}
+            equivalents.add(fingerprint(values))
+            for name, options in encodings.items():
+                for value in set(options.values()) - {values[name]}:
+                    equivalents.add(fingerprint({**values, name: value}))
+    return executing, frozenset(equivalents)
 
 
 
