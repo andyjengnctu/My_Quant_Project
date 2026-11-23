@@ -7,6 +7,7 @@ import json
 import multiprocessing
 import os
 from pathlib import Path
+import pickle
 import sys
 import tempfile
 import time
@@ -137,6 +138,54 @@ class SyntheticExecutionContractTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             execution.describe_entries([_entry(_pass), _entry(_pass)])
         self.assertEqual(execution.describe_entries([_entry(_pass)])[0]["module"], __name__)
+
+    def test_report_snapshots_preserve_verdicts_scalars_and_nested_diagnostics(self):
+        import math
+        import numpy as np
+        from tools.validate.check_result_utils import add_check
+
+        def factory():
+            def probe():
+                return None
+            return probe
+
+        first, other = factory(), factory()
+        diagnostics = {"nested": [first, {"module": os}], "tuple": (first, 3),
+                       "set": {1, 2}, "frozen": frozenset({3, 4}), "path": Path("probe")}
+        raw_rows = []
+        add_check(raw_rows, "transport", "fixture", "same_object", first, first)
+        add_check(raw_rows, "transport", "fixture", "different_objects", first, other)
+        add_check(raw_rows, "transport", "fixture", "numpy_false", np.bool_(True), np.bool_(False))
+        raw_rows.append({"status": "SKIP", "passed": True, "note": "fixture skip",
+                         "expected": diagnostics, "actual": None, "abs_diff": float("nan")})
+
+        def report(_params):
+            return raw_rows, {"diagnostics": diagnostics, "count": np.int64(4),
+                              "value": np.float32(1.25), "infinite": float("inf")}
+
+        def mutate(_params):
+            diagnostics["nested"].append("later mutation")
+            return [], {}
+
+        rows, summaries = execution.run_entries(None, [_entry(report), _entry(mutate)])
+        transported_rows, transported_summaries = pickle.loads(pickle.dumps((rows, summaries)))
+        self.assertEqual([row["status"] for row in transported_rows], ["PASS", "FAIL", "FAIL", "SKIP"])
+        self.assertEqual([row["passed"] for row in transported_rows], [True, False, False, True])
+        self.assertIs(type(transported_rows[2]["passed"]), bool)
+        self.assertEqual(transported_rows[0]["expected"], str(first))
+        self.assertEqual(transported_rows[1]["actual"], str(other))
+        self.assertIs(raw_rows[0]["expected"], first)  # Original comparison data is untouched.
+        snapshot = transported_summaries[0]
+        self.assertEqual(snapshot["diagnostics"]["nested"], [str(first), {"module": str(os)}])
+        self.assertEqual(snapshot["diagnostics"]["tuple"], (str(first), 3))
+        self.assertEqual(snapshot["diagnostics"]["set"], {1, 2})
+        self.assertEqual(snapshot["diagnostics"]["frozen"], frozenset({3, 4}))
+        self.assertEqual(snapshot["diagnostics"]["path"], "probe")
+        self.assertEqual((snapshot["count"], snapshot["value"]), (4, 1.25))
+        self.assertIs(type(snapshot["count"]), int)
+        self.assertIs(type(snapshot["value"]), float)
+        self.assertTrue(math.isinf(snapshot["infinite"]))
+        self.assertTrue(math.isnan(transported_rows[3]["abs_diff"]))
 
     def test_receipts_restore_order_and_reject_missing_duplicate_wrong_identity(self):
         specs = execution.describe_entries([_entry(_pass), _entry(_fail)])
@@ -274,6 +323,57 @@ class SyntheticExecutionContractTests(unittest.TestCase):
 
 class SyntheticExecutionSpawnTests(unittest.TestCase):
     """Actual process lifecycle probes, also usable independently of formal tests."""
+    def test_spawn_transports_callable_receipts_after_module_rebinding(self):
+        source = '''
+def main():
+    return None
+
+def capture(_params):
+    def local():
+        return None
+    return [
+        {"metric": "same", "expected": main, "actual": main, "passed": True, "status": "PASS"},
+        {"metric": "different", "expected": main, "actual": local, "passed": False, "status": "FAIL"},
+        {"metric": "numeric", "expected": 2.0, "actual": 3.0, "abs_diff": 1.0,
+         "passed": False, "status": "FAIL"},
+    ], {"callback": main, "nested": [local], "total_checks": 3}
+
+def rebind(_params):
+    global main
+    def main():
+        return "reloaded"
+    return [{"metric": "skip", "status": "SKIP", "passed": True}], {}
+'''
+        with tempfile.TemporaryDirectory() as temp:
+            module_name = "_execution_rebound_report_fixture"
+            (Path(temp)/f"{module_name}.py").write_text(source)
+            with patch.object(sys, "path", [temp, *sys.path]):
+                module = importlib.import_module(module_name)
+                self.addCleanup(sys.modules.pop, module_name, None)
+                entries = [_entry(module.capture), _entry(module.rebind)]
+                # Reproduce the original transport failure before exercising
+                # the fixed runner: later rebinding invalidates stored main.
+                raw_rows, _ = module.capture(None)
+                module.rebind(None)
+                with self.assertRaises(pickle.PicklingError):
+                    pickle.dumps(raw_rows)
+                expected_rows, expected_summaries = execution.run_entries(None, entries)
+                rows, summaries, files = execution.run_parallel(
+                    None, execution.describe_entries(entries), workers=2, timeout=15, threads=1)
+            verdict_keys = ("metric", "status", "passed", "abs_diff")
+            self.assertEqual([{key: row.get(key) for key in verdict_keys} for row in rows],
+                             [{key: row.get(key) for key in verdict_keys} for row in expected_rows])
+            self.assertEqual([row["status"] for row in rows], ["PASS", "FAIL", "FAIL", "SKIP"])
+            self.assertEqual([s["validator_name"] for s in summaries],
+                             [s["validator_name"] for s in expected_summaries])
+            self.assertIn("function main", rows[0]["expected"])
+            self.assertIn("capture.<locals>.local", rows[1]["actual"])
+            self.assertEqual(rows[0]["expected"], rows[0]["actual"])
+            self.assertIsInstance(summaries[0]["callback"], str)
+            self.assertIsInstance(summaries[0]["nested"][0], str)
+            self.assertEqual(summaries[0]["total_checks"], 3)
+            self.assertEqual(files, [])
+
     def test_spawn_overlap_order_environment_and_parent_isolation(self):
         parent_env = os.environ.get("OMP_NUM_THREADS")
         with tempfile.TemporaryDirectory() as temp:

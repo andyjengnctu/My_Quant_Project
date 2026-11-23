@@ -9,6 +9,7 @@ from contextlib import contextmanager
 import importlib
 import multiprocessing
 from multiprocessing.connection import wait
+from numbers import Integral, Real
 import os
 from pathlib import Path
 import sys
@@ -49,6 +50,33 @@ def plan_batches(specs, workers):
     return [sorted(batch, key=lambda item: item[0]) for batch in batches]
 
 
+def _snapshot_report_value(value):
+    """Detach evaluated diagnostics from process-local/live Python objects.
+
+    Assertion verdicts have already been computed by the validator. Keep plain
+    values and container shapes; render other report cells just as CSV/Excel
+    would. In particular, never pickle callables retained across module reloads.
+    """
+    if value is None or type(value) in (bool, int, float, str, bytes):
+        return value
+    if isinstance(value, dict):
+        return {_snapshot_report_value(key): _snapshot_report_value(item)
+                for key, item in value.items()}
+    if isinstance(value, (list, tuple, set, frozenset)):
+        container = next(kind for kind in (list, tuple, set, frozenset) if isinstance(value, kind))
+        return container(_snapshot_report_value(item) for item in value)
+    if isinstance(value, Integral):
+        return int(value)
+    if isinstance(value, Real):
+        return float(value)
+    # NumPy booleans are not numbers.Integral. Do not import NumPy merely to
+    # transport reports; any validator returning its scalars already loaded it.
+    numpy = sys.modules.get("numpy")
+    if numpy is not None and isinstance(value, numpy.bool_):
+        return bool(value)
+    return str(value)
+
+
 def run_entries(base_params, entries):
     """The same per-case execution/diagnostics for serial and spawned runs."""
     results, summaries = [], []
@@ -56,6 +84,10 @@ def run_entries(base_params, entries):
         started = time.perf_counter()
         try:
             rows, summary = entry.validator(base_params)
+            # Snapshot before the next validator can rebind imports or mutate
+            # shared diagnostics. Serial and spawn use the same report values.
+            rows = _snapshot_report_value(rows)
+            summary = _snapshot_report_value(dict(summary))
         except Exception as exc:
             raise RuntimeError(
                 f"synthetic validator crashed: {entry.name}: {type(exc).__name__}: {exc}"
