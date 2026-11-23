@@ -16,6 +16,7 @@ import pandas as pd
 from config.breakout_quality import (
     BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
 )
+from core.compare_csv_storage import publish_detail_csv
 from core.breakout_quality_registry import (
     get_breakout_quality_experiment_profile,
 )
@@ -1321,12 +1322,12 @@ def backfill_pair_selection_diagnostics(
     }
     payload["selection_diagnostics"] = diagnostics
 
-    baseline_orderable_joined.to_csv(
-        Path(pair_dir) / "no_filter_orderable_target_diagnostics.csv",
+    publish_detail_csv(
+        baseline_orderable_joined, Path(pair_dir) / "no_filter_orderable_target_diagnostics.csv",
         index=False, encoding="utf-8-sig",
     )
-    active_orderable_joined.to_csv(
-        Path(pair_dir) / "score_ranking_orderable_target_diagnostics.csv",
+    publish_detail_csv(
+        active_orderable_joined, Path(pair_dir) / "score_ranking_orderable_target_diagnostics.csv",
         index=False, encoding="utf-8-sig",
     )
     baseline_selected_joined.to_csv(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import ExitStack
+from core.compare_csv_storage import publish_detail_csv
 from core.portfolio_entry_policy import portfolio_entry_policy_context, daily_execution_contract_from_params
 import json
 from pathlib import Path
@@ -571,8 +572,8 @@ def run_standalone_baseline(
         else _flatten_candidate_replay_rows(replay_counts or {}, "orderable_rows")
     )
     baseline_selected = _flatten_selected_buy_rows(baseline_payload["trade_history"])
-    baseline_orderable.to_csv(
-        output_dir / "no_filter_orderable_candidates.csv",
+    publish_detail_csv(
+        baseline_orderable, output_dir / "no_filter_orderable_candidates.csv",
         index=False,
         encoding="utf-8-sig",
     )

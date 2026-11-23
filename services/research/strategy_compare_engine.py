@@ -22,6 +22,7 @@ from filters.breakout_quality.strategy_compare_contracts import (
     comparison_labels as _comparison_labels,
     comparison_switch_spec as _comparison_switch_spec,
 )
+from core.compare_csv_storage import publish_detail_csv
 from core.breakout_quality_runtime import (
     CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH,
 )
@@ -525,8 +526,8 @@ def _materialize_active_observation(
         output_dir / f"{name}_daily_capacity.csv", index=False, encoding="utf-8-sig")
     _flatten_selected_buy_rows(payload["trade_history"]).to_csv(
         output_dir / f"{name}_selected_buys.csv", index=False, encoding="utf-8-sig")
-    _flatten_candidate_replay_rows(replay_counts or {}, "orderable_rows").to_csv(
-        output_dir / f"{name}_orderable_candidates.csv", index=False, encoding="utf-8-sig")
+    publish_detail_csv(
+        _flatten_candidate_replay_rows(replay_counts or {}, "orderable_rows"), output_dir / f"{name}_orderable_candidates.csv", index=False, encoding="utf-8-sig")
     if execution_rows is not None:
         _flatten_entry_execution_rows(execution_rows).to_csv(
             output_dir / f"{name}_execution.csv", index=False, encoding="utf-8-sig")
@@ -867,12 +868,12 @@ def run_comparison(
         )
         baseline_selected = _flatten_selected_buy_rows(baseline_payload["trade_history"])
         quality_selected = _flatten_selected_buy_rows(quality_payload["trade_history"])
-        baseline_orderable.to_csv(
-            output_dir / "no_filter_orderable_candidates.csv", index=False,
+        publish_detail_csv(
+            baseline_orderable, output_dir / "no_filter_orderable_candidates.csv", index=False,
             encoding="utf-8-sig"
         )
-        quality_orderable.to_csv(
-            output_dir / "score_ranking_orderable_candidates.csv", index=False,
+        publish_detail_csv(
+            quality_orderable, output_dir / "score_ranking_orderable_candidates.csv", index=False,
             encoding="utf-8-sig"
         )
         baseline_selected.to_csv(
@@ -958,12 +959,12 @@ def run_comparison(
                 "future_target_join_stage": "post_replay_offline_diagnostic_only",
                 "future_target_used_for_runtime_sort": False,
             }
-            baseline_orderable_joined.to_csv(
-                output_dir / "no_filter_orderable_target_diagnostics.csv",
+            publish_detail_csv(
+                baseline_orderable_joined, output_dir / "no_filter_orderable_target_diagnostics.csv",
                 index=False, encoding="utf-8-sig"
             )
-            quality_orderable_joined.to_csv(
-                output_dir / "score_ranking_orderable_target_diagnostics.csv",
+            publish_detail_csv(
+                quality_orderable_joined, output_dir / "score_ranking_orderable_target_diagnostics.csv",
                 index=False, encoding="utf-8-sig"
             )
             baseline_selected_joined.to_csv(

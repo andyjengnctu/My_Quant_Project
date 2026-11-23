@@ -1,6 +1,7 @@
 """Config-driven Breakout Quality strategy performance comparison orchestration."""
 
 from __future__ import annotations
+from core.compare_csv_storage import copy_reused_detail
 from core.research_orchestration import ResearchArtifactAction, ResearchArtifactPlan
 
 from core.file_integrity import load_json_object_or_none as _read_json
@@ -1397,7 +1398,7 @@ def run_strategy_comparison(
             source_pair_dir = arm_state.source_dir
             if pair_dir.exists():
                 shutil.rmtree(pair_dir)
-            shutil.copytree(source_pair_dir, pair_dir)
+            shutil.copytree(source_pair_dir, pair_dir, copy_function=copy_reused_detail)
             # Between planning and copy the cache may have been replaced or
             # damaged. Recheck the COPIED bytes before any diagnostic backfill
             # or performance read; a stale REUSE decision must not publish them.

@@ -9,6 +9,7 @@ from typing import Any
 
 import pandas as pd
 
+from core.compare_csv_storage import RETIRED_PAIR_EXPORTS
 from core.console_report import (
     compact_console_enabled,
     console_color_enabled,
@@ -1035,7 +1036,7 @@ def materialize_strategy_pair_readable_report(
     return report_path
 
 def _remove_legacy_html_outputs(output_dir: Path) -> None:
-    for filename in ("strategy_comparison.html",):
+    for filename in RETIRED_PAIR_EXPORTS:
         path = output_dir / filename
         if path.is_file():
             path.unlink()

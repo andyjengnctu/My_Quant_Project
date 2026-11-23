@@ -866,6 +866,13 @@ def _run_optimizer_study_db_error_probe(
 
 
 def check_error_paths(timeout: int) -> List[Dict[str, Any]]:
+    from core.regression_fixture_access import fixture_access
+    staging = PROJECT_ROOT / "outputs/local_regression/_staging"
+    with fixture_access(staging, cleanup=False):
+        return _check_error_paths_with_fixtures(timeout)
+
+
+def _check_error_paths_with_fixtures(timeout: int) -> List[Dict[str, Any]]:
     results = []
     params_path = Path(resolve_default_primary_param_source_path(PROJECT_ROOT))
 
