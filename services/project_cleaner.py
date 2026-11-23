@@ -7,7 +7,7 @@ import sqlite3
 import stat
 import subprocess
 import time
-from zipfile import ZipFile
+from zipfile import ZipFile, BadZipFile
 import json
 
 from core.compare_csv_storage import (DETAIL_NAMES, RETIRED_PAIR_EXPORTS, clean_path, compare_root,
@@ -26,7 +26,7 @@ PROTECTED = {
 SCIENTIFIC = {"runs", "rolling_oos", "point_in_time", "fitting_checkpoints", "strategy_params",
               "shared_fitting_checkpoints", "model_robustness", "strategy_param_schedule",
               "standard_model_comparison", "robustness", "training", "optimizer_runtime"}
-FAILURES = (OSError, ValueError, RuntimeError, ImportError, sqlite3.Error)
+FAILURES = (OSError, ValueError, RuntimeError, ImportError, sqlite3.Error, BadZipFile)
 
 
 def walk(root, note):
@@ -89,19 +89,30 @@ class Cleaner:
         self.root, self.note, self.apply = root, log.row, apply
         self.last_progress = time.monotonic()
         self.units = {}
+        self.publication_revisions = {}
+        self.pinned_hashes = {}
+        self.hashes = {}
         self.groups = defaultdict(list)
         self.deletes = defaultdict(list)
         self.git_ok = True
-        try:
-            self.tracked = rules.tracked_paths(root)
-        except (ValueError, OSError, subprocess.CalledProcessError) as exc:
-            self.tracked = set()
-            self.git_ok = False
-            self.note("SKIP", Path("."), 0, f"Git 索引無法核對；略過移除與共用操作：{exc}")
+        self.refresh_tracking()
         self.legacy = self.lookup(rules.legacy_parameters, Path("models"))
         self.retired = self.lookup(rules.retired_diagnostics, rules.DIAGNOSTICS)
         from core.research_summary import get_research_summary_model_profiles
         self.live = {p for _, p in get_research_summary_model_profiles()}
+
+    def refresh_tracking(self):
+        try:
+            self.tracked, self.index_path, self.index_revision = rules.tracking_snapshot(self.root)
+        except (ValueError, OSError, RuntimeError, subprocess.CalledProcessError) as exc:
+            self.tracked = set()
+            self.git_ok = False
+            self.note("SKIP", Path("."), 0, f"Git 索引無法核對；略過移除與共用操作：{exc}")
+
+    def protected_by_git(self, rel):
+        if self.git_ok and file_change_signature(self.index_path) != self.index_revision:
+            self.refresh_tracking()
+        return not self.git_ok or rel in self.tracked
 
     def lookup(self, fn, rel):
         try:
@@ -115,24 +126,55 @@ class Cleaner:
             print(message, flush=True)
             self.last_progress = time.monotonic()
 
+    def hash_file(self, path):
+        """Share byte verification within this scan, never cache publication readiness."""
+        path = Path(path)
+        revision = file_change_signature(path)
+        cached = self.hashes.get(path)
+        if cached and cached[0] == revision:
+            return cached[1]
+        self.progress(f"正在驗證內容 {path.relative_to(self.root).as_posix()}")
+        digest = compute_observed_file_sha256(path)
+        if file_change_signature(path) != revision:
+            raise ValueError("驗證期間檔案變動")
+        self.hashes[path] = (revision, digest)
+        return digest
+
     def published_pairs(self, run_rel):
         from services.research.strategy_compare_pair_integrity import completed_strategy_run_publication_matches
         if run_rel not in self.units:
             run = self.root / run_rel
             names = set()
+            markers = (run / "manifest.json", run / "strategy_comparison.json")
+            revisions = {p: file_change_signature(p) for p in markers}
             if all(clean_path(run / n) and (run / n).is_file() for n in ("manifest.json", "strategy_comparison.json")):
                 payload = load_json_object_or_none(run / "strategy_comparison.json")
-                if isinstance(payload, dict) and completed_strategy_run_publication_matches(
-                        run_dir=run, run_payload=payload, project_root=self.root):
-                    for name, pair in (payload.get("pairs") or {}).items():
+                pairs = payload.get("pairs") if isinstance(payload, dict) else None
+                if isinstance(pairs, dict) and completed_strategy_run_publication_matches(
+                        run_dir=run, run_payload=payload, project_root=self.root, file_hasher=self.hash_file):
+                    for name, pair in pairs.items():
                         if (not isinstance(name, str) or not name or name in {".", ".."}
                                 or Path(name).name != name or not isinstance(pair, dict)):
                             continue
                         file = run / "pairs" / name / "strategy_comparison.json"
-                        if clean_path(file) and load_json_object_or_none(file) == pair:
+                        pair_revision = file_change_signature(file)
+                        if (clean_path(file) and load_json_object_or_none(file) == pair
+                                and pair_revision == file_change_signature(file)
+                                and all(file_change_signature(p) == v for p, v in revisions.items())):
                             names.add(name)
+                            self.publication_revisions[file.parent] = {**revisions, file: pair_revision}
+                            record = payload.get("pair_file_integrity")
+                            if isinstance(record, dict):
+                                for filename, digest in record["pairs"][name].items():
+                                    self.pinned_hashes[file.parent / filename] = str(digest).strip().lower()
             self.units[run_rel] = names
         return self.units[run_rel]
+
+    def published(self, rel):
+        if rel.parent.name not in self.published_pairs(rel.parents[2]):
+            return False
+        return all(clean_path(p) and file_change_signature(p) == revision
+                   for p, revision in self.publication_revisions[self.root / rel.parent].items())
 
     def kind(self, rel):
         if rel in self.legacy:
@@ -157,7 +199,9 @@ class Cleaner:
         if kind == "pyc" and rules.generated_bytecode(self.root, rel, self.tracked):
             return "可由現存原始碼重建的 Python 快取"
         if kind == "legacy" and rel in self.legacy:
-            return "Optimizer 已驗證遷移：" + self.legacy[rel]
+            evidence = rules.legacy_parameters(self.root).get(rel)
+            if evidence:
+                return "Optimizer 已驗證遷移：" + evidence
         if kind == "retired_cache" and rel in self.retired and rules.is_projection(path):
             return "已離開現行清單的診斷投影快取：" + self.retired[rel]
         if kind == "fixture":
@@ -166,7 +210,7 @@ class Cleaner:
             return "已結束程序留下的診斷快取發布暫存"
         if kind == "robust" and rel.relative_to(rules.robust_unit(rel)).parts[1] in scope:
             return "Robustness 已驗證正式成果，其保留規則捨棄此工作副本"
-        if kind == "old_export" and rel.parent.name in self.published_pairs(rel.parents[2]):
+        if kind == "old_export" and self.published(rel):
             if (path.parent / "strategy_comparison.md").is_file():
                 return "已發布比較的退役 HTML 匯出，正式報表已存在"
         return ""
@@ -197,7 +241,9 @@ class Cleaner:
     def clear_unused(self):
         if self.apply and self.git_ok:
             # Never consume an earlier preview as authority.
-            self.tracked = rules.tracked_paths(self.root)
+            self.refresh_tracking()
+            if not self.git_ok:
+                return
             self.legacy = self.lookup(rules.legacy_parameters, Path("models"))
             self.retired = self.lookup(rules.retired_diagnostics, rules.DIAGNOSTICS)
         # Also consider known empty error-probe folders. Empty arbitrary folders are kept.
@@ -239,7 +285,7 @@ class Cleaner:
             info = regular(path)
             revision = file_change_signature(path)
             reason = self.proof(kind, rel, scope)
-            if not reason or rel in self.tracked:
+            if not reason or self.protected_by_git(rel):
                 self.note("KEEP", rel, size, "現行、工作尚未完成或刪除證據不足")
                 return
             if info.st_nlink != 1 or info.st_size != size:
@@ -249,7 +295,8 @@ class Cleaner:
                 file_metadata(path, info)  # Preserve files with additional NTFS data streams.
             space = disk_bytes(path, info)
             if self.apply:
-                if not clean_path(path) or file_change_signature(path) != revision:
+                if (self.protected_by_git(rel) or not clean_path(path)
+                        or file_change_signature(path) != revision):
                     raise ValueError("檔案已變動")
                 self.note("INTENT", rel, size, reason)
                 path.unlink()
@@ -269,11 +316,16 @@ class Cleaner:
     def share_group(self, paths, size, stamp):
         physical = defaultdict(list)
         for rel in sorted(paths):
-            st = regular(self.root / rel)
-            if st.st_size != size or st.st_mtime_ns != stamp:
-                self.note("SKIP", rel, size, "盤點後尺寸或修改時間已變動")
-                continue
-            physical[(st.st_dev, st.st_ino)].append(rel)
+            try:
+                if self.protected_by_git(rel):
+                    self.note("KEEP", rel, size, "Git 保護或索引無法核對")
+                    continue
+                st = regular(self.root / rel)
+                if st.st_size != size or st.st_mtime_ns != stamp:
+                    raise ValueError("盤點後尺寸或修改時間已變動")
+                physical[(st.st_dev, st.st_ino)].append(rel)
+            except FAILURES as exc:
+                self.note("SKIP", rel, size, exc)
         if len(physical) == 1:
             for rel in next(iter(physical.values())):
                 self.note("KEEP", rel, size, "已共用同一實體或無其他同條件副本")
@@ -282,20 +334,22 @@ class Cleaner:
         # Reuse existing verified link sets first; unknown external links never become masters.
         for members in sorted(physical.values(), key=lambda v: (-len(v), v[0])):
             path = self.root / members[0]
-            published = all(rel.parent.name in self.published_pairs(rel.parents[2]) for rel in members)
-            if not published or regular(path).st_nlink != len(members):
-                for name in members:
-                    self.note("KEEP", name, size, "尚未完成發布、完整性無法驗證或有其他連結")
-                continue
             try:
+                published = all(self.published(rel) for rel in members)
+                if not published or regular(path).st_nlink != len(members):
+                    for name in members:
+                        self.note("KEEP", name, size, "尚未完成發布、完整性無法驗證或有其他連結")
+                    continue
                 before = file_change_signature(path)
                 info = regular(path)
                 if info.st_size != size or info.st_mtime_ns != stamp:
                     raise ValueError("盤點後尺寸或修改時間已變動")
                 access = file_metadata(path, info)
-                digest = compute_observed_file_sha256(path)
+                digest = self.hash_file(path)
                 if before != file_change_signature(path):
                     raise ValueError("比對期間檔案變動")
+                if any(self.pinned_hashes.get(self.root / rel, digest) != digest for rel in members):
+                    raise ValueError("內容已偏離已驗證的發布紀錄")
                 key = (digest, access)
                 if key not in masters:
                     masters[key] = [path, before]
@@ -320,18 +374,21 @@ class Cleaner:
         if self.apply:
             with storage_lock(self.root):
                 if (not clean_path(source) or not clean_path(path)
+                        or self.protected_by_git(source_rel) or self.protected_by_git(rel)
                         or file_change_signature(source) != source_revision
-                        or file_change_signature(path) != expected or regular(path).st_nlink != 1):
+                        or file_change_signature(path) != expected or regular(path).st_nlink != 1
+                        or not self.published(source_rel) or not self.published(rel)):
                     raise ValueError("檔案在盤點後變動")
                 stage = self.root / "outputs/project_cleanup/pending.link"
                 if stage.exists() or stage.is_symlink():
                     raise ValueError("清理暫存連結已被使用")
                 self.note("INTENT", rel, size, reason, source=source_rel)
-                os.link(source, stage)
                 try:
+                    os.link(source, stage)
                     os.replace(stage, path)
                 finally:
-                    stage.unlink(missing_ok=True)
+                    if stage.exists() and clean_path(stage) and stage.samefile(source):
+                        stage.unlink()
                 master[1] = file_change_signature(source)
         self.note("LINK" if self.apply else "PLAN_LINK", rel, size, reason, space, source_rel)
 
@@ -379,6 +436,8 @@ def show_history(root):
             print("尚無清理紀錄。")
             return
         with ZipFile(report) as z:
+            if not {"summary.json", "decisions.csv"}.issubset(z.namelist()):
+                raise ValueError("清理紀錄缺少摘要或明細")
             show_summary(json.loads(z.read("summary.json")))
             print("完整逐檔紀錄：outputs/project_cleanup/last_apply.zip 內的 decisions.csv")
             query = input("輸入檔名或部分路徑查看明細（Enter 返回）：").strip().replace(chr(92), "/").casefold()

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 from core.file_integrity import (
     compute_file_sha256,
@@ -73,6 +73,7 @@ def completed_pair_file_integrity_matches(
     pair_id: str,
     pair_dir: Path,
     required_paths: tuple[Path, ...],
+    file_hasher: Callable[[Path], str] = compute_file_sha256,
 ) -> bool:
     """Fail closed on malformed/partial *new* evidence; keep old runs reusable.
 
@@ -122,7 +123,7 @@ def completed_pair_file_integrity_matches(
             digest = digests.get(name)
             if not is_sha256_hex(digest):
                 return False
-            if compute_file_sha256(path) != str(digest).strip().lower():
+            if file_hasher(path) != str(digest).strip().lower():
                 return False
         return True
     except (OSError, ValueError, TypeError):
@@ -132,6 +133,7 @@ def completed_pair_file_integrity_matches(
 
 def completed_strategy_run_publication_matches(
     *, run_dir: Path, run_payload: Mapping[str, Any], project_root: Path,
+    file_hasher: Callable[[Path], str] = compute_file_sha256,
 ) -> bool:
     """Verify a completed run was committed through its manifest-last boundary.
 
@@ -194,7 +196,7 @@ def completed_strategy_run_publication_matches(
                     return False
                 if not completed_pair_file_integrity_matches(
                     run_dir=directory, run_payload=run_payload,
-                    pair_id=pair_id, pair_dir=pair_dir, required_paths=(),
+                    pair_id=pair_id, pair_dir=pair_dir, required_paths=(), file_hasher=file_hasher,
                 ):
                     return False
         return True

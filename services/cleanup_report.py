@@ -47,6 +47,8 @@ def finish(root, mode, status, pending):
             entry[0] += 1
             entry[1] += size
     info = dict(mode=mode, status=status, counts=counts, saved=saved, logical=logical, reasons=reasons)
+    if status == "已完成" and (counts["SKIP"] or counts["ERROR"]):
+        info["status"] = "已完成，部分項目略過或失敗，詳見明細"
     target = report_path(root, f"last_{mode}.zip")
     with tempfile.NamedTemporaryFile(dir=target.parent, delete=False, suffix=".tmp") as tmp:
         tmp_path = Path(tmp.name)
@@ -57,7 +59,11 @@ def finish(root, mode, status, pending):
         atomic_replace_with_retry(tmp_path, target)
     finally:
         tmp_path.unlink(missing_ok=True)
-    pending.unlink()
+    # Preserve the intent until a leftover link has been recovered. A failed
+    # unlink or interrupted link syscall must not strand the next invocation.
+    stage = root / "outputs/project_cleanup/pending.link"
+    if not (mode == "apply" and (stage.exists() or stage.is_symlink())):
+        pending.unlink()
     return info
 
 
@@ -99,12 +105,20 @@ def receipt(root, mode):
 
 
 def show_summary(summary):
+    if (not isinstance(summary, dict) or summary.get("mode") not in {"apply", "preview"}
+            or not isinstance(summary.get("status"), str)):
+        raise ValueError("清理摘要格式不完整")
+    for field in ("counts", "saved", "logical"):
+        values = summary.get(field)
+        if (not isinstance(values, dict)
+                or any(not isinstance(v, int) or v < 0 for v in values.values())):
+            raise ValueError("清理摘要統計格式不完整")
     print("\n" + summary["status"])
     for action, label in LABEL.items():
         count = summary["counts"].get(action, 0)
         if count:
             saved = summary["saved"].get(action, 0)
-            print(f"  {label}  {count:,} 份，容量 {summary['logical'][action]/2**30:.3f} GiB"
+            print(f"  {label}  {count:,} 份，容量 {summary['logical'].get(action, 0)/2**30:.3f} GiB"
                   + (f"，可回收／已回收 {saved:,} bytes" if saved else ""))
             if action in {"KEEP", "REVIEW", "DELETE", "PLAN_DELETE", "SKIP", "ERROR"}:
                 details = sorted(summary.get("reasons", {}).get(action, {}).items(), key=lambda item: -item[1][0])

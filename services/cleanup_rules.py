@@ -8,7 +8,7 @@ import subprocess
 from zipfile import ZipFile, BadZipFile
 
 from core.compare_csv_storage import clean_path
-from core.file_integrity import compute_file_sha256, exclusive_file_lock, sibling_publication_lock_path
+from core.file_integrity import compute_file_sha256, exclusive_file_lock, file_change_signature, sibling_publication_lock_path
 from core.regression_fixture_access import fixture_access
 
 STAGING = Path("outputs/local_regression/_staging")
@@ -17,7 +17,7 @@ DIAGNOSTICS = Path("outputs/filters/breakout_quality/real_path_diagnostic_cache"
 PROBE = re.compile(r"quick_gate_(missing_run_best_params|broken_run_best_params|broken_optimizer_db|optimizer_study_db)_[a-z0-9_]{8}\Z")
 
 
-def tracked_paths(root):
+def tracking_snapshot(root):
     def git(*args):
         result = subprocess.run(["git", "-C", str(root), *args], capture_output=True, check=True,
                                 env={**os.environ, "GIT_OPTIONAL_LOCKS": "0", "LC_ALL": "C"})
@@ -27,11 +27,17 @@ def tracked_paths(root):
     except subprocess.CalledProcessError as exc:
         if (b"not a git repository" in (exc.stderr or b"")
                 and not (root / ".git").exists() and not os.getenv("GIT_DIR")):
-            return set()
+            return set(), root / ".git/index", ("missing",)
         raise
     if not root.is_relative_to(Path(os.fsdecode(git_root)).resolve()):
         raise ValueError("Git 索引與專案位置不符")
-    return {Path(os.fsdecode(p)) for p in git("ls-files", "--cached", "-z").split(b"\0") if p}
+    index = Path(os.fsdecode(git("rev-parse", "--git-path", "index").rstrip(b"\r\n")))
+    index = (root / index).absolute()
+    revision = file_change_signature(index)
+    tracked = {Path(os.fsdecode(p)) for p in git("ls-files", "--cached", "-z").split(b"\0") if p}
+    if file_change_signature(index) != revision:
+        raise RuntimeError("讀取期間 Git 索引變動")
+    return tracked, index, revision
 
 
 def generated_bytecode(root, rel, tracked):

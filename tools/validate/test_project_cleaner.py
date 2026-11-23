@@ -5,6 +5,7 @@ import io
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 import py_compile
 import shutil
 import subprocess
@@ -70,6 +71,141 @@ class CleanupTest(unittest.TestCase):
             self.assertIsNone(result.testzip())
             return json.loads(result.read("summary.json")), list(csv.DictReader(
                 io.StringIO(result.read("decisions.csv").decode("utf-8-sig"))))
+
+    def scanned_cleaner(self):
+        rows = []
+        worker = service.Cleaner(self.root, SimpleNamespace(row=lambda *args, **kwargs: rows.append(args)), True)
+        with contextlib.redirect_stdout(io.StringIO()):
+            worker.scan()
+        return worker, rows
+
+    def test_newly_tracked_candidate_is_preserved(self):
+        a, b, c = [self.publish(name) for name in ("a", "b", "c")]
+        worker, rows = self.scanned_cleaner()
+        self.git("add", str(b))
+        worker.clear_unused()
+        worker.share()
+        self.assertFalse(a.samefile(b))
+        self.assertTrue(a.samefile(c))
+        self.assertTrue(any(row[0] == "KEEP" and row[1] == b.relative_to(self.root) for row in rows))
+
+    def test_git_changes_during_hashing_are_seen_before_replacement(self):
+        a, b = self.publish("a"), self.publish("b")
+        worker, rows = self.scanned_cleaner()
+        original_hash = worker.hash_file
+        def stage_after_hash(path):
+            digest = original_hash(path)
+            if path == b:
+                self.git("add", str(b))
+            return digest
+        with patch.object(worker, "hash_file", side_effect=stage_after_hash):
+            worker.share()
+        self.assertFalse(a.samefile(b))
+        self.assertFalse(any(row[0] == "LINK" for row in rows))
+
+    def test_missing_file_does_not_discard_other_candidates(self):
+        a, b, c = [self.publish(name) for name in ("a", "b", "c")]
+        worker, rows = self.scanned_cleaner()
+        a.unlink()
+        worker.clear_unused()
+        worker.share()
+        self.assertTrue(b.samefile(c))
+        self.assertTrue(any(row[0] == "SKIP" and row[1] == a.relative_to(self.root) for row in rows))
+
+    def test_updated_legacy_source_requires_fresh_migration_proof(self):
+        rel = Path("models/run_best_params.json")
+        source = self.write(rel, b"old")
+        worker, rows = self.scanned_cleaner()
+        worker.legacy = {rel: "content_sha_match"}
+        source.write_bytes(b"new")
+        worker.remove_one("legacy", rel, 3, set())
+        self.assertEqual(source.read_bytes(), b"new")
+        self.assertEqual(rows[-1][0], "KEEP")
+
+    def test_interrupted_link_syscall_can_be_retried(self):
+        a, b = self.publish("a"), self.publish("b")
+        original_link = os.link
+        def link_then_interrupt(src, dst):
+            original_link(src, dst)
+            raise KeyboardInterrupt
+        with patch("services.project_cleaner.os.link", side_effect=link_then_interrupt):
+            self.menu(["2", "0"])
+        self.assertFalse((self.root / "outputs/project_cleanup/pending.link").exists())
+        self.menu(["2", "0"])
+        self.assertTrue(a.samefile(b))
+
+    def test_failed_stage_removal_preserves_recovery_intent(self):
+        a, b = self.publish("a"), self.publish("b")
+        stage = self.root / "outputs/project_cleanup/pending.link"
+        original_unlink, original_replace = Path.unlink, os.replace
+        def reject_stage_unlink(path, *args, **kwargs):
+            if path == stage:
+                raise PermissionError("injected stage is busy")
+            return original_unlink(path, *args, **kwargs)
+        def reject_stage_replace(src, dst):
+            if Path(src) == stage:
+                raise PermissionError("injected destination is busy")
+            return original_replace(src, dst)
+        with patch.object(Path, "unlink", reject_stage_unlink), \
+             patch("services.project_cleaner.os.replace", side_effect=reject_stage_replace):
+            self.menu(["2", "0"])
+        self.assertTrue(stage.exists())
+        self.assertTrue((stage.parent / "apply.pending.csv").exists())
+        self.assertIn("略過", self.summary("apply")[0]["status"])
+        self.menu(["2", "0"])
+        self.assertFalse(stage.exists())
+        self.assertTrue(a.samefile(b))
+
+    def test_malformed_pair_mapping_is_retained(self):
+        a, b = self.publish("a"), self.publish("b")
+        for p in (a, b):
+            result = p.parents[2] / "strategy_comparison.json"
+            payload = json.loads(result.read_text())
+            payload["pairs"] = ["bad shape"]
+            result.write_text(json.dumps(payload))
+        self.menu(["2", "0"])
+        self.assertFalse(a.samefile(b))
+
+    def test_corrupt_history_returns_to_menu(self):
+        target = self.root / "outputs/project_cleanup/last_apply.zip"
+        target.parent.mkdir(parents=True)
+        for contents in (None, {}, {"mode": "apply", "status": "已完成", "counts": []}):
+            with self.subTest(contents=contents):
+                with ZipFile(target, "w") as archive:
+                    archive.writestr("decisions.csv", "")
+                    if contents is not None:
+                        archive.writestr("summary.json", json.dumps(contents))
+                self.assertIn("本次操作未完成", self.menu(["3", "0"]))
+
+    def test_cached_publication_rejects_later_changes(self):
+        for changed in ("csv", "manifest", "pair_json"):
+            with self.subTest(changed=changed):
+                a, b = self.publish("a", pinned=True), self.publish("b", pinned=True)
+                worker, rows = self.scanned_cleaner()
+                for p in (a, b):
+                    self.assertTrue(worker.published(p.relative_to(self.root)))
+                    if changed == "csv":
+                        stamp = p.stat().st_mtime_ns
+                        p.write_bytes(b"!" * len(self.payload))
+                        os.utime(p, ns=(stamp, stamp))
+                    elif changed == "manifest":
+                        (p.parents[2] / "manifest.json").write_text("{}")
+                    else:
+                        (p.parent / "strategy_comparison.json").write_text("{}")
+                worker.share()
+                self.assertFalse(a.samefile(b))
+                self.assertFalse(any(row[0] == "LINK" for row in rows))
+
+    def test_publication_and_dedup_read_each_csv_once(self):
+        from core import file_integrity
+        a, b = self.publish("a", pinned=True), self.publish("b", pinned=True)
+        file_integrity._observed_file_sha256.cache_clear()
+        with patch.object(file_integrity, "compute_file_sha256", wraps=file_integrity.compute_file_sha256) as hashed:
+            self.menu(["1", "0"])
+        observed = [Path(call.args[0]) for call in hashed.call_args_list]
+        self.assertEqual(observed.count(a), 1)
+        self.assertEqual(observed.count(b), 1)
+        self.assertEqual(self.summary("preview")[0]["counts"]["PLAN_LINK"], 1)
 
     def test_menu_proofs_dedup_retry_and_independent_rewrites(self):
         a, b = self.publish("a", pinned=True), self.publish("b")
