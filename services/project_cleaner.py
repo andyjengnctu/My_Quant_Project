@@ -95,8 +95,11 @@ def pair_location(root, rel):
 class Cleaner:
     def __init__(self, root, log, apply):
         self.root, self.note, self.apply = root, log.row, apply
+        self.report = log
         self.last_progress = time.monotonic()
         self.units = {}
+        self.detail_publications = {}
+        self.detail_failures = {}
         self.publication_revisions = {}
         self.pinned_hashes = {}
         self.hashes = {}
@@ -187,6 +190,42 @@ class Cleaner:
         return all(clean_path(p) and file_change_signature(p) == revision
                    for p, revision in self.publication_revisions[self.root / rel.parent].items())
 
+    def detail_published(self, rel):
+        """A storage proof for this CSV, never a substitute for scientific REUSE."""
+        from services.research.strategy_compare_pair_integrity import completed_detail_storage_evidence
+        cached = self.detail_publications.get(rel)
+        if cached is not None:
+            if all(clean_path(p) and file_change_signature(p) == stamp for p, stamp in cached.items()):
+                return True
+            self.detail_failures[rel] = "manifest／run／pair 在驗證後變動"
+            return False
+        path = self.root / rel
+        run = path.parents[2]
+        markers = (run / "manifest.json", run / "strategy_comparison.json", path.parent / "strategy_comparison.json")
+        try:
+            revisions = {p: file_change_signature(p) for p in markers}
+            if any(not clean_path(p) or not p.is_file() or not plain(p.lstat()) for p in markers):
+                raise ValueError("manifest／run／pair JSON 缺少或不是一般檔案")
+            payload = load_json_object_or_none(run / "strategy_comparison.json")
+            digest = completed_detail_storage_evidence(
+                path=path, run_payload=payload, project_root=self.root, file_hasher=self.hash_file,
+            )
+            if any(file_change_signature(p) != stamp for p, stamp in revisions.items()):
+                raise ValueError("發布紀錄在驗證期間變動")
+            self.detail_publications[rel] = revisions
+            if digest is not None:
+                self.pinned_hashes[path] = digest
+            return True
+        except FAILURES as exc:
+            self.detail_failures[rel] = str(exc)
+            self.capture_evidence(markers)
+            return False
+
+    def capture_evidence(self, paths):
+        capture = getattr(self.report, "capture_json", None)
+        if capture is not None:
+            capture(paths)
+
     def kind(self, rel):
         if rel in self.legacy:
             return "legacy", None
@@ -233,6 +272,7 @@ class Cleaner:
     def scan(self):
         print("盤點專案並核對保留依據…", flush=True)
         deferred = []
+        review = []
         def visit(rel):
             self.lifecycle.observe_directory(rel)
             unit = rules.robust_unit(rel)
@@ -270,8 +310,14 @@ class Cleaner:
                 reason = self.lifecycle.retained_reason(rel)
                 action, fallback = retained(rel, self.live)
                 self.note("KEEP" if reason else action, rel, size, reason or fallback)
+                if not reason and action == "REVIEW":
+                    review.append((rel, size))
         for rel, reason in self.lifecycle.errors.items():
             self.note("SKIP", rel, 0, reason)
+        capture = getattr(self.report, "capture_review_context", None)
+        if capture is not None:
+            print("收錄待辨識工作區的既有用途證據…", flush=True)
+            capture(review, self.lifecycle.files)
 
     def clear_unused(self):
         if self.apply and self.git_ok:
@@ -401,6 +447,8 @@ class Cleaner:
             self.progress(f"已核對 REUSE 明細 {index:,}/{len(candidates):,}")
             path = self.root / rel
             size = 0
+            source = None
+            lineage_revisions = {}
             try:
                 if self.lifecycle.protected(rel):
                     self.note("KEEP", rel, self.lifecycle.files.get(rel, 0), "被正式成果、續跑或其他保留工件引用")
@@ -408,37 +456,43 @@ class Cleaner:
                 info = regular(path)
                 size = info.st_size
                 revision = file_change_signature(path)
-                lineage_revisions = {}
                 source = reused_detail_source(path, revisions=lineage_revisions)
                 if source is None:
                     self.note("KEEP", rel, size, "原始比較明細，沒有可取代的 REUSE 來源")
                     continue
-                if not self.published(rel):
-                    raise ValueError("副本尚未完整發布或發布內容無法驗證")
+                if not self.detail_published(rel):
+                    raise ValueError("副本發布驗證未通過：" + self.detail_failures[rel])
                 digest = self.hash_file(path)
                 access = file_metadata(path, info)
                 # Follow only byte-identical, committed producer provenance. An
                 # intervening copy with changed diagnostics remains an original.
                 seen = {path}
                 retained = None
+                retained_revision = None
                 while source is not None:
                     if source in seen:
                         raise ValueError("REUSE 來源循環")
                     seen.add(source)
                     source_rel = source.relative_to(self.root)
+                    verified_revision = file_change_signature(source)
                     source_info = regular(source)
-                    if (source_info.st_size != size or not self.published(source_rel)
+                    if (source_info.st_size != size or not self.detail_published(source_rel)
                             or file_metadata(source, source_info) != access
                             or self.hash_file(source) != digest):
                         break
+                    if file_change_signature(source) != verified_revision:
+                        raise ValueError("REUSE 來源在內容驗證期間變動")
                     retained = source
+                    retained_revision = verified_revision
                     source = reused_detail_source(source, revisions=lineage_revisions)
                 if retained is None:
-                    self.note("KEEP", rel, size, "REUSE 來源不存在、內容不同或未通過完整性驗證")
+                    failure = self.detail_failures.get(source.relative_to(self.root)) if source else None
+                    reason = failure or "來源不存在、內容或存取屬性不同"
+                    self.note("SKIP" if failure else "KEEP", rel, size, "REUSE 來源無法取代副本：" + reason)
                     continue
                 source = retained
                 source_rel = source.relative_to(self.root)
-                source_revision = file_change_signature(source)
+                source_revision = retained_revision
                 if (self.pinned_hashes.get(path, digest) != digest
                         or self.pinned_hashes.get(source, digest) != digest):
                     raise ValueError("內容已偏離已驗證的發布紀錄")
@@ -449,7 +503,7 @@ class Cleaner:
                             or file_change_signature(source) != source_revision
                             or any(not clean_path(p) or file_change_signature(p) != stamp
                                    for p, stamp in lineage_revisions.items())
-                            or not self.published(rel) or not self.published(source_rel)):
+                            or not self.detail_published(rel) or not self.detail_published(source_rel)):
                         raise ValueError("檔案或發布紀錄在核對後變動")
                     # Removing another name for an already shared inode does
                     # not free those data blocks a second time.
@@ -466,6 +520,12 @@ class Cleaner:
                             self.hashes[after] = digest
                 self.note("DELETE" if self.apply else "PLAN_DELETE", rel, size, reason, space, source_rel)
             except FAILURES as exc:
+                markers = set(lineage_revisions)
+                for file in (path, source):
+                    if file is not None and compare_root(file) == self.root:
+                        markers.update((file.parents[2] / "manifest.json", file.parents[2] / "strategy_comparison.json",
+                                        file.parent / "strategy_comparison.json"))
+                self.capture_evidence(markers)
                 self.note("SKIP", rel, size, exc)
 
 

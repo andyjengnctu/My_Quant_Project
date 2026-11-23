@@ -205,6 +205,8 @@ project/
   - Robustness 的可拋棄工作範圍由原 producer 的 retention policy 提供。清理先驗證完成工件，並保留舊報表補齊所需的 baseline 及來源收據引用的工作檔；未完成工作、正式模型／分數和原始研究證據不以退役或檔案大小判定刪除。
   - Robustness 工作區辨識不固定套用單一目錄深度，舊版輸出位置也須通過相同完成驗證。可清範圍內的空目錄與檔案共用工作鎖及刪除依據；預覽不移除目錄，未知範圍及連結保留。
   - 已發布比較的重複明細，依 producer 原有 `metadata.cache_reused_from` 追溯來源；核對來源及副本的完成發布、逐 bytes 內容、存取屬性、Git 保護與來源鏈未變動後，實際刪除副本。沒有來源紀錄、內容不同、來源不完整或循環時保留，不能只因 CSV 同名或大小相同而刪除。原始 CSV 不壓縮；唯一來源、原始 JSON／Markdown／manifest 與既有研究證據保留。
+  - 重複 CSV 的儲存驗證以該 CSV／pair 為範圍：共用原 canonical owner 的 manifest-last 完成邊界，核對本 pair 與 run 結果一致及該 CSV 的既有 SHA，再驗證保留來源。其他 pair 或其他報表異常不應阻擋這份已驗證副本的移除；完整 run／pair 的 scientific REUSE 與 Runtime Gate 仍執行原有完整性檢查，清理不能將失敗結果改為 READY。來源 revision 必須固定在內容驗證前，不能在 hash 後才取得版本並誤認變動來源仍是已驗證內容。
+  - `last_apply.zip`／`last_preview.zip` 除逐檔決策外，可附 `evidence/`：失敗發布驗證的 manifest／run／pair JSON，以及待辨識工作區既有的 manifest／結果摘要。待辨識證據依其工作區占用量優先、使用獨立的 16 MiB 診斷資料預算；未收錄者列於 `review_context.json`。僅擷取既有 JSON，不匯出模型或大型 CSV、不補造完成紀錄，也不將診斷資料的大小／順位用作刪除判斷。略過原因須保留具體失敗欄位。
   - `core/compare_csv_storage.py` 統一解析明細的既有 REUSE 來源鏈；Compare 完整性驗證、baseline／PIT／Audit 讀取與後續 REUSE 複製共用此解析。仍依發布時的 SHA 驗證，未新增 scientific identity、儲存索引或替代研究 manifest。正式與歷史 profile 根目錄深度可不同，均依相同 run／pair 發布邊界辨識。
   - 清理摘要分列刪除檔案的邏輯大小與實際磁碟配置量。原已共用 inode 的副本被刪除時，只減少資料夾的檔名與邏輯大小，不重複計入已釋放磁碟容量；舊版中斷的暫存連結仍可復原。清理與 CSV producer 共用短期發布鎖，中斷後由原選單接續。
 - `apps/portfolio_sim.py`：投組模擬入口；`apps/vip_scanner.py`：掃描器入口。

@@ -12,6 +12,9 @@ from core.compare_csv_storage import clean_path
 from core.file_integrity import atomic_replace_with_retry
 
 FIELDS = ("action", "path", "logical_bytes", "saved_bytes", "reason", "retained_copy")
+# Diagnostic transfer budget only; never a deletion threshold or keep policy.
+REVIEW_EVIDENCE_BUDGET_BYTES = 16 * 1024 * 1024
+REVIEW_METADATA_ENDINGS = ("manifest.json", "summary.json", "result.json", "contract.json", "status.json")
 LABEL = {
     "KEEP": "保留", "REVIEW": "待辨識／保留", "SKIP": "略過", "ERROR": "錯誤",
     "DELETE": "已刪除檔案", "LINK": "已共用內容", "PLAN_DELETE": "可刪檔案",
@@ -26,7 +29,7 @@ def report_path(root, name):
     return p
 
 
-def finish(root, mode, status, pending):
+def finish(root, mode, status, pending, evidence=None):
     counts, saved, logical = Counter(), Counter(), Counter()
     reasons = {}
     with pending.open(encoding="utf-8-sig", newline="") as stream:
@@ -56,6 +59,8 @@ def finish(root, mode, status, pending):
         with ZipFile(tmp_path, "w", ZIP_DEFLATED, compresslevel=2) as z:
             z.write(pending, "decisions.csv")
             z.writestr("summary.json", json.dumps(info, ensure_ascii=False, indent=2))
+            for name, data in (evidence or {}).items():
+                z.writestr("evidence/" + name, data)
         atomic_replace_with_retry(tmp_path, target)
     finally:
         tmp_path.unlink(missing_ok=True)
@@ -78,6 +83,7 @@ class Receipt:
     def __init__(self, root, mode, stream):
         self.root, self.mode, self.stream = root, mode, stream
         self.writer = csv.writer(stream)
+        self.evidence = {}
         self.writer.writerow(FIELDS)
         stream.flush()
 
@@ -88,18 +94,94 @@ class Receipt:
         if action in {"INTENT", "DELETE", "LINK", "ERROR"}:
             self.stream.flush()
 
+    def capture_json(self, paths, *, review=False):
+        """Keep only failed-proof JSON, not CSV data, models or private files."""
+        from core.compare_csv_storage import plain
+        from core.file_integrity import file_change_signature
+        for path in paths:
+            path = Path(path)
+            try:
+                relative = path.relative_to(self.root)
+                allowed = (relative.parts[:2] == ("outputs", "strategy_compare")
+                           and path.name in {"manifest.json", "strategy_comparison.json"})
+                if review:
+                    allowed = (relative.parts[0] == "outputs" and "trading" not in relative.parts[:3]
+                               and relative.parts[1] != "project_cleanup" and path.name.endswith(REVIEW_METADATA_ENDINGS))
+                if not allowed:
+                    continue
+                name = relative.as_posix()
+                if name in self.evidence:
+                    continue
+                if not clean_path(path) or not plain(path.lstat()):
+                    raise ValueError("證據不是專案內的一般檔案")
+                stamp = file_change_signature(path)
+                data = path.read_bytes()
+                if file_change_signature(path) != stamp:
+                    raise ValueError("擷取時證據已變動")
+                self.evidence[name] = data
+            except (OSError, ValueError) as exc:
+                # Evidence export cannot change the deletion decision or hide a
+                # failed proof. It stays visible with the report for diagnosis.
+                name = "capture_errors.json"
+                errors = json.loads(self.evidence.get(name, b"[]"))
+                errors.append({"path": str(path).replace(str(self.root), "."), "reason": str(exc).replace(str(self.root), ".")})
+                self.evidence[name] = json.dumps(errors, ensure_ascii=False).encode("utf-8")
+
+    def capture_review_context(self, rows, inventory):
+        """Collect old producer evidence read-only, prioritizing largest unknown scopes."""
+        totals = Counter()
+        for relative, size in rows:
+            if relative.parts[0] != "outputs":
+                continue
+            for parent in relative.parents:
+                if len(parent.parts) >= 3:
+                    totals[parent] += size
+        candidates = sorted(
+            (relative for relative in inventory
+             if relative.parent in totals and relative.name.endswith(REVIEW_METADATA_ENDINGS)),
+            key=lambda p: (-totals[p.parent], len(p.parts), p.as_posix()),
+        )
+        remaining = REVIEW_EVIDENCE_BUDGET_BYTES
+        selected = []
+        skipped = []
+        for relative in candidates:
+            try:
+                size = (self.root / relative).stat().st_size
+                if size > remaining:
+                    skipped.append({"path": relative.as_posix(), "reason": "診斷資料傳輸預算不足，原件保留"})
+                    continue
+                self.capture_json([self.root / relative], review=True)
+                data = self.evidence.get(relative.as_posix())
+                if data is not None:
+                    if len(data) > remaining:
+                        self.evidence.pop(relative.as_posix())
+                        skipped.append({"path": relative.as_posix(), "reason": "擷取前後大小變動，原件保留"})
+                        continue
+                    remaining -= len(data)
+                    selected.append({"path": relative.as_posix(), "review_scope_bytes": totals[relative.parent],
+                                     "evidence_bytes": len(data)})
+            except OSError as exc:
+                skipped.append({"path": relative.as_posix(), "reason": str(exc).replace(str(self.root), ".")})
+        if candidates:
+            self.evidence["review_context.json"] = json.dumps({
+                "purpose": "只供釐清既有檔案用途；不是刪除授權，不補造生命週期紀錄",
+                "budget_bytes": REVIEW_EVIDENCE_BUDGET_BYTES,
+                "selected": selected, "skipped": skipped,
+            }, ensure_ascii=False, indent=2).encode("utf-8")
+
 
 @contextmanager
 def receipt(root, mode):
     pending = report_path(root, f"{mode}.pending.csv")
     status = "已中斷；僅統計已記錄完成的操作"
+    item = None
     try:
         with pending.open("x", encoding="utf-8-sig", newline="") as stream:
             item = Receipt(root, mode, stream)
             yield item
             status = "已完成"
     finally:
-        summary = finish(root, mode, status, pending)
+        summary = finish(root, mode, status, pending, evidence=item.evidence if item is not None else None)
         show_summary(summary)
         print(f"逐檔明細：outputs/project_cleanup/last_{mode}.zip（decisions.csv）")
 
