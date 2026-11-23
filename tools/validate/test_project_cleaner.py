@@ -94,6 +94,16 @@ class CleanupTest(unittest.TestCase):
         })
         return source, target
 
+    def diagnostic_projection(self, rel):
+        import numpy as np
+        path = self.root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fields = ("identity", "ticker", "dates", "labels", "raw_r", "valid", "payload_sha256")
+        values = {key: np.array([0]) for key in fields}
+        values.update(identity=np.asarray("a" * 64), payload_sha256=np.asarray("b" * 64))
+        np.savez(path, **values)
+        return path
+
     def test_current_parameter_overrides_survive_migration_cleanup(self):
         from core import model_paths
         from services.optimizer.strategy_param_service import collect_legacy_root_strategy_parameter_cleanup_plan
@@ -152,6 +162,44 @@ class CleanupTest(unittest.TestCase):
         self.menu(["2", "0"])
         self.assertFalse(source.exists())
 
+    def test_transitive_parameter_and_model_dependencies_are_retained(self):
+        from dataclasses import replace
+        from core import strategy_compare_policy as policy
+        from core.strategy_comparison import StrategyArtifactBuilder
+        from filters.breakout_quality.strategy_compare_dl_artifacts import resolve_required_artifact_sources
+        source, target = self.migrated_parameter()
+        slots = rules.retired_diagnostics(self.root)
+        retired_slot, retired_profile = next(iter(slots.items()))
+        cache = self.diagnostic_projection(retired_slot)
+        settings = policy.get_strategy_comparison_settings()
+        arm = settings.enabled_arms[0]
+        sources = dict(settings.parameter_sources)
+        models = dict(settings.dl_sources)
+        models["CLEANUP_TEACHER"] = replace(next(iter(models.values())),
+            dl_id="CLEANUP_TEACHER", experiment_profile=retired_profile)
+        sources["CLEANUP_UPSTREAM"] = replace(sources[arm.param_source],
+            source_id="CLEANUP_UPSTREAM", builder=None, trained_with_dl_id="CLEANUP_TEACHER",
+            canonical_family=None, canonical_evaluation_mode=None,
+            path_template=source.relative_to(self.root).as_posix())
+        sources["CLEANUP_MIDDLE"] = replace(sources[arm.param_source], source_id="CLEANUP_MIDDLE",
+            builder=StrategyArtifactBuilder(builder_type="frozen_oos_from_rolling", enabled=True,
+                                             options={"source_param_source_id": "CLEANUP_UPSTREAM"}))
+        sources[arm.param_source] = replace(sources[arm.param_source],
+            builder=StrategyArtifactBuilder(builder_type="frozen_oos_from_rolling", enabled=True,
+                                             options={"source_param_source_id": "CLEANUP_MIDDLE"}))
+        settings = replace(settings, parameter_sources=sources, dl_sources=models)
+        with patch.object(policy, "get_strategy_comparison_settings", return_value=settings):
+            params, dl, _ = resolve_required_artifact_sources(settings)
+            self.assertIn("CLEANUP_UPSTREAM", params)
+            self.assertIn("CLEANUP_TEACHER", dl)
+            self.assertFalse(retired_slot in rules.retired_diagnostics(self.root))
+            self.menu(["2", "0"])
+            self.assertEqual(source.read_bytes(), target.read_bytes())
+            self.assertTrue(cache.is_file())
+        self.menu(["2", "0"])
+        self.assertFalse(source.exists())
+        self.assertFalse(cache.exists())
+
     def test_partial_group_merge_can_resume_without_overstating_savings(self):
         a, b, c, d = [self.publish(name, pinned=True) for name in ("a", "b", "c", "d")]
         b.unlink(); os.link(a, b)
@@ -187,14 +235,14 @@ class CleanupTest(unittest.TestCase):
         self.assertTrue(a.samefile(c))
         self.assertFalse(a.samefile(d))
 
-    def completed_robustness(self, *, benchmark=True):
+    def completed_robustness(self, *, benchmark=True, namespace="suite/rolling"):
         import pandas as pd
         from services.research import strategy_multi_seed_robustness as owner
         from core.strategy_compare_policy import get_strategy_comparison_settings
         settings = get_strategy_comparison_settings()
         arm = next(iter(settings.enabled_arms))
         fixed = next(a for a in settings.arms.values() if not a.dl_enabled)
-        run = self.root / rules.ROBUST / "suite/rolling/1234567890abcdef"
+        run = self.root / rules.ROBUST / namespace / "1234567890abcdef"
         period = {"start": "2021-01-01", "end": "2021-12-31"}
         contract = {"fingerprint": run.name, "profile_id": settings.profile_id,
                     "resolved_seeds": [42], "stochastic_arms": [{"arm_id": arm.arm_id}],
@@ -299,6 +347,51 @@ class CleanupTest(unittest.TestCase):
             self.menu(["2", "0"])
         self.assertTrue(protected.exists())
         self.assertFalse(disposable.exists())
+
+    def test_registered_legacy_robustness_depths_are_cleaned(self):
+        for namespace in ("", "selection_pit", "suite/rolling"):
+            with self.subTest(namespace=namespace):
+                owner, settings, arm, run, contract = self.completed_robustness(namespace=namespace)
+                disposable = self.write(run / "work/results/result.json", b"transient")
+                with patch.object(owner, "PROJECT_ROOT", self.root):
+                    self.menu(["2", "0"])
+                    self.assertIsNotNone(owner._validate_completed_run(run, backfill_integrity=False))
+                self.assertFalse(disposable.exists())
+
+    def test_empty_completed_work_is_removed_but_unknown_and_active_folders_stay(self):
+        owner, settings, arm, run, contract = self.completed_robustness()
+        empty = run / "work/replay/seed/pair"
+        empty.mkdir(parents=True)
+        unknown = run / "work/custom/notes"
+        unknown.mkdir(parents=True)
+        active = run.parent / "incomplete/work/replay/seed"
+        active.mkdir(parents=True)
+        lookalike = self.write(rules.ROBUST / "unrecognized/work", b"a file named work")
+        with patch.object(owner, "PROJECT_ROOT", self.root):
+            self.menu(["1", "0"])
+            self.assertTrue(empty.is_dir())
+            self.menu(["2", "0"])
+        self.assertFalse((run / "work/replay").exists())
+        self.assertTrue(unknown.is_dir() and active.is_dir())
+        self.assertEqual(lookalike.read_bytes(), b"a file named work")
+
+    def test_empty_work_respects_lease_and_replaced_links(self):
+        from core.file_integrity import exclusive_file_lock, sibling_publication_lock_path
+        owner, settings, arm, run, contract = self.completed_robustness()
+        empty = run / "work/replay/seed/pair"
+        empty.mkdir(parents=True)
+        unrelated = self.root / "unrelated/empty"
+        unrelated.mkdir(parents=True)
+        with patch.object(owner, "PROJECT_ROOT", self.root):
+            with exclusive_file_lock(sibling_publication_lock_path(run)):
+                self.menu(["2", "0"])
+                self.assertTrue(empty.is_dir())
+            worker, rows = self.scanned_cleaner()
+            empty.rmdir()
+            empty.symlink_to(unrelated, target_is_directory=True)
+            worker.clear_unused()
+        self.assertTrue(empty.is_symlink())
+        self.assertTrue(unrelated.is_dir())
 
     def test_newly_tracked_candidate_is_preserved(self):
         a, b, c = [self.publish(name) for name in ("a", "b", "c")]
@@ -516,18 +609,12 @@ class CleanupTest(unittest.TestCase):
         self.assertEqual(self.summary("apply")[0]["counts"].get("LINK",0),0)
 
     def test_change_in_model_roster_preserves_cache_and_fit(self):
-        import numpy as np
         from core.strategy_compare_policy import _compatibility_catalogs
         from config import breakout_quality
         slots = rules.retired_diagnostics(self.root)
         self.assertTrue(slots)
         rel, profile = next(iter(slots.items()))
-        eligible = self.root / rel
-        eligible.parent.mkdir(parents=True)
-        fields = ("identity", "ticker", "dates", "labels", "raw_r", "valid", "payload_sha256")
-        values = {key: np.array([0]) for key in fields}
-        values.update(identity=np.asarray("a" * 64), payload_sha256=np.asarray("b" * 64))
-        np.savez(eligible, **values)
+        eligible = self.diagnostic_projection(rel)
         fit = self.write(Path("models/research") / profile / "model.pt", b"unique historical model")
         self.assertIn(profile, {v.get("experiment_profile") for v in _compatibility_catalogs()[1].values()})
         with patch.object(breakout_quality, "BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE", profile):

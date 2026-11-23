@@ -195,8 +195,9 @@ project/
 - `apps/workbench.py`：GUI / workbench 正式入口，`apps/workbench.py` 為單一 GUI 啟用入口；單股檢視為 K 線圖、交易明細、Console 三個分頁。
 - `apps/smart_downloader.py`：Market Data 更新、Preflight／Bootstrap 入口。
 - `apps/cleaner.py`：專案檔案清理的獨立選單，可預覽、執行清理及查閱最近一次紀錄。
-  - 遷移完成的舊參數仍須核對現行路徑覆寫及啟用策略的來源解析；仍被使用的舊路徑保留。
+  - 遷移完成的舊參數仍須核對現行路徑覆寫及正式 preparation 的完整依賴解析，包含 builder 間接使用的上游參數及各來源政策；仍被使用的舊路徑保留。診斷快取的現行模型判定亦涵蓋這些間接參數的 teacher 與其他正式模型依賴。
   - Robustness 的可拋棄工作範圍由原 producer 的 retention policy 提供。清理先驗證完成工件，並保留舊報表補齊所需的 baseline 及來源收據引用的工作檔；未完成工作、正式模型／分數和原始研究證據不以退役或檔案大小判定刪除。
+  - Robustness 工作區辨識不固定套用單一目錄深度，舊版輸出位置也須通過相同完成驗證。可清範圍內的空目錄與檔案共用工作鎖及刪除依據；預覽不移除目錄，未知範圍及連結保留。
   - 已發布比較 CSV 以內容、權限、修改時間及完整性證據核對後共用實體，保留全部原路徑。既有共用群組亦可合併，釋放空間只在最後一個舊實體連結替換成功時入帳；中斷可從原選單接續。
 - `apps/portfolio_sim.py`：投組模擬入口；`apps/vip_scanner.py`：掃描器入口。
 

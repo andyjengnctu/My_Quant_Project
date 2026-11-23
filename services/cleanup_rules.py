@@ -63,6 +63,7 @@ def retired_diagnostics(root):
     from core.strategy_compare_policy import (_compatibility_catalogs, get_strategy_comparison_menu_profiles,
                                              get_strategy_comparison_settings)
     from core.training_policy import resolve_robustness_benchmark_seeds
+    from filters.breakout_quality.strategy_compare_dl_artifacts import resolve_required_artifact_sources
     from services.breakout_quality.real_path_diagnostic_cache import _slot
 
     def strings(item):
@@ -81,15 +82,17 @@ def retired_diagnostics(root):
             if name.isupper():
                 live.update(strings(value))
     # A catalog also contains retired/historical choices. Resolve only the
-    # arms actually enabled by the configured suites, plus their parameter teachers.
+    # arms actually enabled by the configured suites and the preparation owner's
+    # complete dependency graph, including indirect parameters and their teachers.
     for menu in get_strategy_comparison_menu_profiles():
         settings = get_strategy_comparison_settings(menu["profile_id"])
+        parameters, models, _ = resolve_required_artifact_sources(settings)
         for arm in settings.enabled_arms:
-            names = set(strings(arm.as_dict()))
-            names.update(strings(settings.parameter_sources[arm.param_source].as_dict()))
-            live.update(names)
-            for dl_id in names.intersection(settings.dl_sources):
-                live.update(strings(settings.dl_sources[dl_id].as_dict()))
+            live.update(strings(arm.as_dict()))
+        for source_id in parameters:
+            live.update(strings(settings.parameter_sources[source_id].as_dict()))
+        for dl_id in models:
+            live.update(strings(settings.dl_sources[dl_id].as_dict()))
     seeds = {*resolve_robustness_benchmark_seeds(), breakout_quality.BREAKOUT_QUALITY_RANDOM_SEED}
     historical = _compatibility_catalogs()[1]
     slots = {}
@@ -135,17 +138,19 @@ def legacy_parameters(root):
     # has switched to it. Resolve active overrides/templates through their owners.
     from core import model_paths
     from core.strategy_compare_policy import get_strategy_comparison_menu_profiles, get_strategy_comparison_settings
-    from core.strategy_comparison import resolve_strategy_comparison_arm_param_policy
+    from filters.breakout_quality.strategy_compare_dl_artifacts import resolve_required_artifact_sources
     from filters.breakout_quality.strategy_compare_sources import resolve_param_source_path
+    from services.research.strategy_compare_preparation_status import resolve_required_param_policies_for_source
     live = {Path(resolver(str(root))).resolve() for resolver in (
         model_paths.resolve_run_best_params_path, model_paths.resolve_candidate_best_params_path,
         model_paths.resolve_candidate_retention_best_params_path, model_paths.resolve_candidate_val_score_best_params_path,
     )}
     for menu in get_strategy_comparison_menu_profiles():
         settings = get_strategy_comparison_settings(menu["profile_id"])
-        for arm in settings.enabled_arms:
-            live.add(resolve_param_source_path(root, settings, arm.param_source,
-                     param_policy=resolve_strategy_comparison_arm_param_policy(settings, arm)).resolve())
+        parameters, _, _ = resolve_required_artifact_sources(settings)
+        for source_id in parameters:
+            for policy in resolve_required_param_policies_for_source(settings, source_id):
+                live.add(resolve_param_source_path(root, settings, source_id, param_policy=policy).resolve())
     return {Path(r["source"]): r["evidence"] for r in plan["removable"]
             if Path(r["source"]).parts[:1] == ("models",) and (root / r["source"]).resolve() not in live}
 
@@ -178,10 +183,14 @@ def fixture_reason(root, rel):
 
 
 def robust_unit(rel):
+    # Registered historical suites have different directory depths. This only
+    # identifies a candidate; the producer validates the completed run under lease.
     if rel.is_relative_to(ROBUST):
         p = rel.relative_to(ROBUST).parts
-        if len(p) >= 6 and p[3] == "work":
-            return ROBUST.joinpath(*p[:3])
+        if "work" in p:
+            index = p.index("work")
+            if index:
+                return ROBUST.joinpath(*p[:index])
     return None
 
 

@@ -29,12 +29,19 @@ SCIENTIFIC = {"runs", "rolling_oos", "point_in_time", "fitting_checkpoints", "st
 FAILURES = (OSError, ValueError, RuntimeError, ImportError, sqlite3.Error, BadZipFile)
 
 
-def walk(root, note):
+def walk(root, note, visit=None):
     stack = [root]
     while stack:
         folder = stack.pop()
         try:
+            info = folder.lstat()
+            if (not clean_path(folder) or not stat.S_ISDIR(info.st_mode)
+                    or getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT):
+                note("SKIP", folder.relative_to(root), 0, "連結／重新解析點")
+                continue
             with os.scandir(folder) as entries:
+                if visit is not None:
+                    visit(folder.relative_to(root))
                 for entry in entries:
                     path = Path(entry.path)
                     try:
@@ -94,6 +101,7 @@ class Cleaner:
         self.hashes = {}
         self.groups = defaultdict(list)
         self.deletes = defaultdict(list)
+        self.work_dirs = defaultdict(set)
         self.git_ok = True
         self.refresh_tracking()
         self.legacy = self.lookup(rules.legacy_parameters, Path("models"))
@@ -186,7 +194,7 @@ class Cleaner:
         if rel.is_relative_to(rules.STAGING) and len(rel.relative_to(rules.STAGING).parts) >= 2:
             return "fixture", rules.STAGING
         unit = rules.robust_unit(rel)
-        if unit:
+        if unit and len(rel.relative_to(unit).parts) >= 3:
             return "robust", unit
         if rel.name.startswith(".") and rel.suffix == ".npz" and rel.parts[:3] == ("outputs","filters","breakout_quality"):
             return "abandoned", None
@@ -217,7 +225,12 @@ class Cleaner:
 
     def scan(self):
         print("盤點專案並核對保留依據…", flush=True)
-        for n, (rel, size) in enumerate(walk(self.root, self.note), 1):
+        def visit(rel):
+            unit = rules.robust_unit(rel)
+            if unit and self.git_ok:
+                self.work_dirs[unit].add(rel)
+                self.deletes.setdefault(unit, [])
+        for n, (rel, size) in enumerate(walk(self.root, self.note, visit), 1):
             self.progress(f"已盤點 {n:,} 個檔案，目前 {rel.parts[0]}/")
             if rel in self.tracked:
                 self.note("KEEP", rel, size, "Git 追蹤檔")
@@ -258,9 +271,33 @@ class Cleaner:
                         self.remove_one(kind, rel, size, scope)
                     if lease == rules.STAGING and self.apply:
                         self.empty_fixtures(staging)
+                    elif self.apply and scope:
+                        self.empty_robust_work(lease, scope)
             except FAILURES as exc:
                 for _, rel, size in rows:
                     self.note("SKIP", rel, size, f"工作仍在使用或無法驗證：{exc}")
+                if not rows:
+                    self.note("SKIP", lease, 0, f"工作仍在使用或無法驗證：{exc}")
+
+    def empty_robust_work(self, unit, scope):
+        # The same completed-run proof and writer lease cover files and empty
+        # folders. Use only directories seen by the scan; never traverse anew
+        # through a replaced link or remove an unrecognized work scope.
+        for rel in sorted(self.work_dirs[unit], key=lambda p: (-len(p.parts), p)):
+            parts = rel.relative_to(unit / "work").parts
+            if parts and parts[0] not in scope:
+                continue
+            path = self.root / rel
+            try:
+                info = path.lstat()
+                if (not self.protected_by_git(rel) and clean_path(path)
+                        and stat.S_ISDIR(info.st_mode)
+                        and not getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT
+                        and not any(path.iterdir())):
+                    path.rmdir()
+                    self.note("RMDIR", rel, 0, "已完成 Robustness 的空工作資料夾")
+            except OSError as exc:
+                self.note("SKIP", rel, 0, exc)
 
     def empty_fixtures(self, staging):
         for child in staging.iterdir():
