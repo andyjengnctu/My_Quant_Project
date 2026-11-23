@@ -15,7 +15,7 @@ from unittest.mock import patch
 from zipfile import ZipFile
 
 from apps import cleaner
-from core.compare_csv_storage import copy_reused_detail, publish_detail_csv
+from core.compare_csv_storage import copy_reused_detail, publish_detail_csv, detail_read_path, detail_exists
 from core.regression_fixture_access import fixture_access
 from services import cleanup_rules as rules, project_cleaner as service
 from services.research.strategy_compare_pair_integrity import (
@@ -43,10 +43,13 @@ class CleanupTest(unittest.TestCase):
         path.write_bytes(data if isinstance(data, bytes) else json.dumps(data).encode())
         return path
 
-    def publish(self, run, *, pinned=False, data=None):
+    def publish(self, run, *, pinned=False, data=None, source=None):
         rel = self.base / run
         pair = rel / "pairs/arm"
         value = {"metadata": {"name": "arm"}}
+        if source is not None:
+            value["metadata"].update(output_scope="reused_pair_cache",
+                cache_reused_from=source.parent.relative_to(self.root).as_posix())
         self.write(pair / "strategy_comparison.json", value)
         self.write(pair / "strategy_comparison.md", b"md")
         p = self.write(pair / self.output, self.payload if data is None else data)
@@ -123,25 +126,32 @@ class CleanupTest(unittest.TestCase):
                 self.menu(["2", "0"])
                 self.assertFalse(source.exists())
 
-    def test_duplicate_link_groups_merge_without_changing_reuse_bytes(self):
-        from core.compare_csv_storage import disk_bytes
-        a, b, c, d = [self.publish(name, pinned=True) for name in ("a", "b", "c", "d")]
+    def test_existing_shared_copies_are_deleted_and_all_reuse_bytes_survive(self):
+        a = self.publish("a", pinned=True)
+        b = self.publish("b", pinned=True, source=a)
+        c = self.publish("c", pinned=True, source=b)
         b.unlink(); os.link(a, b)
-        d.unlink(); os.link(c, d)
-        saving = disk_bytes(c, c.stat())
+        c.unlink(); os.link(a, c)
+        originals = {p: p.read_bytes() for file in (a, b, c)
+                     for p in (file.parent / "strategy_comparison.json", file.parents[2] / "manifest.json")}
         self.menu(["1", "0"])
-        self.assertEqual(sum(self.summary("preview")[0]["saved"].values()), saving)
-        self.assertFalse(a.samefile(c))
+        self.assertEqual(self.summary("preview")[0]["counts"]["PLAN_DELETE"], 2)
+        self.assertTrue(b.is_file() and c.is_file())
         self.menu(["2", "0"])
-        self.assertTrue(all(a.samefile(p) for p in (b, c, d)))
-        self.assertEqual(sum(self.summary("apply")[0]["saved"].values()), saving)
-        for p in (a, b, c, d):
-            run = p.parents[2]
+        self.assertFalse(b.exists() or c.exists())
+        self.assertEqual(a.read_bytes(), self.payload)
+        self.assertEqual(self.summary("apply")[0]["saved"]["DELETE"], 0)
+        self.assertEqual(self.summary("apply")[0]["logical"]["DELETE"], 2 * len(self.payload))
+        from services.research.strategy_compare_reuse import _required_pair_files_present
+        for file in (a, b, c):
+            self.assertEqual(detail_read_path(file).read_bytes(), self.payload)
+            self.assertTrue(_required_pair_files_present(file.parent, (file,)))
             self.assertTrue(completed_strategy_run_publication_matches(
-                run_dir=run, project_root=self.root,
-                run_payload=json.loads((run / "strategy_comparison.json").read_text())))
+                run_dir=file.parents[2], project_root=self.root,
+                run_payload=json.loads((file.parents[2] / "strategy_comparison.json").read_text())))
+        self.assertTrue(all(p.read_bytes() == value for p, value in originals.items()))
         self.menu(["2", "0"])
-        self.assertEqual(sum(self.summary("apply")[0]["saved"].values()), 0)
+        self.assertEqual(self.summary("apply")[0]["counts"].get("DELETE", 0), 0)
 
     def test_active_strategy_template_protects_migrated_parameter(self):
         from dataclasses import replace
@@ -200,40 +210,26 @@ class CleanupTest(unittest.TestCase):
         self.assertFalse(source.exists())
         self.assertFalse(cache.exists())
 
-    def test_partial_group_merge_can_resume_without_overstating_savings(self):
-        a, b, c, d = [self.publish(name, pinned=True) for name in ("a", "b", "c", "d")]
-        b.unlink(); os.link(a, b)
-        d.unlink(); os.link(c, d)
-        original_replace = os.replace
-        def fail_last(src, dst):
-            if Path(dst) == d:
-                raise PermissionError("injected final alias busy")
-            return original_replace(src, dst)
-        with patch("services.project_cleaner.os.replace", side_effect=fail_last):
-            self.menu(["2", "0"])
-        self.assertTrue(a.samefile(c))
-        self.assertFalse(a.samefile(d))
-        self.assertTrue(all(p.read_bytes() == self.payload for p in (a, b, c, d)))
-        self.assertEqual(sum(self.summary("apply")[0]["saved"].values()), 0)
+    def test_independent_reuse_copy_frees_blocks_but_unproven_equal_file_stays(self):
+        from core.compare_csv_storage import disk_bytes
+        a = self.publish("a")
+        b = self.publish("b", source=a)
+        unproven = self.publish("c")
+        allocation = disk_bytes(b, b.stat())
         self.menu(["2", "0"])
-        self.assertTrue(a.samefile(d))
-        self.assertGreater(sum(self.summary("apply")[0]["saved"].values()), 0)
+        self.assertFalse(b.exists())
+        self.assertTrue(a.exists() and unproven.exists())
+        self.assertEqual(self.summary("apply")[0]["saved"]["DELETE"], allocation)
 
-    def test_group_merge_preserves_replaced_alias(self):
-        a, b, c, d = [self.publish(name) for name in ("a", "b", "c", "d")]
-        b.unlink(); os.link(a, b)
-        d.unlink(); os.link(c, d)
-        replacement = self.write("new.csv", b"updated independent content")
-        original_replace = os.replace
-        def replace_next_alias(src, dst):
-            original_replace(src, dst)
-            if Path(dst) == c:
-                original_replace(replacement, d)
-        with patch("services.project_cleaner.os.replace", side_effect=replace_next_alias):
-            self.menu(["2", "0"])
-        self.assertEqual(d.read_bytes(), b"updated independent content")
-        self.assertTrue(a.samefile(c))
-        self.assertFalse(a.samefile(d))
+    def test_changed_reuse_copy_and_broken_source_are_kept(self):
+        a = self.publish("a", pinned=True)
+        b = self.publish("b", source=a, data=b"different\n")
+        self.menu(["2", "0"])
+        self.assertTrue(b.exists())
+        c = self.publish("c", pinned=True, source=a)
+        a.write_bytes(b"!" * len(self.payload))
+        self.menu(["2", "0"])
+        self.assertTrue(c.exists())
 
     def completed_robustness(self, *, benchmark=True, namespace="suite/rolling"):
         import pandas as pd
@@ -394,17 +390,18 @@ class CleanupTest(unittest.TestCase):
         self.assertTrue(unrelated.is_dir())
 
     def test_newly_tracked_candidate_is_preserved(self):
-        a, b, c = [self.publish(name) for name in ("a", "b", "c")]
+        a = self.publish("a")
+        b, c = self.publish("b", source=a), self.publish("c", source=a)
         worker, rows = self.scanned_cleaner()
         self.git("add", str(b))
         worker.clear_unused()
-        worker.share()
-        self.assertFalse(a.samefile(b))
-        self.assertTrue(a.samefile(c))
-        self.assertTrue(any(row[0] == "KEEP" and row[1] == b.relative_to(self.root) for row in rows))
+        worker.clear_reused_details()
+        self.assertTrue(b.exists())
+        self.assertFalse(c.exists())
 
-    def test_git_changes_during_hashing_are_seen_before_replacement(self):
-        a, b = self.publish("a"), self.publish("b")
+    def test_git_changes_during_hashing_are_seen_before_deletion(self):
+        a = self.publish("a")
+        b = self.publish("b", source=a)
         worker, rows = self.scanned_cleaner()
         original_hash = worker.hash_file
         def stage_after_hash(path):
@@ -413,18 +410,19 @@ class CleanupTest(unittest.TestCase):
                 self.git("add", str(b))
             return digest
         with patch.object(worker, "hash_file", side_effect=stage_after_hash):
-            worker.share()
-        self.assertFalse(a.samefile(b))
-        self.assertFalse(any(row[0] == "LINK" for row in rows))
+            worker.clear_reused_details()
+        self.assertTrue(b.exists())
+        self.assertFalse(any(row[0] == "DELETE" for row in rows))
 
     def test_missing_file_does_not_discard_other_candidates(self):
-        a, b, c = [self.publish(name) for name in ("a", "b", "c")]
+        a = self.publish("a")
+        b, c = self.publish("b", source=a), self.publish("c", source=a)
         worker, rows = self.scanned_cleaner()
-        a.unlink()
-        worker.clear_unused()
-        worker.share()
-        self.assertTrue(b.samefile(c))
-        self.assertTrue(any(row[0] == "SKIP" and row[1] == a.relative_to(self.root) for row in rows))
+        b.unlink()
+        worker.clear_reused_details()
+        self.assertTrue(a.exists())
+        self.assertFalse(c.exists())
+        self.assertTrue(any(row[0] == "SKIP" and row[1] == b.relative_to(self.root) for row in rows))
 
     def test_updated_legacy_source_requires_fresh_migration_proof(self):
         rel = Path("models/run_best_params.json")
@@ -436,39 +434,31 @@ class CleanupTest(unittest.TestCase):
         self.assertEqual(source.read_bytes(), b"new")
         self.assertEqual(rows[-1][0], "KEEP")
 
-    def test_interrupted_link_syscall_can_be_retried(self):
-        a, b = self.publish("a"), self.publish("b")
-        original_link = os.link
-        def link_then_interrupt(src, dst):
-            original_link(src, dst)
-            raise KeyboardInterrupt
-        with patch("services.project_cleaner.os.link", side_effect=link_then_interrupt):
+    def test_interrupted_deletion_can_be_retried_without_losing_original(self):
+        a = self.publish("a", pinned=True)
+        b = self.publish("b", pinned=True, source=a)
+        unlink = Path.unlink
+        def fail_copy(path, *args, **kwargs):
+            if path == b:
+                raise PermissionError("injected busy copy")
+            return unlink(path, *args, **kwargs)
+        with patch.object(Path, "unlink", fail_copy):
             self.menu(["2", "0"])
-        self.assertFalse((self.root / "outputs/project_cleanup/pending.link").exists())
+        self.assertTrue(a.exists() and b.exists())
         self.menu(["2", "0"])
-        self.assertTrue(a.samefile(b))
+        self.assertFalse(b.exists())
+        self.assertEqual(detail_read_path(b).read_bytes(), self.payload)
 
-    def test_failed_stage_removal_preserves_recovery_intent(self):
-        a, b = self.publish("a"), self.publish("b")
-        stage = self.root / "outputs/project_cleanup/pending.link"
-        original_unlink, original_replace = Path.unlink, os.replace
-        def reject_stage_unlink(path, *args, **kwargs):
-            if path == stage:
-                raise PermissionError("injected stage is busy")
-            return original_unlink(path, *args, **kwargs)
-        def reject_stage_replace(src, dst):
-            if Path(src) == stage:
-                raise PermissionError("injected destination is busy")
-            return original_replace(src, dst)
-        with patch.object(Path, "unlink", reject_stage_unlink), \
-             patch("services.project_cleaner.os.replace", side_effect=reject_stage_replace):
-            self.menu(["2", "0"])
-        self.assertTrue(stage.exists())
-        self.assertTrue((stage.parent / "apply.pending.csv").exists())
-        self.assertIn("略過", self.summary("apply")[0]["status"])
+    def test_cyclic_or_outside_provenance_never_authorizes_deletion(self):
+        a = self.publish("a")
+        b = self.publish("b", source=a)
+        self.publish("a", source=b)
         self.menu(["2", "0"])
-        self.assertFalse(stage.exists())
-        self.assertTrue(a.samefile(b))
+        self.assertTrue(a.exists() and b.exists())
+        outside = self.write("private/outside.csv", self.payload)
+        c = self.publish("c", source=outside)
+        self.menu(["2", "0"])
+        self.assertTrue(c.exists() and outside.exists())
 
     def test_malformed_pair_mapping_is_retained(self):
         a, b = self.publish("a"), self.publish("b")
@@ -494,7 +484,8 @@ class CleanupTest(unittest.TestCase):
     def test_cached_publication_rejects_later_changes(self):
         for changed in ("csv", "manifest", "pair_json"):
             with self.subTest(changed=changed):
-                a, b = self.publish("a", pinned=True), self.publish("b", pinned=True)
+                a = self.publish("a", pinned=True)
+                b = self.publish("b", pinned=True, source=a)
                 worker, rows = self.scanned_cleaner()
                 for p in (a, b):
                     self.assertTrue(worker.published(p.relative_to(self.root)))
@@ -506,66 +497,37 @@ class CleanupTest(unittest.TestCase):
                         (p.parents[2] / "manifest.json").write_text("{}")
                     else:
                         (p.parent / "strategy_comparison.json").write_text("{}")
-                worker.share()
+                worker.clear_reused_details()
                 self.assertFalse(a.samefile(b))
                 self.assertFalse(any(row[0] == "LINK" for row in rows))
 
-    def test_publication_and_dedup_read_each_csv_once(self):
+    def test_publication_and_duplicate_check_read_each_csv_once(self):
         from core import file_integrity
-        a, b = self.publish("a", pinned=True), self.publish("b", pinned=True)
+        a = self.publish("a", pinned=True)
+        b = self.publish("b", pinned=True, source=a)
         file_integrity._observed_file_sha256.cache_clear()
         with patch.object(file_integrity, "compute_file_sha256", wraps=file_integrity.compute_file_sha256) as hashed:
             self.menu(["1", "0"])
         observed = [Path(call.args[0]) for call in hashed.call_args_list]
         self.assertEqual(observed.count(a), 1)
         self.assertEqual(observed.count(b), 1)
-        self.assertEqual(self.summary("preview")[0]["counts"]["PLAN_LINK"], 1)
+        self.assertEqual(self.summary("preview")[0]["counts"]["PLAN_DELETE"], 1)
 
-    def test_menu_proofs_dedup_retry_and_independent_rewrites(self):
-        a, b = self.publish("a", pinned=True), self.publish("b")
-        unequal = self.publish("c", data=b"Z" * len(self.payload))
-        partial = self.publish("d")
-        (partial.parents[2] / "manifest.json").unlink()
-        src = self.write("services/module.py", b"v=42")
-        self.git("add", "services/module.py")
-        pyc = Path(py_compile.compile(str(src), doraise=True))
-        stale = self.write(self.base / "a/pairs/arm/strategy_comparison.html", b"retired")
-        fixture = self.write(rules.STAGING / "quick_gate_broken_run_best_params_12345678/models/run_best_params.json",
-                             b"{not-valid-json")
-        custom = self.write(rules.STAGING / "quick_gate_broken_run_best_params_xxxxxxxx/models/run_best_params.json",
-                            b"important")
-        protected = [self.write(x, b"keep") for x in ("data/trading/raw", "state/trading/open",
-                     "models/research/checkpoint.pt", "outputs/optimizer/study.db", "outputs/unclassified/draft")]
-        before, report = self.menu(["", "0"]), self.summary("preview")[0]
-        self.assertIn("預估可釋放", before)
-        self.assertEqual(report["counts"]["PLAN_LINK"], 1)
-        self.assertTrue(pyc.exists() and stale.exists() and fixture.exists())
-        self.assertFalse(os.path.samefile(a, b))
-        self.menu(["2", "3", self.output, "0"])
-        stats, rows = self.summary("apply")
-        self.assertEqual(stats["counts"]["LINK"], 1)
-        self.assertEqual(stats["counts"]["DELETE"], 3)
-        self.assertTrue(os.path.samefile(a, b))
-        self.assertTrue(all(item.exists() for item in [custom, partial, unequal, *protected]))
-        self.assertFalse(os.path.samefile(a, unequal))
-        self.assertFalse(os.path.samefile(a, partial))
-        self.assertFalse(pyc.exists() or stale.exists() or fixture.exists())
-        for p in (a,b):
-            directory=p.parents[2]
-            self.assertTrue(completed_strategy_run_publication_matches(
-                run_dir=directory, project_root=self.root,
-                run_payload=json.loads((directory / "strategy_comparison.json").read_text())))
-        self.menu(["2","0"])
-        self.assertEqual(sum(self.summary("apply")[0]["saved"].values()), 0)
-        replay = self.root / self.base / "e/pairs/arm" / self.output
-        replay.parent.mkdir(parents=True)
-        copy_reused_detail(a, replay)
-        self.assertTrue(os.path.samefile(a,replay))
+    def test_cleaned_reuse_can_be_copied_and_producer_rewrites_stay_independent(self):
         import pandas as pd
-        publish_detail_csv(pd.DataFrame({"new":[1]}), replay, index=False, encoding="utf-8-sig")
-        self.assertFalse(os.path.samefile(a,replay))
+        a = self.publish("a", pinned=True)
+        b = self.publish("b", pinned=True, source=a)
+        self.menu(["2", "0"])
+        c = self.root / self.base / "c/pairs/arm" / self.output
+        shutil.copytree(b.parent, c.parent, copy_function=copy_reused_detail)
+        self.assertFalse(c.exists())
+        self.assertEqual(detail_read_path(c).read_bytes(), self.payload)
+        before = build_completed_pair_file_integrity({"arm": b.parent})
+        self.assertEqual(build_completed_pair_file_integrity({"arm": c.parent}), before)
+        publish_detail_csv(pd.DataFrame({"new": [1]}), c, index=False)
+        self.assertTrue(c.exists())
         self.assertEqual(a.read_bytes(), self.payload)
-        self.assertEqual(b.read_bytes(), self.payload)
+        self.assertEqual(detail_read_path(b).read_bytes(), self.payload)
 
     def test_reuse_copies_independently_and_traces_why_link_was_skipped(self):
         source = self.publish("original")
@@ -661,16 +623,142 @@ class CleanupTest(unittest.TestCase):
         self.assertFalse(os.path.samefile(a,b))
         self.assertIn("中斷", self.summary("apply")[0]["status"])
         self.menu(["2","0"])
-        self.assertTrue(os.path.samefile(a,b))
-
-    def test_interrupt_and_recover(self):
-        a,b=self.publish("a"),self.publish("b")
-        with patch.object(service.Cleaner,"link_one",side_effect=KeyboardInterrupt):
-            self.menu(["2","0"])
-        self.assertIn("中斷",self.summary("apply")[0]["status"])
         self.assertFalse(os.path.samefile(a,b))
-        self.menu(["2","0"])
-        self.assertTrue(os.path.samefile(a,b))
+
+    def test_interrupt_after_unlink_is_readable_and_next_run_is_safe(self):
+        a = self.publish("a")
+        b = self.publish("b", source=a)
+        unlink = Path.unlink
+        def interrupt_copy(path, *args, **kwargs):
+            result = unlink(path, *args, **kwargs)
+            if path == b:
+                raise KeyboardInterrupt
+            return result
+        with patch.object(Path, "unlink", interrupt_copy):
+            self.menu(["2", "0"])
+        self.assertFalse(b.exists())
+        self.assertEqual(detail_read_path(b).read_bytes(), self.payload)
+        self.assertIn("中斷", self.summary("apply")[0]["status"])
+        self.menu(["2", "0"])
+        self.assertEqual(detail_read_path(b).read_bytes(), self.payload)
+
+
+    def test_completed_baseline_planner_and_real_readers_reuse_after_deletion(self):
+        import pandas as pd
+        from core.strategy_compare_policy import get_strategy_comparison_settings
+        from core.strategy_comparison import resolve_strategy_comparison_arm_param_policy, resolve_strategy_parameter_consumption_mode
+        from filters.breakout_quality.strategy_compare_sources import OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF, OPTIONAL_ENTRY_FILTER_POLICY_CURRENT
+        from filters.breakout_quality.strategy_rule_policies import ALL_RULE_FILTERS_OFF_OVERRIDES
+        from services.research import strategy_compare_reuse as reuse
+        from services.research.strategy_compare_replay import _load_reusable_no_filter_baseline
+        from services.breakout_quality.point_in_time_audit import _orderable_coverage
+        settings = get_strategy_comparison_settings("forward_oos")
+        off_arm = next(a for a in settings.arms.values() if not a.dl_enabled)
+        runs = reuse._comparison_runs_roots(root=self.root, settings=settings)[0]
+        period = {"start": "2021-01-01", "end": "2022-12-31"}
+        all_off = off_arm.rule_policy == "all_off"
+        metadata = dict(dataset=settings.dataset, params_file_sha256="synthetic-param-sha",
+            requested_param_policy=resolve_strategy_comparison_arm_param_policy(settings, off_arm),
+            param_evaluation_mode=resolve_strategy_parameter_consumption_mode(settings.parameter_sources[off_arm.param_source]),
+            optional_entry_filter_policy=OPTIONAL_ENTRY_FILTER_POLICY_ALL_OFF if all_off else OPTIONAL_ENTRY_FILTER_POLICY_CURRENT,
+            shared_param_overrides=dict(ALL_RULE_FILTERS_OFF_OVERRIDES) if all_off else {},
+            max_positions=int(settings.max_positions), enable_rotation=settings.rotation == "on",
+            comparison_period=period)
+        contents = {
+            "strategy_comparison.md": b"original report\n",
+            "no_filter_equity.csv": b"Date,Equity\n2021-01-04,1000\n",
+            "no_filter_trades.csv": b"ticker\n0050\n",
+            "no_filter_daily_capacity.csv": b"Date,capacity\n2021-01-04,10\n",
+            "yearly_returns_comparison.csv": b"year,no_filter_return_pct,is_full_year,start_date,end_date\n2021,1.0,True,2021-01-01,2021-12-31\n",
+            "no_filter_orderable_candidates.csv": b"ticker,signal_date,trade_date\n0050,2021-01-04,2021-01-05\n",
+        }
+        pairs = []
+        for name in ("20990101_original", "20990102_reused"):
+            run = runs / name
+            pair = run / "pairs/baseline"
+            payload = {"metadata": dict(metadata), "no_filter": {"total_return_pct": 1.0}}
+            if pairs:
+                payload["metadata"]["cache_reused_from"] = pairs[0].relative_to(self.root).as_posix()
+            self.write(pair / "strategy_comparison.json", payload)
+            for filename, data in contents.items():
+                self.write(pair / filename, data)
+            integrity = build_completed_pair_file_integrity({"baseline": pair})
+            report = {"status": "COMPLETED", "config_fingerprint": "0123456789ab",
+                      "pairs": {"baseline": payload}, "pair_file_integrity": integrity}
+            self.write(run / "strategy_comparison.json", report)
+            self.write(run / "manifest.json", {"config_fingerprint": report["config_fingerprint"],
+                       "pair_file_integrity": integrity})
+            pairs.append(pair)
+        status = {"comparison_period": period,
+                  "resolved_arm_parameter_identities": {off_arm.arm_id: {"sha256": "synthetic-param-sha"}}}
+        kwargs = dict(comparison_mode="score-ranking", expected_dataset=metadata["dataset"],
+            expected_params_sha256=metadata["params_file_sha256"], expected_param_policy=metadata["requested_param_policy"],
+            expected_param_evaluation_mode=metadata["param_evaluation_mode"],
+            expected_optional_entry_filter_policy=metadata["optional_entry_filter_policy"],
+            expected_shared_param_overrides=metadata["shared_param_overrides"],
+            expected_max_positions=metadata["max_positions"], expected_enable_rotation=metadata["enable_rotation"],
+            expected_start_date=period["start"], expected_end_date=period["end"])
+        path = pairs[1] / "no_filter_orderable_candidates.csv"
+        score = pd.DataFrame({"ticker": ["0050"], "date": pd.to_datetime(["2021-01-04"]), "breakout_quality_score": [0.75]})
+        def coverage():
+            return _orderable_coverage(score, requested_path=str(path), filter_id="unused", target_id="unused")
+        before = _load_reusable_no_filter_baseline(pairs[1], **kwargs)
+        audit_before = coverage()
+        self.assertEqual(reuse._find_reusable_baseline_source(root=self.root, settings=settings, status=status, off_arm=off_arm), pairs[1])
+        self.menu(["2", "0"])
+        self.assertFalse(path.exists())
+        self.assertEqual(reuse._find_reusable_baseline_source(root=self.root, settings=settings, status=status, off_arm=off_arm), pairs[1])
+        after = _load_reusable_no_filter_baseline(pairs[1], **kwargs)
+        for field in ("equity_curve", "trade_history"):
+            pd.testing.assert_frame_equal(before[0][field], after[0][field])
+        pd.testing.assert_frame_equal(before[2], after[2])
+        self.assertEqual(before[1], after[1])
+        self.assertEqual(audit_before, coverage())
+        (pairs[0] / path.name).write_bytes(b"corrupted\n")
+        self.assertFalse(detail_exists(path))
+        with self.assertRaises(ValueError):
+            _load_reusable_no_filter_baseline(pairs[1], **kwargs)
+
+    def test_original_deletion_rules_and_unfinished_work_remain_in_force(self):
+        source = self.write("services/sample.py", b"value = 42\n")
+        self.git("add", str(source))
+        pyc = Path(py_compile.compile(str(source), doraise=True))
+        fixture = self.write(rules.STAGING / "quick_gate_broken_run_best_params_12345678/models/run_best_params.json", b"{not-valid-json")
+        keep = [self.write(p, b"keep") for p in (
+            "data/raw.csv", "state/trading/account.json", "models/research/fitting_checkpoints/model.pt",
+            "outputs/optimizer/unfinished/study.db", "outputs/unclassified/draft.csv")]
+        self.menu(["1", "0"])
+        self.assertTrue(pyc.exists() and fixture.exists())
+        self.menu(["2", "0"])
+        self.assertFalse(pyc.exists() or fixture.exists())
+        self.assertTrue(all(p.exists() for p in keep))
+
+
+    def test_absolute_legacy_source_and_changed_lineage_keep_the_copy(self):
+        a = self.publish("a")
+        b = self.publish("b", source=a)
+        marker = b.parent / "strategy_comparison.json"
+        payload = json.loads(marker.read_text())
+        payload["metadata"]["cache_reused_from"] = str(a.parent)
+        marker.write_text(json.dumps(payload))
+        run = b.parents[2] / "strategy_comparison.json"
+        report = json.loads(run.read_text()); report["pairs"]["arm"] = payload
+        run.write_text(json.dumps(report))
+        self.menu(["2", "0"])
+        self.assertTrue(b.exists())
+        b = self.publish("b", source=a)
+        c = self.publish("c", source=b)
+        worker, rows = self.scanned_cleaner()
+        original_hash = worker.hash_file
+        def change_lineage(path):
+            digest = original_hash(path)
+            if path == c:
+                marker.write_text("{}")
+            return digest
+        with patch.object(worker, "hash_file", side_effect=change_lineage):
+            worker.clear_reused_details()
+        self.assertTrue(c.exists())
+        self.assertEqual(a.read_bytes(), self.payload)
 
 
 if __name__ == "__main__":

@@ -125,5 +125,11 @@ def show_summary(summary):
                 for reason, (n, size) in details[:8]:
                     print(f"    {reason}  {n:,} 份／{size/2**30:.3f} GiB")
     total = sum(summary["saved"].values())
+    deleted = sum(summary["logical"].get(action, 0) for action in ("DELETE", "PLAN_DELETE"))
+    if deleted:
+        label = "預計刪除" if summary["mode"] == "preview" else "已刪除"
+        print(f"{label}的檔案大小合計 {deleted/2**30:.3f} GiB；這些檔名將不再占資料夾大小。")
     prefix = "預估可釋放" if summary["mode"] == "preview" else "依已完成檔案的磁碟配置量計算，共釋放"
     print(f"{prefix} {total/2**30:.3f} GiB（{total:,} bytes）")
+    if deleted > total:
+        print("原本已共用實體內容的副本，刪除後會減少資料夾大小，但不會再次釋放同一份磁碟空間。")

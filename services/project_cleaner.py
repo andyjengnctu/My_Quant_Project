@@ -11,7 +11,7 @@ from zipfile import ZipFile, BadZipFile
 import json
 
 from core.compare_csv_storage import (DETAIL_NAMES, RETIRED_PAIR_EXPORTS, clean_path, compare_root,
-                                      disk_bytes, file_metadata, plain, storage_lock)
+                                      disk_bytes, file_metadata, plain, storage_lock, reused_detail_source)
 from core.file_integrity import (compute_observed_file_sha256, exclusive_file_lock, file_change_signature,
                                  load_json_object_or_none)
 from services import cleanup_rules as rules
@@ -115,7 +115,7 @@ class Cleaner:
         except (ValueError, OSError, RuntimeError, subprocess.CalledProcessError) as exc:
             self.tracked = set()
             self.git_ok = False
-            self.note("SKIP", Path("."), 0, f"Git 索引無法核對；略過移除與共用操作：{exc}")
+            self.note("SKIP", Path("."), 0, f"Git 索引無法核對；略過移除操作：{exc}")
 
     def protected_by_git(self, rel):
         if self.git_ok and file_change_signature(self.index_path) != self.index_revision:
@@ -138,14 +138,14 @@ class Cleaner:
         """Share byte verification within this scan, never cache publication readiness."""
         path = Path(path)
         revision = file_change_signature(path)
-        cached = self.hashes.get(path)
-        if cached and cached[0] == revision:
-            return cached[1]
+        cached = self.hashes.get(revision)
+        if cached:
+            return cached
         self.progress(f"正在驗證內容 {path.relative_to(self.root).as_posix()}")
         digest = compute_observed_file_sha256(path)
         if file_change_signature(path) != revision:
             raise ValueError("驗證期間檔案變動")
-        self.hashes[path] = (revision, digest)
+        self.hashes[revision] = digest
         return digest
 
     def published_pairs(self, run_rel):
@@ -341,111 +341,75 @@ class Cleaner:
         except FAILURES as exc:
             self.note("SKIP", rel, size, exc)
 
-    def share(self):
-        print("驗證已發布的比較結果，核對重複 CSV 的實際內容…", flush=True)
-        for i, (key, paths) in enumerate(self.groups.items(), 1):
-            self.progress(f"已處理 CSV 候選群組 {i:,}/{len(self.groups):,}")
+    def clear_reused_details(self):
+        print("核對 REUSE 來源，刪除已有完整原始資料的重複明細…", flush=True)
+        candidates = sorted(rel for paths in self.groups.values() for rel in paths)
+        for index, rel in enumerate(candidates, 1):
+            self.progress(f"已核對 REUSE 明細 {index:,}/{len(candidates):,}")
+            path = self.root / rel
+            size = 0
             try:
-                self.share_group(paths, key[3], key[4])
-            except FAILURES as exc:
-                self.note("ERROR", paths[0], 0, str(exc))
-
-    def share_group(self, paths, size, stamp):
-        physical = defaultdict(list)
-        for rel in sorted(paths):
-            try:
-                if self.protected_by_git(rel):
-                    self.note("KEEP", rel, size, "Git 保護或索引無法核對")
+                info = regular(path)
+                size = info.st_size
+                revision = file_change_signature(path)
+                lineage_revisions = {}
+                source = reused_detail_source(path, revisions=lineage_revisions)
+                if source is None:
+                    self.note("KEEP", rel, size, "原始比較明細，沒有可取代的 REUSE 來源")
                     continue
-                st = regular(self.root / rel)
-                if st.st_size != size or st.st_mtime_ns != stamp:
-                    raise ValueError("盤點後尺寸或修改時間已變動")
-                physical[(st.st_dev, st.st_ino)].append(rel)
+                if not self.published(rel):
+                    raise ValueError("副本尚未完整發布或發布內容無法驗證")
+                digest = self.hash_file(path)
+                access = file_metadata(path, info)
+                # Follow only byte-identical, committed producer provenance. An
+                # intervening copy with changed diagnostics remains an original.
+                seen = {path}
+                retained = None
+                while source is not None:
+                    if source in seen:
+                        raise ValueError("REUSE 來源循環")
+                    seen.add(source)
+                    source_rel = source.relative_to(self.root)
+                    source_info = regular(source)
+                    if (source_info.st_size != size or not self.published(source_rel)
+                            or file_metadata(source, source_info) != access
+                            or self.hash_file(source) != digest):
+                        break
+                    retained = source
+                    source = reused_detail_source(source, revisions=lineage_revisions)
+                if retained is None:
+                    self.note("KEEP", rel, size, "REUSE 來源不存在、內容不同或未通過完整性驗證")
+                    continue
+                source = retained
+                source_rel = source.relative_to(self.root)
+                source_revision = file_change_signature(source)
+                if (self.pinned_hashes.get(path, digest) != digest
+                        or self.pinned_hashes.get(source, digest) != digest):
+                    raise ValueError("內容已偏離已驗證的發布紀錄")
+                reason = "已有完整且內容一致的 REUSE 原始來源，移除重複副本"
+                with storage_lock(self.root) if self.apply else nullcontext():
+                    if (self.protected_by_git(rel) or not clean_path(path) or not clean_path(source)
+                            or file_change_signature(path) != revision
+                            or file_change_signature(source) != source_revision
+                            or any(not clean_path(p) or file_change_signature(p) != stamp
+                                   for p, stamp in lineage_revisions.items())
+                            or not self.published(rel) or not self.published(source_rel)):
+                        raise ValueError("檔案或發布紀錄在核對後變動")
+                    # Removing another name for an already shared inode does
+                    # not free those data blocks a second time.
+                    space = disk_bytes(path, regular(path)) if regular(path).st_nlink == 1 else 0
+                    if self.apply:
+                        self.note("INTENT", rel, size, reason, source=source_rel)
+                        path.unlink()
+                        # Our unlink changes the shared inode's change time,
+                        # not its bytes. Reuse that verified digest while the
+                        # producer's publication lock is still held.
+                        after = file_change_signature(source)
+                        if revision[:2] == source_revision[:2] and after[:4] == source_revision[:4]:
+                            self.hashes[after] = digest
+                self.note("DELETE" if self.apply else "PLAN_DELETE", rel, size, reason, space, source_rel)
             except FAILURES as exc:
                 self.note("SKIP", rel, size, exc)
-        if len(physical) == 1:
-            for rel in next(iter(physical.values())):
-                self.note("KEEP", rel, size, "已共用同一實體或無其他同條件副本")
-            return
-        masters = {}
-        # Reuse existing verified link sets first; unknown external links never become masters.
-        for members in sorted(physical.values(), key=lambda v: (-len(v), v[0])):
-            path = self.root / members[0]
-            try:
-                published = all(self.published(rel) for rel in members)
-                if not published or regular(path).st_nlink != len(members):
-                    for name in members:
-                        self.note("KEEP", name, size, "尚未完成發布、完整性無法驗證或有其他連結")
-                    continue
-                before = file_change_signature(path)
-                info = regular(path)
-                if info.st_size != size or info.st_mtime_ns != stamp:
-                    raise ValueError("盤點後尺寸或修改時間已變動")
-                access = file_metadata(path, info)
-                digest = self.hash_file(path)
-                if before != file_change_signature(path):
-                    raise ValueError("比對期間檔案變動")
-                if any(self.pinned_hashes.get(self.root / rel, digest) != digest for rel in members):
-                    raise ValueError("內容已偏離已驗證的發布紀錄")
-                key = (digest, access)
-                if key not in masters:
-                    masters[key] = [path, before]
-                    for name in members:
-                        self.note("KEEP", name, size, "保留已驗證實體資料")
-                    continue
-                self.link_group(masters[key], members, size, before, info)
-            except FAILURES as exc:
-                for name in members:
-                    self.note("SKIP", name, size, exc)
-
-    def link_group(self, master, members, size, expected, info):
-        # Replacing one alias preserves the old physical data until its last
-        # alias is replaced. Only that last operation releases disk allocation.
-        # One writer lease spans the group; CSV publication cannot replace an
-        # unprocessed alias between our unlink and the next revision snapshot.
-        with storage_lock(self.root) if self.apply else nullcontext():
-            original = expected[:4]
-            for index, rel in enumerate(members):
-                remaining = len(members) - index
-                try:
-                    if self.apply and index:
-                        next_path = self.root / rel
-                        info = regular(next_path)
-                        expected = file_change_signature(next_path)
-                    if expected[:4] != original:
-                        raise ValueError("共用群組在盤點後變動")
-                    self.link_one(master, rel, size, expected, info, expected_links=remaining, locked=True)
-                except FAILURES as exc:
-                    for name in members[index:]:
-                        self.note("SKIP", name, size, exc)
-                    return
-
-    def link_one(self, master, rel, size, expected, info, *, expected_links=1, locked=False):
-        path = self.root / rel
-        source, source_revision = master
-        source_rel = source.relative_to(self.root)
-        space = disk_bytes(path, info) if expected_links == 1 else 0
-        reason = "已發布且內容、修改時間、存取權限一致"
-        if self.apply:
-            with nullcontext() if locked else storage_lock(self.root):
-                if (not clean_path(source) or not clean_path(path)
-                        or self.protected_by_git(source_rel) or self.protected_by_git(rel)
-                        or file_change_signature(source) != source_revision
-                        or file_change_signature(path) != expected or regular(path).st_nlink != expected_links
-                        or not self.published(source_rel) or not self.published(rel)):
-                    raise ValueError("檔案在盤點後變動")
-                stage = self.root / "outputs/project_cleanup/pending.link"
-                if stage.exists() or stage.is_symlink():
-                    raise ValueError("清理暫存連結已被使用")
-                self.note("INTENT", rel, size, reason, source=source_rel)
-                try:
-                    os.link(source, stage)
-                    os.replace(stage, path)
-                finally:
-                    if stage.exists() and clean_path(stage) and stage.samefile(source):
-                        stage.unlink()
-                master[1] = file_change_signature(source)
-        self.note("LINK" if self.apply else "PLAN_LINK", rel, size, reason, space, source_rel)
 
 
 @contextmanager
@@ -479,9 +443,9 @@ def run(root, apply=False):
         cleaner = Cleaner(root, log, apply)
         cleaner.scan()
         print(f"進入用途驗證 {sum(map(len, cleaner.deletes.values())):,} 個檔案；"
-              f"進入重複比對 {sum(len(paths) for paths in cleaner.groups.values() if len(paths) > 1):,} 個明細。", flush=True)
+              f"核對 REUSE 副本 {sum(map(len, cleaner.groups.values())):,} 個明細。", flush=True)
         cleaner.clear_unused()
-        cleaner.share()
+        cleaner.clear_reused_details()
 
 
 def show_history(root):

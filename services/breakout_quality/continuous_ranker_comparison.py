@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from core.compare_csv_storage import detail_exists, detail_read_path
+
 import argparse
 import json
 import math
@@ -381,7 +383,7 @@ def _resolve_reference_pair_dir(
             pair_dir / "score_ranking_orderable_candidates.csv",
             pair_dir / "strategy_comparison.json",
         )
-        if all(path.is_file() for path in required):
+        if all(detail_exists(path) for path in required):
             return pair_dir, run_dir, payload
     raise FileNotFoundError(
         f"找不到符合目前設定 reference arm={reference_arm_id} 語意的已完成 Strategy Compare pair；"
@@ -403,7 +405,7 @@ def _dynamic_orderable_frame(
         "breakout_quality_score_unavailable_reason",
     }
     orderable = read_breakout_quality_csv(
-        pair_dir / "score_ranking_orderable_candidates.csv",
+        detail_read_path(pair_dir / "score_ranking_orderable_candidates.csv"),
         encoding="utf-8-sig",
         usecols=lambda column: column in (required_orderable | optional_orderable),
     )

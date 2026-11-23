@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from core.compare_csv_storage import detail_exists, detail_read_path
+
 import argparse
 import json
 import math
@@ -720,9 +722,9 @@ def _orderable_coverage(
         if requested_path
         else _default_orderable_path(filter_id, target_id)
     )
-    if not path.is_file():
+    if not detail_exists(path):
         return {"available": False, "path": str(path), "reason": "orderable candidate工件不存在"}
-    candidates = pd.read_csv(path, encoding="utf-8-sig", dtype={"ticker": "string"})
+    candidates = pd.read_csv(detail_read_path(path), encoding="utf-8-sig", dtype={"ticker": "string"})
     date_column = next(
         (
             column

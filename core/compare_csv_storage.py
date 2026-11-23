@@ -1,6 +1,7 @@
 """Storage operations for immutable, published Strategy Compare detail CSVs."""
 from contextlib import contextmanager
 import logging
+import json
 import os
 from pathlib import Path
 import shutil
@@ -20,10 +21,12 @@ DETAIL_NAMES = frozenset(
 def compare_root(path):
     """Only the canonical .../runs/<run>/pairs/<pair>/<file> output namespace."""
     p = Path(path).absolute()
-    if (len(p.parents) >= 9 and p.parents[1].name == "pairs"
-            and p.parents[3].name == "runs" and p.parents[6].name == "strategy_compare"
-            and p.parents[7].name == "outputs"):
-        return p.parents[8]
+    if len(p.parents) >= 7 and p.parents[1].name == "pairs" and p.parents[3].name == "runs":
+        # Current and historical profile roots have different depths. The run
+        # and pair publication boundaries, not a fixed depth, establish ownership.
+        for parent in p.parents[4:]:
+            if parent.name == "strategy_compare" and parent.parent.name == "outputs":
+                return parent.parent.parent
     return None
 
 
@@ -34,6 +37,81 @@ def plain(info):
 
 def clean_path(path):
     return Path(path).absolute() == Path(path).resolve(strict=False)
+
+
+def reused_detail_source(path, *, revisions=None):
+    """Follow the producer's existing REUSE provenance; create no new storage format."""
+    path = Path(path).absolute()
+    root = compare_root(path)
+    if root is None or path.name not in DETAIL_NAMES:
+        return None
+    seen = {path}
+    while True:
+        marker = path.parent / "strategy_comparison.json"
+        if not clean_path(marker) or not marker.is_file():
+            return None
+        from core.file_integrity import file_change_signature
+        before = file_change_signature(marker)
+        payload = json.loads(marker.read_text(encoding="utf-8-sig"))
+        if file_change_signature(marker) != before:
+            raise ValueError("讀取 REUSE 來源紀錄時內容變動")
+        if revisions is not None:
+            revisions[marker] = before
+        metadata = payload.get("metadata") if isinstance(payload, dict) else None
+        source = metadata.get("cache_reused_from") if isinstance(metadata, dict) else None
+        if not isinstance(source, str) or not source.strip():
+            return None
+        parent = Path(source)
+        if parent.is_absolute():
+            raise ValueError("舊 REUSE 紀錄使用絕對來源路徑；保留副本，避免專案搬移後失去來源")
+        path = (root / parent / path.name).absolute()
+        if (path in seen or compare_root(path) != root or not clean_path(path)):
+            raise ValueError("REUSE 明細來源循環或離開正式專案路徑")
+        seen.add(path)
+        if path.is_file():
+            if not plain(path.lstat()):
+                raise ValueError("REUSE 明細來源不是一般檔案")
+            return path
+
+
+def detail_read_path(path):
+    path = Path(path)
+    if path.is_file():
+        return path
+    source = reused_detail_source(path)
+    if source is None:
+        return path
+    # For pinned publications the inherited bytes must still match THIS pair's
+    # existing receipt, even when an audit reads the CSV directly.
+    from core.file_integrity import compute_observed_file_sha256, load_json_object_or_none
+    payload = load_json_object_or_none(path.parents[2] / "strategy_comparison.json")
+    record = payload.get("pair_file_integrity") if isinstance(payload, dict) else None
+    if record is not None:
+        try:
+            expected = record["pairs"][path.parent.name][path.name]
+        except (KeyError, TypeError) as exc:
+            raise ValueError("REUSE 明細缺少原有的完整性收據") from exc
+        if compute_observed_file_sha256(source) != expected:
+            raise ValueError("REUSE 明細來源與發布時內容不同")
+    return source
+
+
+def detail_exists(path):
+    try:
+        return detail_read_path(path).is_file()
+    except (OSError, ValueError):
+        return False
+
+
+def detail_sha256(path, *, file_hasher=None):
+    from core.file_integrity import compute_file_sha256
+    return (file_hasher or compute_file_sha256)(detail_read_path(path))
+
+
+def inherited_detail_files(pair_dir):
+    """Only existing REUSE links may supply missing published detail filenames."""
+    return {name: Path(pair_dir) / name for name in DETAIL_NAMES
+            if detail_exists(Path(pair_dir) / name)}
 
 
 @contextmanager

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from core.compare_csv_storage import detail_exists, detail_read_path
+
 import copy
 from functools import lru_cache
 import hashlib
@@ -1273,7 +1275,7 @@ def backfill_pair_selection_diagnostics(
         baseline_selected_path, active_selected_path,
         baseline_trades_path, active_trades_path,
     )
-    if not all(path.is_file() for path in required_paths):
+    if not all(detail_exists(path) for path in required_paths):
         return False
 
     lookup = _continuous_forward_target_lookup(
@@ -1289,14 +1291,14 @@ def backfill_pair_selection_diagnostics(
     )
     baseline_diag, baseline_orderable_joined, baseline_selected_joined = (
         _strategy_selection_diagnostics(
-            orderable=pd.read_csv(baseline_orderable_path, encoding="utf-8-sig"),
+            orderable=pd.read_csv(detail_read_path(baseline_orderable_path), encoding="utf-8-sig"),
             selected=pd.read_csv(baseline_selected_path, encoding="utf-8-sig"),
             lookup=lookup,
         )
     )
     active_diag, active_orderable_joined, active_selected_joined = (
         _strategy_selection_diagnostics(
-            orderable=pd.read_csv(active_orderable_path, encoding="utf-8-sig"),
+            orderable=pd.read_csv(detail_read_path(active_orderable_path), encoding="utf-8-sig"),
             selected=pd.read_csv(active_selected_path, encoding="utf-8-sig"),
             lookup=lookup,
         )
@@ -1835,12 +1837,12 @@ def _filled_selection_geometry_keys(
 ) -> pd.DataFrame:
     orderable_path = Path(pair_dir) / f"{prefix}_orderable_candidates.csv"
     selected_path = Path(pair_dir) / f"{prefix}_selected_buys.csv"
-    if not orderable_path.is_file() or not selected_path.is_file():
+    if not detail_exists(orderable_path) or not selected_path.is_file():
         raise ValueError(
             "Strategy Compare MFE/Safety主報表缺少既有selection sidecar: "
             f"{orderable_path.name} / {selected_path.name}"
         )
-    orderable = pd.read_csv(orderable_path, encoding="utf-8-sig", low_memory=False)
+    orderable = pd.read_csv(detail_read_path(orderable_path), encoding="utf-8-sig", low_memory=False)
     selected = pd.read_csv(selected_path, encoding="utf-8-sig", low_memory=False)
     _orderable_events, selected_events = strategy_replay_score_event_frames(orderable, selected)
     if selected_events is None or selected_events.empty:

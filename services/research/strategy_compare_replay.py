@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from core.compare_csv_storage import detail_exists, detail_read_path
+
 from contextlib import ExitStack
 from core.compare_csv_storage import publish_detail_csv
 from core.portfolio_entry_policy import portfolio_entry_policy_context, daily_execution_contract_from_params
@@ -299,7 +301,7 @@ def _load_reusable_no_filter_baseline(
         "orderable": source_dir / "no_filter_orderable_candidates.csv",
         "yearly": source_dir / "yearly_returns_comparison.csv",
     }
-    missing = [path.name for path in required_paths.values() if not path.is_file()]
+    missing = [path.name for path in required_paths.values() if not detail_exists(path)]
     if missing:
         raise FileNotFoundError(
             "可重用baseline缺少正式工件: " + ", ".join(sorted(missing))
@@ -308,7 +310,7 @@ def _load_reusable_no_filter_baseline(
     equity = pd.read_csv(required_paths["equity"], encoding="utf-8-sig")
     trades = pd.read_csv(required_paths["trades"], encoding="utf-8-sig")
     capacity = pd.read_csv(required_paths["capacity"], encoding="utf-8-sig")
-    orderable = pd.read_csv(required_paths["orderable"], encoding="utf-8-sig")
+    orderable = pd.read_csv(detail_read_path(required_paths["orderable"]), encoding="utf-8-sig")
     yearly = pd.read_csv(required_paths["yearly"], encoding="utf-8-sig")
 
     yearly_rows: list[dict[str, Any]] = []

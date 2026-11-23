@@ -18,6 +18,7 @@ from core.file_integrity import (
     is_sha256_hex,
     load_json_object_or_none,
 )
+from core.compare_csv_storage import detail_sha256, inherited_detail_files
 
 PAIR_FILE_INTEGRITY_FIELD = "pair_file_integrity"
 PAIR_FILE_INTEGRITY_SCHEMA_VERSION = 1
@@ -40,6 +41,7 @@ def _tracked_pair_files(pair_dir: Path) -> dict[str, Path]:
                 raise ValueError(f"pair integrity 不允許符號連結: {name}")
             if entry.is_file():
                 files[name] = pair_dir / name
+    files.update(inherited_detail_files(pair_dir))
     return dict(sorted(files.items()))
 
 
@@ -56,7 +58,7 @@ def build_completed_pair_file_integrity(
         if not any(name.endswith(".csv") for name in files) or not (pair_dir / "strategy_comparison.md").is_file():
             raise ValueError(f"Strategy Compare pair 缺少基本 CSV／Markdown: {pair_id}")
         pairs[str(pair_id)] = {
-            name: compute_file_sha256(path) for name, path in files.items()
+            name: detail_sha256(path) for name, path in files.items()
         }
     if not pairs:
         raise ValueError("Strategy Compare 完成結果缺少可封存 pair")
@@ -123,7 +125,7 @@ def completed_pair_file_integrity_matches(
             digest = digests.get(name)
             if not is_sha256_hex(digest):
                 return False
-            if file_hasher(path) != str(digest).strip().lower():
+            if detail_sha256(path, file_hasher=file_hasher) != str(digest).strip().lower():
                 return False
         return True
     except (OSError, ValueError, TypeError):

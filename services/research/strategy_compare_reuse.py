@@ -1,6 +1,8 @@
 """Completed-pair cache, archived provenance, and frozen-score reuse owner."""
 
 from __future__ import annotations
+
+from core.compare_csv_storage import DETAIL_NAMES, detail_exists, detail_read_path
 from core.research_orchestration import ResearchArtifactAction, ResearchArtifactPlan
 
 from core.file_integrity import (
@@ -452,9 +454,9 @@ def _required_pair_files_present(
     """
     if any(path.parent != pair_dir for path in required_paths):
         # Keep the original semantics for any future non-direct-child paths.
-        return all(path.is_file() for path in required_paths)
+        return all(detail_exists(path) for path in required_paths)
 
-    remaining = {path.name for path in required_paths}
+    remaining = {path.name for path in required_paths if not (path.name in DETAIL_NAMES and detail_exists(path))}
     if not remaining:
         return True
     try:
@@ -936,10 +938,10 @@ def _legacy_pair_score_projection_matches_current(
             return False
 
     sidecar_path = pair_dir / "score_ranking_orderable_candidates.csv"
-    if not sidecar_path.is_file():
+    if not detail_exists(sidecar_path):
         return False
     try:
-        sidecar = pd.read_csv(sidecar_path, encoding="utf-8-sig")
+        sidecar = pd.read_csv(detail_read_path(sidecar_path), encoding="utf-8-sig")
     except (OSError, ValueError, pd.errors.ParserError):
         return False
     if sidecar.empty or "ticker" not in sidecar.columns:
@@ -2033,7 +2035,7 @@ def _find_reusable_baseline_source(
             if actual != expected:
                 continue
             required_paths = tuple(pair_dir / name for name in required_names)
-            if all(path.is_file() for path in required_paths) and completed_pair_file_integrity_matches(
+            if all(detail_exists(path) for path in required_paths) and completed_pair_file_integrity_matches(
                 run_dir=run_dir, run_payload=run_payload,
                 pair_id=pair_dir.name, pair_dir=pair_dir,
                 required_paths=required_paths,

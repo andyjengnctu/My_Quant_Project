@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from core.compare_csv_storage import detail_exists, detail_read_path
+
 from contextlib import nullcontext
 
 from dataclasses import dataclass
@@ -492,14 +494,14 @@ def load_strategy_arm_replay_sidecars(
         prefix = "score_ranking"
     orderable_path = pair_dir / f"{prefix}_orderable_candidates.csv"
     selected_path = pair_dir / f"{prefix}_selected_buys.csv"
-    missing = [path.name for path in (orderable_path, selected_path) if not path.is_file()]
+    missing = [path.name for path in (orderable_path, selected_path) if not detail_exists(path)]
     if missing:
         raise AuditSourceBlockedError(
             f"{source.profile_id}/{arm_key} pair缺少既有row sidecar: {missing}; "
             "Audit不得重跑策略補資料"
         )
     try:
-        orderable = pd.read_csv(orderable_path, encoding="utf-8-sig", low_memory=False)
+        orderable = pd.read_csv(detail_read_path(orderable_path), encoding="utf-8-sig", low_memory=False)
         selected = pd.read_csv(selected_path, encoding="utf-8-sig", low_memory=False)
     except (OSError, ValueError, UnicodeError) as exc:
         raise AuditSourceBlockedError(
