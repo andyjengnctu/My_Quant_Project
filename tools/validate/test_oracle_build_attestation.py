@@ -120,7 +120,9 @@ class OracleBuildAttestationTests(unittest.TestCase):
     def test_only_comments_docstrings_and_encoding_are_structurally_neutral(self):
         payload = self.publish()
         self.source.write_bytes(b'# comment\r\n"""module docs"""\r\ndef calculate(x=1):\r\n    """function docs"""\r\n    return x + 1\r\n')
-        self.assertTrue(owner.inspect_oracle_build_attestation(self.root).ready)
+        status = owner.inspect_oracle_build_attestation(self.root)
+        self.assertTrue(status.ready)
+        self.assertEqual(status.differences, ())
         next_candidate = owner.prepare_oracle_build_candidate(self.root)
         self.assertEqual(next_candidate["source_digest"], payload["source_digest"])
         self.assertEqual(next_candidate["equivalence_evidence"]["kind"], "unchanged_sources")
@@ -128,6 +130,49 @@ class OracleBuildAttestationTests(unittest.TestCase):
                         "@decorator\ndef calculate(x=1):\n    return x + 1\n"):
             self.source.write_text(changed)
             self.assertFalse(owner.inspect_oracle_build_attestation(self.root).ready)
+
+    def test_unverified_diagnostics_report_added_removed_changed_and_revisions(self):
+        self.publish()
+        original = self.source.read_bytes()
+        self.source.write_bytes(b"import new\n" + original)
+        (self.root / "new.py").write_text("VALUE = 1\n")
+        self.revisions = {"replay": 2, "new_component": 1}
+        status = owner.inspect_oracle_build_attestation(self.root)
+        self.assertFalse(status.ready)
+        self.assertIsNone(status.payload)
+        self.assertEqual(status.component_revisions, self.revisions)
+        self.assertEqual(status.source_digest, owner.source_inventory_digest(owner.capture_oracle_source_inventory(self.root)))
+        self.assertEqual(status.differences, (
+            "revision new_component: <absent> -> 1", "revision observation: 1 -> <absent>",
+            "revision replay: 1 -> 2", "source changed: calculation.py", "source added: new.py",
+        ))
+        with self.assertRaises(owner.OracleBuildBlockedError) as raised:
+            owner.require_oracle_build_attestation(self.root)
+        for difference in status.differences:
+            self.assertIn(difference, str(raised.exception))
+        self.assertNotIn(str(self.root), status.reason)
+
+        self.revisions = {"replay": 1, "observation": 1}
+        self.current = owner.capture_oracle_source_inventory(self.root)
+        self.review = self.make_review()
+        self.write_review()
+        self.publish()
+        self.source.write_bytes(original)
+        removed = owner.inspect_oracle_build_attestation(self.root)
+        self.assertFalse(removed.ready)
+        self.assertIn("source removed: new.py", removed.differences)
+
+    def test_unavailable_source_keeps_known_diagnostics_without_absolute_paths(self):
+        self.publish()
+        self.revisions = {"replay": 2, "observation": 1}
+        self.source.unlink()
+        status = owner.inspect_oracle_build_attestation(self.root)
+        self.assertFalse(status.ready)
+        self.assertEqual(status.component_revisions, self.revisions)
+        self.assertEqual(status.source_digest, "")
+        self.assertIn("revision replay: 1 -> 2", status.differences)
+        self.assertIn("unavailable: calculation.py", status.differences)
+        self.assertNotIn(str(self.root), status.reason)
 
     def test_pass_partial_fail_or_drift_cannot_certify(self):
         candidate = owner.prepare_oracle_build_candidate(self.root)
@@ -246,6 +291,73 @@ class OracleBuildAttestationTests(unittest.TestCase):
                 else:
                     with self.assertRaises(owner.OracleBuildBlockedError):
                         owner.prepare_oracle_build_candidate(self.root)
+
+    def test_fresh_review_requires_external_baseline_without_packaging_it(self):
+        candidate = owner.prepare_oracle_build_candidate(self.root)
+        baseline = candidate["equivalence_evidence"]["baseline_snapshot"]
+        self.assertEqual(baseline["storage"], "external_audit")
+        self.assertEqual(baseline["sha256"], sha256(self.snapshot.read_bytes()).hexdigest())
+        self.assertFalse(any(owner.oracle_evidence_role(name) == "external_baseline"
+                             for name in candidate["evidence_artifacts"]))
+        self.snapshot.unlink()
+        with self.assertRaises(FileNotFoundError):
+            owner.prepare_oracle_build_candidate(self.root)
+
+    def test_delivery_omits_old_baseline_and_formal_archives_but_unpacked_runtime_is_verified(self):
+        from apps import package_zip
+        previous = self.publish()
+        # Model the earlier certificate that embedded a full baseline and two
+        # prior formal runs. These historical files must remain untouched.
+        old_archives = {}
+        for label in ("baseline_sources", "formal_bundle_first", "formal_bundle_second"):
+            content = self.snapshot.read_bytes() if label == "baseline_sources" else label.encode()
+            digest = sha256(content).hexdigest()
+            name = f"{owner.EVIDENCE_DIRECTORY}/{label}_{digest[:16]}.zip"
+            path = self.root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(content)
+            old_archives[name] = (digest, path.read_bytes())
+            previous["evidence_artifacts"][name] = digest
+            if label == "baseline_sources":
+                previous["equivalence_evidence"]["baseline_snapshot"] = {"path": name, "sha256": digest}
+        certificate_path = self.root / owner.ATTESTATION_RELATIVE_PATH
+        certificate_path.write_text(json.dumps(owner._sealed_payload(previous)), encoding="utf-8")
+
+        candidate = owner.prepare_oracle_build_candidate(self.root)
+        self.assertEqual(candidate["equivalence_evidence"]["kind"], "unchanged_sources")
+        self.assertEqual(candidate["equivalence_evidence"]["baseline_snapshot"], {
+            "path": str(self.snapshot), "sha256": sha256(self.snapshot.read_bytes()).hexdigest(), "storage": "external_audit",
+        })
+        self.assertTrue(all(owner.oracle_evidence_role(name) == "review" for name in candidate["evidence_files"]))
+        for name, (_digest, content) in old_archives.items():
+            self.assertEqual((self.root / name).read_bytes(), content)
+
+        formal = self.root / "this_formal.zip"
+        with zipfile.ZipFile(formal, "w") as archive:
+            archive.writestr("master_summary.json", '{"overall_status":"PASS"}')
+        digest = sha256(formal.read_bytes()).hexdigest()
+        name = f"{owner.EVIDENCE_DIRECTORY}/formal_bundle_{digest[:16]}.zip"
+        candidate["evidence_files"][name] = {"path": str(formal), "sha256": digest}
+        candidate["evidence_artifacts"][name] = digest
+        attestation = self.finalize(candidate)
+        package = self.root / "delivery.zip"
+        with zipfile.ZipFile(package, "w") as archive:
+            archive.writestr("calculation.py", self.source.read_bytes())
+        snapshot = package_zip.freeze_package_snapshot(package)
+        with patch.object(package_zip, "PROJECT_ROOT", self.root):
+            package_zip.finalize_frozen_package(snapshot, attestation=attestation,
+                                               evidence_files=candidate["evidence_files"])
+        with zipfile.ZipFile(package) as archive:
+            names = archive.namelist()
+            self.assertFalse(any(owner.oracle_evidence_role(name) == "external_baseline" for name in names))
+            self.assertEqual(sum(owner.oracle_evidence_role(name) == "formal_run" for name in names), 1)
+            self.assertFalse(set(old_archives).intersection(names))
+            with TemporaryDirectory(prefix="oracle_unpacked_") as extracted:
+                archive.extractall(extracted)
+                self.snapshot.unlink()
+                status = owner.inspect_oracle_build_attestation(extracted)
+                self.assertTrue(status.ready, status.reason)
+                self.assertEqual(status.differences, ())
 
 
 if __name__ == "__main__":

@@ -61,11 +61,19 @@ def verify_frozen_package(snapshot: FrozenPackageSnapshot) -> None:
 def finalize_frozen_package(snapshot: FrozenPackageSnapshot, *, attestation: dict,
                             evidence_files: dict[str, dict] | None = None) -> Path:
     """Add only the verified certificate to the original immutable member set."""
-    from services.research.oracle_build_attestation import ATTESTATION_RELATIVE_PATH
+    from services.research.oracle_build_attestation import ATTESTATION_RELATIVE_PATH, oracle_evidence_role
     verify_frozen_package(snapshot)
+    records = dict(evidence_files or {})
+    if set(records) != set(attestation.get("evidence_artifacts") or {}):
+        raise RuntimeError("Oracle delivery evidence does not match the certificate")
+    roles = [oracle_evidence_role(name) for name in records]
+    if "external_baseline" in roles:
+        raise RuntimeError("Full baseline snapshots remain external audit evidence")
+    if roles.count("formal_run") > 1:
+        raise RuntimeError("Oracle delivery may contain only the current formal run")
     certificate = (json.dumps(attestation, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
     additions = {ATTESTATION_RELATIVE_PATH: certificate}
-    for name, record in (evidence_files or {}).items():
+    for name, record in records.items():
         expected = dict(attestation.get("evidence_artifacts") or {}).get(name)
         if (not name.startswith("outputs/local_regression/oracle_contract/evidence/")
                 or ".." in PurePosixPath(name).parts or "\\" in name or expected != record.get("sha256")):

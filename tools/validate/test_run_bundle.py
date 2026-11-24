@@ -14,7 +14,7 @@ from unittest.mock import patch
 import zipfile
 
 from apps import package_zip, run_bundle
-from services.research.oracle_build_attestation import ATTESTATION_RELATIVE_PATH, OracleBuildBlockedError
+from services.research.oracle_build_attestation import ATTESTATION_RELATIVE_PATH, EVIDENCE_DIRECTORY, OracleBuildBlockedError
 from tools.local_regression.formal_pipeline import FORMAL_STEP_ORDER
 
 
@@ -130,6 +130,18 @@ class RunBundleTests(unittest.TestCase):
         self.formal_effect = lambda: self.package.write_bytes(self.package.read_bytes() + b"changed")
         self.assertEqual(self.invoke(), 1)
         self.publish.assert_not_called()
+
+    def test_package_rejects_accidental_baseline_or_accumulated_formal_evidence(self):
+        snapshot = self.package_snapshot()
+        for names, message in (([f"{EVIDENCE_DIRECTORY}/baseline_sources_{'a' * 16}.zip"], "external audit"),
+                               ([f"{EVIDENCE_DIRECTORY}/formal_bundle_{'a' * 16}.zip",
+                                 f"{EVIDENCE_DIRECTORY}/formal_bundle_{'b' * 16}.zip"], "only the current formal")):
+            with self.subTest(names=names):
+                records = {name: {"path": "not_read", "sha256": "a" * 64} for name in names}
+                certificate = {"evidence_artifacts": {name: record["sha256"] for name, record in records.items()}}
+                with self.assertRaisesRegex(RuntimeError, message):
+                    package_zip.finalize_frozen_package(snapshot, attestation=certificate, evidence_files=records)
+                self.assertEqual(self.package.read_bytes(), self.original_zip)
 
     def orchestration_tree(self):
         tree = ast.parse(Path(run_bundle.__file__).read_text(encoding="utf-8"))

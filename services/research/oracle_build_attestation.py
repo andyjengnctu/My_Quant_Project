@@ -34,6 +34,16 @@ def _is_sha256(value) -> bool:
     return isinstance(value, str) and bool(re.fullmatch(r"[0-9a-f]{64}", value))
 
 
+def oracle_evidence_role(relative_path: str) -> str:
+    """Classify stable engineering evidence names without changing their identity."""
+    name = PurePosixPath(relative_path).name
+    if name.startswith("baseline_sources_") and name.endswith(".zip"):
+        return "external_baseline"
+    if name.startswith("formal_bundle_") and name.endswith(".zip"):
+        return "formal_run"
+    return "review"
+
+
 class OracleBuildBlockedError(RuntimeError):
     """The executing build has no applicable, complete source proof."""
 
@@ -45,6 +55,7 @@ class OracleBuildAttestationStatus:
     component_revisions: Mapping[str, int]
     source_digest: str
     payload: Mapping[str, Any] | None = None
+    differences: tuple[str, ...] = ()
 
 
 def _relative_path(value: str) -> str:
@@ -176,23 +187,55 @@ def _validate_certificate(payload: Mapping[str, Any]) -> None:
 
 
 def inspect_oracle_build_attestation(project_root: str | Path) -> OracleBuildAttestationStatus:
+    root = None
+    revisions = {}
+    digest = ""
+    differences = []
+
+    def blocked(detail):
+        difference_text = "; ".join(differences)
+        reason = f"IMPLEMENTATION_UNVERIFIED: {detail}"
+        if difference_text:
+            reason += f"; {difference_text}"
+        return OracleBuildAttestationStatus(False, reason, revisions, digest, differences=tuple(differences))
+
     try:
         root = Path(project_root).resolve()
         payload = _load_json(root / ATTESTATION_RELATIVE_PATH)
         _validate_certificate(payload)
         revisions = _component_revisions()
-        if payload.get("component_revisions") != revisions:
-            raise OracleBuildBlockedError("Oracle build calculation revision is not certified")
+        certified_revisions = dict(payload.get("component_revisions") or {})
+        for component in sorted(set(certified_revisions) | set(revisions)):
+            old = certified_revisions.get(component, "<absent>")
+            current = revisions.get(component, "<absent>")
+            if old != current:
+                differences.append(f"revision {component}: {old} -> {current}")
         inventory = capture_oracle_source_inventory(root)
         digest = source_inventory_digest(inventory)
+        certified_inventory = payload["source_inventory"]
         if digest != payload.get("source_digest"):
-            raise OracleBuildBlockedError("Oracle build source closure changed; equivalence review required")
+            for name in sorted(set(certified_inventory) | set(inventory)):
+                if name not in certified_inventory:
+                    differences.append(f"source added: {name}")
+                elif name not in inventory:
+                    differences.append(f"source removed: {name}")
+                elif certified_inventory[name]["syntax_sha256"] != inventory[name]["syntax_sha256"]:
+                    differences.append(f"source changed: {name}")
+        if differences:
+            return blocked("Oracle build calculation/source proof differs; review required")
         return OracleBuildAttestationStatus(True, "verified", revisions, digest, payload)
     except OSError as exc:
-        return OracleBuildAttestationStatus(False, f"IMPLEMENTATION_UNVERIFIED: evidence/source unavailable ({type(exc).__name__})", {}, "")
+        if root is not None and exc.filename:
+            try:
+                relative_missing = Path(exc.filename).relative_to(root).as_posix()
+            except ValueError:
+                relative_missing = None
+            if relative_missing is not None:
+                differences.append(f"unavailable: {relative_missing}")
+        return blocked(f"evidence/source unavailable ({type(exc).__name__})")
     except (ValueError, KeyError, TypeError, SyntaxError, OracleBuildBlockedError) as exc:
         detail = str(exc) if isinstance(exc, OracleBuildBlockedError) else type(exc).__name__
-        return OracleBuildAttestationStatus(False, f"IMPLEMENTATION_UNVERIFIED: {detail}", {}, "")
+        return blocked(detail)
 
 
 def require_oracle_build_attestation(project_root: str | Path) -> dict[str, Any]:
@@ -265,7 +308,8 @@ def _verify_review(root: Path, path: Path, inventory, revisions) -> dict[str, An
         relative = f"{EVIDENCE_DIRECTORY}/{file_name.stem}_{digest[:16]}{file_name.suffix}"
         evidence_files[relative] = {"path": str(source), "sha256": digest}
         return {"path": relative, "sha256": digest}
-    baseline_reference = retain("baseline_sources.zip", snapshot, baseline["snapshot_sha256"])
+    baseline_reference = {"path": str(snapshot), "sha256": baseline["snapshot_sha256"],
+                          "storage": "external_audit"}
     retain("review.json", path, sha256(path.read_bytes()).hexdigest())
     proofs = list(review.get("proofs") or [])
     parity_count = 0
@@ -373,7 +417,20 @@ def prepare_oracle_build_candidate(project_root: str | Path, *, review_path: Pat
                     "baseline_source_digest": digest, "current_source_digest": digest}
         origins = dict(previous.get("legacy_origins") or {})
         evidence_files = {name: {"path": str(root / name), "sha256": digest}
-                          for name, digest in dict(previous.get("evidence_artifacts") or {}).items()}
+                          for name, digest in dict(previous.get("evidence_artifacts") or {}).items()
+                          if oracle_evidence_role(name) == "review"}
+        baseline_reference = dict(dict(previous.get("equivalence_evidence") or {}).get("baseline_snapshot") or {})
+        # Older certificates packaged the baseline itself. Its pinned lightweight
+        # review retains the original external locator after that duplicate is
+        # removed from delivery. No archive is deleted or opened by runtime.
+        for name, reference in evidence_files.items():
+            if PurePosixPath(name).name.startswith("review_") and name.endswith(".json"):
+                baseline = dict(_read_pinned_json(reference, relative_to=root).get("baseline") or {})
+                baseline_reference = {"path": str(baseline["snapshot_path"]),
+                                      "sha256": baseline["snapshot_sha256"], "storage": "external_audit"}
+                break
+        if baseline_reference:
+            evidence["baseline_snapshot"] = {**baseline_reference, "storage": "external_audit"}
     else:
         evidence = _verify_review(root, review_path or root / REVIEW_RELATIVE_PATH, inventory, revisions)
         origins = evidence.pop("legacy_origins")
