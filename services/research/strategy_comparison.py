@@ -11,7 +11,7 @@ import math
 from pathlib import Path
 import shutil
 import time
-from typing import Any
+from typing import Any, Callable
 
 import pandas as pd
 
@@ -1061,6 +1061,7 @@ def run_strategy_comparison(
     auto_prepare: bool = True,
     settings: StrategyComparisonSettings | None = None,
     producer_handlers: dict[str, Any] | None = None,
+    report_output: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     root = Path(project_root).resolve()
     settings = settings or get_strategy_comparison_settings()
@@ -1690,7 +1691,7 @@ def run_strategy_comparison(
         manifest_path=manifest_path,
     )
 
-    print("\n" + console_report)
+    (report_output or print)("\n" + console_report)
     print_artifact_paths(
         (
             ("策略比較Markdown", report_path),

@@ -10,7 +10,12 @@ owners.
 
 from __future__ import annotations
 
+from collections import deque
+from contextlib import contextmanager, redirect_stdout
+from functools import partial
 from pathlib import Path
+import sys
+import tempfile
 from typing import Callable
 
 from core.strategy_compare_policy import (
@@ -250,23 +255,45 @@ def resolve_strategy_comparison_execution(profile_id: str):
     return settings, resolved_plan, rendered_plan
 
 
+@contextmanager
+def _strategy_console(compact: bool):
+    """Retain producer diagnostics on failure; show the native result on success."""
+    if not compact:
+        yield None
+        return
+    output = partial(print, file=sys.stdout, flush=True)
+    with tempfile.TemporaryFile(mode="w+", encoding="utf-8") as details:
+        try:
+            with redirect_stdout(details):
+                yield output
+        except Exception:
+            details.seek(0)
+            tail = "".join(deque(details, maxlen=8)).strip()
+            if tail:
+                output(tail)
+            raise
+
+
 def execute_strategy_comparison(
     *,
     resolved_plan,
     settings,
     producer_handlers: dict[str, Callable] | None = None,
+    compact: bool = False,
 ) -> dict:
     """Execute an already-resolved comparison through the canonical engine."""
 
     from services.research.strategy_comparison import run_strategy_comparison
 
-    return run_strategy_comparison(
-        resolved_plan=resolved_plan,
-        auto_prepare=True,
-        settings=settings,
-        quiet=True,
-        producer_handlers=dict(producer_handlers or {}),
-    )
+    with _strategy_console(compact) as report_output:
+        return run_strategy_comparison(
+            resolved_plan=resolved_plan,
+            auto_prepare=True,
+            settings=settings,
+            quiet=True,
+            producer_handlers=dict(producer_handlers or {}),
+            **({"report_output": report_output} if compact else {}),
+        )
 
 
 def show_strategy_comparison_profile_status(*, profile_id: str) -> None:
@@ -283,16 +310,23 @@ def run_strategy_multi_seed_robustness(
     robustness_id: str,
     confirm: bool,
     model_upstream_preparer: Callable[[], int] | None = None,
+    compact: bool = False,
 ) -> dict:
     """Run one configured robustness profile through its canonical implementation."""
 
     from services.research.strategy_multi_seed_robustness import run_multi_seed_robustness
 
-    return run_multi_seed_robustness(
-        robustness_id=str(robustness_id),
-        confirm=bool(confirm),
-        model_upstream_preparer=model_upstream_preparer,
-    )
+    with _strategy_console(compact):
+        summary = run_multi_seed_robustness(
+            robustness_id=str(robustness_id),
+            confirm=False if compact else bool(confirm),
+            model_upstream_preparer=model_upstream_preparer,
+        )
+    if compact:
+        from services.research.strategy_multi_seed_reporting import render_multi_seed_robustness_report
+
+        print(render_multi_seed_robustness_report(summary, target="console").rstrip(), flush=True)
+    return summary
 
 
 def show_strategy_multi_seed_robustness_status(*, robustness_id: str) -> None:

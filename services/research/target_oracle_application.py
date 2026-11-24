@@ -43,7 +43,7 @@ def get_formal_oracle_definition(module_id: str):
 
 
 def ensure_authorized_oracle_parameters(
-    *, project_root: Path, definition, approved_plan: Mapping[str, Any],
+    *, project_root: Path, definition, approved_plan: Mapping[str, Any], quiet: bool = False,
 ) -> dict[str, int]:
     """Build only approved missing canonical-family seeds, then reattest every source.
 
@@ -100,7 +100,7 @@ def ensure_authorized_oracle_parameters(
         print(f"[Oracle 參數前置 {i}/{len(pending)}] {baseline} seed={seed} → canonical Optimizer")
         result = ensure_fixed_multiseed_robustness_strategy_parameter_artifact(
             root, replication_seed=seed, **kwargs,
-            force_rebuild=False, resume_parameter_training=True, quiet=False,
+            force_rebuild=False, resume_parameter_training=True, quiet=quiet,
         )
         if str(result.get("action") or "") not in {"REUSE", "BUILD", "REBUILD", "REPAIR"}:
             raise RuntimeError(f"Oracle {baseline} seed={seed} Optimizer未完成：{result.get('action')}")

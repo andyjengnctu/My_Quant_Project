@@ -187,9 +187,10 @@ def _run_optimizer(args: list[str] | None = None) -> int:
     )
 
 
-def _run_current_comparison(*, profile_id: str, confirm: bool) -> dict:
+def _run_current_comparison(*, profile_id: str, confirm: bool, compact: bool = False) -> dict:
     settings, resolved_plan, rendered_plan = resolve_strategy_comparison_execution(profile_id)
-    print("\n" + rendered_plan)
+    if not compact:
+        print("\n" + rendered_plan)
 
     if resolved_plan.preparation_plan.blocked:
         blocked = [
@@ -217,6 +218,7 @@ def _run_current_comparison(*, profile_id: str, confirm: bool) -> dict:
     return execute_strategy_comparison(
         resolved_plan=resolved_plan,
         settings=settings,
+        **({"compact": True} if compact else {}),
         producer_handlers={
             "model_training": lambda action: _prepare_strategy_model_artifacts(
                 profile_id=profile_id, scope=_strategy_model_artifact_scope(action)
@@ -235,11 +237,12 @@ def _strategy_compare_profile_menu(profile_id: str) -> int:
     return 0
 
 
-def _run_current_robustness(*, robustness_id: str, confirm: bool) -> dict:
+def _run_current_robustness(*, robustness_id: str, confirm: bool, compact: bool = False) -> dict:
     robustness = get_strategy_multi_seed_robustness_settings(robustness_id)
     return run_strategy_multi_seed_robustness(
         robustness_id=robustness_id,
         confirm=confirm,
+        **({"compact": True} if compact else {}),
         model_upstream_preparer=lambda: _prepare_strategy_model_artifacts(
             profile_id=robustness.profile_id, scope="upstream",
             include_seed_dependencies=robustness.benchmark_id is None
@@ -353,12 +356,15 @@ def _strategy_compare_menu() -> int:
             print("選項無效，請按 Enter 或輸入 0～4。")
 
 
-def _run_reusable_audit_method(module_id: str, method_id: str) -> int:
+def _run_reusable_audit_method(module_id: str, method_id: str, *, one_click: bool = False) -> int:
     method = next(item for item in get_audit_methods() if item.method_id == method_id)
     menu_state = collect_audit_menu_state(module_id, method_id=method_id)
     enabled = bool(menu_state["configured"])
-    print(f"\n=== {method.menu_label} ===")
+    if not one_click:
+        print(f"\n=== {method.menu_label} ===")
     if not enabled:
+        if one_click:
+            raise RuntimeError(f"{method.menu_label} 未啟用")
         print("目前沒有啟用此Reusable module的參數設定；保留固定選單但本次不執行。")
         return 0
     if method.menu_location == "research_root":
@@ -371,30 +377,44 @@ def _run_reusable_audit_method(module_id: str, method_id: str) -> int:
         )
         definition = get_formal_oracle_definition(module_id)
         preview = preview_oracle_replay_plan(definition, project_root=PROJECT_ROOT)
-        print("\n" + preview["text"])
-        for baseline, plan in preview["parameter_plans"].items():
-            if plan["missing"]:
-                missing_seeds = ", ".join(str(seed) for seed in plan["missing"])
-                print(
-                    f"[參數前置待補] {baseline}："
-                    f"{len(plan['seed_set']) - len(plan['missing'])} 個 REUSE / "
-                    f"{len(plan['missing'])} 個由 Optimizer 自動補建（Seed：{missing_seeds}）。"
-                )
-        try:
-            answer = input("👉 按 Enter 執行（含必要參數自動補建與 REUSE／RUN）；輸入 0 返回：").strip().lower()
-        except EOFError:
-            answer = "0"
-        if answer not in {"", "1"}:
-            print("[Target 驗證] 未授權執行，未進行 Optimizer 或 Portfolio Replay。")
-            return 0
+        if one_click:
+            from collections import Counter
+            counts = Counter(preview["preflight"].values())
+            print("[Target Replay] " + " / ".join(
+                f"{action} {count}" for action, count in sorted(counts.items())
+            ), flush=True)
+        else:
+            print("\n" + preview["text"])
+            for baseline, plan in preview["parameter_plans"].items():
+                if plan["missing"]:
+                    missing_seeds = ", ".join(str(seed) for seed in plan["missing"])
+                    print(
+                        f"[參數前置待補] {baseline}："
+                        f"{len(plan['seed_set']) - len(plan['missing'])} 個 REUSE / "
+                        f"{len(plan['missing'])} 個由 Optimizer 自動補建（Seed：{missing_seeds}）。"
+                    )
+            try:
+                answer = input("👉 按 Enter 執行（含必要參數自動補建與 REUSE／RUN）；輸入 0 返回：").strip().lower()
+            except EOFError:
+                answer = "0"
+            if answer not in {"", "1"}:
+                print("[Target 驗證] 未授權執行，未進行 Optimizer 或 Portfolio Replay。")
+                return 0
         ensure_authorized_oracle_parameters(
-            project_root=PROJECT_ROOT, definition=definition, approved_plan=preview,
+            project_root=PROJECT_ROOT, definition=definition, approved_plan=preview, quiet=one_click,
         )
         result = run_enabled_audits(
             module_id, project_root=PROJECT_ROOT, method_id=method_id,
             preflight_display="summary", preflight_approval=lambda _view: True,
-            approved_replay_decisions=preview["preflight"],
+            approved_replay_decisions=preview["preflight"], quiet=one_click,
         )
+        if one_click:
+            from services.audit.target_oracle_romd import render_result
+            report = result[definition.audit_id]
+            if report.get("status") != "COMPLETED":
+                raise RuntimeError(f"Target 驗證未完成（{report.get('status')}）")
+            print(render_result(report, target="console"), flush=True)
+            return 0
         if any(row.get("status") == "CANCELLED" for row in result.values()):
             print("[Target 驗證] 未授權執行 Portfolio Replay，返回上一層。")
             return 0
@@ -420,6 +440,36 @@ def _run_reusable_audit_method(module_id: str, method_id: str) -> int:
     return 0
 
 
+def _run_summary_verification() -> int:
+    """Run the Summary producers in dependency order, then read fresh results."""
+    _, rolling = _current_strategy_mode_rows()
+    steps = (
+        ("模型比較 Rolling", lambda: _run_model_cli(["compare", "rolling"])),
+        ("策略比較 Rolling", lambda: _run_current_comparison(
+            profile_id=rolling["profile_id"], confirm=False, compact=True)),
+        ("模型比較 Robustness", lambda: _run_model_cli(["compare", "rolling-robustness"])),
+        ("策略比較 Robustness", lambda: _run_current_robustness(
+            robustness_id=rolling["robustness_id"], confirm=False, compact=True)),
+        ("Target 驗證", lambda: _run_reusable_audit_method(
+            get_active_audit_module_id(), "target_ground_truth_strategy_romd", one_click=True)),
+        ("Summary", _show_research_summary),
+    )
+    for index, (label, run) in enumerate(steps, start=1):
+        stage = f"[{index}/{len(steps)}] {label}"
+        print(f"\n{stage}｜執行中", flush=True)
+        try:
+            result = run()
+            if isinstance(result, int) and result != 0:
+                print(f"{stage}｜未完成（回傳碼 {result}）", flush=True)
+                return result
+            if isinstance(result, dict) and not result:
+                raise RuntimeError("缺少策略比較結果")
+        except (OSError, ImportError, RuntimeError, ValueError) as exc:
+            raise RuntimeError(f"{stage}｜未完成：{exc}") from exc
+        print(f"{stage}｜完成", flush=True)
+    return 0
+
+
 def _show_research_summary(*, sortable: bool = False) -> int:
     from services.research.target_dl_overview import (
         DEFAULT_SORT_COLUMN, collect_target_dl_overview, render_target_dl_overview,
@@ -441,18 +491,20 @@ def _show_research_summary(*, sortable: bool = False) -> int:
             f"[{index}]{column.label}"
             for index, column in enumerate(sort_columns, start=1)
         ]
-        print(" ".join((*choices, "[0]返回")))
+        print(" ".join((*choices, "[V]一鍵驗證並補齊結果", "[0]返回")))
         try:
-            choice = input("👉 選擇排序欄位（Enter：Oracle RoMD；0：返回）：").strip().lower()
+            choice = input("👉 選擇排序欄位，或按 V 一鍵驗證（Enter 預設排序，0 返回）：").strip().lower()
         except EOFError:
             return 0
         if choice in {"0", "q", "quit", "exit"}:
             return 0
+        if choice == "v":
+            return _run_summary_verification()
         if choice == "":
             sort_key = DEFAULT_SORT_COLUMN
             continue
         if not choice.isdecimal() or not 1 <= int(choice) <= len(sort_columns):
-            print(f"選項無效，請按 Enter 或輸入 0～{len(sort_columns)}。")
+            print(f"選項無效，請按 Enter、V 或輸入 0～{len(sort_columns)}。")
             continue
         sort_key = sort_columns[int(choice) - 1].key
 
@@ -926,7 +978,7 @@ def _interactive_menu() -> int:
 def _print_help(program_name: str) -> None:
     print(f"用法: python {program_name} [summary|target|model|optimizer|compare|audit|market-data|status] [options]")
     print("說明: Research 單一正式入口；互動選單只選工作類型，研究標的與設定由 config/ 決定。")
-    print("  summary    研究成果總覽（唯讀）；Target／DL／策略共用 Summary 清單")
+    print("  summary    顯示研究成果總覽；summary verify 依序補齊目前清單並顯示各步結果")
     print("  target     正式 Target 驗證（非 PIT hindsight Oracle）；可接 run/status/latest")
     print("  model      目前 active model 的模型訓練／驗證；後續參數原樣轉交model provider")
     print("  optimizer  依 config/strategy_params.py 執行目前策略參數訓練 profile")
@@ -959,8 +1011,10 @@ def main(argv=None) -> int:
         _print_help(program_name)
         return 0
     if command == "summary":
+        if rest == ["verify"]:
+            return _run_summary_verification()
         if rest:
-            raise ValueError("summary 不接受額外參數")
+            raise ValueError("用法：summary [verify]")
         return _show_research_summary()
     if command in {"target", "target-validation", "target_validation"}:
         if len(rest) > 1:

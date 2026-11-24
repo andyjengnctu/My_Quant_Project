@@ -846,6 +846,51 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     check_true("summary_insertion_preserves_every_root_work_type_dispatch",
                menu_rc == 0 and all(handler.call_count == 1 for handler in handlers))
 
+    # Drive the real menu: the Summary displayed after Target must be read anew.
+    run_order = []
+    def stage_result(name, result):
+        run_order.append(name)
+        print(f"report-{name}")
+        return result
+
+    with ExitStack() as stack:
+        stack.enter_context(patch("builtins.input", side_effect=["1", "v", "0"]))
+        collect = stack.enter_context(patch.object(
+            target_dl_overview, "collect_target_dl_overview", side_effect=["initial", "updated"]))
+        stack.enter_context(patch.object(
+            target_dl_overview, "render_target_dl_overview", side_effect=lambda report, **kw: report))
+        stack.enter_context(patch.object(research_app, "_run_model_cli",
+            side_effect=lambda args: stage_result(args[-1], 0)))
+        strategy_step = stack.enter_context(patch.object(research_app, "_run_current_comparison",
+            side_effect=lambda **kw: stage_result("strategy", {"result": "ok"})))
+        robustness_step = stack.enter_context(patch.object(research_app, "_run_current_robustness",
+            side_effect=lambda **kw: stage_result("robustness", {"result": "ok"})))
+        target_step = stack.enter_context(patch.object(research_app, "_run_reusable_audit_method",
+            side_effect=lambda *args, **kw: stage_result("target", 0)))
+        output = stack.enter_context(redirect_stdout(io.StringIO()))
+        menu_rc = research_app._interactive_menu()
+    _, rolling_mode = research_app._current_strategy_mode_rows()
+    expected_order = ["rolling", "strategy", "rolling-robustness", "robustness", "target"]
+    transcript = output.getvalue()
+    check_true("summary_verify_dispatches_native_rolling_work_and_displays_each_result_before_next_step",
+               menu_rc == 0 and run_order == expected_order and collect.call_count == 2
+               and strategy_step.call_args.kwargs == {
+                   "profile_id": rolling_mode["profile_id"], "confirm": False, "compact": True}
+               and robustness_step.call_args.kwargs == {
+                   "robustness_id": rolling_mode["robustness_id"], "confirm": False, "compact": True}
+               and target_step.call_args.kwargs == {"one_click": True}
+               and all(transcript.index(f"[{index}/6]") < transcript.index(f"report-{name}\n")
+                       < transcript.index(f"[{index + 1}/6]")
+                       for index, name in enumerate(expected_order, start=1))
+               and transcript.index("[6/6]") < transcript.index("updated"))
+    with patch.object(research_app, "_run_model_cli", return_value=2), \
+         patch.object(research_app, "_run_current_comparison") as later_step, \
+         patch.object(research_app, "_show_research_summary") as final_step, \
+         redirect_stdout(io.StringIO()):
+        failed_rc = research_app.main(["research", "summary", "verify"])
+    check_true("summary_verify_stops_after_unsuccessful_producer",
+               failed_rc == 2 and not later_step.called and not final_step.called)
+
     # Cancel leaves both Optimizer and Replay untouched. The visible matrix is
     # a scientific read-only plan, not a parameter file-existence inventory.
     cancellation = io.StringIO()
@@ -966,6 +1011,35 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         and producer.call_count == 1
         and one_stage.getvalue().count(preview) == 1
         and one_stage.getvalue().count("LATEST") == 1,
+    )
+
+    # Summary's one-click selection authorizes the same preview once. Only a
+    # complete result from that invocation may be displayed before continuing.
+    batch_console = io.StringIO()
+    audit_id = oracle_application.get_formal_oracle_definition("breakout_quality").audit_id
+    complete = {"status": "COMPLETED"}
+    with patch("builtins.input", side_effect=AssertionError("unexpected second prompt")), \
+         patch.object(oracle_handler, "preview_oracle_replay_plan", return_value=preview_plan), \
+         patch.object(oracle_application, "ensure_authorized_oracle_parameters") as prepare, \
+         patch.object(research_app, "run_enabled_audits", side_effect=[
+             {audit_id: complete}, {audit_id: {"status": "CANCELLED"}},
+         ]) as replay, \
+         patch.object(oracle_handler, "render_result", return_value="CURRENT_TARGET_REPORT") as render, \
+         redirect_stdout(batch_console):
+        batch = lambda: research_app._run_reusable_audit_method(
+            "breakout_quality", oracle_method_id, one_click=True,
+        )
+        completed = batch() == 0
+        cancelled = raises_expected(RuntimeError, batch)
+    check_true(
+        "summary_target_runs_only_approved_cells_and_shows_completed_report",
+        completed and cancelled
+        and prepare.call_args.kwargs["approved_plan"] is preview_plan
+        and replay.call_args.kwargs["approved_replay_decisions"] is preview_plan["preflight"]
+        and replay.call_args.kwargs["quiet"]
+        and render.call_count == 1 and render.call_args.args == (complete,)
+        and render.call_args.kwargs["target"] == "console"
+        and batch_console.getvalue().count("CURRENT_TARGET_REPORT") == 1,
     )
 
     # A read-only direct Audit invocation still blocks when its P16 is absent;

@@ -9,7 +9,7 @@ import hashlib
 from collections import deque
 from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager, nullcontext, redirect_stdout
 import importlib
 import json
 import math
@@ -264,6 +264,7 @@ INTERACTIVE_EVALUATE_OOS = True
 
 COMMAND_DESCRIPTIONS = {
     "menu": "開啟互動式操作選單",
+    "compare": "執行模型比較（rolling 或 rolling-robustness）並顯示結果",
     "workflow": "依序執行 dataset、active model train、research score export與報表",
     "build-dataset": "建立 breakout quality event dataset",
     "train": "訓練模型；可選擇 inner validation 選 epoch 後完整 Selection 重訓",
@@ -4461,7 +4462,9 @@ def _require_fresh_model_comparison_source(
     return readiness.source_contract, dict(readiness.evidence_payload)
 
 
-def _run_configured_model_comparison(program_name: str, *, rolling: bool) -> int:
+def _run_configured_model_comparison(
+    program_name: str, *, rolling: bool, summary_output: Callable[[str], None] | None = None,
+) -> int:
     """Run Forward/Rolling comparison through one model list and one report pipeline."""
 
     # An external PIT Producer can update Audit after this Research process
@@ -4548,6 +4551,8 @@ def _run_configured_model_comparison(program_name: str, *, rolling: bool) -> int
     preceding_model_mutation = False
     affected_completed_models: set[int] = set()
     for model_id, settings, contract, payload, _reason in planned:
+        if summary_output is not None and (contract is None or payload is None):
+            summary_output(f"[{len(completed) + 1}/{len(planned)}] {model_id} 補建 Rolling 結果")
         if preceding_model_mutation:
             readiness = _resolve_continuous_model_readiness(
                 settings, rolling=rolling, mode=rolling_mode,
@@ -4620,12 +4625,13 @@ def _run_configured_model_comparison(program_name: str, *, rolling: bool) -> int
             raise
         print("[模型比較未發布] " + str(exc))
         return 2
-    print("\n" + render_title(f"{mode_label} Standard Model SOP Comparison"))
-    print(console)
+    report_output = summary_output or print
+    report_output("\n" + render_title(f"{mode_label} Standard Model SOP Comparison"))
+    report_output(console)
     json_path, markdown_path = _write_standard_model_comparison_report(
         completed, evaluation_mode="rolling_oos" if rolling else "forward_oos"
     )
-    print(render_status_paths(
+    report_output(render_status_paths(
         (("比較JSON", json_path, json_path.is_file()), ("比較Markdown", markdown_path, markdown_path.is_file())),
         project_root=PROJECT_ROOT,
     ))
@@ -5338,7 +5344,9 @@ def _run_parallel_model_robustness_seeds(
             raise
 
 
-def _run_configured_model_robustness(program_name: str, *, rolling: bool) -> int:
+def _run_configured_model_robustness(
+    program_name: str, *, rolling: bool, summary_output: Callable[[str], None] | None = None,
+) -> int:
     """Run model robustness through the same model list, SOP builder and comparison renderer."""
 
     # A prior Research invocation (or an external score/audit Producer) may
@@ -5393,6 +5401,8 @@ def _run_configured_model_robustness(program_name: str, *, rolling: bool) -> int
         # within the seed producer and re-enters the normal input gate.
         # Per-seed Min teacher sources cannot be prepared once with default
         # seed 42; each required seed is handled at its actual producer boundary.
+        if summary_output is not None and readiness.evidence_refresh_required:
+            summary_output(f"[{len(completed) + 1}/{len(plans)}] {model_id} 補建 Robustness 結果")
         inputs_prepared = bool(
             (force_rebuild or not rolling or readiness.score_build_required)
             and not _requires_formal_trade_path_inputs(settings)
@@ -5608,19 +5618,33 @@ def _run_configured_model_robustness(program_name: str, *, rolling: bool) -> int
         )
         previous["source_reports"] = final_reports
 
-    print("\n" + render_title(f"{mode_label} Robustness Standard Model SOP Comparison"))
-    print(_render_standard_model_comparison(completed, target="console"))
+    report_output = summary_output or print
+    report_output("\n" + render_title(f"{mode_label} Robustness Standard Model SOP Comparison"))
+    report_output(_render_standard_model_comparison(completed, target="console"))
     json_path, markdown_path = _write_standard_model_comparison_report(
         completed,
         evaluation_mode="rolling_oos" if rolling else "forward_oos",
         robustness=True,
     )
-    print(render_status_paths(
+    report_output(render_status_paths(
         (("Robustness比較JSON", json_path, json_path.is_file()),
          ("Robustness比較Markdown", markdown_path, markdown_path.is_file())),
         project_root=PROJECT_ROOT,
     ))
     return 0
+
+def run_summary_model_comparison(*, robustness: bool) -> int:
+    """Use the regular comparison and its renderer, hiding producer chatter on success."""
+    compare = _run_configured_model_robustness if robustness else _run_configured_model_comparison
+    output = partial(print, file=sys.stdout, flush=True)
+    with tempfile.TemporaryFile(mode="w+", encoding="utf-8") as details:
+        with _compact_console_scope(), redirect_stdout(details):
+            code = compare("apps/research.py model", rolling=True, summary_output=output)
+        if code:
+            details.seek(0)
+            output("".join(deque(details, maxlen=8)).rstrip())
+    return code
+
 
 # Stable seven-workflow menu, independent of model identity and experiments.
 from core.model_research_menu_contract import model_research_menu_items
@@ -5731,6 +5755,14 @@ def main(argv=None) -> int:
             rolling=worker_args.mode == "rolling",
         )
 
+    if command == "compare":
+        if args[1:] in (["-h"], ["--help"], ["help"]):
+            print(f"用法: python {program_name} compare [rolling|rolling-robustness]")
+            return 0
+        if len(args) != 2 or args[1] not in {"rolling", "rolling-robustness"}:
+            raise ValueError("compare 需要指定 rolling 或 rolling-robustness")
+        return run_summary_model_comparison(robustness=args[1] == "rolling-robustness")
+
     if command == "menu":
         if len(args) > 1:
             raise ValueError("menu 不接受其他參數")
@@ -5757,6 +5789,7 @@ __all__ = [
     "main",
     "prepare_strategy_compare_artifacts",
     "run_model_training_menu",
+    "run_summary_model_comparison",
     "show_model_status",
 ]
 
