@@ -347,16 +347,16 @@
 | B399 | P0 | Market Data V2 Research required-scope true common-complete / immutable freeze candidate | Research V2 computes field-aware completeness only across the Round-14 authorized foundation scope and freezes a fingerprint-addressed promotion candidate without changing active Research truth | DONE | Round 15不得重用archive-wide mechanical common-complete，也不得只看dataset有date row。canonical common-complete owner必須只使用Round-14四個daily participants：TaiwanStockTradingDate作calendar，TaiwanStockPrice必須對daily universe逐(date,stock_id)具可解析Trading_Volume，TaiwanStockPriceLimit必須exact cover daily universe，TaiwanStockPriceAdj必須對daily universe逐列具可解析open/max/min/close operands；TaiwanStockDelisting為required event evidence但no-row合法且不進daily denominator，46個OPTIONAL_NOT_SELECTED datasets及其PIT/mechanical diagnostics不得污染foundation completeness/fingerprint。candidate只有在latest contiguous required-scope complete tail ceiling精確等於fixed required_cutoff時才可填research_common_complete_cutoff；candidate仍須CANDIDATE_NOT_READY、frozen_cutoff=null、promotion_authorized=false。immutable freeze candidate必須另以自身fingerprint namespace保存，pin provider snapshot、source candidate、daily-universe physical hash、scope/adjusted-representation/common-complete identities與fixed frozen_cutoff；同identity rebuild只能REUSE，且freeze candidate仍promotion_authorized=false、不得修改config/market_data.py或ACTIVE_RESEARCH_DATA_GENERATION。 | `core/market_data_research_freeze.py`, `core/market_data_research_v2.py`, `core/market_data_research_storage_contract.py`, `services/research/market_data_v2.py`, `tools/validate/synthetic_market_data_cases.py` |
 | B400 | P0 | Market Data V2 Research explicit promotion / active consumer integration | Research V2 promotion is an explicit immutable state transition that materializes the authorized OHLCV compatibility view and atomically routes active Research consumers without changing the safe V1 source-code fallback | DONE | Round 16不得只改ACTIVE_RESEARCH_DATA_GENERATION常數，也不得以artifact存在推測active。promotion必須消費一個validated Round-15 freeze candidate、先建立fingerprint-addressed immutable compatibility materialization，再寫immutable promotion manifest，最後atomic publish小型active pointer；沒有pointer或任一lineage/hash/contract驗證失敗時effective generation必須fail-closed回V1或報錯。compatibility OHLC只可直接取TaiwanStockPriceAdj open/max/min/close，Volume只可取raw TaiwanStockPrice.Trading_Volume，不得新增第二套還原價engine、不得讀Trading overlay或打provider。full Research consumer必須透過既有dataset-profile seam切到promoted immutable dir，reduced fixture與Trading namespace不變；direct V2 reader須pin exact provider snapshot與daily-universe physical hash。promotion必須是明確user action，多freeze candidates時不得自動選latest；同identity只能REUSE，不同active freeze不得隱性repromotion。active V2後不得重建同generation candidate。 | `core/market_data_research_materialization.py`, `core/market_data_research_promotion.py`, `services/research/market_data_generation.py`, `core/market_data_contract.py`, `core/dataset_profiles.py`, `filters/breakout_quality/source_inventory.py`, `apps/research.py`, `tools/validate/synthetic_market_data_cases.py` |
 | B401 | P0 | Market Data Rounds 1–16 audit Repair 1 / market-date and PIT universe correctness | Market Data Rounds 1–16 Repair 1 invariants remain current after Legacy Trading cache retirement | DONE | Repair 1建立的publication-policy SSOT、Research date-specific market-state eligibility、transition-guard scientific identity與FinMind PriceAdj calendar-row語意必須持續成立。Round 8已退役Legacy Trading universe cache，因此requested-market-date cache identity不再要求舊`services/downloader/universe.py`存在；current Trading runtime state必須位於V2 namespace，completed-day時間仍由provider-verified publication policy解析。 | `core/trading_market_clock.py`, `core/market_data_instrument_universe.py`, `services/trading/market_data_consumer.py`, `services/trading/market_data_market_date_discovery.py`, `services/research/market_data_v2.py`, `core/market_data_research_v2.py`, `core/market_data_contract.py`, `tools/validate/synthetic_market_data_cases.py` |
-| B402 | P0 | Market Data Rounds 1–16 audit Repair 2 / Research PIT source projection and PriceAdj revision legality | Research V2 foundation identity consumes only required PIT evidence and post-cutoff adjusted-price provider rebuild must be proven equivalent to frozen V1 before freeze/promotion | DONE | Independent Rounds 1–16 audit found that the 2026-09-01 FinMind TaiwanStockPriceAdj full-history rebuild was outside the Round-13 corporate-action scalar proof, active direct reads could expose rows after frozen_cutoff, and optional archive registry/snapshot provenance still contaminated foundation identity. Repair must add a frozen-V1/current-PriceAdj revision-equivalence proof, enforce cutoff inside the active read seam, separate full Provider Snapshot provenance from required-source scientific projection identity, and validate persisted optional diagnostics by their own hash rather than current optional registry state. | `core/market_data_adjusted_price_revision_proof.py`, `services/research/adjusted_price_revision_proof.py`, `services/research/market_data_v2.py`, `services/research/market_data_generation.py`, `services/market_data/provider_snapshot_repository.py`, `core/market_data_research_v2.py`, `core/market_data_research_freeze.py`, `core/market_data_research_materialization.py`, `core/market_data_research_promotion.py` |
-| B403 | P0 | Market Data Rounds 1–16 audit Repair 3 / lifecycle integrity and durable activation | Research generation freeze, materialization and explicit promotion remain immutable, content-verified, crash-recoverable and permanently protected from Trading writes across active-generation changes | DONE | Independent Rounds 1–16 audit reproduced five lifecycle/integrity defects: Research V2 promotion caused the legacy V1 dataset root to leave the Trading write-protection set; deleting the active pointer silently rolled effective Research back to V1 despite a published promotion; normal active routing validated only the materialization manifest rather than CSV content bytes; freeze candidates depended on a mutable per-snapshot candidate/daily-universe physical slot; and promotion mkdir-before-manifest publication left an unrecoverable crash window. Repair must protect all legacy/V2 Research roots independent of active routing, make pointer loss fail-closed with explicit same-promotion recovery, content-verify normal active routing, snapshot candidate evidence into the freeze fingerprint namespace, and publish promotion directories through sibling staging plus atomic rename. | `core/runtime_domains.py`, `core/market_data_research_storage_contract.py`, `core/market_data_research_freeze.py`, `core/market_data_research_materialization.py`, `core/market_data_research_promotion.py`, `services/research/market_data_v2.py`, `services/research/market_data_generation.py` |
-| B404 | P0 | Market Data Rounds 1–16 audit Repair 4 / downstream Research generation identity | Research consumers bind artifact reuse and physical namespaces to the effective dataset generation while preserving legacy V1 identity and historical evidence | DONE | Independent Rounds 1–16 audit reproduced cross-generation identity collisions: Optimizer Study/effective policy and Strategy Compare pair cache treated V1 and promoted V2 as the same `full` dataset, while Breakout Quality would rebuild promoted-V2 artifacts into the existing V1 model/output namespace. Repair must derive one canonical dataset-generation lineage, preserve exact V1/reduced fingerprints and paths, isolate promoted-V2 Study/cache/model/output identities, and prevent V2 Breakout Quality fallback from reading or overwriting V1 historical evidence. | `core/dataset_profiles.py`, `core/walk_forward_policy.py`, `services/optimizer/application.py`, `services/research/strategy_compare_preparation_status.py`, `services/research/strategy_compare_reuse.py`, `services/research/strategy_comparison.py`, `filters/breakout_quality/paths.py` |
-| B405 | P0 | Rounds 1–16 Final Closure / cross-generation execution-cache identity and price-dataset SSOT | Execution caches cannot cross Research generations when public profile metadata collides, and canonical FinMind price dataset identity remains single-owned | DONE | Final Closure independently reproduced a residual cross-generation collision after Repair 4: Optimizer raw cache and Portfolio prepared cache could treat different V1/V2 bytes as the same source when ticker basename, file size and mtime matched. Final closure must bind execution-cache identity to the resolved physical dataset root, invalidate prior cache schemas, and keep same-generation reuse deterministic. The same closure also removes duplicated provider price dataset declarations from Research scope/candidate/registry logic by consuming the canonical FinMind raw/adjusted dataset constants from core/market_data_contract.py. This is engineering-only and must not change Market Data scientific scope, PIT semantics, active generation, strategy parameters, or Breakout Quality MR status. | `services/optimizer/raw_cache.py`, `services/portfolio_replay.py`, `core/market_data_contract.py`, `core/market_data_dataset_registry.py`, `core/market_data_research_scope.py`, `core/market_data_research_v2.py`, `tools/validate/synthetic_regression_cases.py` |
-| B409 | P2 | Trading actionable-universe Scanner membership / historical-retention separation | Trading new-buy Scanner must consume the canonical current-universe membership while retained historical/required-position CSVs remain available for Optimizer, audit and position management | DONE | Trading data_dir intentionally retains historical ticker CSVs after they leave the current actionable universe, but the generic Scanner previously discovered every CSV in the directory. Stale-date filtering prevented an old row from becoming a same-day order, yet obsolete tickers still entered Scanner work and could contaminate opportunity-set membership semantics. Repair must keep physical historical retention separate from today actionable membership: generic Scanner defaults to full-dataset discovery for Research/other callers, Trading Daily Workflow passes market-data snapshot current_universe_tickers explicitly, missing requested CSVs fail-closed, required holdings outside the current universe remain retained but are excluded from new-buy scanning, and candidate snapshots persist/revalidate the exact scanned ticker membership plus market-data snapshot identity. | `services/scanner/scan_runner.py`, `services/trading/daily_workflow.py`, `services/trading/scanner_state.py`, `tools/local_regression/meta_quality_targets.py` |
-| B412 | P0 | Market Data V2 Trading historical/latest read view | Trading production training must read one verified Market Data V2 historical/latest view composed from the neutral Provider Snapshot plus completed Trading overlays, use neutral date-local PIT market membership, and resolve its endpoint from the common READY horizon of the exact required datasets; the current execution pool must never define historical training membership. | DONE | After neutral PIT ownership and pool layering were established, Trading still lacked a canonical read seam that could compose immutable Provider Snapshot history with verified overlay restatements for future production training. Without it, consumers could use aggregate SYNCED state, the newest single dataset date, current 556 membership, or incomplete overlay files as historical truth. The read seam must be provider-free/write-free, use registry primary keys for deterministic overlay precedence, enforce lineage/ledger/hash verification, reuse neutral PIT membership, and preserve current execution authority until a later consumer cutover. | `core/market_data_trading_view.py`, `services/trading/market_data_v2_view.py`, `services/market_data/provider_snapshot_repository.py`, `services/market_data/daily_pit_universe.py`, `core/market_data_trading_storage_contract.py` |
-| B413 | P0 | Market Data V2 canonical daily updater / Legacy provider decoupling | Smart Downloader and automatic due sync must update Market Data V2 directly from the neutral Provider Snapshot plus V2 operational/discovery state, use capability-declared dataset/date bulk request geometry, and must not refresh or read Legacy Trading provider truth to derive the V2 daily target. | DONE | After the shared V2 archive, neutral PIT universe, pool layering, and Trading historical/latest read view were established, Smart Downloader [1] and market-date discovery still routed through the Legacy Trading updater or Legacy Trading snapshot. That kept duplicate provider-history production alive and made daily request behavior difficult to audit. Repair must make V2 due-dataset overlay sync the canonical daily updater, advance target only from V2/provider evidence, keep no-due wakes zero-provider-call, use full-market exact-date requests whenever the dataset capability declares them, expose request-date geometry, and preserve the still-needed Legacy Workbench Full path only as an explicit later-migration compatibility exception. | `services/trading/market_data_auto_update.py`, `services/downloader/main.py`, `core/market_data_trading_sync.py`, `services/downloader/market_data_trading_sync.py`, `core/market_data_contract.py` |
-| B415 | P0 | Market Data V2 direct Trading consumer cutover / Legacy read retirement | Live rule-based Trading Params, Scanner, holdings/exit planning, allocator mark-to-market and Workbench operational reads must consume the verified Market Data V2 historical/latest view plus canonical V2 execution consumer state; Legacy six-column CSV/snapshot may remain only as an unused transitional cache until deletion. | DONE | Round 6 removed Legacy provider authority but production consumers could still read V2-derived CSV/snapshot. Round 7 must preserve the existing adjusted-OHLC/raw-Volume strategy semantics and training-membership continuity while moving operational lineage/readiness to V2, keeping Research/file-based scanner behavior isolated and preventing any live consumer from requiring Legacy CSV membership or snapshot content. | `services/trading/market_data_consumer.py`, `core/trading_data_dependencies.py`, `services/trading/strategy_param_training.py`, `services/trading/scanner_state.py`, `services/trading/daily_workflow.py`, `services/trading/position_market_context.py`, `services/trading/order_planning.py`, `services/trading/market_data_ops.py` |
-| B416 | P0 | Market Data V2 terminal Trading state / Legacy compatibility retirement | Production Trading market-data update, readiness, Params lineage, Scanner lineage, holdings/exit and allocator reads must be V2-only. Legacy Trading direct-provider application, six-column compatibility materializer and snapshot state modules must be absent from the production dependency graph; operational lineage field names must explicitly identify the V2 consumer-state SHA and V2 source-view fingerprint. | DONE | Round 7 moved live consumers to verified Market Data V2 but deliberately left an unused Legacy CSV/snapshot compatibility cache plus migration-era lifecycle/schema names. Round 8 must remove the Legacy producer/materializer/snapshot runtime paths, eliminate the readiness fallback, enforce the v2_only terminal lifecycle, bump Params/Scanner operational schemas so stale artifacts fail closed, retain only the shared canonical adjusted-OHLC/raw-Volume mapping needed by V2/Research, and keep Research scientific identity unchanged. | `core/trading_data_dependencies.py`, `core/market_data_contract.py`, `config/market_data.py`, `services/trading/market_data_update.py`, `services/trading/market_data_consumer.py`, `services/trading/data_readiness.py`, `services/trading/strategy_param_state.py`, `services/trading/scanner_state.py`, `services/trading/daily_workflow.py`, `services/trading/operations_status.py`, `tools/validate/synthetic_market_data_cases.py`, `tools/validate/synthetic_meta_cases.py` |
-| B417 | P0 | Research V2 pre-promotion activation validation | An explicit Research V2 freeze candidate must have a local-only promotion-readiness seam that deep-validates frozen/common-complete/adjusted-price-revision evidence, derives the exact future compatibility-materialization identity, and audits existing promotion publication state without provider calls, materialization writes, pointer publication or active-generation mutation. | DONE | Rounds 9–16 already build fail-closed freeze/promotion contracts, but the user-facing lifecycle previously jumped directly from freeze creation to explicit PROMOTE. Activation validation must expose the already-authorized legality evidence before the irreversible generation switch without inventing a second V1/V2 scientific gate or allowing candidate auto-selection. | `apps/research.py`, `services/research/market_data_generation.py`, `tools/validate/synthetic_market_data_cases.py` |
+| B402 | P0 | Market Data Rounds 1–16 audit Repair 2 / Research PIT source projection and PriceAdj revision legality | Research V2 foundation identity consumes only required PIT evidence and post-cutoff adjusted-price provider rebuild must be proven equivalent to frozen V1 before freeze/promotion | DONE | Repair must add a frozen-V1/current-PriceAdj revision-equivalence proof, enforce cutoff inside the active read seam, separate full Provider Snapshot provenance from required-source scientific projection identity, and validate persisted optional diagnostics by their own hash rather than current optional registry state. | `core/market_data_adjusted_price_revision_proof.py`, `services/research/adjusted_price_revision_proof.py`, `services/research/market_data_v2.py`, `services/research/market_data_generation.py`, `services/market_data/provider_snapshot_repository.py`, `core/market_data_research_v2.py`, `core/market_data_research_freeze.py`, `core/market_data_research_materialization.py`, `core/market_data_research_promotion.py` |
+| B403 | P0 | Market Data Rounds 1–16 audit Repair 3 / lifecycle integrity and durable activation | Research generation freeze, materialization and explicit promotion remain immutable, content-verified, crash-recoverable and permanently protected from Trading writes across active-generation changes | DONE | Repair must protect all legacy/V2 Research roots independent of active routing, make pointer loss fail-closed with explicit same-promotion recovery, content-verify normal active routing, snapshot candidate evidence into the freeze fingerprint namespace, and publish promotion directories through sibling staging plus atomic rename. | `core/runtime_domains.py`, `core/market_data_research_storage_contract.py`, `core/market_data_research_freeze.py`, `core/market_data_research_materialization.py`, `core/market_data_research_promotion.py`, `services/research/market_data_v2.py`, `services/research/market_data_generation.py` |
+| B404 | P0 | Market Data Rounds 1–16 audit Repair 4 / downstream Research generation identity | Research consumers bind artifact reuse and physical namespaces to the effective dataset generation while preserving legacy V1 identity and historical evidence | DONE | Repair must derive one canonical dataset-generation lineage, preserve exact V1/reduced fingerprints and paths, isolate promoted-V2 Study/cache/model/output identities, and prevent V2 Breakout Quality fallback from reading or overwriting V1 historical evidence. | `core/dataset_profiles.py`, `core/walk_forward_policy.py`, `services/optimizer/application.py`, `services/research/strategy_compare_preparation_status.py`, `services/research/strategy_compare_reuse.py`, `services/research/strategy_comparison.py`, `filters/breakout_quality/paths.py` |
+| B405 | P0 | Rounds 1–16 Final Closure / cross-generation execution-cache identity and price-dataset SSOT | Execution caches cannot cross Research generations when public profile metadata collides, and canonical FinMind price dataset identity remains single-owned | DONE | Final closure must bind execution-cache identity to the resolved physical dataset root, invalidate prior cache schemas, and keep same-generation reuse deterministic. The same closure also removes duplicated provider price dataset declarations from Research scope/candidate/registry logic by consuming the canonical FinMind raw/adjusted dataset constants from core/market_data_contract.py. This is engineering-only and must not change Market Data scientific scope, PIT semantics, active generation, strategy parameters, or Breakout Quality MR status. | `services/optimizer/raw_cache.py`, `services/portfolio_replay.py`, `core/market_data_contract.py`, `core/market_data_dataset_registry.py`, `core/market_data_research_scope.py`, `core/market_data_research_v2.py`, `tools/validate/synthetic_regression_cases.py` |
+| B409 | P2 | Trading actionable-universe Scanner membership / historical-retention separation | Trading new-buy Scanner must consume the canonical current-universe membership while retained historical/required-position CSVs remain available for Optimizer, audit and position management | DONE | Repair must keep physical historical retention separate from today actionable membership: generic Scanner defaults to full-dataset discovery for Research/other callers, Trading Daily Workflow passes market-data snapshot current_universe_tickers explicitly, missing requested CSVs fail-closed, required holdings outside the current universe remain retained but are excluded from new-buy scanning, and candidate snapshots persist/revalidate the exact scanned ticker membership plus market-data snapshot identity. | `services/scanner/scan_runner.py`, `services/trading/daily_workflow.py`, `services/trading/scanner_state.py`, `tools/local_regression/meta_quality_targets.py` |
+| B412 | P0 | Market Data V2 Trading historical/latest read view | Trading production training must read one verified Market Data V2 historical/latest view composed from the neutral Provider Snapshot plus completed Trading overlays, use neutral date-local PIT market membership, and resolve its endpoint from the common READY horizon of the exact required datasets; the current execution pool must never define historical training membership. | DONE | The read seam must be provider-free/write-free, use registry primary keys for deterministic overlay precedence, enforce lineage/ledger/hash verification, reuse neutral PIT membership, and preserve current execution authority until a later consumer cutover. | `core/market_data_trading_view.py`, `services/trading/market_data_v2_view.py`, `services/market_data/provider_snapshot_repository.py`, `services/market_data/daily_pit_universe.py`, `core/market_data_trading_storage_contract.py` |
+| B413 | P0 | Market Data V2 canonical daily updater / Legacy provider decoupling | Smart Downloader and automatic due sync must update Market Data V2 directly from the neutral Provider Snapshot plus V2 operational/discovery state, use capability-declared dataset/date bulk request geometry, and must not refresh or read Legacy Trading provider truth to derive the V2 daily target. | DONE | Repair must make V2 due-dataset overlay sync the canonical daily updater, advance target only from V2/provider evidence, keep no-due wakes zero-provider-call, use full-market exact-date requests whenever the dataset capability declares them, expose request-date geometry, and preserve the still-needed Legacy Workbench Full path only as an explicit later-migration compatibility exception. | `services/trading/market_data_auto_update.py`, `services/downloader/main.py`, `core/market_data_trading_sync.py`, `services/downloader/market_data_trading_sync.py`, `core/market_data_contract.py` |
+| B415 | P0 | Market Data V2 direct Trading consumer cutover / Legacy read retirement | Live rule-based Trading Params, Scanner, holdings/exit planning, allocator mark-to-market and Workbench operational reads must consume the verified Market Data V2 historical/latest view plus canonical V2 execution consumer state; Legacy six-column CSV/snapshot may remain only as an unused transitional cache until deletion. | DONE | Round 7 must preserve the existing adjusted-OHLC/raw-Volume strategy semantics and training-membership continuity while moving operational lineage/readiness to V2, keeping Research/file-based scanner behavior isolated and preventing any live consumer from requiring Legacy CSV membership or snapshot content. | `services/trading/market_data_consumer.py`, `core/trading_data_dependencies.py`, `services/trading/strategy_param_training.py`, `services/trading/scanner_state.py`, `services/trading/daily_workflow.py`, `services/trading/position_market_context.py`, `services/trading/order_planning.py`, `services/trading/market_data_ops.py` |
+| B416 | P0 | Market Data V2 terminal Trading state / Legacy compatibility retirement | Production Trading market-data update, readiness, Params lineage, Scanner lineage, holdings/exit and allocator reads must be V2-only. Legacy Trading direct-provider application, six-column compatibility materializer and snapshot state modules must be absent from the production dependency graph; operational lineage field names must explicitly identify the V2 consumer-state SHA and V2 source-view fingerprint. | DONE | Round 8 must remove the Legacy producer/materializer/snapshot runtime paths, eliminate the readiness fallback, enforce the v2_only terminal lifecycle, bump Params/Scanner operational schemas so stale artifacts fail closed, retain only the shared canonical adjusted-OHLC/raw-Volume mapping needed by V2/Research, and keep Research scientific identity unchanged. | `core/trading_data_dependencies.py`, `core/market_data_contract.py`, `config/market_data.py`, `services/trading/market_data_update.py`, `services/trading/market_data_consumer.py`, `services/trading/data_readiness.py`, `services/trading/strategy_param_state.py`, `services/trading/scanner_state.py`, `services/trading/daily_workflow.py`, `services/trading/operations_status.py`, `tools/validate/synthetic_market_data_cases.py`, `tools/validate/synthetic_meta_cases.py` |
+| B417 | P0 | Research V2 pre-promotion activation validation | An explicit Research V2 freeze candidate must have a local-only promotion-readiness seam that deep-validates frozen/common-complete/adjusted-price-revision evidence, derives the exact future compatibility-materialization identity, and audits existing promotion publication state without provider calls, materialization writes, pointer publication or active-generation mutation. | DONE | Activation validation must expose the already-authorized legality evidence before the irreversible generation switch without inventing a second V1/V2 scientific gate or allowing candidate auto-selection. | `apps/research.py`, `services/research/market_data_generation.py`, `tools/validate/synthetic_market_data_cases.py` |
 | B418 | P1 | Meta / Test governance / lifecycle closure | Current DONE checklist definitions must reference existing exact Python implementation paths, while retired one-time/Legacy implementations remain historical evidence instead of false-green current contracts. | DONE | 現行 DONE 項目所列 exact Python 檔案必須存在，且由 formal meta-quality 逐次核對；已退役實作及歷史 G 列不再算作有效來源。 | `tools/local_regression/checklist_contract.py`, `tools/local_regression/run_meta_quality.py`, `tools/validate/synthetic_meta_cases.py`, `doc/ARCHITECTURE.md` |
 | B419 | P0 | Trading strategy semantic parity / broker-truth re-entry | Research/Portfolio、Scanner 與 live Trading 必須共用 canonical strategy primitives；live STOP→re-entry 只可由 broker-confirmed STOP truth 與原 entry agreeing-voter frozen Params 決定性重建，並重新套用原 finalist min-agree。 | DONE | Scanner/Portfolio normal-entry 與 position-management parity 已新增 fast contract；Trading live re-entry 需排除 single-stock historical hypothetical STOP、保存完整 ensemble voter Params lineage、由 broker-confirmed full STOP 建立 watch，且 checklist/config identity 不得再硬編 current selector。 | `core/portfolio_ensemble.py`, `core/extended_signals.py`, `core/trading_order_state.py`, `services/trading/live_reentry.py`, `services/trading/daily_workflow.py`, `services/trading/order_planning.py`, `services/trading/entry_order_submission.py`, `services/trading/fill_reconciliation.py`, `services/trading/market_data_consumer.py`, `services/trading/market_data_update.py`, `tools/validate/synthetic_unit_cases.py`, `tools/validate/synthetic_trading_cases.py` |
 | B420 | P0 | Research / Trading accounting SSOT / fee rebate cash timing | Research 與 Trading 必須共用 raw broker settlement fee/tax/rounding SSOT；Research 的手續費回饋只能作為 economic rebate receivable，未到月界線 settlement 前不得成為可下單現金；Trading 既有 broker-aligned per-trade accounting 數字不得因 Research rebate policy 改變。 | DONE | Raw broker fee rate、stock tax 與 charge rounding 已抽到 `config/broker_accounting.py`；`core/exact_accounting.py` 同時輸出 broker cash ledger 與 Research economic ledger/rebate receivable。Research affordability/sizing/cash movement 改讀 broker cash total，PnL/cost basis 保留 economic net total，receivable 只計入 economic equity 並於跨月時轉回 spendable cash；Trading raw fee path 維持 cash==net、rebate==0。 | `config/broker_accounting.py`, `config/execution_policy.py`, `services/trading/accounting_policy.py`, `core/exact_accounting.py`, `core/fee_rebate.py`, `core/backtest_core.py`, `core/portfolio_engine.py`, `tools/validate/synthetic_unit_cases.py`, `tools/validate/synthetic_trading_cases.py` |
@@ -401,10 +401,10 @@
 | T05 | `validate_synthetic_fee_tax_net_equity_case` | B03 |
 | T06 | `validate_synthetic_round_trip_pnl_only_on_tail_exit_case` | B04 |
 | T07 | `validate_synthetic_missed_sell_accounting_case` | B11 |
-| T08 | `validate_synthetic_candidate_order_fill_layer_separation_case` | B09 |
+| T08 | `validate_synthetic_candidate_order_fill_layer_separation_case`：B09 | B09 |
 | T09 | `validate_synthetic_portfolio_history_filter_only_case` | B10 |
 | T10 | `validate_synthetic_lookahead_prev_day_only_case` | B01 |
-| T11 | `validate_price_utils_unit_case` | B13 |
+| T11 | `validate_price_utils_unit_case`：B13 | B13 |
 | T12 | `validate_history_filters_unit_case` | B13 |
 | T13 | `validate_portfolio_stats_unit_case` | B13 |
 | T14 | `validate_model_io_schema_case` | B47 |
@@ -569,43 +569,43 @@
 | T201 | `validate_quick_gate_synthetic_registry_import_targets_contract_case` | B122 |
 | T202 | `tools/validate/cli.py --dataset reduced` | B23 |
 | T203 | `validate_checklist_t_formal_command_single_entry_case` | B26 |
-| T204 | `validate_exact_accounting_ledger_conservation_case` | B123 |
-| T205 | `validate_exact_accounting_cost_basis_allocation_case` | B123 |
+| T204 | `validate_exact_accounting_ledger_conservation_case`：B123 | B123 |
+| T205 | `validate_exact_accounting_cost_basis_allocation_case`：B123 | B123 |
 | T206 | `validate_exact_accounting_tick_limit_integer_case` | B123 |
 | T207 | `validate_exact_accounting_cash_risk_boundary_case` | B123 |
-| T208 | `validate_exact_accounting_single_vs_portfolio_parity_case` | B123 |
-| T209 | `validate_exact_accounting_display_derived_case` | B123 |
+| T208 | `validate_exact_accounting_single_vs_portfolio_parity_case`：B123 | B123 |
+| T209 | `validate_exact_accounting_display_derived_case`：B123 | B123 |
 | T210 | `validate_single_backtest_stats_legacy_schema_contract_case` | B124 |
-| T211 | `validate_exact_accounting_single_vs_portfolio_parity_case` cash-equity-path | B125 |
+| T211 | `validate_exact_accounting_single_vs_portfolio_parity_case`：B125 | B125 |
 | T212 | `validate_debug_backtest_entry_cash_path_contract_case` | B126 |
-| T213 | `validate_exact_accounting_display_leg_reconciliation_case` | B127 |
-| T214 | `validate_exact_accounting_display_leg_reconciliation_case` shared-display-rounding | B128 |
-| T217 | `validate_exact_accounting_single_vs_portfolio_parity_case` forced-closeout-total-pnl | B131 |
-| T220 | `validate_exact_accounting_display_derived_case` debug-exit-capital | B134 |
-| T221 | `validate_exact_accounting_display_derived_case` debug-entry-capital-fallback | B135 |
-| T222 | `validate_exact_accounting_display_derived_case` debug-entry-capital | B136 |
-| T223 | `validate_exact_accounting_display_leg_reconciliation_case` half-exit-leg-return | B137 |
-| T224 | `validate_exact_accounting_single_vs_portfolio_parity_case` sell-signal-return | B138 |
-| T225 | `validate_exact_accounting_single_vs_portfolio_parity_case` debug-exact-fallback | B139 |
-| T226 | `validate_exact_accounting_cost_basis_allocation_case` average-price-total | B140 |
+| T213 | `validate_exact_accounting_display_leg_reconciliation_case`：B127 | B127 |
+| T214 | `validate_exact_accounting_display_leg_reconciliation_case`：B128 | B128 |
+| T217 | `validate_exact_accounting_single_vs_portfolio_parity_case`：B131 | B131 |
+| T220 | `validate_exact_accounting_display_derived_case`：B134 | B134 |
+| T221 | `validate_exact_accounting_display_derived_case`：B135 | B135 |
+| T222 | `validate_exact_accounting_display_derived_case`：B136 | B136 |
+| T223 | `validate_exact_accounting_display_leg_reconciliation_case`：B137 | B137 |
+| T224 | `validate_exact_accounting_single_vs_portfolio_parity_case`：B138 | B138 |
+| T225 | `validate_exact_accounting_single_vs_portfolio_parity_case`：B139 | B139 |
+| T226 | `validate_exact_accounting_cost_basis_allocation_case`：B140 | B140 |
 | T227 | `validate_portfolio_rotation_mark_to_market_return_contract_case` | B141 |
 | T229 | `validate_checklist_done_test_summary_markdown_structure_case` | B143 |
-| T231 | `validate_price_utils_unit_case` shared-helper-import | B145 |
+| T231 | `validate_price_utils_unit_case`：B145 | B145 |
 | T232 | `validate_price_utils_array_tick_normalization_contract_case` | B146 |
-| T234 | `validate_exact_accounting_ledger_conservation_case` exact-ledger-ratio | B148 |
-| T235 | `validate_exact_accounting_display_derived_case` debug-total-return-binding | B149 |
-| T236 | `validate_exact_accounting_ledger_conservation_case` r-multiple-exact-ledger | B150 |
+| T234 | `validate_exact_accounting_ledger_conservation_case`：B148 | B148 |
+| T235 | `validate_exact_accounting_display_derived_case`：B149 | B149 |
+| T236 | `validate_exact_accounting_ledger_conservation_case`：B150 | B150 |
 | T237 | `validate_gui_workbench_documentation_sync_case` | B151 |
 | T238 | `validate_trade_analysis_legacy_naming_documentation_contract_case` | B152 |
 | T239 | `validate_trade_analysis_canonical_alias_export_contract_case` | B153 |
-| T242 | `validate_exact_accounting_single_vs_portfolio_parity_case` public-profit-equity | B156 |
+| T242 | `validate_exact_accounting_single_vs_portfolio_parity_case`：B156 | B156 |
 | T243 | `validate_test_suite_help_text_mentions_stable_theme_tokens_case` | B157 |
 | T248 | `validate_synthetic_conservative_executable_exit_interpretation_case` | B161 |
 | T249 | `validate_architecture_workbench_entry_file_tree_sync_case` | B66 |
 | T250 | `validate_model_param_source_resolution_contract_case` | B163 |
 | T253 | `validate_architecture_local_regression_meta_quality_file_tree_sync_case` | B166 |
 | T256 | `validate_validate_runtime_tmp_output_staging_contract_case` | B167 |
-| T257 | `validate_optimizer_walk_forward_policy_contract_case` | B52 |
+| T257 | `validate_optimizer_walk_forward_policy_contract_case`：B52 | B52 |
 | T258 | `validate_optimizer_session_milestone_cache_case` | B52 |
 | T259 | `validate_meta_quality_coverage_threshold_uses_target_scope_case` | B22 |
 | T260 | `validate_signal_utils_unit_case` | B13 |
@@ -615,263 +615,263 @@
 | T264 | `validate_breakout_quality_policy_single_source_case` | B11 |
 | T265 | `validate_breakout_quality_chronological_embargo_case` | B01 |
 | T266 | `validate_breakout_quality_runtime_artifact_contract_case` | B15 |
-| T267 | `validate_breakout_quality_strategy_comparison_contract_case` | B170 |
+| T267 | `validate_breakout_quality_strategy_comparison_contract_case`：B170 | B170 |
 | T268 | `validate_breakout_quality_continuous_target_contract_case` | B171 |
-| T269 | `validate_breakout_quality_continuous_ranker_contract_case` | B172 |
-| T279 | `validate_breakout_quality_point_in_time_score_builder_contract_case` | B182 |
+| T269 | `validate_breakout_quality_continuous_ranker_contract_case`：B172 | B172 |
+| T279 | `validate_breakout_quality_point_in_time_score_builder_contract_case`：B182 | B182 |
 | T280 | `validate_breakout_quality_selection_point_in_time_score_sort_contract_case` | B183 |
 | T281 | `validate_breakout_quality_single_seed_single_entry_contract_case` | B184 |
 | T284 | `validate_breakout_quality_binary_dl_param_adaptation_contract_case` | B187 |
 | T285 | `validate_breakout_quality_trade_path_label_contract_case` | B188 |
-| T286 | `validate_strategy_compare_config_driven_app_contract_case` | B189 |
-| T287 | `validate_breakout_quality_audit_framework_contract_case` | B190 |
+| T286 | `validate_strategy_compare_config_driven_app_contract_case`：B189/T286 | B189 |
+| T287 | `validate_breakout_quality_audit_framework_contract_case`：B190 | B190 |
 | T288 | `validate_breakout_quality_all_event_no_time_ranker_contract_case` | B191 |
 | T289 | `validate_breakout_quality_pairwise_ranker_contract_case` | B192 |
-| T290 | `validate_breakout_quality_strategy_readable_report_contract_case` | B193 |
-| T291 | `validate_breakout_quality_app_simple_report_contract_case` | B194 |
+| T290 | `validate_breakout_quality_strategy_readable_report_contract_case`：B193/T290 | B193 |
+| T291 | `validate_breakout_quality_app_simple_report_contract_case`：B194 | B194 |
 | T294 | `validate_breakout_quality_daily_pit_strategy_runtime_contract_case` | B197 |
 | T295 | `validate_breakout_quality_legacy_research_cleanup_contract_case` | B198 |
 | T296 | `validate_breakout_quality_active_legacy_model_isolation_contract_case` | B199 |
 | T297 | `validate_portfolio_core_module_boundary_contract_case` | B200 |
 | T298 | `validate_breakout_quality_multi_dl_ranker_architecture_contract_case` | B201 |
-| T302 | `validate_breakout_quality_daily_full_list_ndcg_pairwise_contract_case` | B205 |
-| T305 | `validate_breakout_quality_daily_full_list_ndcg_pairwise_contract_case` runtime OOS contract extension | B208 |
-| T307 | `validate_strategy_compare_config_driven_app_contract_case` execution-sidecar/cache extension | B210 |
-| T308 | `validate_strategy_compare_config_driven_app_contract_case` selector-trace/cache extension | B211 |
-| T310 | `validate_strategy_compare_config_driven_app_contract_case` minimum-repair scalable single-swap certificate／sidecar extension | B212 |
-| T311 | `validate_strategy_compare_config_driven_app_contract_case` Frozen Expected-PnL objective／calibration contract extension | B213 |
-| T315 | `validate_strategy_compare_config_driven_app_contract_case` Excess-Alpha calibration/objective extension | B217 |
-| T316 | `validate_strategy_compare_config_driven_app_contract_case` Excess-Alpha No-R0 resource-ablation extension | B218 |
-| T317 | `validate_strategy_compare_config_driven_app_contract_case` Excess-Alpha exact constrained solver extension | B219 |
-| T318 | `validate_strategy_compare_config_driven_app_contract_case` MR-13E score exact constrained solver extension | B220 |
-| T319 | `validate_strategy_compare_config_driven_app_contract_case` MR-13A score exact constrained source-isolation extension | B221 |
-| T320 | `validate_strategy_compare_config_driven_app_contract_case` MR-13E Forward score exact constrained stage/source-isolation extension | B222 |
-| T321 | `validate_strategy_compare_config_driven_app_contract_case` completed-pair pinned frozen Forward-score reuse extension | B223 |
-| T322 | `validate_strategy_compare_config_driven_app_contract_case` archived completed-pair score-path recovery extension | B224 |
-| T323 | `validate_strategy_compare_config_driven_app_contract_case` continuous required-start / first-scored-event separation extension | B225 |
-| T324 | `validate_strategy_compare_config_driven_app_contract_case` config-driven robustness / isolated shared-DL training dedupe compatibility extension | B226 |
-| T325 | `validate_strategy_compare_config_driven_app_contract_case` SR-C45 historical-only compatibility boundary extension | B227 |
-| T326 | `validate_strategy_compare_config_driven_app_contract_case` active three-arm matrix / historical catalog separation extension | B228 |
-| T327 | `validate_strategy_compare_config_driven_app_contract_case` recovered frozen-score common-period refresh extension | B229 |
-| T328 | `validate_strategy_compare_resolved_plan_transition_contract_case` immutable resolved-plan / active-membership-independent artifact provenance contract | B230 |
-| T329 | `validate_strategy_compare_config_driven_app_contract_case` preparation owner split：既有8個dependency-wave／parameter-preflight checks由專責helper聚合，check identity不變；changed status/helper modules必須觸發同一contract且納入coverage targets | B231 |
-| T330 | `validate_strategy_compare_config_driven_app_contract_case` completed-pair/cache/reuse owner split：既有6項checks由專責helper聚合，並要求score SHA變更使normal與archived fallback都失效；DL artifact owner與reuse helper納入change-selection／coverage targets | B232 |
-| T331 | `validate_strategy_compare_config_driven_app_contract_case` production reuse/runtime owner split：既有completed-pair/cache checks維持原identity，改驗證reuse implementation已移至專責 owner 且main orchestration不得重複def；new runtime/reuse modules納入change-selection impact mapping | B233 |
-| T332 | `validate_breakout_quality_runtime_integration_gate_contract_case` production promotion extension：以current workflow config動態驗證continuous profile可被workflow-runtime exporter接受並dispatch到daily path、production daily score identity／missing-score／coverage contract | B234 |
-| T333 | `validate_breakout_quality_strategy_comparison_contract_case` fixed-signal re-entry案例以隔離non-daily context維持既有continuation語意 | B234 |
-| T334 | `validate_breakout_quality_daily_full_list_ndcg_pairwise_contract_case` frozen MR-13E manifest可缺後來新增且不適用的canonical-null semantic key，但真正pairwise weighting等objective contract漂移仍必須被拒絕 | B235 |
-| T336 | `validate_strategy_compare_config_driven_app_contract_case` 以exhaustive oracle驗證SR-C48三pass Pareto exact No-R0、Selection-only historical lifecycle與current matrix不得再啟用C48 | B236 |
-| T340 | `validate_strategy_compare_config_driven_app_contract_case` Selection PIT consumer ownership／Gate FAIL status distinction regression | B189 |
-| T341 | `validate_strategy_compare_config_driven_app_contract_case` target-aware R-table rendering：不同continuous Target identity不互相比best/worst；同Target identity正常比較，actual realized-R仍跨arm比較 | B240 |
-| T342 | `validate_breakout_quality_full_horizon_target_components_contract_case` MR-13H Target-only change、scalar/vector parity、no-breach invariant、profile/reference、read-only audit metrics contract | B241 |
-| T343 | `validate_breakout_quality_strategy_readable_report_contract_case` Multi-seed robustness canonical Standard SOP reuse + append-only compact Robustness Extension + report-only schema refresh contract | B193 |
-| T344 | `validate_breakout_quality_full_horizon_target_components_contract_case` MR-13K extension：驗證pure-MFE只移除adverse target penalty、reference identity與Forward GO後PIT authorization | B242 |
-| T345 | `validate_strategy_compare_config_driven_app_contract_case` historical current-matrix regression；後續current C56 full-flow matrix由T353接手，T345保留MR-13K source-only遷移歷史 | B242 |
-| T347 | `validate_breakout_quality_low_adverse_target_component_contract_case` MR-13M negative-adverse Target、MR-13H peak/diagnostic parity、scalar/vector parity、pairwise training固定、strategy-agnostic與PIT/production isolation | B244 |
-| T351 | `validate_strategy_compare_config_driven_app_contract_case` C55 extension + dual-model exact synthetic：驗證CONT13M secondary artifact/readiness/cache identity、baseline safety coverage＋score-sum hard floor、13K-only primary objective、exact全域最優、無score weighting，以及C55不進robustness/production | B248 |
-| T352 | `validate_strategy_compare_config_driven_app_contract_case` C56 Seed42 B2 residual-safety exact contract：same-day rank OLS、baseline residual floor、13K-only objective與exhaustive global optimum | B249 |
-| T353 | `validate_strategy_compare_config_driven_app_contract_case` C56/C57 full-flow extension：current Selection C32/C23/C42/C57、Forward C1/C3/C44/C56；CONT13M_PIT secondary PIT pinned lookup；C54/C55 historical-only；Selection/Forward robustness只C57/C56，且每seed同seed建立13K+13M兩source後單一replay | B250 |
-| T357 | `validate_strategy_compare_config_driven_app_contract_case` Strategy Parameter SSOT：驗證Full/Min OOS與Rolling logical identities解析到同一flat canonical schedule、canonical shared search第一policy BUILD後第二policy REUSE且只執行一次Optimizer search、canonical／benchmark workspace固定落`outputs/optimizer/strategy_param_schedule/`、benchmark flat per-seed truth下不得建立current `_optimizer_work`、Optimizer sole producer、stale auto-build contract、current ensure不掃legacy root、explicit migration + READY-gated cleanup與named run-best repository contract；另以legacy workspace `-Infinity`診斷sentinel驗證strict-JSON auto-repair後不重跑Optimizer，並驗non-finite runtime params fail-fast | B253 |
-| T360 | `validate_breakout_quality_point_in_time_score_builder_contract_case` PIT fitting-identity regression：identity忽略純score_end但拒絕training-contract漂移；OOS start改為2023時與Rolling 2023同identity、與2021 fitting identity不同 | B189 |
-| T361 | `validate_breakout_quality_strategy_readable_report_contract_case` Strategy Compare fitting-identity checkpoint integration：single/multi與OOS/Rolling共用`checkpoint_cache_root`、canonical PIT依fitting identity取checkpoint且不共用score，seed屬identity且same identity/different SHA fail-fast | B189 |
-| T362 | `validate_breakout_quality_reusable_model_component_contract_case` 以experiment-agnostic隔離fixture保護reusable ranker components，並驗證execution recipe不含MR identity、historical PIT compatibility與current OOS／Rolling authorization分離、current Strategy Compare依賴集合一致、active／legacy architecture互斥完整；不得重新綁定已結案MR promotion status | B254 |
-| T363 | `validate_breakout_quality_strategy_comparison_contract_case` Multi-seed robustness REUSE完整性 regression：completed-result永久REUSE只接受exact scientific fingerprint/current contract，不再做跨fingerprint、seed-expansion或legacy raw-SHA migration；benchmark manifest/raw parameter file SHA只作provenance、parameter `created_at`/diagnostic刷新不得改runtime-scientific identity；completed seed observation綁strategy-param identity，PIT aggregate在retention清除per-fold checkpoint後仍以fold count＋score/runtime identity驗證、非PIT仍要求model SHA，partial yearly unit不得誤判completed，永久結果SHA tamper拒絕，completed rerun true no-op、同fingerprint interrupted run可resume、缺少transient C61/C58 baseline只重建context，OOS/Rolling baseline mode不可混用 | B255 |
-| T364 | `validate_breakout_quality_conditional_mfe_safety_single_model_contract_case` MR-13P single-model Conditional MFE–Safety：驗證MR-13P identity、full-list dual-head等權training contract、同日conditional residual target、雙2-logit heads與conditional loss對primary head stop-gradient／shared encoder可更新 | B256 |
-| T365 | `validate_breakout_quality_reverse_conditional_mfe_ab_contract_case` MR-13Q/R reverse-Conditional MFE A/B：共同J target、Single/Duo identity、Raw Safety stop-gradient condition與final score一致性 | B257 |
-| T366 | `validate_synthetic_candidate_order_fill_layer_separation_case` resource-aware selector matrix覆蓋SR-C67 K-Flex/R0-preserved controlled fixture：驗baseline K、fixed-K C59、最大可行count、同一R0 floor/canonical cash feasibility，並以wide-slot stress fixture驗minimum-notional cash-count upper bound、略過不可能高count與Raw Top-K合法時direct exact-optimum shortcut；不得用wall-clock threshold作formal correctness gate | B258 |
-| T367 | `validate_strategy_compare_config_driven_app_contract_case` 覆蓋C68/C69 matched local pair的current suite／contrasts／source isolation與C67 historical isolation；selector behavioral coverage由既有resource-aware selector synthetic承接 | B259 |
-| T368 | `validate_breakout_quality_audit_framework_contract_case`：B260 驗證現行 reusable Audit、Strategy Compare Filled-buys MFE×Safety geometry/renderer 及 K/R0、C69 one-time identities僅保留歷史 evidence，不要求已退役實作或正式重跑入口。 | B260 |
-| T369 | `validate_synthetic_candidate_order_fill_layer_separation_case` 覆蓋B261：C70 No-K/No-R0 selector behavioral fixture，驗baseline K=1/R0較高時仍可依score order選滿canonical-cash可行physical slots且reserved可低於R0 | B261 |
-| T370 | `validate_strategy_compare_config_driven_app_contract_case` 覆蓋B261：C66/C70 controlled-source isolation、C70啟動時六-arm focused-suite snapshot、contrasts與historical-arm exclusion | B261 |
-| T371 | `validate_breakout_quality_point_in_time_score_builder_contract_case` 覆蓋B262 PIT output contract：MR-13R `raw_safety_score` optional column可被lookup，score-output-only contract不改`fold_training_identity`且fitting-compatible，確保既有checkpoint rescore而非重訓 | B262 |
-| T372 | `validate_synthetic_candidate_order_fill_layer_separation_case` 覆蓋B262：C71 Raw Safety same-day orderable percentile gate behavioral fixture、No-K/No-R0 preservation與canonical cash count | B262 |
-| T373 | `validate_strategy_compare_config_driven_app_contract_case` 覆蓋B262：C70/C71 controlled-source isolation、same-source Raw Safety dependency dedupe、七-arm current suite與C71 contrasts | B262 |
-| T374 | `validate_breakout_quality_point_in_time_score_builder_contract_case` 覆蓋B263：C71 score-only cache自癒、跨封裝bit-exact相同FIT保留原始cache bytes、真正權重或來源衝突fail-fast | B263 |
-| T375 | `validate_breakout_quality_point_in_time_score_builder_contract_case` 覆蓋B264：score-only cache repair後重新載入canonical fold manifest，top-level aggregate使用post-sync checkpoint SHA而非舊in-memory SHA | B264 |
-| T376 | `validate_strategy_compare_config_driven_app_contract_case` 覆蓋B265：Selection-PIT per-arm score projection fingerprint與legacy completed-pair recorded-score migration，驗C66/C70忽略未消費Raw Safety但primary變動必須MISS、C71 Raw Safety變動必須MISS | B265 |
-| T377 | `validate_strategy_compare_config_driven_app_contract_case` 覆蓋B266：C70 historical-only、C71/C72/C73 P50/P60/P70 same-source cutoff curve、runtime-options納入duplicate identity與八-arm current suite | B266 |
-| T378 | `validate_breakout_quality_strategy_readable_report_contract_case` 覆蓋B266：aggregate新增Raw Safety Gate Sensitivity表與section numbering contract | B266 |
-| T379 | `validate_breakout_quality_strategy_comparison_contract_case` 覆蓋B266：Raw Safety Gate Sensitivity renderer/comparison contract一致 | B266 |
-| T380 | `validate_breakout_quality_strategy_readable_report_contract_case` 覆蓋B267：C71/C72/C73 pair storage key以arm-id隔離且三arm scenario materialization完整，不得因same source/mode互相覆蓋 | B267 |
-| T381 | `validate_synthetic_candidate_order_fill_layer_separation_case` 覆蓋B268：C74同日orderable Raw-Safety/Conditional-MFE percentile product排序、joint-score missing fail-closed與No-K/No-R0 selector behavior | B268 |
-| T382 | `validate_strategy_compare_config_driven_app_contract_case` 覆蓋B268：C74 same-source dual-head dependency、parameter-free runtime options、九-arm current suite與C74 controlled contrasts | B268 |
-| T385 | `validate_breakout_quality_safety_raw_mfe_duo_contract_case` MR-13S controlled contrast：absolute U target、MR-13R Safety/architecture isolation、model-only 5×5 joint Gate與no-C75 authorization | B271 |
-| T386 | `validate_breakout_quality_safety_raw_mfe_duo_contract_case` 擴充MR-13S Truth Geometry：actual Daily/Breakout 5×5 population/enrichment、actual/predicted S↔MFE relation、Breakout沿用daily-universal percentile不subset rerank，且Truth Geometry升格標準Model SOP、不保留專屬menu | B272 |
-| T387 | `validate_strategy_compare_config_driven_app_contract_case` 驗Strategy OOS/Rolling同層、OOS+Rolling one-click consistency與無獨立settings submenu | B273 |
-| T388 | `validate_breakout_quality_audit_framework_contract_case` 驗Audit Reusable/One-time/Historical分層、四個stable method families與exact audit-id runner scope | B273 |
-| T389 | `validate_breakout_quality_strategy_readable_report_contract_case` 驗Strategy固定SOP sections、hypothesis-specific Raw Safety sensitivity退出主報表與既有execution/diagnostics語意保留 | B273 |
-| T390 | `validate_breakout_quality_audit_framework_contract_case` 覆蓋B274：三個purpose-driven Reusable producers、Daily/Breakout canonical 5×5 no-subset-rerank、shared color/section semantics與one-time lifecycle | B274 |
-| T391 | `validate_breakout_quality_strategy_readable_report_contract_case` 覆蓋B274：Strategy Filled Trade Quality使用Breakout truth baseline，並維持canonical Strategy metric/report contract | B274 |
-| T392 | `validate_breakout_quality_audit_framework_contract_case` 覆蓋B275：Reusable Planned membership與Opportunity preflight都以execution＋orderable為SSOT，No-K/No-R0缺`feasible_ascent_final`不得BLOCK，targeted pipeline loader仍保留selector trace contract | B275 |
-| T393 | `validate_breakout_quality_app_simple_report_contract_case` 覆蓋B276：Standard Model SOP console/Markdown共用section與semantic palette、Generalization direction color、Evidence status color及plain-output不變契約 | B276 |
-| T394 | `validate_breakout_quality_safety_raw_mfe_hmhs_tri_head_contract_case` 覆蓋B277：MR-13T raw-300×10 strict control、exact HM/HS truth、tri-head gradient isolation／fixed equal loss、Raw-MFE epoch selection、Direct-vs-product joint retrieval與Standard Model SOP integration | B277 |
-| T395 | `validate_breakout_quality_safety_raw_mfe_hmhs_tri_head_contract_case` 擴充B278：production shared batched inference `tri_head`必須配置6-logit buffer，避免Validation/OOS將`(N,6)`寫入legacy`(N,2)` | B278 |
-| T396 | `validate_breakout_quality_hmhs_single_head_contract_case` 覆蓋B279：MR-13U raw-300×10/trunk control、H exact target、single-head/no auxiliary heads、Validation HM/HS Pair→PR-AUC selection、H-only Standard Model SOP與no PIT/C75 | B279 |
-| T397 | `validate_research_report_contract_freeze_case` 覆蓋B280：六份persistent report fingerprint freeze、MR-13S/T/U Standard SOP cross-profile invariance與MR-specific Extension isolation | B280 |
-| T398 | `validate_breakout_quality_nonlinear_hmhs_head_contract_case` 覆蓋B281：MR-13V strict MR-13T control、fixed nonlinear H MLP、tri-head gradient/output、Standard SOP approved fingerprint不變與existing Model-specific Extension isolation | B281 |
-| T399 | `validate_breakout_quality_joint_min_target_contract_case` 覆蓋B282：MR-13W exact continuous `min(S,U)` target-only contrast、same MR-13V architecture/loss/epoch、Joint-Min top-tail metrics、Standard SOP fingerprint freeze與Model-specific Extension isolation | B282 |
-| T400 | `validate_breakout_quality_joint_attention_pool_contract_case` 覆蓋B283：MR-13X same-Jmin representation-only contrast、same-seed parameter identity、joint scalar temporal softmax pooling、marginal-logit invariance、gradient isolation與Standard SOP/Joint-Min Extension freeze | B283 |
-| T401 | `validate_breakout_quality_modern_tcn_joint_min_contract_case` 覆蓋B284：MR-13Y same-Jmin ModernTCN family contrast、legacy 9B trunk exact reconstruction、96D tri-head/attention topology、gradient isolation與Standard SOP/Joint-Min Extension freeze | B284 |
-| T402 | `validate_breakout_quality_patch_transformer_joint_min_contract_case` 覆蓋B285：MR-13Z same-Jmin Patch Transformer family contrast、legacy 9F trunk exact reconstruction、30-token 128D tri-head/attention topology、gradient isolation與Standard SOP/Joint-Min Extension freeze | B285 |
-| T403 | `validate_mr13z_c75_conversion_contract_case` 覆蓋B286：historical C75 Joint-Min No-K/No-R0 identity/score projection/compatibility retained、current suite已合法移除C75、MR-13Z Model Gate與no-production不被strategy FAIL改寫 | B286 |
-| T404 | `validate_breakout_quality_pit_training_performance_semantics_case` 覆蓋B287：lazy feature batch-vectorization exactness、PIT selection-only metrics exactness與full/lightweight select_epoch optimizer/epoch identity | B287 |
-| T405 | `validate_strategy_compare_config_driven_app_contract_case` 覆蓋B288：C75 configured Joint-Min runtime score identity與legacy primary default regression | B288 |
-| T406 | `validate_strategy_compare_config_driven_app_contract_case` preparation checks覆蓋B289：default Rolling models/output split ownership、override=None、mode-specific co-location與training lifecycle override傳遞 | B289 |
-| T407 | `validate_breakout_quality_mr13aa_patch_transformer_h_target_contract_case` 覆蓋B290：MR-13H target/training exact control、frozen Patch recipe、新ARCH/legacy isolation、same-seed trunk exactness、single-rank-head與no-PIT/no-strategy/persistent-report freeze | B290 |
-| T408 | `validate_breakout_quality_mr13ab_first_breach_pure_mfe_contract_case` 覆蓋B291：MR-13K target-only control、MR-13E canonical first-breach path、no-breach identity、breach-day high exclusion、first-bar 0R、scalar/vectorized exactness與no-PIT/no-strategy/persistent-report freeze | B291 |
-| T409 | `validate_breakout_quality_audit_framework_contract_case` 覆蓋B292：保留MR-13AB frozen survival-increment historical decision contract與read-only/no-training治理語意 | B292 |
-| T410 | `validate_breakout_quality_audit_framework_contract_case` 覆蓋B293：historical source缺失不得觸發重訓，舊inference-only fallback只保留歷史治理證據 | B293 |
-| T411 | `validate_breakout_quality_audit_framework_contract_case` 覆蓋B294：AB-only embedded-reference truth final contract與no historical checkpoint dependency | B294 |
-| T412 | `validate_breakout_quality_mr13ac_predicted_upside_conditional_safety_contract_case` 覆蓋B296：Stage-1 MR-13K PIT-safe cross-fit/fixed-forward context、PIT-covered Selection universe、Stage-2 MR-13M recipe、residual-percentile truth、1-scalar direct concat、MR-13P helper preservation、artifact provenance；Model Gate GO後C78 research authorization不得改science/persistent-report contract | B296 |
-| T413 | `validate_breakout_quality_mr13ac_predicted_upside_conditional_safety_contract_case` 擴充B297：驗`build_daily_ranker_split`排除date合法但`target_valid=False` rows、split report明示target-valid filter，並驗Stage-1 CSV string dtype保留`0050/2330/00632R` identity | B297 |
-| T414 | `validate_strategy_compare_config_driven_app_contract_case` 保留B298 historical mechanism invariants：C79-C59 source-only exact K/R0、C77/C78 direct contract、C76 historical-only；current exact membership由T423/B306接手 | B298 |
-| T415 | `validate_breakout_quality_audit_framework_contract_case` 覆蓋B295：MR-13AB一次性survival Audit退役後generic framework仍完整、historical decision evidence仍由Registry/Log保存 | B295 |
-| T416 | `validate_breakout_quality_mr13ad_predicted_safety_conditional_mfe_contract_case` 覆蓋B299：MR-13M PIT-safe predicted-Safety Stage-1、MR-13K Stage-2 recipe、conditional-MFE residual-percentile truth、shared isolated producer、target-valid/ticker identity、1-scalar architecture、artifact provenance、no PIT/strategy與Standard SOP freeze | B299 |
-| T417 | `validate_breakout_quality_mr13ae_predicted_safety_context_pure_mfe_contract_case` 覆蓋B300：MR-13M PIT-safe predicted-Safety canonical context reuse、MR-13K Pure-MFE target/order與training recipe、no-residualization、target-valid/context coverage、1-scalar architecture、MFE/Safety diagnostic-only extension、no PIT/strategy與Standard SOP freeze | B300 |
-| T418 | `validate_breakout_quality_mr13af_high_safety_weighted_pure_mfe_contract_case` 覆蓋B301：MR-13K target/order＋MR-13M PIT Safety pair-weight context、`ΔNDCG×min(Si,Sj)` normalized loss、Safety=1退化K、low-Safety降權、no model-input/joint/bucket/lambda、AF frozen identity、no Target-reference／checkpoint reference fallback regression、no PIT/strategy與Standard SOP freeze | B301 |
-| T419 | `validate_breakout_quality_continuous_ranker_contract_case` 覆蓋B302：registry-driven pair-weight primitive、MR-13AG declarative recipe/context/dependency、ΔNDCG×S_winner、Safety=1退化base、AF min-policy compatibility，以及synthetic第三種policy在不修改trainer/data/report/synthetic registry下可直接執行；AF dedicated frozen regression另由既有B301/T418持續覆蓋 | B302 |
-| T420 | `validate_breakout_quality_continuous_ranker_contract_case` 覆蓋B303：registry-driven `product_predicted_safety` primitive、MR-13AH declarative recipe/context/dependency、`ΔNDCG×S_i×S_j` symmetric weighting、Safety=1退化base、low/low concentration，以及AF min/AG winner policy compatibility；不新增AH dedicated synthetic registration | B303 |
-| T422 | `validate_breakout_quality_continuous_ranker_contract_case` 覆蓋B305：registry-driven `conflict_unsafe_winner_predicted_safety` primitive、MR-13AJ declarative recipe/context/dependency、aligned pair完整保留、unsafe-MFE-winner conflict-only discount、Safety=1退化base，以及AF/AG/AH compatibility；不新增AJ dedicated synthetic registration | B305 |
-| T423 | `validate_strategy_compare_config_driven_app_contract_case` 覆蓋B306：CONT13AH PIT-safe source、C80完整複製C59 constrained contract、C81完整複製C78 No-K/No-R0 contract、C80/C81 catalog retention、current suite由shared model list＋既有strategy binding派生、AH model-level auth維持False/False、source-scoped Seed42 canonical OOS/Rolling exception與Multi-seed fail-closed | B306 |
-| T424 | `validate_research_report_contract_freeze_case` 覆蓋B307：Standard Model SOP v2固定sections 1～8、common Target/Score×MFE/Safety＋Top10 economic quality schema、canonical Pred-Safety reporting-only reference、Breakout no-subset-rerank、reference缺失不改fit，以及MR-specific extension isolation；數值helper另由既有MR-13AE synthetic回歸 | B307 |
-| T425 | `validate_research_report_contract_freeze_case` 覆蓋B308主契約：Standard SOP v3 actual-truth common schema、Top-Bottom/Top10 Low-Adverse/四象限、Ranking欄位與section order、approved comparison contract derivation、H/AF/AH＋4-arm config extensibility、model+manifest+report REUSE不要求score sidecar、缺失才BUILD | B308 |
-| T426 | `validate_breakout_quality_mr13ae_predicted_safety_context_pure_mfe_contract_case` 覆蓋B308 actual-truth數值helper：Target/Score→MFE/Safety、Top10 Low-Adverse與四象限％/enrichment，不把MR-13M Pred-Safety升回Standard common metric | B308 |
-| T427 | `validate_breakout_quality_continuous_ranker_contract_case` 覆蓋B308 generic menu regression：Enter仍進Forward Gate、[4]由config-driven Standard SOP comparison route持有，不恢復舊固定two-arm／experiment-specific submenu | B308 |
-| T428 | `validate_research_report_contract_freeze_case` 覆蓋B309：Standard SOP v4 / comparison v2 fingerprints與schema、[1][1] `Validation → OOS` label、[1][4]零Validation且OOS/Breakout獨立表、comparison省略Split、best綠/worst紅/淡藍title及既有status palette | B309 |
-| T429 | `validate_research_report_contract_freeze_case` 覆蓋B310：Standard SOP v5 / comparison v3 fingerprints、共通1～6連續編號、Multi-head/Truth Geometry Extension isolation、[1][4] Generalization第二與單一section title下Forward OOS/Breakout雙表；multi-head renderer regressions由既有simple-report與MR-13S synthetics同輪回歸 | B310 |
-| T430 | `validate_research_report_contract_freeze_case` 覆蓋B311：comparison v4 fingerprint/structural columns、SOP 2 `Validation → OOS`＋`OOS → Breakout slice`雙表、Forward/Breakout/transition無色次標題、完整Standard evidence REUSE與缺失evidence canonical BUILD/fail-fast、configured model section membership不靜默遺失 | B311 |
-| T431 | `validate_research_report_contract_freeze_case` 覆蓋B312：Forward/Rolling Standard SOP persistent contracts共用1～6且Rolling只追加Fold/Year Stability；新menu/shared-list與strategy-binding/robustness authorization另由既有model/strategy capability synthetics同鏈覆蓋 | B312 |
-| T432 | `validate_breakout_quality_continuous_ranker_contract_case` 覆蓋B313：[1]/[2] active Training Profile與[3]/[4] shared Model Compare/Test List直接成為current Forward/Rolling model-workflow authorization SSOT，不再由per-profile current flag作第二selector | B313 |
-| T433 | `validate_strategy_compare_config_driven_app_contract_case` 覆蓋B313：[3]～[6] strategy/robustness membership由同一shared Model Compare/Test List＋既有正式strategy binding派生；AH C80/C81 current multi-seed routing不再被舊single-seed flag二次排除，AF無binding仍MODEL-ONLY | B313 |
-| T434 | `validate_research_report_contract_freeze_case` 覆蓋B314：Model Standard SOP/Comparison只有v7/v6一套persistent contract，Forward/Rolling/Robustness共用1～6，Rolling/Robustness僅用mode extension，舊rolling-specific persistent contract與runtime runner不得復活 | B314 |
-| T435 | `validate_breakout_quality_point_in_time_score_builder_contract_case` 覆蓋B314：Rolling fold canonical artifact包含post-refit `validation_scores.csv` sidecar，cache sync/rescore/manifest對checkpoint與兩種score sidecar共同驗證 | B314 |
-| T436 | `validate_breakout_quality_app_simple_report_contract_case` 覆蓋B314：simple console/Markdown直接消費同一Standard SOP nested payload與Model-specific Extension，不保留舊Forward/Rolling renderer schema | B314 |
-| T437 | `validate_breakout_quality_point_in_time_score_builder_contract_case` 覆蓋B315：canonical PIT Scores/Audit artifact rewrite後必須invalidate cached ranking contract；Rolling validation sidecar audit只讀SOP必要欄，不因`ticker` mixed dtype產生warning | B315 |
-| T438 | `validate_breakout_quality_continuous_ranker_contract_case` 覆蓋B316：[1]～[6]共用`Model / Profile / Action / Reason`狀態renderer、Training Model以MR identity顯示、artifact completeness獨立為工件狀態，Daily target/index使用InlineProgress單行刷新且redirect只留final state | B316 |
-| T439 | `validate_breakout_quality_continuous_ranker_contract_case` 覆蓋B317：[3]～[6]不得再出現二次Y/N確認；Training/Compare List與所有Model欄MR identity為淡藍；Robustness顯示淡藍`seed=<id> (n/N)`；comparison區內次標題黃色；PIT daily data真正走InlineProgress單行刷新 | B317 |
-| T440 | `validate_research_report_contract_freeze_case` 覆蓋B317：Standard comparison section主標題維持淡藍，Forward OOS/Breakout/Generalization transition次標題固定黃色；best/worst與status palette維持既有語意 | B317 |
-| T441 | `validate_breakout_quality_continuous_ranker_contract_case` 覆蓋B322：multiworker feature materialization維持batch/value一致且worker不持有pinned allocator；CUDA device iterator保留main-thread pinning、non-blocking copy stream並在teardown synchronize | B322 |
-| T442 | `validate_research_report_contract_freeze_case` 覆蓋B323：Rolling robustness允許不同seed的`flagged_folds/drift_flag`診斷結果，以deterministic union／any-seed OR彙總，同時criterion維持invariant、max drift取mean且generic list/boolean contract不放寬 | B323 |
-| T443 | `validate_breakout_quality_shared_ah_contract_case` 覆蓋B324：MR-13AK identity／無external context、Shared-AH MFE head不吃Safety、MFE-only loss對Safety classifier stop-gradient且shared encoder/MFE head仍有梯度、內生Safety先維持AH same-date average-rank percentile尺度，再使product精確等於`S_i×S_j` | B324 |
-| T444 | `validate_breakout_quality_continuous_ranker_contract_case` 覆蓋B325：[1]/[2] canonical Training Model pair必為[3]～[6] shared Model Compare/Test List的必要子集；synthetic新training pair不需手動修改comparison list即可自動merge，reference controls保留且identity collision fail-fast | B325 |
-| T445 | `validate_research_report_contract_freeze_case` 覆蓋B326：comparison v7只在Standard 1～6後按payload capability追加Multi-head Learnability／Truth-Prediction Geometry；non-multi-head不出現空extension，Rolling mode label/order正確且approved fingerprint同步 | B326 |
-| T446 | `validate_breakout_quality_point_in_time_score_builder_contract_case` 覆蓋B327：A1/A2共用runtime `score_output_policy`自動Raw Safety/MFE sidecar、PIT producer/reader不得持有target-builder capability或optional-column表、score-output-only fitting identity不變、Rolling audit由persisted sidecar產生OOS/Breakout multi-head evidence | B327 |
-| T447 | `validate_breakout_quality_shared_ah_contract_case` 覆蓋B328：A1/A2同training recipe只換model topology、A2 Safety context確實影響MFE logits但stop-gradient隔離Safety classifier、同shared-weight loss handler可直接訓練兩種topology | B328 |
-| T448 | `validate_research_report_contract_freeze_case` 覆蓋B329：comparison v8把multi-head extension依method合併成Model維度同表；Safety cohort固定Model/Pred Safety/N/Raw-MFE→MFE rho/High-MFE/HM/HS，best/worst只在同quintile比較，single-model extension schema不變 | B329 |
-| T449 | `validate_breakout_quality_shared_ah_contract_case` 覆蓋B330：AL negative control保留可解析但退出current membership；AM與AK共用topology/shared-Safety-product loss，只換economic primary target且不帶Safety context；generic head label/extension capability不把AM誤當Raw-MFE | B330 |
-| T450 | `validate_breakout_quality_shared_ah_contract_case` 覆蓋B331：MR-13AN與AM target/loss/weighting完全相同、只重用A2 Safety-conditioned topology，stop-gradient primary-head context語意與production training path可直接執行；current membership保留AM並自動加入AN且不恢復AL | B331 |
-| T451 | `validate_strategy_compare_config_driven_app_contract_case` 覆蓋B332：驗AK canonical score source、C82/C83對C80/C81 source-only contracts與current strategy membership由shared model-list派生 | B332 |
-| T452 | `validate_breakout_quality_shared_ah_contract_case` 覆蓋B332：驗model current membership回到H/AF/AH/AK/AM且排除AL/AN | B332 |
-| T453 | `validate_breakout_quality_true_hs_scoped_pair_membership_contract_case` 覆蓋B333：驗AO true-HS membership先於MFE rank geometry、LS不影響HS-sublist ΔNDCG、AK同gate attribution與Forward-only authorization | B333 |
-| T454 | `validate_breakout_quality_hs_priority_mfe_contract_case` 覆蓋B334：驗AP non-compensatory HS-priority truth、direct all-daily runtime與membership外fail-closed | B334 |
-| T455 | `validate_breakout_quality_hs_priority_stratified_mfe_contract_case` 覆蓋B335：驗AQ pair-stratum normalization且不改AP target/geometry | B335 |
-| T456 | `validate_breakout_quality_hs_qualification_conditional_mfe_contract_case` 覆蓋B336：驗AR binary HS qualification、true-HS Conditional-MFE與shared-membership authorization | B336 |
-| T457 | `validate_breakout_quality_hs_boundary_weighted_conditional_mfe_contract_case` 覆蓋B337：驗AS boundary-proximity truth-side weighting、training-pair自動merge與shared-membership authorization | B337 |
-| T458 | `validate_breakout_quality_continuous_ranker_contract_case` 覆蓋B338：驗[1]/[2] training-pair→[3]～[6] shared membership單向派生、移除per-profile current-mode veto與menu二次gate | B338 |
-| T459 | `validate_research_report_contract_freeze_case` 覆蓋B339：驗comparison v9 evidence-capability discovery、無第二extension allow-list及HS Conditional-MFE cross-model merged rendering | B339 |
-| T460 | `validate_breakout_quality_reusable_model_component_contract_case` 覆蓋B340：驗architecture descriptor單一membership/routing來源、generic consumer無architecture-ID leakage、spec manifest behavior-preserving與report/manifest共用canonical training semantics | B340 |
-| T461 | `validate_breakout_quality_continuous_ranker_contract_case` 覆蓋B341：驗profile-enabled objective membership、loss/metric/spec legality、supervision modes、pair/scope/weight capability、head-loss composition與artifact semantics均由single training composition owner派生 | B341 |
-| T462 | `validate_breakout_quality_continuous_ranker_contract_case` 覆蓋B342：驗一般Rolling與Rolling Robustness共用Forward→PIT fitting-checkpoint bridge，標準Rolling可偵測canonical Forward model/report並只以candidate交給PIT逐foldexact-identity驗證 | B342 |
-| T463 | `validate_breakout_quality_reusable_model_component_contract_case` 覆蓋B343：驗Safety scalar temporal-attention pooling descriptor、same-seed AO common-weight/MFE-path preservation、attention normalization與Safety-only scorer gradient ownership | B343 |
-| T464 | `validate_research_report_contract_freeze_case` 覆蓋B344：驗comparison v10、HS-Conditional gate新增Safety Daily/Global rho與Pair且Standard SOP v7/fingerprint不變 | B344 |
-| T465 | `validate_breakout_quality_reusable_model_component_contract_case` 覆蓋B345：驗task-specific Safety attention capability composition、AV/AX exact MFE path與gradient ownership | B345 |
-| T466 | `validate_breakout_quality_reusable_model_component_contract_case` 覆蓋B346：驗Safety single-head temporal self-attention Q/K/V primitive、AO exact MFE path與Safety-only gradient ownership | B346 |
-| T467 | `validate_breakout_quality_reusable_model_component_contract_case` 覆蓋B347：驗Safety Patch / MFE Inception dual-encoder frozen recipe、AO MFE exact initialization/logits與雙向gradient isolation | B347 |
-| T468 | `validate_breakout_quality_reusable_model_component_contract_case` 覆蓋B348：驗InceptionTime per-module dilation、full-window RF=305、AO kernels/depth/width/pooling/parameter-count exact control與descriptor-driven dilation | B348 |
-| T469 | `validate_checklist_generated_view_ssot_contract_case`：v2 B/T generated-view 一致、current-state transaction、非法歷史欄位與孤兒映射 fail-closed | B349 |
-| T470 | `validate_breakout_quality_fitted_model_lifecycle_contract_case` 驗report/manifest缺失不會抹除獨立fitted-model truth、exact fitting identity reuse、same-identity byte conflict fail-fast、Forward refresh必帶reuse-fitted-model且完整contract 0 producer call | B350 |
-| T471 | `validate_research_report_contract_freeze_case` 覆蓋B351：驗comparison extension evidence-family discovery、v11 persistent contract、row-mean robustness aggregation與single-seed-only geometry contract | B351 |
-| T472 | `validate_breakout_quality_point_in_time_score_builder_contract_case` 覆蓋B352：current score-output policy為唯一column owner，AK-style legacy primary-only PIT在audit前被拒絕並要求checkpoint-rescore | B352 |
-| T473 | `validate_breakout_quality_point_in_time_score_builder_contract_case` 覆蓋B353：eligibility-only manifest必須通過future-independent row contract，同一manifest必須被獨立score-output capability validator拒絕，完整PIT loader再組合兩者 | B353 |
-| T474 | `validate_breakout_quality_fitted_model_lifecycle_contract_case` 覆蓋B354：patience 1→3必須使Forward/Rolling/Forward Robustness/Rolling Robustness reuse全部失效，且legacy historical defaults不得隨current config漂移 | B354 |
-| T475 | `validate_breakout_quality_fitted_model_lifecycle_contract_case` 覆蓋B355：Forward fitted-model evidence與Rolling fold原始證據由canonical FIT owner核驗；同權重不同封裝可REUSE，來源/權重差異拒絕，stale fit不得假REUSE。Rolling PIT分數路徑另由既有PIT synthetic契約覆蓋。 | B355 |
-| T476 | `validate_research_report_contract_freeze_case` 覆蓋B356：Forward report reuse fixture包含report_path並實際走過current fitted-model readiness precondition；缺OOS score仍不得單獨迫使重訓 | B356 |
-| T477 | `validate_breakout_quality_continuous_ranker_contract_case` 覆蓋B357：Rolling compact TRAIN fold透過canonical `render_training_unit_progress` 接收trainer select/refit heartbeat；Robustness與Rolling共用相同phase/epoch進度語意，不恢復verbose metric洗版 | B357 |
-| T478 | `validate_breakout_quality_hs_boundary_weighted_conditional_mfe_contract_case` 覆蓋B358：historical MR-13AS regression以ordered de-duplicating reference∪current結果驗[3]～[6] membership，不再要求current必使list長度固定+1 | B358 |
-| T479 | `validate_runtime_domain_isolation_contract_case` 覆蓋Research既有dataset path不搬遷、Trading data/models/outputs/state path隔離、Research downloader write guard、Trading downloader default route、Research cutoff合法性與Trading config-driven selector/no-DL cross-field validation。 | B359 |
-| T480 | `validate_trading_strategy_param_producer_contract_case` 覆蓋Trading static multi-seed production plan、isolated strategy-param root、registered-profile-driven family/selector/trials/seed-count/train-window/exact resolved seed bundle、seed policy在artifact/manifest一致持久化、Trading V2 loader/data identity、canonical Optimizer delegation、profile/PARAM/fingerprint binding identity與stale pre-profile Params拒絕、static current binding roundtrip／legacy rolling historical runtime compatibility及Research physical truth隔離。 | B360 |
-| T481 | `validate_trading_account_state_contract_case` 覆蓋single account file、legacy manual-adoption compatibility/primary-BUY-only inventory source、actual-account fee/tax policy、historical trade void/correction replay、full-sell reopen、刪除BUY精確恢復cash、刪改BUY造成dependent SELL oversell時fail-safe且不得建立historical_inventory_reconciliation/phantom inventory、cash-reconciliation delta replay、latest-revision-inside-lock user intent、position strategy_lineage persist/replay、actual-PnL empirical 1R/賺賠比/EV(R)/win-rate、無loss風險單位N/A、missing-market open count/cost、broker-truth correction closed performance、same-day/over-sell guards與event hash-chain tamper detection。 | B361 |
-| T482 | `validate_trading_workbench_account_panel_contract_case` 覆蓋 Workbench 預設開啟交易中心、投組/單股回測頁籤順序、交易中心/帳務中心 panel registry、BUY-only交易中心、直接補登買入來源→股票→名稱→數量→成交日→成交價順序、canonical代碼來源判定與「登錄買入」按鈕、inventory-selected direct SELL與「登錄賣出」按鈕、帳務 SELL 選取庫存後自動帶入股票/名稱/完整數量/最新合法成交日、成交日→成交價→數量欄位順序、canonical actual-fill constraint 與所選成交日合法 tick readonly 下拉、no-broker-OMS primary UI、visible holdings decision table與賣出訊號raw-code隱藏、交易中心不重複帳戶儀表板、Scanner Pool停利線→參考股數→參考投入且無Scanner摘要、primary initial bundle不預載hidden proposed/orders、latest revision inside lock、日期欄日曆、12列分頁/排序/取消選取/單股入口、全頁MouseWheel、帳務庫存/買入/賣出/沖抵四張交易表格來源第一欄與策略/自選二值顯示、績效統計不分來源、FinMind TaiwanStockInfo最新官方名稱SSOT、所有股票表格股票旁名稱欄、買賣/掛單/單股代碼旁自動名稱、單股/投組股票下拉統一為股票＋名稱＋來源、account-wide庫存/平倉/加總不可排序實績PnL績效schema且價值欄改淨值、帳戶儀表固定五卡revision/市價日/股票淨值/現金餘額/帳戶淨值與金額正紅負綠0白、Trading/帳戶儀表板固定置頂且不隨scroll、各中心單一最右下角全狀態刷新、固定hover操作提示、Trading總覽六張資訊卡（總股數/快篩/Scanner候選/可操作檔位/可操作資金/策略Params）且移除同步狀態卡、三個數量卡第二列只顯示資料日期、可操作檔位與可操作資金直接消費canonical Operations Status並以綠色主值呈現、掛單區不重複資源摘要、無帳號卡與member/agree、總覽單行動態狀態（以進行狀況與下一步為主且不重複上方資訊卡）、掛單區移除ACTIVE掛單摘要、掛單/直接補登固定操作提示集中於底部操作提示、每日Trading流程「套用參數Params」文字且不重複status、單股右側「交易狀態」標籤，以及manual/strategy交易/庫存修正刪除。 | B362 |
-| T483 | `validate_trading_daily_workflow_contract_case` 覆蓋V2 consumer readiness、Params freshness／REUSE、canonical ensemble Scanner及frozen-lineage admission先於live re-entry、Trading scanner output isolation、Trading Strategy/Params/Scanner獨立動作、DataOps不受連帶更新，以及Workbench background-thread controls。 | B363 |
-| T484 | `validate_trading_proposed_order_plan_contract_case` 覆蓋fresh candidate/param binding、account revision、canonical mark-to-market sizing、max-position/cash reservation、held-ticker/extended-TBD排除、proposal artifact與no-account-mutation/no-confirmed-fill guard。 | B364 |
-| T485 | `validate_trading_pending_order_state_contract_case` 覆蓋proposal-only/no-state、explicit PROPOSED→ORDERED、immutable plan/account/param/candidate binding、broker-order ID、no-account-mutation、duplicate/stale/tamper guards、active-order account/replan lock、cancelled same-day reallocation lock、ORDERED→CANCELLED與Workbench explicit confirmation controls。 | B365 |
-| T486 | `validate_trading_confirmed_fill_reconciliation_contract_case` 覆蓋frozen submitted params、explicit actual-fill inputs、above-limit/overfill/date guards、PARTIAL→FILLED、PARTIAL→CANCELLED保留既有fill、canonical cash/position accounting、write-ahead crash recovery、state drift fail-fast與Workbench no-market-bar-auto-fill controls。 | B366 |
-| T487 | `validate_trading_protection_plan_contract_case` 覆蓋position strategy_lineage direct no-orders plan、legacy frozen-order fallback、confirmed partial/final fill後canonical Stop/TP levels、full-position Stop qty、half-take-profit qty、STOP_OVER_TP priority、manual-position exclusion、lineage freshness、no-market-data/no-discretionary/no-account-mutation/no-broker-submission。 | B367 |
-| T488 | `validate_trading_protection_order_submission_contract_case` 覆蓋legacy explicit Stop/TP SELL submission compatibility、canonical POSITION lineage + optional legacy entry lineage、non-OCO持股上限、explicit broker-native OCO group、account no-mutation、next-day primary allocation不被long-lived legacy protection阻擋、no-BUY-fill/no-market-inference。 | B368 |
-| T489 | `validate_trading_protection_sell_fill_reconciliation_contract_case` 覆蓋legacy backend explicit protection SELL actual-fill、PARTIAL→FILLED、跨日partial、TP limit/Stop gap語意、canonical exact-accounting、TP sold_half完成時點、broker-native OCO fill不推論peer cancellation、peer待explicit broker reconciliation、明確取消為獨立order mutation與no-market-inference；不要求Workbench primary UI暴露broker OMS。 | B369 |
-| T490 | `validate_trading_operations_status_contract_case` 覆蓋non-OMS primary next-action、account/cash setup、actual account BUY/SELL trade-date session lock、position roll-forward與strategy indicator obligation、Data/Params/Scanner階段、legacy active ENTRY/orphan SELL/stale protection/legacy indicator-protection orders只警告不阻擋primary allocation、manual-adopted隔離、read-only ownership與Workbench總覽/按鈕控制。 | B370 |
-| T491 | `validate_trading_prelive_operational_audit_contract_case` 覆蓋publication-policy SSOT的completed-daily-bar cutoff、provider publish前當日row拒絕、Research physical cutoff、required-live capability blockers、read-only audit artifacts與Workbench實盤就緒入口。 | B371 |
-| T492 | `validate_trading_position_rollforward_contract_case` 覆蓋completed-bar seal、position immutable strategy_lineage、legacy order fallback、direct lineage no-orders compatibility、canonical trailing/highest-high推進、cash/qty不變、last_rollforward/idempotence、legacy protection共存warning、no-hidden-recovery/no-market-fill，並驗證已退役批次調度不再繞過canonical lifecycle sync／獨立Trading操作。 | B372 |
-| T493 | `validate_trading_indicator_sell_execution_contract_case` 覆蓋position-lineage completed-bar full-position SELL obligation、immutable signal identity、primary manual-broker decision/no hidden fill、legacy cancel/retry submission compatibility、canonical IND_SELL actual account event、actual SELL-fill D3/D4 session lock與獨立DataOps／lifecycle sync／Trading Params、Scanner runtime safety。 | B373 |
-| T494 | `validate_research_report_contract_freeze_case` 與既有model/CLI regressions驗Standard SOP v8 / comparison v12 approved fingerprints、Head Learnability上移、retired geometry不再persistent render、HS-Conditional去重、compact evidence、Standard Mode Evidence命名、robustness aggregation與legacy payload相容。 | B374 |
-| T495 | `validate_trading_live_readiness_hardening_contract_case` 覆蓋candidate row/seed exact information-date gating、stale row explicit skip、market-date雙provider失敗時fail-closed，以及真實temp account/order lifecycle的TP partial fill→cancel→rebuild→retry→cumulative sold_half固定義務；既有daily/proposed-order/fill/protection/rollforward/indicator/operations/pre-live regressions同步驗證無回歸。 | B375 |
-| T496 | `validate_trading_stop_remainder_forced_exit_contract_case` 以真實temp account/order lifecycle覆蓋STOP partial fill→persistent trigger identity→active original reconcile-only→explicit cancel→full-remainder MARKET submission→partial forced fill→cancel→retry→flat，並驗restart obligation reconstruction、attempt/key continuity、entry lineage isolation、Indicator priority guard、Operations next-action與既有Trading regressions無回歸。 | B376 |
-| T497 | `validate_model_extension_architecture_contract_case` 驗head semantics來自canonical score-output policy、AK Raw-MFE與AO Conditional-MFE不混欄、OOS/Breakout同schema分scope、all-model N/A=`-`與applicable missing=`MISSING`、optional head union、training evidence-family applicability、shared composition renderer與無MR identity branching。 | B377 |
-| T498 | `validate_research_report_contract_freeze_case` 驗Standard SOP v9保持不變、comparison v14只含SOP 1～5、Generalization單一七欄pivot、comparison無Evidence Coverage、SOP→Model-specific Extension major separator、既有Extension capability/Robustness/Mode Evidence及approved fingerprint無回歸。 | B378 |
-| T499 | `validate_trading_ssot_identity_path_scale_contract_case` 驗canonical ticker identity/embedded-whitespace rejection、Scanner同identity contract、account/order/fill service path與core owner完全一致、current truth固定解析到`state/trading/`，並鎖定執行consumer不得以raw 1000 arithmetic重建milli scale或在order planning複製orders path resolver。 | B379 |
-| T500 | `validate_trading_ssot_identity_path_scale_contract_case` 驗same-bar priority identity固定為STOP_OVER_TP，且canonical resolver在Stop/TP同時命中時只保留Stop；Trading/Backtest consumers改為共用owner。 | B380 |
-| T501 | `validate_trading_ssot_identity_path_scale_contract_case` 驗canonical event hash會忽略既有event_hash self-field，且account/order state不再各自定義`_event_hash_payload`。 | B381 |
-| T502 | `validate_trading_operational_safety_ssot_contract_case` 覆蓋canonical Trading date/chronology、Operations單一primary allocation guard、legacy ENTRY submission compatibility的persist前二次safety/hash guard、proposed artifact state/producer分層、actual broker BUY/SELL direct account-entry只走canonical chronology/accounting/shared-lock seam且不得market inference、legacy order state只作compatibility evidence不阻擋primary allocation、STOP progress owner共用、Pre-live consume-only與Workbench routing；既有Trading lifecycle regressions同步驗證無回歸。 | B382 |
-| T504 | `validate_downloader_finmind_token_resolution_case` 覆蓋環境變數優先、`doc/FINMIND_API_TOKEN.md` API_TOKEN section fallback、缺section不誤讀其他credential，以及DataLoader初始化實際消費canonical resolver；synthetic值皆為隔離假token，不讀出或輸出使用者真實憑證。 | B384 |
-| T506 | `validate_market_data_governance_contract_case` 覆蓋FinMind canonical adjusted-price/raw archive/lifecycle SSOT、retrospective invariance requirement、V1/V2 calendar-row語意，以及daily PIT → model context → Trading execution pool分層與V2 consumer共用canonical execution-screen owner。 | B386 |
-| T507 | `validate_market_data_v2_preflight_planner_contract_case` 覆蓋archive include/exclude roster、raw/adjusted price、derivative product master、historical股票/ETF+delisting universe並排除TAIEX/TPEx、大盤/Index/所有證券/ETN特殊列、universe contract fingerprint、registry-driven planner、live quota adoption、instrument-count非硬編、failed probe fail-closed，以及direct HTTP request accounting/4xx no-hidden-retry。 | B387 |
-| T508 | `validate_market_data_v2_resumable_executor_contract_case` 覆蓋planner/executor manifest identity、logical request uniqueness、executor lock互斥與expired takeover、orphan RUNNING reclaim、DONE restart零HTTP重抓、402 WAIT_QUOTA自動resume、transient bounded retry/exhaustion、permanent 4xx no-hidden-retry，以及storage committed receipt gate。 | B388 |
-| T509 | `validate_market_data_v2_parquet_storage_contract_case` 覆蓋neutral manifest-scoped archive path、Parquet/ZSTD policy、bootstrap/dataset schema manifests、atomic publication與SHA receipt、schema drift fail-closed、disk-space gate、committed artifact recovery，以及commit後ledger前crash重啟零data-HTTP重抓。 | B389 |
-| T510 | `validate_market_data_v2_bootstrap_activation_contract_case` 覆蓋periodic full-history不依probe-date union、最新BLOCKED不得fallback舊READY、manifest drift與historical-universe contract drift fail-closed、READY evidence重建exact manifest、prepare無ledger side effect、storage startup gate於data HTTP前fail-closed、explicit execution到DONE、project-relative status path、completed ledger resume preview與DONE restart零data-HTTP重抓。 | B390 |
-| T511 | `validate_market_data_v2_provider_snapshot_completion_contract_case` 覆蓋full-DONE ledger gate、Bootstrap storage manifest必要性、逐request local artifact verification、row/SHA ledger parity、immutable snapshot fingerprint/persistence、project-relative path、reverify REUSE、artifact SHA drift fail-closed與unfinished ledger不得發布 snapshot。 | B391 |
-| T513 | `validate_market_data_v2_research_candidate_contract_case` 覆蓋51-dataset PIT assessment、neutral Provider Snapshot pinning、neutral full-horizon daily PIT universe materialization與Research cutoff projection、current-vintage adjusted-price fail-closed、raw-price presence + TaiwanStockInfo date-specific market-state guard、future轉板不得反向納入earlier emerging rows、PriceLimit exact completeness ceiling、event no-row legality、零provider call candidate build、固定Research required-cutoff截斷post-cutoff archive rows、schema-v9 market-state guard fingerprint、NOT_READY/no frozen cutoff/no promotion、project-relative Research artifacts、neutral/candidate SQLite SHA tamper fail-closed與禁止讀Trading V2 overlay。 | B393 |
-| T514 | `validate_market_data_v2_research_pit_review_contract_case` 覆蓋51-dataset cadence-driven PIT review classification、零scientific auto-authorization、current-vintage hard block、daily date-presence eligibility、mechanical common-tail intersection/retreat與缺dataset audit時cutoff清空。 | B394 |
-| T515 | `validate_market_data_v2_research_required_cutoff_isolation_contract_case` 覆蓋Research V1/V2 required-cutoff一致性、Provider Snapshot可晚於但不得早於Research horizon、candidate identity納入required_cutoff、review date-presence排除post-cutoff rows與mechanical common-complete不得越過Research cutoff。 | B395 |
-| T516 | `validate_market_data_v2_research_non_daily_pit_legality_contract_case` 覆蓋21個non-daily review dataset canonical PIT policy、9個event conservative information-time anchor、8 periodic + 4 static historical publication/as-of vintage fail-closed、Dividend AnnouncementDate/Time與Disposition announcement-date next-session規則、MonthRevenue historical create_time gap、TaiwanStockPriceAdj獨立hard block、零scientific auto-authorization，以及candidate blocker/identity保存legality evidence。 | B396 |
-| T517 | `validate_market_data_v2_adjusted_price_representation_invariance_contract_case` 覆蓋FinMind corporate-action prefix-restatement proof scope、provider correction非invariance聲明、raw absolute level BLOCKED、volume deferred、pre-decision candidate membership/anchor-relative OHLC/benchmark independent scale/context ratio/matured target與hit-order scale invariance、PIT proof binding、candidate identity fingerprint與仍未授權dataset scope。 | B397 |
-| T518 | `validate_market_data_v2_research_scope_field_authorization_contract_case` 覆蓋registry-driven scope coverage、5個required/46個optional-not-selected、4個daily common-complete participants、Delisting event no-row、raw TaiwanStockPrice僅Trading_Volume direct input與next-session availability、raw OHLC禁止、TaiwanStockPriceAdj OHLC transform-source-only且只授權Round-13 invariant representations、adjusted volume/absolute level禁止、optional event/periodic datasets不自動選入且optional PIT diagnostic變動不改foundation fingerprint、candidate scope identity與Round-15 common-complete gate。 | B398 |
-| T519 | `validate_market_data_v2_research_required_common_complete_freeze_contract_case` 覆蓋4個required daily participants、optional dataset fingerprint isolation、cutoff缺PriceAdj operand fail-closed、scope reader欄位白名單、raw Trading_Volume / PriceAdj OHLC逐universe completeness、required_scope_coverage與required_common_complete SQLite evidence、candidate schema v7 common-complete identity、candidate仍unfrozen/unpromoted、fingerprint-addressed freeze candidate、source artifact/hash/contract pinning、同identity REUSE及active research_v1/config不變。 | B399 |
-| T520 | `validate_market_data_v2_research_promotion_consumer_integration_contract_case` 覆蓋V1 safe fallback、explicit-authorization gate、freeze→materialization→promotion→active-pointer sequencing、PriceAdj OHLC/raw Price Volume exact mapping、zero provider calls、full/reduced consumer routing、effective contract/runtime-domain V2切換、full Research source inventory的generation/promotion/materialization lineage pinning、active read-view daily-universe pinning、same-identity REUSE、active-V2 candidate rebuild block與materialized CSV tamper detection。 | B400 |
-| T521 | `validate_market_data_rounds_1_16_repair1_contract_case` 驗證V2 runtime state namespace、provider publication-policy SSOT、date-specific historical market-transition eligibility、transition-guard content identity，以及既有FinMind PriceAdj no-price-day calendar-row語意不被後續Round暗改。 | B401 |
-| T522 | `validate_market_data_rounds_1_16_repair2_research_pit_projection_contract_case` 泛化驗證post-cutoff PriceAdj只有逐股票單一正比例歷史重述才可取得revision proof、非共同重算fail-closed、historical Provider Snapshot以自身persisted identity可重載，以及candidate→freeze→materialization→promotion只以required-source projection/revision proof作foundation identity。 | B402 |
-| T523 | `validate_market_data_rounds_1_16_repair3_lifecycle_integrity_contract_case` 泛化驗證legacy/V2 Research roots永久write-protect、hidden stage不構成published truth、published promotion缺pointer必須fail-closed，以及active materialization以content SHA拒絕same-size byte tamper；T519/T520另覆蓋freeze self-contained evidence與explicit pointer recovery。 | B403 |
-| T524 | `validate_market_data_rounds_1_16_repair4_downstream_generation_identity_contract_case` 泛化驗證V1/reduced legacy identity/path不漂移、promoted V2 dataset-generation lineage改變Optimizer policy/Study DB與Strategy Compare pair cache identity，且Breakout Quality V2 model/output使用獨立generation namespace並禁止fallback覆寫V1 evidence。 | B404 |
-| T525 | `validate_research_generation_execution_cache_isolation_case` 對抗驗證不同physical Research generation即使ticker basename/size/mtime完全相同，Optimizer raw cache與Portfolio prepared cache identity仍必須分離；同一generation重建則保持deterministic。 | B405 |
-| T529 | `validate_trading_actionable_universe_scanner_membership_contract_case` 驗 generic Scanner 預設仍掃完整 dataset、optional ticker membership 只掃指定且缺檔 fail-closed、Trading Scanner 只接 current_universe_tickers、不把 universe 外 required holding 當新買 candidate、candidate snapshot schema v3 保存 exact scanned membership 並拒絕 membership 外 candidate／過期 membership。 | B409 |
-| T532 | `validate_market_data_v2_trading_historical_latest_view_contract_case` 驗證 required-dataset common READY horizon、Provider Snapshot minimum baseline、verified overlay primary-key precedence、neutral historical PIT source，以及 current execution pool 不得成為歷史 training membership。 | B412 |
-| T533 | `validate_market_data_v2_trading_workbench_sidecar_contract_case` 擴充驗證 Smart Downloader [1] 只委派 V2 daily updater、manual update 強制一次 market-date discovery、V2 target 不讀 Legacy Trading snapshot、新 completed day 不呼叫 Legacy update、full-market capable daily request 使用 exact-date geometry，並維持 no-due zero-provider-call / sidecar resume 等既有契約。 | B413 |
-| T535 | `validate_market_data_v2_trading_direct_consumer_cutover_contract_case` 驗證 full_rule_based_no_dl 的六個 V2 dependency、V2 OHLCV mapping、consumer-state membership continuity/zero-provider-call，以及 Params/Scanner/holdings/allocator/Workbench direct consumer 不再讀 Legacy CSV。 | B415 |
-| T536 | `validate_market_data_v2_trading_direct_consumer_cutover_contract_case` 擴充驗證 Round 8 V2-only terminal state：Legacy Trading producer/materializer/snapshot modules 已退役、canonical update 只執行 V2 update→consumer-state publish、readiness 無 Legacy fallback、dependency contract/schema 已 bump、Params/Scanner lineage 使用明確 V2 欄位且舊欄位不存在。 | B416 |
-| T537 | `validate_trading_market_data_lineage_contract_case` 覆蓋 Market Data V2 consumer-state/source-view lineage、Params/Scanner exact identity、Legacy CSV/snapshot drift 不影響 V2 truth、V2 state drift 使 Params/Scanner/candidate/proposed artifact fail-closed，以及 Scanner/Params producer TOCTOU publication guard。 | B416 |
-| T538 | `validate_market_data_v2_research_promotion_readiness_contract_case` 驗證precheck只消費明確freeze fingerprint、重用common-complete與adjusted-price positive-scalar proof、衍生deterministic materialization identity、provider calls=0/無任何Research mutation，並對same-active candidate、incomplete publication、non-READY proof與immutable-path collision fail-closed。 | B417 |
-| T539 | `validate_checklist_generated_view_ssot_contract_case`：B/T 原子更新、正式程式路徑缺件 FAIL、有效路徑恢復 PASS、退役項目同步移除 | B418 |
-| T540 | `validate_domain_synthetic_interactive_import_boundary_case` 驗證domain synthetic不得import `apps.*`或`services/*/main.py`互動composition root，並以fault-injection同時驗證static與dynamic import都會被攔截。 | B23 |
-| T541 | validate_strategy_semantic_scanner_portfolio_parity_case 鎖定 Scanner/Portfolio normal candidate、entry plan、fill/miss-buy 與 canonical trade_plans delegation 的 strategy-semantic parity。 | B419 |
-| T542 | validate_position_management_rollforward_parity_case 鎖定 live completed-bar rollforward 與 execute_bar_step 在 no-exit 情境下的 highest-high/trailing-stop/SL/position state parity。 | B419 |
-| T543 | validate_trading_live_reentry_broker_truth_contract_case 鎖定 broker-confirmed full STOP truth、original agreeing-voter frozen Params lineage、canonical finalist re-agreement、historical hypothetical re-entry 排除與 V2 re-entry ticker continuity。 另驗證Live Re-entry以原始reclaim signal_date重新集票，相同日期可重建agreement、不同日期不可湊成同ticker consensus；並由consumer promotion owner查核broker-truth re-entry training membership。 | B419 |
-| T544 | validate_research_fee_rebate_cash_timing_case 鎖定 Research broker-cash / economic-net / rebate-receivable 守恆、未結算 rebate 不可下單與月界線 settlement equity-neutral；Trading accounting contract 另鎖定 cash==net、rebate==0。 | B420 |
-| T545 | validate_lifecycle_management_owner_contract_case - Shared management owner, shadow inheritance, deferred obligations and quantity decisions. | B421 |
-| T546 | validate_trading_lifecycle_persistent_simulation_case - Persisted Pending/Position finalized source, corrected-generation replay and idempotence. | B421 |
-| T547 | validate_lifecycle_prefill_provenance_contract_case - Frozen parameter/indicator provenance and strict pre-acquisition Shadow boundary. | B421 |
-| T548 | validate_trading_deferred_exit_full_cycle_case - Persisted deferred market half-exit, partial fills, completion and stop liquidation. | B421 |
-| T549 | validate_trading_signal_origin_persistence_case - First-observation lineage persistence, current-Params historical replay adoption prevention, continued-signal rebinding prevention and tamper guard.；包含frozen-lineage邊界在落盤前拒絕同ticker多條候選，並驗證拒絕前未產生state。 | B421 |
-| T550 | validate_lifecycle_architecture_contract_case - Layer dependency, adapter delegation and management-only write ownership. | B421 |
-| T551 | validate_trading_discretion_pending_fill_correction_case - User ranking choice, downward quantity edit, partial BUY, actual correction and cancellation. | B421 |
-| T552 | validate_lifecycle_same_session_confirmation_order_case - Same-session confirmed half exit precedes the subsequent full exit decision. | B421 |
-| T553 | validate_lifecycle_randomized_confirmed_replay_case - Fixed-seed randomized simulator facts versus canonical confirmed replay. | B421 |
-| T554 | validate_trading_confirmed_cycle_history_contract_case - Per-acquisition closed-history replay, manual fill reasons, chart/hover agreement, binding isolation and read-only error boundaries. | B421 |
-| T555 | validate_trading_corrected_chart_ledger_contract_case - Corrected BUY chronology and immutable binding; SELL chart amounts consume canonical corrected account economics. | B421 |
-| T556 | validate_trading_partial_exit_chart_contract_case - Incomplete/complete TP confirmation, manual/unknown execution reason preservation and unmanaged legacy fact isolation. | B421 |
-| T557 | validate_trading_prefill_position_exclusion_contract_case - Confirmed acquisition consumes existing prefill lineage; signals born during holding do not revive after exit, while genuine new post-exit signals remain available. | B421 |
-| T558 | validate_trading_pinned_history_input_contract_case - Full pinned consumer input preserves automatic/manual frozen management on fresh and cropped views; legacy origin and read-error recovery must not erase existing valid geometry. | B421 |
-| T559 | validate_trading_direct_fill_source_contract_case - Direct fills resolve Scanner source independently of selection; frozen lineage, quantity discretion, stale guards and execution reason remain distinct. | B421 |
-| T560 | `validate_optimizer_walk_forward_policy_contract_case` Strategy Parameter scientific identity extension：驗registered profile與resolved canonical fingerprint一致、scientific config mutation觸發drift、legacy-unbound在source registration仍exact-match時路由canonical `REBUILD`且不得REUSE/direct-adopt、bound manifest需exact contract/fingerprint，並以resolved display contract驗`seed_min_agree`／`best_local_min`只在適用policy出現。 | B422 |
-| T561 | `validate_optimizer_walk_forward_policy_contract_case` Round-4 extension：以config-driven mapping驗canonical non-validation family/policy registered profiles、distinct fingerprints、Strategy Compare relational binding、C84/P5 exclusion與scientific-drift BLOCKED；不得硬編current C-arm/PARAM/seed/trial values。 | B423 |
-| T562 | `validate_optimizer_walk_forward_policy_contract_case` Round-5 extension：驗registered FIT protocol owns seed/trials、generic Optimizer defaults不得改registered fitting identity、single-seed/P6 robustness derived scientific identity與source-drift fail-fast；不得修改C84/P5 validation semantics。 | B424 |
+| T302 | `validate_breakout_quality_daily_full_list_ndcg_pairwise_contract_case`：B205 | B205 |
+| T305 | `validate_breakout_quality_daily_full_list_ndcg_pairwise_contract_case`：B208 | B208 |
+| T307 | `validate_strategy_compare_config_driven_app_contract_case`：B210 | B210 |
+| T308 | `validate_strategy_compare_config_driven_app_contract_case`：B211 | B211 |
+| T310 | `validate_strategy_compare_config_driven_app_contract_case`：B212 | B212 |
+| T311 | `validate_strategy_compare_config_driven_app_contract_case`：B213 | B213 |
+| T315 | `validate_strategy_compare_config_driven_app_contract_case`：B217 | B217 |
+| T316 | `validate_strategy_compare_config_driven_app_contract_case`：B218 | B218 |
+| T317 | `validate_strategy_compare_config_driven_app_contract_case`：B219 | B219 |
+| T318 | `validate_strategy_compare_config_driven_app_contract_case`：B220 | B220 |
+| T319 | `validate_strategy_compare_config_driven_app_contract_case`：B221 | B221 |
+| T320 | `validate_strategy_compare_config_driven_app_contract_case`：B222 | B222 |
+| T321 | `validate_strategy_compare_config_driven_app_contract_case`：B223 | B223 |
+| T322 | `validate_strategy_compare_config_driven_app_contract_case`：B224 | B224 |
+| T323 | `validate_strategy_compare_config_driven_app_contract_case`：B225 | B225 |
+| T324 | `validate_strategy_compare_config_driven_app_contract_case`：B226 | B226 |
+| T325 | `validate_strategy_compare_config_driven_app_contract_case`：B227 | B227 |
+| T326 | `validate_strategy_compare_config_driven_app_contract_case`：B228 | B228 |
+| T327 | `validate_strategy_compare_config_driven_app_contract_case`：B229 | B229 |
+| T328 | `validate_strategy_compare_resolved_plan_transition_contract_case` | B230 |
+| T329 | `validate_strategy_compare_config_driven_app_contract_case`：B231 | B231 |
+| T330 | `validate_strategy_compare_config_driven_app_contract_case`：B232 | B232 |
+| T331 | `validate_strategy_compare_config_driven_app_contract_case`：B233 | B233 |
+| T332 | `validate_breakout_quality_runtime_integration_gate_contract_case` | B234 |
+| T333 | `validate_breakout_quality_strategy_comparison_contract_case`：B234 | B234 |
+| T334 | `validate_breakout_quality_daily_full_list_ndcg_pairwise_contract_case`：B235 | B235 |
+| T336 | `validate_strategy_compare_config_driven_app_contract_case`：B236 | B236 |
+| T340 | `validate_strategy_compare_config_driven_app_contract_case`：B189/T340 | B189 |
+| T341 | `validate_strategy_compare_config_driven_app_contract_case`：B240 | B240 |
+| T342 | `validate_breakout_quality_full_horizon_target_components_contract_case`：B241 | B241 |
+| T343 | `validate_breakout_quality_strategy_readable_report_contract_case`：B193/T343 | B193 |
+| T344 | `validate_breakout_quality_full_horizon_target_components_contract_case`：B242 | B242 |
+| T345 | `validate_strategy_compare_config_driven_app_contract_case`：B242 | B242 |
+| T347 | `validate_breakout_quality_low_adverse_target_component_contract_case` | B244 |
+| T351 | `validate_strategy_compare_config_driven_app_contract_case`：B248 | B248 |
+| T352 | `validate_strategy_compare_config_driven_app_contract_case`：B249 | B249 |
+| T353 | `validate_strategy_compare_config_driven_app_contract_case`：B250 | B250 |
+| T357 | `validate_strategy_compare_config_driven_app_contract_case`：B253 | B253 |
+| T360 | `validate_breakout_quality_point_in_time_score_builder_contract_case`：B189 | B189 |
+| T361 | `validate_breakout_quality_strategy_readable_report_contract_case`：B189 | B189 |
+| T362 | `validate_breakout_quality_reusable_model_component_contract_case`：B254 | B254 |
+| T363 | `validate_breakout_quality_strategy_comparison_contract_case`：B255 | B255 |
+| T364 | `validate_breakout_quality_conditional_mfe_safety_single_model_contract_case` | B256 |
+| T365 | `validate_breakout_quality_reverse_conditional_mfe_ab_contract_case` | B257 |
+| T366 | `validate_synthetic_candidate_order_fill_layer_separation_case`：B258 | B258 |
+| T367 | `validate_strategy_compare_config_driven_app_contract_case`：B259 | B259 |
+| T368 | `validate_breakout_quality_audit_framework_contract_case`：B260 | B260 |
+| T369 | `validate_synthetic_candidate_order_fill_layer_separation_case`：B261 | B261 |
+| T370 | `validate_strategy_compare_config_driven_app_contract_case`：B261 | B261 |
+| T371 | `validate_breakout_quality_point_in_time_score_builder_contract_case`：B262 | B262 |
+| T372 | `validate_synthetic_candidate_order_fill_layer_separation_case`：B262 | B262 |
+| T373 | `validate_strategy_compare_config_driven_app_contract_case`：B262 | B262 |
+| T374 | `validate_breakout_quality_point_in_time_score_builder_contract_case`：B263 | B263 |
+| T375 | `validate_breakout_quality_point_in_time_score_builder_contract_case`：B264 | B264 |
+| T376 | `validate_strategy_compare_config_driven_app_contract_case`：B265 | B265 |
+| T377 | `validate_strategy_compare_config_driven_app_contract_case`：B266 | B266 |
+| T378 | `validate_breakout_quality_strategy_readable_report_contract_case`：B266 | B266 |
+| T379 | `validate_breakout_quality_strategy_comparison_contract_case`：B266 | B266 |
+| T380 | `validate_breakout_quality_strategy_readable_report_contract_case`：B267 | B267 |
+| T381 | `validate_synthetic_candidate_order_fill_layer_separation_case`：B268 | B268 |
+| T382 | `validate_strategy_compare_config_driven_app_contract_case`：B268 | B268 |
+| T385 | `validate_breakout_quality_safety_raw_mfe_duo_contract_case`：B271 | B271 |
+| T386 | `validate_breakout_quality_safety_raw_mfe_duo_contract_case`：B272 | B272 |
+| T387 | `validate_strategy_compare_config_driven_app_contract_case`：B273 | B273 |
+| T388 | `validate_breakout_quality_audit_framework_contract_case`：B273 | B273 |
+| T389 | `validate_breakout_quality_strategy_readable_report_contract_case`：B273 | B273 |
+| T390 | `validate_breakout_quality_audit_framework_contract_case`：B274 | B274 |
+| T391 | `validate_breakout_quality_strategy_readable_report_contract_case`：B274 | B274 |
+| T392 | `validate_breakout_quality_audit_framework_contract_case`：B275 | B275 |
+| T393 | `validate_breakout_quality_app_simple_report_contract_case`：B276 | B276 |
+| T394 | `validate_breakout_quality_safety_raw_mfe_hmhs_tri_head_contract_case`：B277 | B277 |
+| T395 | `validate_breakout_quality_safety_raw_mfe_hmhs_tri_head_contract_case`：B278 | B278 |
+| T396 | `validate_breakout_quality_hmhs_single_head_contract_case` | B279 |
+| T397 | `validate_research_report_contract_freeze_case`：B280 | B280 |
+| T398 | `validate_breakout_quality_nonlinear_hmhs_head_contract_case` | B281 |
+| T399 | `validate_breakout_quality_joint_min_target_contract_case` | B282 |
+| T400 | `validate_breakout_quality_joint_attention_pool_contract_case` | B283 |
+| T401 | `validate_breakout_quality_modern_tcn_joint_min_contract_case` | B284 |
+| T402 | `validate_breakout_quality_patch_transformer_joint_min_contract_case` | B285 |
+| T403 | `validate_mr13z_c75_conversion_contract_case` | B286 |
+| T404 | `validate_breakout_quality_pit_training_performance_semantics_case` | B287 |
+| T405 | `validate_strategy_compare_config_driven_app_contract_case`：B288 | B288 |
+| T406 | `validate_strategy_compare_config_driven_app_contract_case`：B289 | B289 |
+| T407 | `validate_breakout_quality_mr13aa_patch_transformer_h_target_contract_case` | B290 |
+| T408 | `validate_breakout_quality_mr13ab_first_breach_pure_mfe_contract_case` | B291 |
+| T409 | `validate_breakout_quality_audit_framework_contract_case`：B292 | B292 |
+| T410 | `validate_breakout_quality_audit_framework_contract_case`：B293 | B293 |
+| T411 | `validate_breakout_quality_audit_framework_contract_case`：B294 | B294 |
+| T412 | `validate_breakout_quality_mr13ac_predicted_upside_conditional_safety_contract_case`：B296 | B296 |
+| T413 | `validate_breakout_quality_mr13ac_predicted_upside_conditional_safety_contract_case`：B297 | B297 |
+| T414 | `validate_strategy_compare_config_driven_app_contract_case`：B298 | B298 |
+| T415 | `validate_breakout_quality_audit_framework_contract_case`：B295 | B295 |
+| T416 | `validate_breakout_quality_mr13ad_predicted_safety_conditional_mfe_contract_case` | B299 |
+| T417 | `validate_breakout_quality_mr13ae_predicted_safety_context_pure_mfe_contract_case`：B300 | B300 |
+| T418 | `validate_breakout_quality_mr13af_high_safety_weighted_pure_mfe_contract_case` | B301 |
+| T419 | `validate_breakout_quality_continuous_ranker_contract_case`：B302 | B302 |
+| T420 | `validate_breakout_quality_continuous_ranker_contract_case`：B303 | B303 |
+| T422 | `validate_breakout_quality_continuous_ranker_contract_case`：B305 | B305 |
+| T423 | `validate_strategy_compare_config_driven_app_contract_case`：B306 | B306 |
+| T424 | `validate_research_report_contract_freeze_case`：B307 | B307 |
+| T425 | `validate_research_report_contract_freeze_case`：B308 | B308 |
+| T426 | `validate_breakout_quality_mr13ae_predicted_safety_context_pure_mfe_contract_case`：B308 | B308 |
+| T427 | `validate_breakout_quality_continuous_ranker_contract_case`：B308 | B308 |
+| T428 | `validate_research_report_contract_freeze_case`：B309 | B309 |
+| T429 | `validate_research_report_contract_freeze_case`：B310 | B310 |
+| T430 | `validate_research_report_contract_freeze_case`：B311 | B311 |
+| T431 | `validate_research_report_contract_freeze_case`：B312 | B312 |
+| T432 | `validate_breakout_quality_continuous_ranker_contract_case`：B313 | B313 |
+| T433 | `validate_strategy_compare_config_driven_app_contract_case`：B313 | B313 |
+| T434 | `validate_research_report_contract_freeze_case`：B314 | B314 |
+| T435 | `validate_breakout_quality_point_in_time_score_builder_contract_case`：B314 | B314 |
+| T436 | `validate_breakout_quality_app_simple_report_contract_case`：B314 | B314 |
+| T437 | `validate_breakout_quality_point_in_time_score_builder_contract_case`：B315 | B315 |
+| T438 | `validate_breakout_quality_continuous_ranker_contract_case`：B316 | B316 |
+| T439 | `validate_breakout_quality_continuous_ranker_contract_case`：B317 | B317 |
+| T440 | `validate_research_report_contract_freeze_case`：B317 | B317 |
+| T441 | `validate_breakout_quality_continuous_ranker_contract_case`：B322 | B322 |
+| T442 | `validate_research_report_contract_freeze_case`：B323 | B323 |
+| T443 | `validate_breakout_quality_shared_ah_contract_case`：B324 | B324 |
+| T444 | `validate_breakout_quality_continuous_ranker_contract_case`：B325 | B325 |
+| T445 | `validate_research_report_contract_freeze_case`：B326 | B326 |
+| T446 | `validate_breakout_quality_point_in_time_score_builder_contract_case`：B327 | B327 |
+| T447 | `validate_breakout_quality_shared_ah_contract_case`：B328 | B328 |
+| T448 | `validate_research_report_contract_freeze_case`：B329 | B329 |
+| T449 | `validate_breakout_quality_shared_ah_contract_case`：B330 | B330 |
+| T450 | `validate_breakout_quality_shared_ah_contract_case`：B331 | B331 |
+| T451 | `validate_strategy_compare_config_driven_app_contract_case`：B332 | B332 |
+| T452 | `validate_breakout_quality_shared_ah_contract_case`：B332 | B332 |
+| T453 | `validate_breakout_quality_true_hs_scoped_pair_membership_contract_case` | B333 |
+| T454 | `validate_breakout_quality_hs_priority_mfe_contract_case` | B334 |
+| T455 | `validate_breakout_quality_hs_priority_stratified_mfe_contract_case` | B335 |
+| T456 | `validate_breakout_quality_hs_qualification_conditional_mfe_contract_case` | B336 |
+| T457 | `validate_breakout_quality_hs_boundary_weighted_conditional_mfe_contract_case`：B337 | B337 |
+| T458 | `validate_breakout_quality_continuous_ranker_contract_case`：B338 | B338 |
+| T459 | `validate_research_report_contract_freeze_case`：B339 | B339 |
+| T460 | `validate_breakout_quality_reusable_model_component_contract_case`：B340 | B340 |
+| T461 | `validate_breakout_quality_continuous_ranker_contract_case`：B341 | B341 |
+| T462 | `validate_breakout_quality_continuous_ranker_contract_case`：B342 | B342 |
+| T463 | `validate_breakout_quality_reusable_model_component_contract_case`：B343 | B343 |
+| T464 | `validate_research_report_contract_freeze_case`：B344 | B344 |
+| T465 | `validate_breakout_quality_reusable_model_component_contract_case`：B345 | B345 |
+| T466 | `validate_breakout_quality_reusable_model_component_contract_case`：B346 | B346 |
+| T467 | `validate_breakout_quality_reusable_model_component_contract_case`：B347 | B347 |
+| T468 | `validate_breakout_quality_reusable_model_component_contract_case`：B348 | B348 |
+| T469 | `validate_checklist_generated_view_ssot_contract_case`：B349 | B349 |
+| T470 | `validate_breakout_quality_fitted_model_lifecycle_contract_case`：B350 | B350 |
+| T471 | `validate_research_report_contract_freeze_case`：B351 | B351 |
+| T472 | `validate_breakout_quality_point_in_time_score_builder_contract_case`：B352 | B352 |
+| T473 | `validate_breakout_quality_point_in_time_score_builder_contract_case`：B353 | B353 |
+| T474 | `validate_breakout_quality_fitted_model_lifecycle_contract_case`：B354 | B354 |
+| T475 | `validate_breakout_quality_fitted_model_lifecycle_contract_case`：B355 | B355 |
+| T476 | `validate_research_report_contract_freeze_case`：B356 | B356 |
+| T477 | `validate_breakout_quality_continuous_ranker_contract_case`：B357 | B357 |
+| T478 | `validate_breakout_quality_hs_boundary_weighted_conditional_mfe_contract_case`：B358 | B358 |
+| T479 | `validate_runtime_domain_isolation_contract_case` | B359 |
+| T480 | `validate_trading_strategy_param_producer_contract_case` | B360 |
+| T481 | `validate_trading_account_state_contract_case` | B361 |
+| T482 | `validate_trading_workbench_account_panel_contract_case` | B362 |
+| T483 | `validate_trading_daily_workflow_contract_case` | B363 |
+| T484 | `validate_trading_proposed_order_plan_contract_case` | B364 |
+| T485 | `validate_trading_pending_order_state_contract_case` | B365 |
+| T486 | `validate_trading_confirmed_fill_reconciliation_contract_case` | B366 |
+| T487 | `validate_trading_protection_plan_contract_case` | B367 |
+| T488 | `validate_trading_protection_order_submission_contract_case` | B368 |
+| T489 | `validate_trading_protection_sell_fill_reconciliation_contract_case` | B369 |
+| T490 | `validate_trading_operations_status_contract_case` | B370 |
+| T491 | `validate_trading_prelive_operational_audit_contract_case` | B371 |
+| T492 | `validate_trading_position_rollforward_contract_case` | B372 |
+| T493 | `validate_trading_indicator_sell_execution_contract_case` | B373 |
+| T494 | `validate_research_report_contract_freeze_case`：B374 | B374 |
+| T495 | `validate_trading_live_readiness_hardening_contract_case` | B375 |
+| T496 | `validate_trading_stop_remainder_forced_exit_contract_case` | B376 |
+| T497 | `validate_model_extension_architecture_contract_case` | B377 |
+| T498 | `validate_research_report_contract_freeze_case`：B378 | B378 |
+| T499 | `validate_trading_ssot_identity_path_scale_contract_case`：B379 | B379 |
+| T500 | `validate_trading_ssot_identity_path_scale_contract_case`：B380 | B380 |
+| T501 | `validate_trading_ssot_identity_path_scale_contract_case`：B381 | B381 |
+| T502 | `validate_trading_operational_safety_ssot_contract_case` | B382 |
+| T504 | `validate_downloader_finmind_token_resolution_case` | B384 |
+| T506 | `validate_market_data_governance_contract_case` | B386 |
+| T507 | `validate_market_data_v2_preflight_planner_contract_case` | B387 |
+| T508 | `validate_market_data_v2_resumable_executor_contract_case` | B388 |
+| T509 | `validate_market_data_v2_parquet_storage_contract_case` | B389 |
+| T510 | `validate_market_data_v2_bootstrap_activation_contract_case` | B390 |
+| T511 | `validate_market_data_v2_provider_snapshot_completion_contract_case` | B391 |
+| T513 | `validate_market_data_v2_research_candidate_contract_case` | B393 |
+| T514 | `validate_market_data_v2_research_pit_review_contract_case` | B394 |
+| T515 | `validate_market_data_v2_research_required_cutoff_isolation_contract_case` | B395 |
+| T516 | `validate_market_data_v2_research_non_daily_pit_legality_contract_case` | B396 |
+| T517 | `validate_market_data_v2_adjusted_price_representation_invariance_contract_case` | B397 |
+| T518 | `validate_market_data_v2_research_scope_field_authorization_contract_case` | B398 |
+| T519 | `validate_market_data_v2_research_required_common_complete_freeze_contract_case` | B399 |
+| T520 | `validate_market_data_v2_research_promotion_consumer_integration_contract_case` | B400 |
+| T521 | `validate_market_data_rounds_1_16_repair1_contract_case` | B401 |
+| T522 | `validate_market_data_rounds_1_16_repair2_research_pit_projection_contract_case` | B402 |
+| T523 | `validate_market_data_rounds_1_16_repair3_lifecycle_integrity_contract_case` | B403 |
+| T524 | `validate_market_data_rounds_1_16_repair4_downstream_generation_identity_contract_case` | B404 |
+| T525 | `validate_research_generation_execution_cache_isolation_case` | B405 |
+| T529 | `validate_trading_actionable_universe_scanner_membership_contract_case` | B409 |
+| T532 | `validate_market_data_v2_trading_historical_latest_view_contract_case` | B412 |
+| T533 | `validate_market_data_v2_trading_workbench_sidecar_contract_case` | B413 |
+| T535 | `validate_market_data_v2_trading_direct_consumer_cutover_contract_case`：B415 | B415 |
+| T536 | `validate_market_data_v2_trading_direct_consumer_cutover_contract_case`：B416 | B416 |
+| T537 | `validate_trading_market_data_lineage_contract_case` | B416 |
+| T538 | `validate_market_data_v2_research_promotion_readiness_contract_case` | B417 |
+| T539 | `validate_checklist_generated_view_ssot_contract_case`：B418 | B418 |
+| T540 | `validate_domain_synthetic_interactive_import_boundary_case` | B23 |
+| T541 | `validate_strategy_semantic_scanner_portfolio_parity_case` | B419 |
+| T542 | `validate_position_management_rollforward_parity_case` | B419 |
+| T543 | `validate_trading_live_reentry_broker_truth_contract_case` | B419 |
+| T544 | `validate_research_fee_rebate_cash_timing_case` | B420 |
+| T545 | `validate_lifecycle_management_owner_contract_case` | B421 |
+| T546 | `validate_trading_lifecycle_persistent_simulation_case` | B421 |
+| T547 | `validate_lifecycle_prefill_provenance_contract_case` | B421 |
+| T548 | `validate_trading_deferred_exit_full_cycle_case` | B421 |
+| T549 | `validate_trading_signal_origin_persistence_case` | B421 |
+| T550 | `validate_lifecycle_architecture_contract_case` | B421 |
+| T551 | `validate_trading_discretion_pending_fill_correction_case` | B421 |
+| T552 | `validate_lifecycle_same_session_confirmation_order_case` | B421 |
+| T553 | `validate_lifecycle_randomized_confirmed_replay_case` | B421 |
+| T554 | `validate_trading_confirmed_cycle_history_contract_case` | B421 |
+| T555 | `validate_trading_corrected_chart_ledger_contract_case` | B421 |
+| T556 | `validate_trading_partial_exit_chart_contract_case` | B421 |
+| T557 | `validate_trading_prefill_position_exclusion_contract_case` | B421 |
+| T558 | `validate_trading_pinned_history_input_contract_case` | B421 |
+| T559 | `validate_trading_direct_fill_source_contract_case` | B421 |
+| T560 | `validate_optimizer_walk_forward_policy_contract_case`：B422 | B422 |
+| T561 | `validate_optimizer_walk_forward_policy_contract_case`：B423 | B423 |
+| T562 | `validate_optimizer_walk_forward_policy_contract_case`：B424 | B424 |
 | T563 | `validate_optimizer_sampler_resume_determinism_case` | B48 |
-| T564 | `validate_shared_raw_market_quote_capability_case`：共享Raw quote有效性／正量／Research診斷與Trading實際成交、掛單日期，以及observed quote mask、PIT window、raw source fingerprint／SHA256的共用契約；整合九個獨立回歸案例。 | B386 |
-| T565 | `validate_trading_strategy_promotion_capability_case`：Strategy Compare核准evidence、Release staging／activation、random multi-seed fitting與Trading dashboard必須維持canonical lineage；重用原有headless promotion回歸案例。 | B360 |
-| T566 | `validate_ssot_regression_guard_case`：跨層反向相依、實驗身分滲漏、architecture family switch、golden 帳務快照與受保護測試契約的 SSOT 回歸及反向故障注入。 | B23 |
-| T567 | `validate_portfolio_daily_phase_owner_contract_case`：Portfolio 日序 phase canonical owner、PIT cursor 隔離、單／多成員 replay context、每日容量與 idle 判定之跨模組直接契約。 | B200 |
-| T568 | `validate_portfolio_day_event_equity_owner_contract_case`：Portfolio 每日 rotation／settlement／entry 事件與權益標記的 canonical owner、盤前資源鎖定、回饋應收與 PIT 時序契約。 | B200 |
-| T569 | `validate_portfolio_terminal_owner_contract_case`：Portfolio 期末結算、統計、期間報表、profile sidecar 與 training／reporting tuple 的 canonical owner 與同源口徑。 | B200 |
-| T570 | `validate_portfolio_candidate_replay_owner_contract_case`：Portfolio 候選資格、盤前資源選擇及 Replay 輸出之 canonical owner、PIT cursor、單／多成員行為與時序契約。 | B200 |
-| T571 | `validate_portfolio_signal_lifecycle_owner_contract_case`：Portfolio 日序買訊 Re-entry／延續追蹤／清理的 canonical owner、PIT 時序、單／多成員路由與 replay fast-path 契約。 | B200 |
-| T572 | `validate_strategy_compare_settings_validation_stages_contract_case`：Registry-driven Compare profile、validation first-error precedence、DL runtime capability 與設定 fingerprint schema 防退化。 | B189 |
-| T573 | `validate_research_fit_lifecycle_architecture_case`：FIT Owner / PIT Fold proof dependency direction, cross-mode fitting identity / SHA conflict and retired fallback mutations | B350 |
-| T574 | `validate_research_model_readiness_architecture_case`：FIT/SCORE/EVALUATION/REPORT shared readiness; Audit-independent score reuse and owner anti-divergence mutations | B351 |
+| T564 | `validate_shared_raw_market_quote_capability_case` | B386 |
+| T565 | `validate_trading_strategy_promotion_capability_case` | B360 |
+| T566 | `validate_ssot_regression_guard_case` | B23 |
+| T567 | `validate_portfolio_daily_phase_owner_contract_case` | B200 |
+| T568 | `validate_portfolio_day_event_equity_owner_contract_case` | B200 |
+| T569 | `validate_portfolio_terminal_owner_contract_case` | B200 |
+| T570 | `validate_portfolio_candidate_replay_owner_contract_case` | B200 |
+| T571 | `validate_portfolio_signal_lifecycle_owner_contract_case` | B200 |
+| T572 | `validate_strategy_compare_settings_validation_stages_contract_case` | B189 |
+| T573 | `validate_research_fit_lifecycle_architecture_case` | B350 |
+| T574 | `validate_research_model_readiness_architecture_case` | B351 |

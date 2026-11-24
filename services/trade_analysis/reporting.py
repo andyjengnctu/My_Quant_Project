@@ -119,16 +119,3 @@ def finalize_debug_analysis(
         "chart_path": chart_path,
         "chart_payload": chart_payload,
     }
-
-
-def finalize_debug_trade_logs(*, trade_logs, ticker, output_dir, colors, export_excel=True, verbose=True):
-    result = finalize_debug_analysis(
-        trade_logs=trade_logs,
-        ticker=ticker,
-        output_dir=output_dir,
-        colors=colors,
-        export_excel=export_excel,
-        export_chart=False,
-        verbose=verbose,
-    )
-    return result["trade_logs_df"]

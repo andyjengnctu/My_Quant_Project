@@ -331,28 +331,6 @@ def replay_implementation_sha256() -> str:
         ast.parse((code_root / relative).read_text(encoding="utf-8-sig")))) for relative in owners})
 
 
-def broker_cash_economics_contract() -> dict[str, Any]:
-    """Economic terms actually consumed by Research Broker-Cash replay.
-
-    Do not include the electronic-discount reference ratio: refunds are manual
-    Trading cash operations, not current Research fee receivables.
-    """
-    from config import broker_accounting as broker
-    from config.execution_policy import EXECUTION_POLICY_PARAM_SPECS
-    return {
-        "broker_policy_id": broker.BROKER_ACCOUNTING_POLICY_ID,
-        "fee_rate": str(broker.BROKER_FEE_RATE),
-        "min_fee_twd": str(broker.BROKER_MIN_FEE_TWD),
-        "odd_lot_min_fee_twd": str(broker.BROKER_ODD_LOT_MIN_FEE_TWD),
-        "board_lot_shares": int(broker.BROKER_BOARD_LOT_SHARES),
-        "stock_tax_rate": str(broker.BROKER_STOCK_TAX_RATE),
-        "rounding_mode": broker.BROKER_CHARGE_ROUNDING_MODE,
-        "strategy_param_defaults": {
-            name: spec["default"] for name, spec in EXECUTION_POLICY_PARAM_SPECS.items()
-        },
-    }
-
-
 @lru_cache(maxsize=4)
 def portfolio_candidate_execution_sha256(*, daily_execution_contract: str | None = None) -> str:
     """Attest executable portfolio capabilities for a registered execution scope.
@@ -631,7 +609,6 @@ def source_calculation_contract(*, recipe: str, profile_id: str,
         "score_mapping": "canonical_daily_truth_percentile_v2",
         "percentile_method": "average_zero_based",
     }
-
 
 
 def attest_daily_candidate_execution(policy: Mapping[str, Any]) -> dict[str, Any]:

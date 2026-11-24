@@ -55,12 +55,6 @@ from core.research_report_contract import (
     require_approved_report_contract, section_contract,
     persistent_report_contract_fingerprint,
 )
-from core.report_metrics import (
-    EXECUTION_STRATEGY_RESULT_METRICS,
-    CORE_STRATEGY_RESULT_METRICS,
-    PORTFOLIO_RESULT_METRICS,
-    TRADE_RESULT_METRICS,
-)
 from core.report_style import best_worst_signals, styled_signal, styled_workflow_status
 from core.console_report import (
     print_artifact_paths,
@@ -177,10 +171,6 @@ def _json_native(value: Any) -> Any:
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     with comparison_publication_lock(path):
         atomic_write_json(path, _json_native(payload))
-
-
-
-
 
 
 def resolve_comparison_plan(
@@ -396,7 +386,6 @@ def render_status(
     )
 
 
-
 def _single_line_execution_plan_cell(value: object) -> str:
     """Keep all visible cell content on one output line, without abbreviation."""
 
@@ -534,8 +523,6 @@ def _fmt(value: Any, *, unit: str = "", digits: int = 2) -> str:
     return f"{number:.{digits}f}{unit}"
 
 
-
-
 def _exclusive_selection_r_from_trade_files(
     pair_dir: Path,
     *,
@@ -628,18 +615,12 @@ def _load_direct_selection_r(
     )
 
 
-
-
-
-
 def _standalone_baseline_group_id(
     settings: StrategyComparisonSettings,
     arm: StrategyComparisonArm,
 ) -> str:
     param_policy = resolve_strategy_comparison_arm_param_policy(settings, arm)
     return f"{arm.param_source}__{param_policy.replace('-', '_')}__{arm.rule_policy}__dl_off_baseline"
-
-
 
 
 def _assert_same_shared_baseline(
@@ -747,70 +728,6 @@ def _value_with_signal(text: str, signal: str, *, target: str) -> str:
     return styled_signal(text, signal, target=target)
 
 
-def _metric_table(
-    scenarios: dict[str, dict[str, Any]],
-    *,
-    settings: StrategyComparisonSettings,
-    metrics: tuple[Any, ...],
-    target: str = "plain",
-) -> str:
-    display_arms = _display_ordered_strategy_arms(settings)
-    signals_by_metric = {
-        metric.key: best_worst_signals(
-            {arm.arm_id: _metric(scenarios[arm.arm_id], metric.key) for arm in display_arms},
-            preference=metric.preference,
-        )
-        for metric in metrics
-    }
-    rows = []
-    for arm in display_arms:
-        payload = scenarios[arm.arm_id]
-        values = []
-        for metric in metrics:
-            text = _fmt(payload.get(metric.key), unit=metric.unit, digits=metric.digits)
-            signal = signals_by_metric.get(metric.key, {}).get(arm.arm_id)
-            if signal:
-                text = _value_with_signal(text, signal, target=target)
-            values.append(text)
-        rows.append((arm.arm_id, arm.name, *values))
-    return render_table(
-        ("編號", "比較對象", *(metric.label for metric in metrics)),
-        rows,
-    )
-
-
-def render_strategy_core_result_table(
-    scenarios: dict[str, dict[str, Any]],
-    *,
-    settings: StrategyComparisonSettings,
-    target: str = "plain",
-) -> str:
-    return _metric_table(
-        scenarios,
-        settings=settings,
-        metrics=CORE_STRATEGY_RESULT_METRICS,
-        target=target,
-    )
-
-
-
-
-def render_strategy_execution_table(
-    scenarios: dict[str, dict[str, Any]],
-    *,
-    settings: StrategyComparisonSettings,
-    target: str = "plain",
-) -> str:
-    return _metric_table(
-        scenarios,
-        settings=settings,
-        metrics=EXECUTION_STRATEGY_RESULT_METRICS,
-        target=target,
-    )
-
-
-
-
 def render_safety_gate_sensitivity_table(
     scenarios: dict[str, dict[str, Any]],
     diagnostics: dict[str, Any],
@@ -870,32 +787,6 @@ def _delta(left: dict[str, Any], right: dict[str, Any], key: str) -> float | Non
     return None if a is None or b is None else a - b
 
 
-def render_strategy_yearly_values_table(
-    by_id: dict[str, dict[int, float | None]],
-    *,
-    settings: StrategyComparisonSettings,
-    target: str = "plain",
-) -> str:
-    enabled_ids = tuple(arm.arm_id for arm in _display_ordered_strategy_arms(settings))
-    years = sorted({year for values in by_id.values() for year in values})
-    rows = []
-    for year in years:
-        signals = best_worst_signals(
-            {arm_id: dict(by_id.get(arm_id) or {}).get(year) for arm_id in enabled_ids},
-            preference="higher",
-        )
-        values = []
-        for arm_id in enabled_ids:
-            value = dict(by_id.get(arm_id) or {}).get(year)
-            text = _fmt(value, unit="%")
-            signal = signals.get(arm_id)
-            if signal:
-                text = _value_with_signal(text, signal, target=target)
-            values.append(text)
-        rows.append((year, *values))
-    return render_table(("年度", *enabled_ids), rows)
-
-
 def _yearly_values_by_id(
     pair_payloads: dict[str, dict[str, Any]],
     *,
@@ -925,8 +816,6 @@ def _yearly_values_by_id(
                 runtime_spec = _arm_runtime_spec(on_arm)
                 by_id[on_arm.arm_id][year] = row.get(runtime_spec["yearly_key"])
     return by_id
-
-
 
 
 def _comparison_period(pair_payloads: dict[str, dict[str, Any]]) -> Any:
@@ -1183,7 +1072,6 @@ def _render_report(
         execution_summary=execution_summary,
         target=target,
     )
-
 
 
 def _run_directory(

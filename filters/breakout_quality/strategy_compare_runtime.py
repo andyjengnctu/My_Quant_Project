@@ -116,18 +116,6 @@ def _execution_pairs(
     return tuple(pairs)
 
 
-def strategy_comparison_execution_pairs(
-    settings: StrategyComparisonSettings,
-) -> tuple[tuple[str, str, StrategyComparisonArm, StrategyComparisonArm], ...]:
-    """Public read-only view of the canonical Strategy Compare execution groups.
-
-    Consumers that need to resolve one displayed arm back to the pair artifacts must
-    reuse this grouping contract instead of reconstructing param-policy/rule-policy
-    membership independently.
-    """
-
-    return _execution_pairs(settings)
-
 def _standalone_baseline_arms(
     settings: StrategyComparisonSettings,
 ) -> tuple[StrategyComparisonArm, ...]:

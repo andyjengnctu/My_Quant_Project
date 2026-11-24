@@ -23,7 +23,6 @@ from config.downloader import (
     DOWNLOADER_VERBOSE_LAST_DATE_CHECK_ERRORS as VERBOSE_LAST_DATE_CHECK_ERRORS,
     DOWNLOADER_VERBOSE_UNIVERSE_FETCH_ERRORS as VERBOSE_UNIVERSE_FETCH_ERRORS,
 )
-from core.log_utils import append_issue_log, build_timestamped_log_path
 from core.market_data_contract import FINMIND_ADJUSTED_PRICE_DATASET
 from core.runtime_utils import get_taipei_now, get_taipei_file_mtime
 from core.runtime_domains import (
@@ -195,28 +194,3 @@ def ensure_runtime_dirs():
 
 
 # # (AI註: 防錯透明化 - 將錯誤摘要落檔，避免長時間批次執行後 console 訊息遺失)
-DOWNLOADER_ISSUE_LOG_PATH = None
-
-
-# # (AI註: session log path 改為 lazy init；只有真的要寫 log 時才建立輸出目錄)
-def get_downloader_issue_log_path():
-    global DOWNLOADER_ISSUE_LOG_PATH
-    if DOWNLOADER_ISSUE_LOG_PATH is None:
-        ensure_runtime_dirs()
-        DOWNLOADER_ISSUE_LOG_PATH = build_timestamped_log_path(
-            "downloader_issues",
-            log_dir=OUTPUT_DIR,
-            timestamp=get_taipei_now().strftime("%Y%m%d_%H%M%S_%f")
-        )
-    return DOWNLOADER_ISSUE_LOG_PATH
-
-
-# # (AI註: 將下載器的非致命問題統一寫入單一 session log，避免每種類別各自爆檔)
-def append_downloader_issues(section, lines):
-    if not lines:
-        return
-
-    append_issue_log(
-        get_downloader_issue_log_path(),
-        [f"[{section}] {line}" for line in lines]
-    )

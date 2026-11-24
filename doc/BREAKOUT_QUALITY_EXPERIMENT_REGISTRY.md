@@ -709,91 +709,15 @@ Audit 固定 read-only。Audit 結果可形成 `SR-*` 或 `MR-*` 假設，但 Au
 5. 程式若因相容性保留舊 alias，文件在可能歧義的情況下仍必須使用 canonical namespace。
 6. Registry 與 Experiment Log 衝突時，先停止新實驗，於同一輪完成 identity／狀態 reconciliation。
 
-## 2026-09-03 — Engineering contract: Continuous DL Comparison Evidence Bundle SSOT
+## 歷史報表改版授權（2026-09-05）
 
-- **Scope**：engineering-only report/evidence lifecycle；不新增或修改任何 MR scientific identity、target/loss/architecture/fitting/PIT/strategy semantics。
-- **Canonical comparison contract**：`model.standard_comparison` v11。`[3] Forward OOS`、`[4] Rolling OOS`、`[5] Forward OOS Robustness`、`[6] Rolling OOS Robustness` 必須共用同一 `Standard SOP + Model-specific Extension` evidence bundle；workflow 只可附加其 mode-specific extension，不得自行維護 model/extension whitelist。
-- **Evidence applicability SSOT**：`ContinuousRankerTrainingPolicy.report_evidence_families` 宣告 training composition 可產生的 report evidence family；`MODEL_EXTENSION_SCHEMAS` 以 `evidence_family` 宣告 extension capability。workflow 只能由兩者交集派生可比較 extension。
-- **Rolling lifecycle**：既有 PIT score/manifest 合法但 audit 缺新 extension 時，僅允許 `audit-point-in-time-scores` refresh；不得重新進入 PIT fitting/scoring。Rolling model-specific evidence由 persisted primary score + capability-owned sidecar heads重建。
-- **Robustness aggregation**：extension contract 自己宣告 across-seed aggregation。row-table evidence使用 benchmark-seed arithmetic mean；Truth / Prediction Geometry 為 distribution geometry，明確 `single_seed_only`，不得逐格硬平均。
+以下只保留已核准報表身分與決策；已完成的工程實作／synthetic 修補年表退役。現行規格與版本以 `core/research_report_contract.py` 及 `doc/scientific_contracts/REPORT_CONTRACT_VERSIONS.json` 為準。這些改版均未改 MR identity、Target／loss／fitting、PIT、策略或 promotion，也不授權重訓。
 
-Decision：`ENGINEERING_ONLY / COMPARISON_EVIDENCE_BUNDLE_SSOT / MODEL_IDENTITIES_UNCHANGED`。
-
-## 2026-09-03 — Engineering contract: Rolling comparison evidence dependency lifecycle
-
-- **Scope**：B351 後續 engineering closure；不改 `model.standard_comparison` v11、MR identity、target/loss/model fitting、PIT legality或Strategy semantics。
-- **Score capability SSOT**：任何 Continuous objective 的 persisted score-column contract 只能由 `ContinuousRankerTrainingPolicy.score_output_policy` 派生。PIT producer、`ranking_score_store`、PIT audit、一般 Rolling comparison 與 Rolling Robustness 不得再維護 objective-specific sidecar 對照表。
-- **Dependency order**：`fitted checkpoint → PIT score-output capability → PIT audit evidence → comparison bundle`。若 current extension 所需 model-output sidecar 尚未持久化，狀態必須是 score capability stale，先以 compatible fold checkpoint rescore；只有 score capability 已完整而 audit evidence stale 時，才允許 audit-only refresh。Audit 不得宣稱可重建未持久化的 model outputs。
-- **Fail-fast**：standalone PIT audit 必須驗 manifest `score_columns` 與實際 score columns 都符合 current score-output policy；不符合時拒絕產生新的 incomplete audit。相同規則同時適用 `[4]` 與 `[6]`，避免 single-seed / robustness 再次分叉。
-
-Decision：`ENGINEERING_ONLY / SCORE_THEN_AUDIT_DEPENDENCY_ORDER / NO_RETRAIN_FOR_SCORE_OUTPUT_ONLY_REFRESH`。
-
-## 2026-09-03 — Engineering contract: PIT score eligibility / output capability orthogonality
-
-- **Scope**：B352 後續 engineering correction；不新增／修改 MR scientific identity、target/loss/model fitting、PIT information legality、Strategy semantics 或 `model.standard_comparison` contract。
-- **Row-eligibility owner**：`build_score_eligibility_contract(profile)` 只定義 prediction-time 某 stock-day 是否可依當下 feature history 產生 PIT score；future target maturity 只能控制 training/evaluation target availability，不得控制 score row 是否存在。
-- **Score-output capability owner**：`ContinuousRankerTrainingPolicy.score_output_policy` 只定義已產生 PIT score artifact 必須持久化哪些 primary／sidecar output columns。新增 model head 或 report evidence family 不得回頭改寫 row eligibility universe。
-- **Consumer contract**：正式 PIT ranking loader 依序驗 `score_eligibility_contract` 與 `score_columns`，兩者可同時是 required dependency，但必須由獨立 validator 判定。eligibility-only fixture 可獨立驗 future-independence；完整 loader 仍會對缺 sidecar 的 stale multi-head artifact fail-fast 並要求 checkpoint-rescore。
-
-Decision：`ENGINEERING_ONLY / ROW_ELIGIBILITY_AND_OUTPUT_CAPABILITY_ORTHOGONAL / B197_AND_B352_BOTH_PRESERVED`。
-
-## 2026-09-03 — Engineering contract: Formal synthetic fixture fidelity after fitted-model readiness
-
-- **Scope**：B356 engineering-only formal regression closure；不新增／修改任何 MR scientific identity、target/loss/architecture/fitting/PIT/strategy semantics，也不放寬 production artifact reuse contract。
-- **Fixture rule**：凡 synthetic 直接呼叫 canonical Forward report reuse loader，fixture 必須提供正式 contract 必有的 `report_path`，並明確 mock／建立 fitting-readiness dependency；不得用缺欄位 `SimpleNamespace` 讓 suite-level exception 取代實際 capability assertion。
-- **Production boundary**：`_load_reusable_continuous_forward_contract()` 持續先驗 fitted-model settings，再驗 Standard SOP/comparison evidence；測試修正不得使缺 fitted-model evidence 的 production artifact 被誤判 REUSE。
-
-Decision：`ENGINEERING_ONLY / SYNTHETIC_FIXTURE_FIDELITY / PRODUCTION_REUSE_CONTRACT_UNCHANGED`。
-
-## 2026-09-03 — Engineering contract: Rolling PIT compact training heartbeat parity
-
-- **Scope**：B357 engineering-only console observability；不新增／修改任何 MR scientific identity、target/loss/architecture/fitting/PIT legality/checkpoint reuse/strategy semantics。
-- **Progress owner**：Continuous-ranker `select_epoch` / `fit_final` 仍是canonical training heartbeat owner；compact Rolling PIT只透過optional progress callback消費該heartbeat，不重算epoch、patience或fold狀態。
-- **Renderer parity**：Rolling TRAIN fold必須重用 `core/training_progress.py::render_training_unit_progress`，與Robustness使用相同 `select/refit + epoch x/y + elapsed` 語意；畫面固定可辨識 `PIT fold i/N | fold_id | elapsed | epoch select/refit x/y`。
-- **Compact boundary**：維持PROJECT_SETTINGS B17；不恢復每個epoch完整loss/validation metrics洗版。REUSE列與fold完成摘要維持既有canonical輸出。
-
-Decision：`ENGINEERING_ONLY / ROLLING_TRAIN_PROGRESS_RESTORED / ROBUSTNESS_PARITY / NO_SCIENTIFIC_CHANGE`。
-
-## 2026-09-04 — Engineering contract: Historical synthetic must follow de-duplicating model membership SSOT
-
-- **Scope**：B358 engineering-only formal regression correction；不新增／修改任何 MR scientific identity、current training model、comparison reference membership、authorization、fitting/PIT/strategy semantics。
-- **Membership SSOT**：`BREAKOUT_QUALITY_MODEL_TEST_PROFILES` 仍只由 `BREAKOUT_QUALITY_MODEL_TEST_REFERENCE_PROFILES` 與 `BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE` 經 ordered exact de-duplicating merge 產生。Current training pair若已合法存在reference controls，正式結果必須去重，不得強制再新增一列。
-- **Historical regression rule**：歷史MR synthetic只能驗其自身scientific freeze與current membership invariants，不得以 `len(reference)+1` 等固定cardinality假設反向綁住未來current/reference組合。
-
-Decision：`ENGINEERING_ONLY / VALIDATOR_CARDINALITY_ASSUMPTION_REMOVED / PRODUCTION_MEMBERSHIP_UNCHANGED`。
-
-## 2026-09-05 — Engineering contract: Standard Model report surface consolidation
-
-- **Scope**：B374 engineering-only persistent-report governance closure；使用者已明確授權調整常駐Research報表。不得新增／修改MR scientific identity、target/loss/architecture/fitting、PIT、Strategy或promotion semantics。
-- **Standard SOP**：`model.standard_sop`升v8。Reusable multi-head `Head Learnability`正式成為Section 1條件式子表（`Split / Head / Daily rho / Global rho / Pair`）；single-head model不顯示空表。metric只消費既有canonical evaluation payload，不另算第二套。
-- **Retired persistent extension**：`multi_head_learnability`與`truth_prediction_geometry`退出`MODEL_EXTENSION_SCHEMAS`。前者已被Standard SOP吸收；後者的原始joint geometry／cohort evidence仍保留於歷史scientific payload與既有artifact，可供on-demand diagnostic使用，但不再於single/cross-model常駐報表自動渲染。
-- **Conditional-MFE extension**：`hs_conditional_mfe_gate`只保留獨立gate/oracle/LS-tail evidence；Safety head learnability改由SOP 1承接，boundary不重印Pred-HS true-LS/recall，LS-tail不重印mean MFE，`hs_attribution_control`只保留single-model診斷且不再嵌入cross-model comparison。
-- **Display density / mode evidence**：Evidence Coverage在全部六項AVAILABLE時只顯示`6/6 AVAILABLE`；缺失／PARTIAL時才展開。Rolling/Robustness後綴改稱`Standard Mode Evidence｜Rolling Stability / Across-seed Stability`，不再稱model-specific extension。
-- **Persistent freeze**：`model.standard_comparison`升v12；approved fingerprints=`model.standard_sop:c96c1d5380ed303f`、`model.standard_comparison:a586067f58467ea4`。舊v7 report payload與legacy comparison extension仍可讀，renderer只作compatibility normalization；report schema升級不得觸發模型重訓。
-
-Decision：`B374_DONE / STANDARD_HEAD_LEARNABILITY / GEOMETRY_PERSISTENT_EXTENSION_RETIRED / HS_GATE_DEDUPED / COMPACT_EVIDENCE / STANDARD_MODE_EVIDENCE / NO_SCIENTIFIC_CHANGE`。
-
-## 2026-09-05 — Engineering contract: Capability-driven Model Extension architecture
-
-- **Scope**：B377 engineering-only persistent-report architecture closure；使用者在B374實際Rolling輸出後明確要求Multi-head因各DL head定義不同應回Extension、head由列轉欄、OOS/Breakout分子表，並先調整架構避免未來新增DL/head/scope再次分叉。不得修改任何MR scientific identity、target/loss/architecture/fitting、PIT、Strategy或promotion semantics。
-- **Ownership**：Standard SOP只保留跨所有DL共同的final-output comparison。Model Extension applicability由canonical `ContinuousRankerTrainingPolicy.report_evidence_families`派生；head semantics由既有`ContinuousRankerScoreOutputPolicy.head_names`派生。報表不得另建MR→head或MR→extension第二表，也不得以MR identity branch決定欄位。
-- **Multi-head Extension**：`multi_head_learnability`回到persistent Model-specific Extension，但改為semantic-head wide schema。Current semantic union含Raw Safety / Raw MFE / Conditional MFE等registered head；comparison中所有model保留一列，model沒有該semantic head顯示`-`，依canonical training composition應存在卻缺evidence則顯示`MISSING`並進completeness issue。OOS與Breakout共用同一schema，只由scope dimension分成兩張子表。
-- **HS Quality Extension**：`hs_conditional_mfe_gate`顯示title改為`HS Qualification / Conditional-MFE Quality`，常駐comparison只保留`Pred-HS true-LS / True-HS recall / P45–P55 Pair / Pred-HS HM/HS / Pred-HS High-MFE / Pred-HS MFE / Δ MFE vs Oracle`七項；HS-only learnability由Multi-head Extension承接，P40–P60、HS-Qual Pair、LS contam lift、完整oracle與LS rank-tail等仍保留原scientific payload／historical diagnostic，不刪資料。
-- **Composition / rendering**：新增`services/breakout_quality/model_report_extensions.py`作canonical extension-evidence normalization；single-model、Forward/Rolling comparison與Robustness均消費相同extension payload。Renderer只做scope split、optional semantic-column union、format/color，不知道AK/AO/BO identity。Robustness不再維護`standard_head_learnability_rows`專用aggregation，改走generic extension `row_mean`。
-- **Persistent freeze**：`model.standard_sop v9` fingerprint=`7a2be4dbb363e3fd`；`model.standard_comparison v13` fingerprint=`95065df1bec1ed81`。Truth / Prediction Geometry仍保持B374退役狀態；report-only schema升級不得觸發重訓，舊B374/pre-B374 head rows只作compatibility normalization。
-
-Decision：`B377_DONE / CAPABILITY_DRIVEN_EXTENSION / SEMANTIC_HEAD_WIDE_SCHEMA / SCOPE_DRIVEN_SUBTABLES / HS_QUALITY_COMPACT / GENERIC_RENDERER / NO_MODEL_RETRAIN / NO_SCIENTIFIC_CHANGE`。
-
-## 2026-09-05 — Engineering contract: Cross-model SOP surface compaction
-
-- **Scope**：B378 engineering-only persistent comparison presentation closure；使用者明確指定模型比較`Generalization`合併、`Evidence Coverage`移除，以及Standard SOP / Model-specific Extension採major title分區。不得修改任何MR scientific identity、target/loss/architecture/fitting、PIT、Strategy或promotion semantics。
-- **Generalization**：`model.standard_comparison`只把single-model SOP既有`Validation → OOS`與`OOS → Breakout slice`三個canonical delta作display pivot；比較表固定七欄=`Model + Val→OOS三delta + OOS→Breakout三delta`。renderer不得由raw scores重算第二套Generalization metric。
-- **Evidence Coverage**：只從cross-model comparison persistent surface移除；single-model `model.standard_sop v9`與其Evidence Coverage section / internal completeness guard保持不變。comparison common numbered surface固定1～5。
-- **Namespace boundary**：Standard SOP 1～5結束後，capability-driven Model-specific Extension前必須顯示與主comparison title同層級的major separator；Extension內部仍依B377 semantic-head / scope contract自動生成，禁止MR identity branch。Standard Mode Evidence仍在Extension之後。
-- **Persistent freeze**：`model.standard_sop v9` fingerprint仍=`7a2be4dbb363e3fd`；`model.standard_comparison v14` fingerprint=`e1a9b52b45992a62`。report-only schema升級不得觸發重訓或改fitting/artifact identity。
-- **Formal checklist closure**：本輪基準仍含B377 `T497`同列兩個formal test entry的已知治理錯誤；現已將T497收斂為`validate_model_extension_architecture_contract_case`單一entry，B378新增T498由`validate_research_report_contract_freeze_case`覆蓋comparison v14 surface，未修改或放寬validator。
-
-Decision：`B378_DONE / COMPARISON_GENERALIZATION_7_COLUMNS / COMPARISON_EVIDENCE_COVERAGE_REMOVED / SOP_EXTENSION_MAJOR_BOUNDARY / SINGLE_MODEL_SOP_UNCHANGED / T497_SINGLE_ENTRY_CLOSED / NO_SCIENTIFIC_CHANGE`。
+| 授權 | 報表版本與 fingerprint | 歷史決策 |
+|---|---|---|
+| B374 | `model.standard_sop@v8`：`c96c1d5380ed303f`；`model.standard_comparison@v12`：`a586067f58467ea4` | 使用者授權常駐報表收斂：Head Learnability 納入 SOP；Truth / Prediction Geometry 退出常駐 Extension，原科學 payload／工件保留；HS gate 去重、Evidence Coverage 簡化、Rolling／Across-seed 改列 Standard Mode Evidence。 |
+| B377 | `model.standard_sop@v9`：`7a2be4dbb363e3fd`；`model.standard_comparison@v13`：`95065df1bec1ed81` | 使用者要求多 Head 回到 Model-specific Extension，Head 由列轉語意欄，OOS／Breakout 共用 schema 分表；HS Quality 保留七項共通診斷，其他原始診斷仍留科學 payload。Extension 適用性及 Head 由 canonical capability 派生。 |
+| B378 | `model.standard_sop@v9`：`7a2be4dbb363e3fd`（不變）；`model.standard_comparison@v14`：`e1a9b52b45992a62` | 使用者指定 comparison 的 Generalization 合併成 Model＋兩組三 delta（七欄），移除 comparison 表面的 Evidence Coverage，並以 major title 分開 Standard SOP／Extension；single-model SOP 與 completeness guard 不變。 |
 
 ### 2026-10-27 現行 Research [1] 全期間 Oracle 修正（覆蓋上述歷史窗口敘述）
 

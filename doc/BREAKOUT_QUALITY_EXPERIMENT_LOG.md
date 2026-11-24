@@ -2257,7 +2257,6 @@ MR-12B pairwise objective相對MR-12A MSE的模型經濟改善成立。更重要
 - 使用者最新版ZIP：`test-branch-1_20260809_022059_051c97b(2).zip`
 - SHA256：`afb1556a6374db8e5f5f0f08e982896cddabce4f9ae4e119ad59ea5797e05178`
 - 全新解壓工作目錄：`/mnt/data/stock_p2_review`
-- 開始前依序讀取`PROJECT_SETTINGS → BREAKOUT_QUALITY_EXPERIMENT_REGISTRY → BREAKOUT_QUALITY_EXPERIMENT_LOG`；未執行`apps/test_suite.py`或formal pipeline。
 
 #### 使用者本機P2結果
 
@@ -2292,7 +2291,6 @@ P2 `_dynamic_orderable_frame()`卻只讀`ticker / trade_date / signal_date`，�
 #### 本輪基準與唯一診斷變化
 
 - 最新程式ZIP：`test-branch-1_20260809_031311_2ee25ae.zip`；SHA256：`a140e71c420f05b14d61118c764c543012c763096ae0b39403ff8b0a6ec87c1b`。
-- GPT fresh extract：`/mnt/data/stock_review_20260809_031311`；開始前依序讀取`PROJECT_SETTINGS → BREAKOUT_QUALITY_EXPERIMENT_REGISTRY → BREAKOUT_QUALITY_EXPERIMENT_LOG`；未執行`apps/test_suite.py`。
 - 使用者本機以score-event-date修正版重新執行`apps/research.py → 模型訓練 → 比較設定中的 Continuous Rankers`。
 - Fixed K=10 Selection／OOS數字與前輪完全相同，表示score-event-date修正只影響Dynamic-K join路徑。
 - Dynamic-K仍為C17 max-DL eligible `223`日，其中三模型score+target全候選共同完整日`94`、非共同完整日`129`、day coverage `42.15%`；K=`1～8`、mean=`1.34`。
@@ -2347,8 +2345,6 @@ MR-12B相對MR-12A在603個共同OOS competition days：NDCG `+0.0290`、Top-K L
 
 - 使用者最新版ZIP：`test-branch-1_20260809_035134_5989e50.zip`。
 - SHA256：`54beca984605fee7618a80098e2a0b0b2a5ee1f0773bfe4d8062609616d0260d`。
-- GPT fresh extract：`/mnt/data/stock_review_20260809_035134`。
-- 開始前依序讀取`PROJECT_SETTINGS → BREAKOUT_QUALITY_EXPERIMENT_REGISTRY → BREAKOUT_QUALITY_EXPERIMENT_LOG`；未執行`apps/test_suite.py`。
 
 #### 使用者本機P2結果
 
@@ -2387,8 +2383,6 @@ K=2與K=3的NDCG／Boundary反而偏向MR-12B：K=2 NDCG Δ `+0.0588`、Boundary
 
 - 使用者最新版ZIP：`test-branch-1_20260809_040310_a2c253e.zip`。
 - SHA256：`f07c982725c40f517e8b76986544f8ab4f24c51bcba87b3ce5f1723925c11552`。
-- GPT fresh extract：`/mnt/data/stock_review_040310`。
-- 開始前依序讀取`PROJECT_SETTINGS → BREAKOUT_QUALITY_EXPERIMENT_REGISTRY → BREAKOUT_QUALITY_EXPERIMENT_LOG`；未執行`apps/test_suite.py`。
 
 #### 使用者本機P2結果
 
@@ -2437,8 +2431,6 @@ console／Markdown直接列出MR-12B−MR-12A的NDCG、Boundary與Top-K Lift差�
 
 - 使用者最新版ZIP：`test-branch-1_20260809_041427_90499bb.zip`。
 - SHA256：`ddf8d4d2666b16871ad2c00c794861b7b4511230683c58570104ba9248cd6304`。
-- GPT fresh extract：`/mnt/data/stock_review_20260809_041427`。
-- 開始前依序讀取`PROJECT_SETTINGS → BREAKOUT_QUALITY_EXPERIMENT_REGISTRY → BREAKOUT_QUALITY_EXPERIMENT_LOG`；未執行`apps/test_suite.py`。
 
 #### 使用者本機Reference-subset attribution結果
 
@@ -2491,8 +2483,6 @@ MR-12B training objective為**within-day RankNet**：pair只在相同event date�
 
 - 使用者最新版ZIP：`test-branch-1_20260809_043045_8dbc562.zip`。
 - SHA256：`2e4383cb7eef5f9a83e27b18a891476df63291e47f51e037ff674e7e4e02861e`。
-- GPT fresh extract：`/mnt/data/stock_review_20260809_043045`。
-- 開始前依序讀取`PROJECT_SETTINGS → BREAKOUT_QUALITY_EXPERIMENT_REGISTRY → BREAKOUT_QUALITY_EXPERIMENT_LOG`；未執行`apps/test_suite.py`。
 
 #### 使用者本機結果
 
@@ -2540,8 +2530,6 @@ P2 Dynamic-K / score-date comparability目前使用的方向真值仍是每個�
 
 - 使用者最新版ZIP：`test-branch-1_20260809_045404_66521e1.zip`。
 - SHA256：`710539a6fc783608572c753a050e2a83237d6500919fbebfddd1e63690abff5a`。
-- GPT fresh extract：`/mnt/data/stock_review_20260809_045404_710539a6`。
-- 開始前依序讀取`PROJECT_SETTINGS → BREAKOUT_QUALITY_EXPERIMENT_REGISTRY → BREAKOUT_QUALITY_EXPERIMENT_LOG`；未執行`apps/test_suite.py`。
 
 #### 使用者本機PIT結果
 
@@ -2575,8 +2563,6 @@ MR-12B的Selection PIT模型層證據通過：10個年度的PASS-only rho全部�
 
 - 使用者最新版ZIP：`test-branch-1_20260809_055527_b0e14c8.zip`。
 - SHA256：`0b3702630954ad39a254de2805f30b5cb6239c7df43f500630824e93bdda88ba`。
-- GPT fresh extract：`/mnt/data/stock_review_055527`。
-- 開始前依序讀取`PROJECT_SETTINGS → BREAKOUT_QUALITY_EXPERIMENT_REGISTRY → BREAKOUT_QUALITY_EXPERIMENT_LOG`；未執行`apps/test_suite.py`。
 
 #### 固定條件
 
@@ -2625,8 +2611,6 @@ Controlled deltas：
 
 - 使用者最新版ZIP：`test-branch-1_20260809_065116_e3092c2.zip`。
 - SHA256：`c714add288f842d6b7383f5a577bf38220785beffc55e841af69bebf3c269729`。
-- GPT fresh extract：`/mnt/data/stock_review_065116`。
-- 開始前依序讀取`PROJECT_SETTINGS → BREAKOUT_QUALITY_EXPERIMENT_REGISTRY → BREAKOUT_QUALITY_EXPERIMENT_LOG`；未執行`apps/test_suite.py`。
 
 #### 使用者本機Audit結果
 
@@ -2676,8 +2660,6 @@ Controlled deltas：
 
 - 使用者最新版ZIP：`test-branch-1_20260809_082042_f0e60a4.zip`。
 - SHA256：`33eedd1798f6a4ecfacc85c65405a64dafb9eda8c7c8da7763fbcded281931fb`。
-- GPT fresh extract：`/mnt/data/stock_review_082042`。
-- 開始前依序讀取`PROJECT_SETTINGS → BREAKOUT_QUALITY_EXPERIMENT_REGISTRY → BREAKOUT_QUALITY_EXPERIMENT_LOG`；未執行`apps/test_suite.py`。
 
 #### 使用者本機Audit結果
 
@@ -4169,7 +4151,6 @@ MR-13AC同樣是PIT-safe兩階段conditional residual設計，但方向為Predic
 - **Deleted split report ownership**：PIT Audit內舊Standard-SOP組裝、獨立Forward/Rolling comparison runners、舊Strategy-Robustness report menu route與rolling-specific persistent report contracts全部退出runtime。歷史output可保留作evidence，但runtime不留第二套producer/renderer alias。
 - **Persistent contract**：唯一`model.standard_sop`升v7，approved fingerprint=`56e5fb1173404d7f`；唯一`model.standard_comparison`升v6，approved fingerprint=`7b11c0b9ddf50e41`。Rolling只追加`Rolling-specific Extension｜Fold / Year Stability`；Robustness只追加`Robustness-specific Extension｜Across-seed Stability`，extension不得改Standard 1～6 schema。
 - **Robustness**：`[5]/[6]`改成model-level robustness route，從同一Model Compare/Test List取得模型；各benchmark seed先建立相同Standard SOP payload，再由generic aggregate建立同schema summary。Rolling robustness同時可帶Rolling extension＋Across-seed extension，不再接Strategy robustness報表。
-- **Independent GPT validation**：以formal bundle retained primary params執行完整synthetic consistency=`4710 checks / 244 validators / 0 FAIL`；source compileall PASS。正式`apps/run_bundle.py`/`apps/test_suite.py`依PROJECT_SETTINGS不由GPT執行。
 
 ### 2026-09-01 — MR-13AK A1 decision → MR-13AL A2 + B327 Rolling multi-head producer closure
 
@@ -4180,7 +4161,6 @@ MR-13AC同樣是PIT-safe兩階段conditional residual設計，但方向為Predic
 - **Generic composition seam**：`forward_safety_mfe_heads`改為capability interface，可由model topology選擇independent Raw-MFE head或Safety-conditioned MFE head；trainer仍只消費Raw-Safety+final-MFE capability，不辨識MR/profile/architecture。shared-Safety-weighted training semantics中的head topology改由model spec擁有，loss contract本身保持topology-agnostic。
 - **B327 Rolling extension closure**：B326 renderer本身已capability-driven；真正缺口是Rolling PIT score producer沒有為A1 `safety_raw_mfe` target builder持久化Raw Safety/Raw-MFE sidecars。現在score-output capability由`training_policy.target_builder`單一解析，A1/A2自動得到`raw_safety_score/raw_mfe_score`；`score_output_contract`仍被既有fitting identity排除，所以compatible舊AK fold checkpoint只checkpoint-only rescore，不因補head evidence重訓。PIT Audit直接消費sidecars，用canonical same-date truth percentile與既有`safety_raw_mfe_metrics`產生`safety_raw_mfe_evaluation`，B326 [4] comparison即可顯示Multi-head Learnability / Truth-Prediction Geometry。
 - **Persistent report boundary**：本輪不改`model.standard_sop v7`或`model.standard_comparison v7` schema/fingerprint；只補B326已授權extension的Rolling evidence producer。
-- **Validation before formal local suite**：Shared-AH composition synthetic=`16/16 PASS`；PIT builder/canonical score-only reuse=`26/26 PASS`；Continuous DL workflow=`44/44 PASS`；persistent report freeze=`25/25 PASS`。正式`apps/run_bundle.py` / `apps/test_suite.py`依PROJECT_SETTINGS不由GPT執行。
 
 Decision：`MR13AK_A1_CLOSED_PASS_TO_A2 / MR13AL_IMPLEMENTED_RESULT_PENDING / ROLLING_MULTIHEAD_EVIDENCE_CLOSED / NO_REPORT_FINGERPRINT_CHANGE / FORWARD_SEED42_NEXT`。
 
@@ -4194,7 +4174,6 @@ Decision：`MR13AK_A1_CLOSED_PASS_TO_A2 / MR13AL_IMPLEMENTED_RESULT_PENDING / RO
 - **Membership SSOT**：current training pair切至`MR-13AM`後，B325 ordered merge自動得到`MR-13H / MR-13AF / MR-13AH / MR-13AK / MR-13AM`；MR-13AL不再是reference control，因此自然退出[3]～[6] current comparison/robustness list，沒有第二份exclude清單。
 - **Report boundary**：B329 `model.standard_comparison v8` / fingerprint=`aa7f812b9d1d936a`不變；本輪沒有新增、刪除或重排persistent report section。
 - **Implementation provenance**：B329文件記錄的完整baseline `test-branch-1_20260901_193732_d9e902aa.zip` binary在本輪sandbox不可取，因此工作樹由可用`test-branch-1_20260901_182733_0eecf87e(1).zip` + 已交付MR-13AL/B327 patch + B329 patch重建，並依B327 capability-owner contract補回owner closure後實作A3；交付內容以replacement patch形式包含所有相對該可驗證重建基準的必要changed files。
-- **Targeted validation before formal local suite**：Shared-AH/A3 composition=`19/19 PASS`；PIT score-output ownership=`26/26 PASS`；Continuous DL workflow=`44/44 PASS`；simple report=`15/15 PASS`；persistent report freeze=`27/27 PASS`。正式`apps/run_bundle.py` / `apps/test_suite.py`依PROJECT_SETTINGS不由GPT執行。
 
 Decision：`MR13AL_CLOSED_NEGATIVE_CONTROL / MR13AK_ROBUST_MFE_BASE / MR13AM_IMPLEMENTED_RESULT_PENDING / AL_REMOVED_FROM_CURRENT_COMPARE_LIST / FORWARD_SEED42_NEXT`。
 
@@ -4455,7 +4434,6 @@ Decision：`MR13BN_FORWARD_GATE_FAIL / MR13BO_IMPLEMENTED_RESULT_PENDING / EXPLI
 - **Isolation / capacity**：relation capability只進Safety；Conditional-MFE維持AO shared feature map→GAP。Same-seed BP對AY所有common state tensors exact，僅新增relation MLP三個state tensors／`56` params；AO/AY/BP MFE logits bitwise exact。relation branch Safety-only gradient=`>0`、MFE-only gradient=`0`。
 - **Execution-only memory semantics**：relation owner利用一階線性層對signed differences的代數等價性，避免materialize完整`T×T×8` hidden tensor；relation-biased attention只按batch維度做固定pair-cell cap chunking，relation/output/order完全不變，也不形成scientific knob。小型fixture與直接5D MLP計算allclose=`1e-6`。
 - **Refactor boundary**：沒有在trainer/planner/renderer加入`MR-13BP` identity branch；新增scientific composition只落在declarative architecture/profile、單一pairwise-relation capability owner與既有capability-oriented synthetic validator。Current compare/test membership由B325 SSOT自動派生為`MR-13H / MR-13AH / MR-13AK / MR-13AO / MR-13AY / MR-13BP`，已關閉BL～BO退出current controls。
-- **GPT targeted checks**：`validate_breakout_quality_reusable_model_component_contract_case=75/75 PASS`；current-membership contract=`6/6 PASS`；`validate_breakout_quality_policy_single_source_case=13/13 PASS`；registry/config current pair解析=`PASS`；Python compile/import=`PASS`。GPT未執行`apps/test_suite.py`或`apps/run_bundle.py`。
 - **Gate / stop rule**：Seed42 Forward first。Raw Safety Daily/Global/Pair需material共同改善，purity改善不可靠True-HS recall collapse，Breakout/P45–P55與drift需同方向，HS-only Conditional-MFE與Pred-HS top-tail不可material惡化。只有小幅單seed增量時不做robustness，也不做relation feature/window/hidden/head/topology sweep。
 
 Decision：`MR13BO_CLOSED / PRICE_VOLUME_STRUCTURE_FAMILY_CLOSED / MR13BP_IMPLEMENTED_RESULT_PENDING / AO_SCIENTIFIC_BASE / AY_MECHANISTIC_CONTROL / EXPLICIT_PAIRWISE_RELATION_SAFETY_ONLY / MFE_PATH_EXACT / FORWARD_GATE_FIRST`。
