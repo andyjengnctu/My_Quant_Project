@@ -81,11 +81,10 @@ def extend_source_capability(source, profile):
     study = study_for_profile(profile)
     if study is None or not study.get('history_extension'):
         return source
-    from services.breakout_quality.trade_path_target_source import TeacherDependency
     contract = dict(study['history_extension'])
-    early = TeacherDependency(
-        'early_history', 'optimizer_early_history', 50,
-        partial(_early_inspect, contract=contract), partial(_early_execute, contract=contract))
+    early = replace(source.dependencies[0],
+        name='early_history', builder_type='optimizer_early_history', priority=50,
+        inspect=partial(_early_inspect, contract=contract), execute=partial(_early_execute, contract=contract))
     return replace(source, loader=partial(_early_loader, contract=contract),
                    dependencies=(*source.dependencies, early))
 

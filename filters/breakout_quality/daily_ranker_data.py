@@ -258,12 +258,6 @@ class LazyDailyFeatureBank:
         ):
             raise ValueError("daily feature benchmark index超出範圍")
 
-    def canonical_price_frame(self, ticker_id: int):
-        """Canonical source projection for per-stock lifecycle diagnostics."""
-        return pd.DataFrame(self._frame_arrays[int(ticker_id)],
-                            index=pd.DatetimeIndex(self._frame_dates[int(ticker_id)]),
-                            columns=["Open", "High", "Low", "Close", "Volume"])
-
     def _normalized_window(self, values: np.ndarray, source_pos: int) -> np.ndarray:
         feature_window = int(self._policy.feature_window_bars)
         start_pos = int(source_pos) - feature_window + 1

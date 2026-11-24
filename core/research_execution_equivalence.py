@@ -220,6 +220,14 @@ _REVIEWED.setdefault('filters/breakout_quality/models/architectures.py', {"file_
 _REVIEWED.setdefault('config/research_summary.py', {"file_sha256": 'cac2cb2835358f193c83fc42a8847f7bb093ca486d2b8929d4becaf1795477e3', "original_file_sha256": '9280b09d88652ccfffeb3d4f9a73270ee2b15cbf58e8d7e90b8cc9c7599b38fb', "calculations": {}}).setdefault(
     "reviewed_model_only_revisions", {})['cac2cb2835358f193c83fc42a8847f7bb093ca486d2b8929d4becaf1795477e3'] = '9280b09d88652ccfffeb3d4f9a73270ee2b15cbf58e8d7e90b8cc9c7599b38fb'
 
+# AI: 2026-11-24 opt-in original-signal inventory. Removing the two diagnostic
+# keyword arguments and branches recovers the complete dec8e2d2 module AST
+# exactly. Default price, fill, exit, fee and maturity code is unchanged.
+# Proof: outputs/research/learning_studies/engineering_default_path_equivalence.json.
+# Exact current bytes/encodings only; any later edit hashes normally.
+_REVIEWED["filters/breakout_quality/daily_trade40_target.py"].setdefault(
+    "reviewed_model_only_revisions", {}).update({'d716d6007511d42f19388d5e0535b145c275adebb7563cfe06bd6e0605f32883': '4df90ba6d95a22cd0a78845141dc6bfb91683e7fa2ecc612cafa6f66e6bd3370', '9bea022a543d347d5f46815d9189bec08e1ac5b57451ee7e8580a781ef2edf45': 'e569741dc258f637757d42cdd3febd39818f2136224a23b4fc26d7c505d4ada1'})
+
 def reviewed_execution_source_sha256(relative: str, actual: str) -> str:
     normalized = _certified_model_selection_only_config_sha256(relative, actual)
     if normalized == actual:

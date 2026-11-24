@@ -133,7 +133,9 @@ def _episode_inventory(bundle, *, teacher, mask, cutoff):
     calendar = collect_canonical_exchange_sessions(csv_inputs, benchmark_ticker='0050', horizon_sessions=None)
     selected = bundle.group_table.loc[mask]
     for ticker, rows in selected.groupby('ticker', observed=True, sort=False):
-        frame = bundle.feature_bank.canonical_price_frame(int(rows['ticker_id'].iloc[0]))
+        ticker_id = int(rows['ticker_id'].iloc[0])
+        bank = bundle.feature_bank
+        frame = pd.DataFrame(bank._frame_arrays[ticker_id], index=pd.DatetimeIndex(bank._frame_dates[ticker_id]), columns=['Open','High','Low','Close','Volume'])
         frame = frame.loc[frame.index <= pd.Timestamp(cutoff)]
         observed = {}
         compute_counterfactual_trade40_batch(
