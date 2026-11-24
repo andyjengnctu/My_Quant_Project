@@ -72,31 +72,28 @@ def validate_strategy_compare_resolved_plan_transition_contract_case(_base_param
     results.extend(entry_checks)
     summary["robustness_entry_seed_scope"] = entry_summary
 
-    base = get_strategy_comparison_settings("forward_oos")
-    current_dl_arms = tuple(arm for arm in base.enabled_arms if arm.dl_enabled)
-    current_arm = None
-    retired_same_source = None
-    for candidate in current_dl_arms:
-        retired = next(
-            (
-                arm
-                for arm in base.arms.values()
-                if not arm.enabled
-                and arm.dl_enabled
-                and arm.dl_id == candidate.dl_id
-            ),
-            None,
-        )
-        if retired is not None:
-            current_arm = candidate
-            retired_same_source = retired
-            break
-    check_true(
-        "fixture_has_current_dl_arm_with_retired_same_source_arm",
-        current_arm is not None and retired_same_source is not None,
+    from config.strategy_compare import STRATEGY_COMPARE_CURRENT_OOS_PROFILE
+    from filters.breakout_quality.ranking_score_store import SCORE_SOURCE_CONTINUOUS_RANKER_OOS
+
+    base = get_strategy_comparison_settings(STRATEGY_COMPARE_CURRENT_OOS_PROFILE)
+    current_arm = base.arms["C111"]
+    retired_same_source = replace(base.arms["C112"], enabled=False)
+    # Isolate a membership transition using two current consumers of one source.
+    # Frozen Forward-score recovery is a reusable artifact capability; its fixture
+    # explicitly selects that source mode without restoring a retired profile.
+    source_id = str(current_arm.dl_id)
+    base = replace(
+        base, start_date=None, end_date=None,
+        arms={**base.arms, retired_same_source.arm_id: retired_same_source},
+        dl_sources={**base.dl_sources, source_id: replace(
+            base.dl_sources[source_id], score_source=SCORE_SOURCE_CONTINUOUS_RANKER_OOS,
+        )},
     )
-    if current_arm is None or retired_same_source is None:
-        return results, summary
+    check_true(
+        "fixture_has_enabled_and_disabled_consumers_of_one_source",
+        current_arm.enabled and not retired_same_source.enabled
+        and current_arm.dl_id == retired_same_source.dl_id,
+    )
 
     dl_id = str(current_arm.dl_id or "")
     isolated_arms = {

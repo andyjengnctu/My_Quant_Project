@@ -756,7 +756,7 @@ class CleanupTest(unittest.TestCase):
         from services.research import strategy_compare_reuse as reuse
         from services.research.strategy_compare_replay import _load_reusable_no_filter_baseline
         from services.breakout_quality.point_in_time_audit import _orderable_coverage
-        settings = get_strategy_comparison_settings("forward_oos")
+        settings = get_strategy_comparison_settings("broker_cash_dl_conversion_oos")
         off_arm = next(a for a in settings.arms.values() if not a.dl_enabled)
         runs = reuse._comparison_runs_roots(root=self.root, settings=settings)[0]
         period = {"start": "2021-01-01", "end": "2022-12-31"}
