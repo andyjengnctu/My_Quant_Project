@@ -1601,6 +1601,7 @@ def validate_optimizer_interrupt_export_contract_case(_base_params):
     check("export_policy_interrupted_reason", "interrupted_before_target", interrupted_reason)
 
     optimizer_main = importlib.import_module("services.optimizer.application")
+    from services.optimizer.execution_settings import OptimizerExecutionSettings
 
     class _FakeMainProfileRecorder:
         def __init__(self):
@@ -1665,6 +1666,12 @@ def validate_optimizer_interrupt_export_contract_case(_base_params):
 
         fake_session = _FakeMainSession()
         fake_export_calls = []
+        caller_environ = {
+            "OPTIMIZER_PREP_CACHE_MAX_ITEMS": "7",
+            "OPTIMIZER_FULL_EVAL_CACHE_MAX_ITEMS": "9",
+        }
+        expected_environ = dict(caller_environ)
+        process_environ_before = dict(os.environ)
 
         class _InterruptingStudy:
             def __init__(self, session):
@@ -1679,8 +1686,9 @@ def validate_optimizer_interrupt_export_contract_case(_base_params):
                 self._session.current_session_trial = 2
                 raise KeyboardInterrupt()
 
-        def _fake_build_optimizer_session(*, walk_forward_policy=None):
+        def _fake_build_optimizer_session(*, walk_forward_policy, execution_settings):
             _ = walk_forward_policy
+            fake_session.execution_settings = execution_settings
             return fake_session
 
         def _fake_resolve_trial_count_or_exit(session, *, environ, resolve_optimizer_trial_count, colors):
@@ -1721,7 +1729,9 @@ def validate_optimizer_interrupt_export_contract_case(_base_params):
             stack.enter_context(patch("services.optimizer.runtime.export_best_params_if_requested", side_effect=_fake_export_best_params_if_requested))
             stack.enter_context(redirect_stdout(stdout_buffer))
             stack.enter_context(redirect_stderr(stderr_buffer))
-            rc = optimizer_main.main(["services/optimizer/application.py", "--dataset", "full"], environ={})
+            rc = optimizer_main.main(
+                ["services/optimizer/application.py", "--dataset", "full"], environ=caller_environ,
+            )
 
         persisted_payload = json.loads(best_params_path.read_text(encoding="utf-8"))
 
@@ -1733,6 +1743,13 @@ def validate_optimizer_interrupt_export_contract_case(_base_params):
     check("optimizer_main_interrupt_reports_warning", True, "使用者中斷訓練流程" in stdout_text)
     check("optimizer_main_interrupt_reports_skip_overwrite", True, "不自動覆寫" in stdout_text and "2/5" in stdout_text)
     check("optimizer_main_interrupt_stderr_empty", "", stderr_text)
+    check("optimizer_main_interrupt_receives_immutable_execution_settings", True,
+          isinstance(fake_session.execution_settings, OptimizerExecutionSettings))
+    check("optimizer_main_interrupt_preserves_requested_execution_settings", expected_environ,
+          fake_session.execution_settings.as_environ())
+    check("optimizer_main_interrupt_does_not_mutate_caller_environment", expected_environ, caller_environ)
+    check("optimizer_main_interrupt_restores_process_environment", True,
+          dict(os.environ) == process_environ_before)
 
     summary["checks"] = len(results)
     return results, summary

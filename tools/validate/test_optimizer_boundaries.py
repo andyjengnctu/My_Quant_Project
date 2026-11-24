@@ -172,8 +172,8 @@ class OptimizerBoundaryTests(unittest.TestCase):
             pass
 
         captured = {}
-        def capture(**kwargs):
-            captured.update(kwargs)
+        def capture(*, walk_forward_policy, execution_settings):
+            captured.update(walk_forward_policy=walk_forward_policy, execution_settings=execution_settings)
             raise CapturedSession()
 
         incoming = {"OPTIMIZER_PREP_CACHE_MAX_ITEMS": "7"}
@@ -268,8 +268,9 @@ class OptimizerBoundaryTests(unittest.TestCase):
             member_count=2, raw_data_loader_path="fixture", execution_settings=settings,
         )))
         captured = {}
-        def capture(**kwargs):
-            captured.update(kwargs)
+        def capture(*, walk_forward_policy, output_dir, execution_settings):
+            captured.update(walk_forward_policy=walk_forward_policy, output_dir=output_dir,
+                            execution_settings=execution_settings)
             raise CapturedSession()
         with (patch.object(application, "build_optimizer_session", side_effect=capture),
               patch.object(application, "set_optimizer_runtime_model_mode"),
@@ -294,8 +295,9 @@ class OptimizerBoundaryTests(unittest.TestCase):
         )
         fold = _build_rolling_folds(config)[0]
         captured = {}
-        def capture(**kwargs):
-            captured.update(kwargs)
+        def capture(*, walk_forward_policy, execution_settings, runtime_cache_identity=None):
+            captured.update(walk_forward_policy=walk_forward_policy, execution_settings=execution_settings,
+                            runtime_cache_identity=runtime_cache_identity)
             raise CapturedSession()
 
         for spec in ({}, {"runtime_cache_identity": "fixture"}):

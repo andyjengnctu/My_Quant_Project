@@ -10,7 +10,7 @@
 2. 每次開始專案修改或檢查前，必須確認並回報當前工作基準與本輪必要已讀文件；若基準為 ZIP，另須回報 ZIP 檔名、SHA256 與本輪使用的全新解壓目錄。
 3. GPT 每輪修改程式時，必須完整檢查本輪修改範圍、直接依賴鏈、正式契約及可能受影響的同鏈項目，並在同輪修正可由既有契約唯一確定的問題；涉及新的 research decision、scientific semantics、使用者設定取捨或不可唯一確定的產品決策時不得擅自決定。使用者明確要求「完整檢查」時，另依本文件頂層第 2 條執行全專案檢查。
 4. `apps/run_bundle.py` 為本機正式 double check 與交付打包的單一使用者入口；預設流程為 stage 變更 → commit 當前 snapshot → package ZIP → 執行 `apps/test_suite.py`。formal test 即使 FAIL，既有 commit 與 ZIP 仍須保留。`apps/test_suite.py` 僅為內部正式 runner，不作一般使用者主要入口。若使用者提供正式測試結果，GPT 必須依失敗證據完成閉環分析與修正；未提供時不得自行假定 PASS。正式本機整合測試不使用 `--no-commit`，除非使用者當輪明確要求。
-5. GPT 不得執行 `apps/run_bundle.py` 或 `apps/test_suite.py`，亦不得重建整套 formal suite 冒充本機正式測試；仍須以獨立方式完成本輪應有檢查。本輪涉及正式測試鏈、使用者要求完整檢查，或已有證據顯示 formal gate 本身可能有問題時，才須進一步檢查 `run_bundle.py`、`test_suite.py` 與 `doc/TEST_SUITE_CHECKLIST.md` 的可信度與必要覆蓋。
+5. 透過 Codex／GPT 修改專案程式後，必須先完成本輪必要自檢，再直接於本機專案根目錄執行 `python apps/run_bundle.py`；使用者已授權依 A4 執行 stage、commit、package 與完整 formal test，不需逐輪再次確認，且不得自行使用 `--no-commit` 或以獨立測試取代正式入口。若執行失敗，須讀取當次紀錄、修正根因並重新執行 `run_bundle`，持續到最終修改版本完整 PASS；不得跳過失敗測項、降低品質門檻或改寫 Golden／科學契約來換取通過。若環境或外部依賴確實阻止執行，須明確回報阻擋原因與尚未通過的狀態，不得宣稱完成驗證。本輪涉及正式測試鏈、使用者要求完整檢查，或 formal gate 本身出現問題時，須一併檢查 `run_bundle.py`、`test_suite.py` 與 `doc/TEST_SUITE_CHECKLIST.md` 的可信度與必要覆蓋；交付須提供最後一次實際執行結果及對應 commit／bundle。
 6. `doc/PROJECT_SETTINGS.md` 不得由 formal suite 或 validator 以硬編碼目前條款內容的方式反向定義其合法性；formal tests 只能驗證程式遵守已落地的正式契約，不得成為 PROJECT_SETTINGS 的上位真理。
 
 
