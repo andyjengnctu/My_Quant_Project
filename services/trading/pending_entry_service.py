@@ -753,11 +753,12 @@ def update_trading_pending_entry_intent(
     )
 
 
-def get_trading_pending_entry_read_model(project_root) -> dict[str, Any]:
+def get_trading_pending_entry_read_model(project_root, *, recover_pending: bool = True) -> dict[str, Any]:
     # Complete any durable account-commit -> pending-close recovery before exposing
     # the Workbench read model, so a process restart cannot leave a filled order
     # visible as ACTIVE indefinitely.
-    recover_trading_pending_entry_transaction(project_root)
+    if recover_pending:
+        recover_trading_pending_entry_transaction(project_root)
     try:
         information_date = _latest_finalized_date_for_frozen_pending(project_root)
     except (OSError, ValueError, RuntimeError, FileNotFoundError):

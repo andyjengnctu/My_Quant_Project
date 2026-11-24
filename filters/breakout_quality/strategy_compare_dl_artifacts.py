@@ -6,6 +6,7 @@ or completed-pair reuse policy.
 """
 
 from __future__ import annotations
+from core.ranking_policy import ranking_policy_requires
 from core.research_orchestration import ResearchArtifactAction
 
 from pathlib import Path
@@ -17,17 +18,7 @@ from core.breakout_quality_policy import (
 )
 from core.console_report import project_relative_display_path
 from core.research_orchestration import resolve_research_artifact_action
-from core.strategy_comparison import (
-    STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_CONSTRAINED_OPTIMAL,
-    STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_FEASIBLE_ASCENT,
-    STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_NO_R0_FEASIBLE_ASCENT,
-    STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXPECTED_PNL_FEASIBLE_ASCENT,
-    STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_SAFETY_CONSTRAINED_OPTIMAL,
-    STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_RESIDUAL_SAFETY_CONSTRAINED_OPTIMAL,
-    STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0_RAW_SAFETY_GATE,
-    STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0_SAFETY_MFE_PRODUCT,
-    StrategyComparisonSettings,
-)
+from core.strategy_comparison import StrategyComparisonSettings
 from filters.breakout_quality.artifact_dependency_registry import (
     PRODUCER_EXISTING_ARTIFACT,
     collect_model_upstream_readiness,
@@ -126,12 +117,7 @@ def resolve_arm_runtime_dl_source_ids(
             raise ValueError(f"arm引用不存在的dl_id: {arm.arm_id}/{primary}")
         source_ids.append(primary)
 
-    if arm.dl_runtime_mode in {
-        STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_SAFETY_CONSTRAINED_OPTIMAL,
-        STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_RESIDUAL_SAFETY_CONSTRAINED_OPTIMAL,
-        STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0_RAW_SAFETY_GATE,
-        STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0_SAFETY_MFE_PRODUCT,
-    }:
+    if ranking_policy_requires(arm.dl_runtime_mode, 'safety'):
         safety_dl_id = str(
             dict(arm.dl_runtime_options or {}).get("safety_dl_id") or ""
         ).strip()
@@ -171,8 +157,7 @@ def resolve_arm_artifact_dl_source_ids(
     source_ids = list(resolve_arm_runtime_dl_source_ids(settings, arm))
     options = dict(arm.dl_runtime_options or {})
     if (
-        arm.dl_runtime_mode
-        == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXPECTED_PNL_FEASIBLE_ASCENT
+        ranking_policy_requires(arm.dl_runtime_mode, 'expected_r_calibration')
     ):
         fit_dl_id = str(options.get("expected_r_fit_dl_id") or "").strip()
         if not fit_dl_id or fit_dl_id not in settings.dl_sources:
@@ -180,11 +165,7 @@ def resolve_arm_artifact_dl_source_ids(
                 f"Expected-PnL arm缺少合法expected_r_fit_dl_id: {arm.arm_id}"
             )
         source_ids.append(fit_dl_id)
-    if arm.dl_runtime_mode in {
-        STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_FEASIBLE_ASCENT,
-        STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_NO_R0_FEASIBLE_ASCENT,
-        STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_CONSTRAINED_OPTIMAL,
-    }:
+    if ranking_policy_requires(arm.dl_runtime_mode, 'expected_excess_r_calibration'):
         fit_dl_id = str(options.get("expected_excess_r_fit_dl_id") or "").strip()
         if not fit_dl_id or fit_dl_id not in settings.dl_sources:
             raise ValueError(

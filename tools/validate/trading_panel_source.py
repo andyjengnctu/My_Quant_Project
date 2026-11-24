@@ -27,7 +27,6 @@ _TRADING_ACCOUNT_COMPONENTS = (
 def read_trading_account_panel_source(project_root: Path) -> str:
     """Combine source files in widget/handler declaration order for legacy guards."""
     directory = Path(project_root) / "services" / "workbench_ui"
-    return "\n\n".join(
-        (directory / name).read_text(encoding="utf-8")
-        for name in _TRADING_ACCOUNT_COMPONENTS
-    )
+    sources = [Path(project_root) / "services" / "trading" / "workbench_snapshot.py"]
+    sources.extend(directory / name for name in _TRADING_ACCOUNT_COMPONENTS)
+    return "\n\n".join(path.read_text(encoding="utf-8") for path in sources)

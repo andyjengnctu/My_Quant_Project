@@ -143,9 +143,11 @@ def build_runtime_context_factory_from_spec(spec):
     return _factory
 
 
-def build_optimizer_session_from_spec(*, walk_forward_policy: dict, spec=None):
+def build_optimizer_session_from_spec(*, walk_forward_policy: dict, spec=None, execution_settings=None):
     """Create an optimizer session from a process-safe serializable contract."""
     payload = dict(spec or {})
+    if execution_settings is not None:
+        payload["execution_settings"] = execution_settings
     runtime_context_spec = payload.pop("runtime_context_spec", None)
     if runtime_context_spec is not None:
         payload["runtime_context_factory"] = build_runtime_context_factory_from_spec(
@@ -165,6 +167,7 @@ def build_optimizer_session(
     train_max_positions=None,
     train_enable_rotation=None,
     strategy_param_scientific_contract=None,
+    execution_settings=None,
 ):
     from services.optimizer.profile import OptimizerProfileRecorder
     from services.optimizer.session import OptimizerSession
@@ -237,4 +240,5 @@ def build_optimizer_session(
         fixed_strategy_param_overrides=fixed_strategy_param_overrides,
         runtime_context_factory=runtime_context_factory,
         runtime_cache_identity=runtime_cache_identity,
+        execution_settings=execution_settings,
     )

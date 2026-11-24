@@ -15,6 +15,7 @@ from hashlib import sha256
 import json
 import logging
 import os
+import re
 import sys
 from pathlib import Path
 from uuid import uuid4
@@ -25,6 +26,7 @@ import zlib
 import numpy as np
 import pandas as pd
 from core.research_execution_equivalence import reviewed_execution_source_sha256
+from core.artifact_inspection import ArtifactInspection, InspectionStatus
 
 from filters.breakout_quality.daily_trade40_target import CounterfactualTrade40Batch
 
@@ -41,6 +43,7 @@ _CACHE_EXECUTION_CONFIG = (
     "config/training_policy.py",
 )
 _CACHE_SUBDIR = Path("outputs/filters/breakout_quality/formal_mintrade_outcome_cache")
+FORMAL_MINTRADE_CACHE_ROOT = _CACHE_SUBDIR
 _LOG = logging.getLogger(__name__)
 
 
@@ -220,6 +223,36 @@ def _read_cache(path: Path, key: str, count: int) -> CounterfactualTrade40Batch 
         )
     except (OSError, BadZipFile, zlib.error, ValueError, KeyError, TypeError, EOFError, OverflowError):
         return None
+
+
+def inspect_formal_mintrade_cache_shard(path: Path) -> ArtifactInspection[CounterfactualTrade40Batch]:
+    """Read the producer's complete shard contract without computing or publishing."""
+    from core.compare_csv_storage import clean_path, plain
+    from core.file_integrity import file_change_signature
+
+    path = Path(path)
+    try:
+        if not clean_path(path) or not plain(path.lstat()):
+            return ArtifactInspection(InspectionStatus.INVALID, "cache shard is not a plain file")
+        before = file_change_signature(path)
+        with np.load(path, allow_pickle=False) as store:
+            identity = store["identity"]
+            if identity.shape != () or not re.fullmatch(r"[0-9a-f]{64}", str(identity.item())):
+                return ArtifactInspection(InspectionStatus.INVALID, "cache shard identity is malformed")
+            values = store["net_r"]
+            if values.ndim != 1:
+                return ArtifactInspection(InspectionStatus.INVALID, "cache shard net_r is not one-dimensional")
+            count, key = len(values), str(identity.item())
+        batch = _read_cache(path, key, count)
+        if batch is None:
+            return ArtifactInspection(InspectionStatus.INVALID, "cache shard schema, shape or outcome evidence is invalid")
+        if file_change_signature(path) != before:
+            return ArtifactInspection(InspectionStatus.INVALID, "cache shard changed during inspection")
+        return ArtifactInspection(InspectionStatus.READY, "", batch)
+    except FileNotFoundError as exc:
+        return ArtifactInspection(InspectionStatus.MISSING, str(exc))
+    except (OSError, ValueError, KeyError, TypeError, BadZipFile, zlib.error, EOFError, OverflowError) as exc:
+        return ArtifactInspection(InspectionStatus.INVALID, f"{type(exc).__name__}: {exc}")
 
 
 def _write_cache(path: Path, key: str, batch: CounterfactualTrade40Batch) -> None:

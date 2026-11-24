@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from services.workbench_ui.background_tasks import BackgroundTaskRunner
+
 import queue
 import threading
 import tkinter as tk
@@ -347,7 +349,7 @@ class TradingAccountRuntimeMixin:
         ):
             self._operations_next_var.set("WAIT | Trading 初始狀態仍在載入中…")
             return False
-        if self._command_thread is not None and self._command_thread.is_alive():
+        if (self._command_thread is not None and self._command_thread.is_alive()) or bool(getattr(getattr(self, "_command_runner", None), "busy", False)):
             self._operations_next_var.set(f"BUSY | {label} 尚未執行；目前已有 Trading command 執行中。")
             return False
         self._command_token += 1
@@ -360,18 +362,22 @@ class TradingAccountRuntimeMixin:
             "state_domains": normalize_state_domains(state_domains),
         }
         self._set_command_busy(True, label=str(label))
-        thread = threading.Thread(
-            target=self._trading_command_worker,
-            args=(token, worker, bool(refresh_state)),
-            name=f"workbench-trading-command-{token}",
-            daemon=True,
+        runner = getattr(self, "_command_runner", None)
+        if runner is None:
+            runner = self._command_runner = BackgroundTaskRunner(self.after, self.after_cancel)
+        def complete(outcome):
+            if outcome.error is not None:
+                self._finish_trading_command(token, None, outcome.error, None, None)
+            else:
+                self._finish_trading_command(token, *outcome.value)
+        self._command_thread = runner.submit(
+            lambda: self._execute_trading_command(worker, bool(refresh_state)),
+            complete, name=f"workbench-trading-command-{token}",
         )
-        self._command_thread = thread
-        thread.start()
-        self._schedule_command_poll()
         return True
 
-    def _trading_command_worker(self, token: int, worker, refresh_state: bool) -> None:
+    @staticmethod
+    def _execute_trading_command(worker, refresh_state: bool):
         result = None
         command_error = None
         try:
@@ -386,22 +392,7 @@ class TradingAccountRuntimeMixin:
                 bundle = build_trading_account_panel_initial_bundle(WORKBENCH_PROJECT_ROOT)
             except Exception as exc:
                 bundle_error = exc
-        self._command_results.put((int(token), result, command_error, bundle, bundle_error))
-
-    def _schedule_command_poll(self) -> None:
-        if self._command_poll_after_id is None:
-            self._command_poll_after_id = self.after(25, self._drain_command_results)
-
-    def _drain_command_results(self) -> None:
-        self._command_poll_after_id = None
-        while True:
-            try:
-                payload = self._command_results.get_nowait()
-            except queue.Empty:
-                break
-            self._finish_trading_command(*payload)
-        if self._command_thread is not None and self._command_thread.is_alive():
-            self._schedule_command_poll()
+        return result, command_error, bundle, bundle_error
 
     def _finish_trading_command(self, token: int, result, command_error, bundle, bundle_error) -> None:
         context = self._command_context.pop(int(token), {})
@@ -455,16 +446,22 @@ class TradingAccountRuntimeMixin:
                 and not bool(getattr(self, "_initial_state_applied", False))
             )
         )
-        command_busy = self._command_thread is not None and self._command_thread.is_alive()
+        runner = getattr(self, "_command_runner", None)
+        command_busy = bool(
+            (runner is not None and runner.busy)
+            or (self._command_thread is not None and self._command_thread.is_alive())
+        )
+        self._external_state_refresh_pending_domains.update(normalized)
         if initial_busy or command_busy:
-            self._external_state_refresh_pending_domains.update(normalized)
             return False
-        self._external_state_refresh_pending_domains.clear()
-        return self._submit_trading_command(
+        submitted = self._submit_trading_command(
             "同步狀態變更",
             lambda: None,
             refresh_state=True,
         )
+        if submitted:
+            self._external_state_refresh_pending_domains.clear()
+        return submitted
 
     def refresh_external_account_state(self) -> bool:
         """Backward-compatible account refresh through the state-domain coordinator."""
@@ -477,6 +474,9 @@ class TradingAccountRuntimeMixin:
         self.after_idle(lambda domains=domains: self.refresh_for_state_domains(domains))
 
     def destroy(self):
+        runner = getattr(self, "_command_runner", None)
+        if runner is not None:
+            runner.close()
         if self._pending_manual_preview_after_id is not None:
             try:
                 self.after_cancel(self._pending_manual_preview_after_id)
@@ -493,7 +493,6 @@ class TradingAccountRuntimeMixin:
             ("_initial_state_start_after_id", "initial-state-start"),
             ("_initial_state_poll_after_id", "initial-state"),
             ("_initial_apply_after_id", "initial-render"),
-            ("_command_poll_after_id", "command"),
             ("_pending_preview_poll_after_id", "pending-preview"),
             ("_trade_constraint_poll_after_id", "direct-fill-constraint"),
             ("_stock_name_warm_after_id", "stock-name-warm"),

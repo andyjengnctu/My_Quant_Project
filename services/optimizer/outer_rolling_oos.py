@@ -179,6 +179,7 @@ from services.optimizer.outer_rolling_runtime import (
     summarize_optimizer_no_finalist,
     _validate_optimizer_runtime_context,
 )
+from services.optimizer.execution_settings import OptimizerExecutionSettings
 from services.optimizer.outer_rolling_parallel_progress import (
     PARALLEL_FOLD_LOG_STATUS_MAX_CHARS,
     _MirroredLogWriter,
@@ -1146,6 +1147,8 @@ def _build_outer_rolling_fold_task(
         "progress_display_contract": dict(common["progress_display_contract"]),
         "require_complete_param_schedule": bool(common.get("require_complete_param_schedule", False)),
     })
+    if common.get("execution_settings") is not None:
+        task["execution_settings"] = common["execution_settings"]
     if mode in {"parallel", "seed"}:
         task["seed_ensemble_policy"] = dict(seed_ensemble_policy or {})
     task["log_path"] = os.path.join(
@@ -1673,8 +1676,13 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
         shared_raw_context = task.get("shared_raw_context")
         if not isinstance(shared_raw_context, dict) or not shared_raw_context.get("raw_data_cache"):
             shared_raw_context = None
-        if not str(os.environ.get("OPTIMIZER_PREP_CACHE_MAX_ITEMS", "")).strip():
-            os.environ["OPTIMIZER_PREP_CACHE_MAX_ITEMS"] = str(_resolve_parallel_worker_prep_cache_max_items(os.environ))
+        execution_settings = task.get("execution_settings") or OptimizerExecutionSettings.from_environ()
+        worker_environ = execution_settings.as_environ()
+        if not str(worker_environ.get("OPTIMIZER_PREP_CACHE_MAX_ITEMS", "")).strip():
+            worker_environ["OPTIMIZER_PREP_CACHE_MAX_ITEMS"] = str(
+                _resolve_parallel_worker_prep_cache_max_items(worker_environ)
+            )
+            execution_settings = OptimizerExecutionSettings.from_environ(worker_environ)
 
         fold_start = time.perf_counter()
         seed_context = _seed_progress_context_from_task(task)
@@ -1730,9 +1738,10 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
             build_optimizer_session_from_spec(
                 walk_forward_policy=fold_policy,
                 spec=session_spec,
+                execution_settings=execution_settings,
             )
             if session_spec
-            else build_optimizer_session(walk_forward_policy=fold_policy)
+            else build_optimizer_session(walk_forward_policy=fold_policy, execution_settings=execution_settings)
         )
         _validate_optimizer_runtime_context(session, session_spec)
         session.rolling_fold_workers_max = int(fold_workers)
@@ -1851,9 +1860,10 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                     build_optimizer_session_from_spec(
                         walk_forward_policy=inner_policy,
                         spec=inner_session_spec,
+                        execution_settings=execution_settings,
                     )
                     if inner_session_spec
-                    else build_optimizer_session(walk_forward_policy=inner_policy)
+                    else build_optimizer_session(walk_forward_policy=inner_policy, execution_settings=execution_settings)
                 )
                 inner_study = None
                 try:
@@ -2523,8 +2533,9 @@ def run_outer_rolling_oos(
             return build_optimizer_session_from_spec(
                 walk_forward_policy=walk_forward_policy,
                 spec=resolved_session_spec,
+                execution_settings=execution_settings,
             )
-        return build_optimizer_session(walk_forward_policy=walk_forward_policy)
+        return build_optimizer_session(walk_forward_policy=walk_forward_policy, execution_settings=execution_settings)
 
     session_ts = get_taipei_now().strftime("%Y%m%d_%H%M%S")
     os.makedirs(os.path.join(output_dir, "outer_rolling_oos"), exist_ok=True)
@@ -2556,6 +2567,8 @@ def run_outer_rolling_oos(
     fold_count = int(len(folds))
     _apply_outer_rolling_resource_env_defaults(environ, timing_mode=bool(timing_mode), fold_count=fold_count)
     _apply_outer_rolling_process_environ(environ)
+    # Fold-count defaults must be applied before the shared worker snapshot.
+    execution_settings = OptimizerExecutionSettings.from_environ(environ)
     fold_workers = _resolve_rolling_fold_workers(environ, timing_mode=bool(timing_mode), fold_count=fold_count)
     fold_parallel_enabled = _is_rolling_fold_parallel_enabled(environ, timing_mode=bool(timing_mode), fold_count=fold_count)
     from services.optimizer.runtime import resolve_optimizer_sampler_kind
@@ -2651,6 +2664,7 @@ def run_outer_rolling_oos(
         "timing_mode": timing_mode,
         "fold_workers": fold_workers,
         "optimizer_session_spec": session_spec,
+        "execution_settings": execution_settings,
         "progress_display_contract": progress_display_contract,
         "require_complete_param_schedule": paramset_models_dir is not None,
     }

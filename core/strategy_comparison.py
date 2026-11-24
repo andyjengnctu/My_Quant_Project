@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from core.ranking_policy import ranking_policy_has_validation
 from dataclasses import dataclass
 from datetime import date, timedelta
 import json
@@ -1104,13 +1105,13 @@ def _validate_strategy_comparison_arm_runtime(settings: StrategyComparisonSettin
                 f"allowed={SUPPORTED_STRATEGY_DL_RUNTIME_MODES}"
             )
         options = dict(arm.dl_runtime_options or {})
-        if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT_STALE_GUARD:
+        if ranking_policy_has_validation(arm.dl_runtime_mode, 'stale_guard'):
             raw_max_age = options.get('stale_score_membership_guard_max_age_days')
             if isinstance(raw_max_age, bool) or not isinstance(raw_max_age, int) or raw_max_age < 0:
                 raise ValueError(
                     f"arm {key} stale-score guard必須指定非負整數 stale_score_membership_guard_max_age_days"
                 )
-        if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_MAX_DL_K_FLEX_R0_FEASIBLE_ASCENT:
+        if ranking_policy_has_validation(arm.dl_runtime_mode, 'local_count_growth'):
             if options.get("count_constraint") != "baseline_k_to_physical_free_slots_local_v1":
                 raise ValueError(f"arm {key} K-Flex local count_constraint contract不支援")
             if options.get("preserve_r0") is not True:
@@ -1119,7 +1120,7 @@ def _validate_strategy_comparison_arm_runtime(settings: StrategyComparisonSettin
                 raise ValueError(f"arm {key} K-Flex local_search contract不支援")
             if options.get("selection_only") is not True:
                 raise ValueError(f"arm {key} K-Flex local必須selection_only=True")
-        if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXPECTED_PNL_FEASIBLE_ASCENT:
+        if ranking_policy_has_validation(arm.dl_runtime_mode, 'expected_pnl'):
             fit_dl_id = str(options.get("expected_r_fit_dl_id") or "").strip()
             if not fit_dl_id or fit_dl_id not in settings.dl_sources:
                 raise ValueError(f"arm {key} Expected-PnL必須指定合法expected_r_fit_dl_id")
@@ -1131,7 +1132,7 @@ def _validate_strategy_comparison_arm_runtime(settings: StrategyComparisonSettin
                 raise ValueError(
                     f"arm {key} 第一階段Expected-PnL不得以Expected R負值改變K/R0"
                 )
-        if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_FEASIBLE_ASCENT:
+        if ranking_policy_has_validation(arm.dl_runtime_mode, 'excess_alpha'):
             fit_dl_id = str(options.get("expected_excess_r_fit_dl_id") or "").strip()
             if not fit_dl_id or fit_dl_id not in settings.dl_sources:
                 raise ValueError(f"arm {key} Excess-Alpha必須指定合法expected_excess_r_fit_dl_id")
@@ -1145,7 +1146,7 @@ def _validate_strategy_comparison_arm_runtime(settings: StrategyComparisonSettin
                 )
             if options.get("selection_only") is not True:
                 raise ValueError(f"arm {key} 第一階段Excess-Alpha必須selection_only=True")
-        if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_NO_R0_FEASIBLE_ASCENT:
+        if ranking_policy_has_validation(arm.dl_runtime_mode, 'excess_alpha_no_reserve_floor'):
             fit_dl_id = str(options.get("expected_excess_r_fit_dl_id") or "").strip()
             if not fit_dl_id or fit_dl_id not in settings.dl_sources:
                 raise ValueError(f"arm {key} Excess-Alpha no-R0必須指定合法expected_excess_r_fit_dl_id")
@@ -1163,7 +1164,7 @@ def _validate_strategy_comparison_arm_runtime(settings: StrategyComparisonSettin
                 )
             if options.get("selection_only") is not True:
                 raise ValueError(f"arm {key} Excess-Alpha no-R0必須selection_only=True")
-        if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_CONSTRAINED_OPTIMAL:
+        if ranking_policy_has_validation(arm.dl_runtime_mode, 'exact_excess_alpha'):
             fit_dl_id = str(options.get("expected_excess_r_fit_dl_id") or "").strip()
             if not fit_dl_id or fit_dl_id not in settings.dl_sources:
                 raise ValueError(f"arm {key} Excess-Alpha constrained必須指定合法expected_excess_r_fit_dl_id")
@@ -1183,7 +1184,7 @@ def _validate_strategy_comparison_arm_runtime(settings: StrategyComparisonSettin
             requires_positive_score, uses_primary_positive_classifier,
             POSITIVE_P_CLASS_COLUMN, POSITIVE_PROBABILITY_THRESHOLD,
         )
-        if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_POSITIVE_ONLY_DEFAULT and not uses_primary_positive_classifier(options):
+        if ranking_policy_has_validation(arm.dl_runtime_mode, 'primary_positive') and not uses_primary_positive_classifier(options):
             raise ValueError(f"arm {key} Default Positive selector requires primary classifier-only admission")
         if requires_positive_score(options):
             from core.breakout_quality_registry import get_breakout_quality_experiment_profile
@@ -1192,7 +1193,7 @@ def _validate_strategy_comparison_arm_runtime(settings: StrategyComparisonSettin
                 profile = get_breakout_quality_experiment_profile(source.experiment_profile)
                 from core.breakout_quality_runtime import get_continuous_ranker_training_policy
                 policy = get_continuous_ranker_training_policy(profile.training_objective)
-                if (arm.dl_runtime_mode != STRATEGY_DL_RUNTIME_MODE_POSITIVE_ONLY_DEFAULT
+                if (not ranking_policy_has_validation(arm.dl_runtime_mode, 'primary_positive')
                         or source.score_source != "selection_point_in_time"
                         or options.get("selection_only") is not True
                         or options.get("primary_score_column") != POSITIVE_P_CLASS_COLUMN
@@ -1205,10 +1206,7 @@ def _validate_strategy_comparison_arm_runtime(settings: StrategyComparisonSettin
                         or POSITIVE_P_CLASS_COLUMN not in policy.categorical_score_columns):
                     raise ValueError(f"arm {key} requires one genuine binary PIT classifier and Default ordering")
                 return
-            if arm.dl_runtime_mode not in {
-                STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL,
-                STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0,
-            }:
+            if not (ranking_policy_has_validation(arm.dl_runtime_mode, 'positive_filter')):
                 raise ValueError(f"arm {key} Positive filter requires Exact or Direct mode")
             positive_dl_id = str(options["positive_dl_id"])
             if positive_dl_id not in settings.dl_sources or positive_dl_id == arm.dl_id:
@@ -1238,12 +1236,12 @@ def _validate_strategy_comparison_arm_runtime(settings: StrategyComparisonSettin
                     or classification.categorical_primary_class != 1
                     or not column_valid):
                 raise ValueError(f"arm {key} requires matching PIT NetPnL rank and independent binary Positive DL")
-        if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL:
+        if ranking_policy_has_validation(arm.dl_runtime_mode, 'exact_score'):
             if options.get("preserve_k_r0") is not True:
                 raise ValueError(f"arm {key} Score constrained必須preserve_k_r0=True")
             if options.get("constrained_solver") != "exact_branch_and_bound_v1":
                 raise ValueError(f"arm {key} constrained_solver必須為exact_branch_and_bound_v1")
-        if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_K_FLEX_R0_CONSTRAINED_OPTIMAL:
+        if ranking_policy_has_validation(arm.dl_runtime_mode, 'exact_count_growth'):
             if options.get("count_constraint") != "baseline_k_to_physical_free_slots_v1":
                 raise ValueError(
                     f"arm {key} K-Flex count_constraint必須為baseline_k_to_physical_free_slots_v1"
@@ -1254,22 +1252,19 @@ def _validate_strategy_comparison_arm_runtime(settings: StrategyComparisonSettin
                 raise ValueError(f"arm {key} K-Flex constrained_solver必須為exact_branch_and_bound_v1")
             if options.get("selection_only") is not True:
                 raise ValueError(f"arm {key} K-Flex必須selection_only=True")
-        if arm.dl_runtime_mode in {
-            STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_SAFETY_CONSTRAINED_OPTIMAL,
-            STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_RESIDUAL_SAFETY_CONSTRAINED_OPTIMAL,
-        }:
+        if ranking_policy_has_validation(arm.dl_runtime_mode, 'safety_floor'):
             if options.get("preserve_k_r0") is not True:
                 raise ValueError(f"arm {key} Score+Safety constrained必須preserve_k_r0=True")
             if options.get("constrained_solver") != "exact_branch_and_bound_v1":
                 raise ValueError(f"arm {key} constrained_solver必須為exact_branch_and_bound_v1")
             expected_constraint = (
                 "baseline_residual_coverage_and_score_sum_floor_v1"
-                if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_RESIDUAL_SAFETY_CONSTRAINED_OPTIMAL
+                if ranking_policy_has_validation(arm.dl_runtime_mode, 'residual_safety')
                 else "baseline_coverage_and_score_sum_floor_v1"
             )
             if options.get("safety_constraint") != expected_constraint:
                 raise ValueError(f"arm {key} safety_constraint contract不支援")
-            if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_RESIDUAL_SAFETY_CONSTRAINED_OPTIMAL:
+            if ranking_policy_has_validation(arm.dl_runtime_mode, 'residual_safety'):
                 if options.get("safety_residualization") != "same_day_rank_ols_v1":
                     raise ValueError(f"arm {key} residual safety必須使用same_day_rank_ols_v1")
             safety_dl_id = str(options.get("safety_dl_id") or "").strip()
@@ -1307,7 +1302,7 @@ def _validate_strategy_comparison_arm_runtime(settings: StrategyComparisonSettin
                 )
             ):
                 raise ValueError(f"arm {key} Score+Safety constrained不得依賴Expected-R/Excess-R calibration")
-        if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0:
+        if ranking_policy_has_validation(arm.dl_runtime_mode, 'direct_score'):
             if options.get("preserve_k") is not False:
                 raise ValueError(f"arm {key} Score No-K/No-R0必須preserve_k=False")
             if options.get("preserve_r0") is not False:
@@ -1324,7 +1319,7 @@ def _validate_strategy_comparison_arm_runtime(settings: StrategyComparisonSettin
                     f"arm {key} Score No-K/No-R0必須綁Selection PIT score source: "
                     f"actual={settings.dl_sources[arm.dl_id].score_source!r}"
                 )
-        if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0_RAW_SAFETY_GATE:
+        if ranking_policy_has_validation(arm.dl_runtime_mode, 'raw_safety_gate'):
             if options.get("preserve_k") is not False:
                 raise ValueError(f"arm {key} Raw Safety gate必須preserve_k=False")
             if options.get("preserve_r0") is not False:
@@ -1352,7 +1347,7 @@ def _validate_strategy_comparison_arm_runtime(settings: StrategyComparisonSettin
             safety_source = settings.dl_sources[safety_dl_id]
             if primary_source.score_source != "selection_point_in_time" or safety_source.score_source != primary_source.score_source:
                 raise ValueError(f"arm {key} Raw Safety primary/secondary必須使用同一Selection PIT source")
-        if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0_SAFETY_MFE_PRODUCT:
+        if ranking_policy_has_validation(arm.dl_runtime_mode, 'safety_mfe_product'):
             if options.get("preserve_k") is not False:
                 raise ValueError(f"arm {key} Safety×MFE product必須preserve_k=False")
             if options.get("preserve_r0") is not False:
@@ -1374,11 +1369,7 @@ def _validate_strategy_comparison_arm_runtime(settings: StrategyComparisonSettin
             safety_source = settings.dl_sources[safety_dl_id]
             if primary_source.score_source != "selection_point_in_time" or safety_source.score_source != primary_source.score_source:
                 raise ValueError(f"arm {key} Safety×MFE product primary/secondary必須使用同一Selection PIT source")
-        if arm.dl_runtime_mode in {
-            STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_R0_CONSTRAINED_OPTIMAL,
-            STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_NO_R0_CONSTRAINED_OPTIMAL,
-            STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_PARETO_NO_R0_CONSTRAINED_OPTIMAL,
-        }:
+        if ranking_policy_has_validation(arm.dl_runtime_mode, 'exact_no_reserve_floor'):
             if options.get("preserve_k") is not True:
                 raise ValueError(f"arm {key} Score no-R0 exact必須preserve_k=True")
             if options.get("preserve_r0") is not False:
@@ -1387,7 +1378,7 @@ def _validate_strategy_comparison_arm_runtime(settings: StrategyComparisonSettin
                 raise ValueError(f"arm {key} Score no-R0 exact必須r0_minimum_repair=False")
             if options.get("constrained_solver") != "exact_branch_and_bound_v1":
                 raise ValueError(f"arm {key} constrained_solver必須為exact_branch_and_bound_v1")
-            if arm.dl_runtime_mode == STRATEGY_DL_RUNTIME_MODE_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_PARETO_NO_R0_CONSTRAINED_OPTIMAL:
+            if ranking_policy_has_validation(arm.dl_runtime_mode, 'pareto_product'):
                 if options.get("pareto_selection") != "normalized_product_v1":
                     raise ValueError(f"arm {key} Pareto selection method不支援")
                 if options.get("pareto_quality") != "score_sum_max_coverage_first":

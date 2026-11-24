@@ -1,6 +1,8 @@
 """Persistent Trading broker-order state service."""
 from __future__ import annotations
 
+from services.trading.state_snapshot import snapshot_state_value
+
 import hashlib
 from pathlib import Path
 from typing import Any
@@ -53,6 +55,9 @@ def _read_state_with_sha(path: Path) -> tuple[dict[str, Any], str]:
 
 
 def load_trading_order_state(project_root, *, required: bool = False) -> dict[str, Any] | None:
+    captured, value = snapshot_state_value(project_root, "orders", required=required)
+    if captured:
+        return value
     _assert_no_fill_transaction(project_root)
     path = resolve_trading_order_state_path(project_root)
     if not path.is_file():

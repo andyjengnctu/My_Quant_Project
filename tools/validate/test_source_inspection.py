@@ -24,6 +24,25 @@ class _IsolatedSourceCacheTest(unittest.TestCase):
 
 
 class SourceInspectionContractTests(_IsolatedSourceCacheTest):
+    def test_import_ownership_accepts_equivalent_syntax_but_rejects_shadow_sources(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "consumer.py"
+            for statement in (
+                "from core.walk_forward_policy import filter_search_train_dates",
+                "from core.walk_forward_policy import (\n    filter_search_train_dates,\n)",
+                "from core.walk_forward_policy import filter_search_train_dates as filter_dates",
+            ):
+                path.write_text(statement, encoding="utf-8")
+                self.assertTrue(index.imports_symbol_from(path, "core.walk_forward_policy", "filter_search_train_dates"))
+            for statement in (
+                '# from core.walk_forward_policy import filter_search_train_dates\n',
+                'TEXT = "from core.walk_forward_policy import filter_search_train_dates"',
+                "from another_owner import filter_search_train_dates",
+                "from core.walk_forward_policy import different_function",
+            ):
+                path.write_text(statement, encoding="utf-8")
+                self.assertFalse(index.imports_symbol_from(path, "core.walk_forward_policy", "filter_search_train_dates"))
+
     def test_compact_structure_matches_ast_for_nested_language_constructs(self):
         source = '''import os as operating
 from . import child

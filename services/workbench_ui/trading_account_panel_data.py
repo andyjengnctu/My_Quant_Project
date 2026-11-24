@@ -1,27 +1,14 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from config.trading import TRADING_WORKBENCH_INITIAL_READ_WORKERS
-from core.console_report import project_relative_display_path
-from core.trading_policy import get_trading_policy_snapshot
-from services.trading.daily_workflow import TRADING_PARAM_MODE_REUSE, TRADING_PARAM_MODE_TRAIN, build_trading_daily_workflow_snapshot
-from services.trading.proposed_order_state import get_trading_proposed_order_plan_read_model
-from services.trading.scanner_state import get_trading_candidate_snapshot_read_model, load_trading_candidate_snapshot_for_account
-from services.trading.position_rollforward import build_trading_position_rollforward_snapshot, reconcile_trading_manual_position_management
-from services.trading.lifecycle_sync import run_trading_lifecycle_sync
-from services.trading.pending_entry_service import get_trading_pending_entry_read_model
-from services.trading.operations_status import derive_trading_operations_status_from_preloaded
-from services.trading.market_data_consumer_promotion import reconcile_trading_v2_consumer_state_from_local_evidence
-from services.trading.protection_planning import get_trading_protection_plan_read_model
-from services.trading.indicator_exit_planning import get_trading_indicator_exit_plan_read_model
-from services.trading.fill_reconciliation import resolve_trading_fill_transaction_path, recover_trading_fill_transaction
-from services.trading.order_state import get_trading_order_read_model
-from services.trading.account_dashboard import build_trading_account_dashboard_read_model, publish_trading_account_dashboard_snapshot
-from services.trading.account_state import get_trading_account_read_model, load_trading_account_state, resolve_trading_account_state_path
-from services.workbench_ui.workbench import run_workbench_local_reconcile_serialized
+from services.trading.daily_workflow import TRADING_PARAM_MODE_REUSE, TRADING_PARAM_MODE_TRAIN
+from services.trading.workbench_snapshot import (
+    build_trading_account_panel_snapshot as _build_account_snapshot,
+    build_trading_account_panel_initial_bundle as _build_initial_bundle,
+    _capture_initial_panel_value as capture_panel_value,
+)
 
 WORKBENCH_PROJECT_ROOT = Path(__file__).resolve().parents[2]
 MANUAL_SOURCE = "manual_adopted"
@@ -117,145 +104,17 @@ def format_trading_money(value) -> str:
     return f"{float(value):,.3f}".rstrip("0").rstrip(".")
 
 
-def build_trading_account_panel_snapshot(project_root=WORKBENCH_PROJECT_ROOT) -> dict[str, object]:
-    recover_trading_fill_transaction(project_root)
-    policy = get_trading_policy_snapshot(project_root)
-    state = load_trading_account_state(project_root, required=False)
-    account_path = resolve_trading_account_state_path(project_root)
-    if state is None:
-        return {
-            "initialized": False,
-            "state_path": project_relative_display_path(account_path, project_root=project_root),
-            "policy": policy,
-            "revision": None,
-            "cash": None,
-            "position_count": 0,
-            "positions": [],
-            "updated_at": None,
-        }
-    read_model = get_trading_account_read_model(project_root)
-    return {
-        "initialized": True,
-        "state_path": project_relative_display_path(account_path, project_root=project_root),
-        "policy": policy,
-        **read_model,
-    }
+# Compatibility exports for existing panel consumers; orchestration is service-owned.
+def build_trading_account_panel_snapshot(project_root=WORKBENCH_PROJECT_ROOT):
+    return _build_account_snapshot(project_root)
+
+
+def build_trading_account_panel_initial_bundle(project_root=WORKBENCH_PROJECT_ROOT):
+    return _build_initial_bundle(project_root)
 
 
 def _capture_initial_panel_value(loader):
-    try:
-        return True, loader()
-    except Exception as exc:
-        return False, exc
-
-
-def build_trading_account_panel_initial_bundle(project_root=WORKBENCH_PROJECT_ROOT) -> dict[str, object]:
-    """Read one coherent initial Trading page bundle without duplicate state I/O."""
-
-    root = Path(project_root).resolve()
-    bundle: dict[str, object] = {}
-    # Consumer promotion can change the finalized market-data identity, so it
-    # remains the only sequential prerequisite. Everything after this point is
-    # read-only against the same finalized generation.
-    def _reconcile_initial_state():
-        market_data = run_workbench_local_reconcile_serialized(
-            lambda: reconcile_trading_v2_consumer_state_from_local_evidence(root)
-        )
-        manual_management = reconcile_trading_manual_position_management(root)
-        return {"market_data": market_data, "manual_management": manual_management}
-
-    bundle["reconcile"] = _capture_initial_panel_value(_reconcile_initial_state)
-    # Lifecycle state must be synchronized before any Trading read model is
-    # rendered.  This is the canonical automatic replacement for the old
-    # user-driven position rollforward step and also advances ACTIVE pending
-    # plans with their own frozen lineage.
-    bundle["lifecycle_sync"] = _capture_initial_panel_value(
-        lambda: run_trading_lifecycle_sync(root)
-    )
-    # Account recovery historically ran before protection/indicator readers. Keep
-    # that ordering, then parallelize independent canonical read models.
-    bundle["account"] = _capture_initial_panel_value(lambda: build_trading_account_panel_snapshot(root))
-
-    def _load_dashboard():
-        snapshot = build_trading_account_dashboard_read_model(root)
-        publish_trading_account_dashboard_snapshot(root, snapshot)
-        return snapshot
-
-    loaders = {
-        # Display-only stock names are warmed independently by the panel and must
-        # never gate the canonical Trading first paint.  A cold TaiwanStockInfo
-        # verification can be much slower than the account/scanner read models.
-        "dashboard": _load_dashboard,
-        "candidate_read": lambda: get_trading_candidate_snapshot_read_model(root),
-        "protection": lambda: get_trading_protection_plan_read_model(root, recover_pending_fill=False),
-        "indicator": lambda: get_trading_indicator_exit_plan_read_model(root, recover_pending_fill=False),
-        "workflow": lambda: build_trading_daily_workflow_snapshot(root),
-        "orders": lambda: get_trading_order_read_model(root),
-        "proposed": lambda: get_trading_proposed_order_plan_read_model(root),
-        "position_rollforward": lambda: build_trading_position_rollforward_snapshot(root),
-        "pending": lambda: get_trading_pending_entry_read_model(root),
-    }
-    worker_count = max(1, min(int(TRADING_WORKBENCH_INITIAL_READ_WORKERS), len(loaders)))
-    parallel_results: dict[str, tuple[bool, object]] = {}
-    with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="workbench-trading-read") as executor:
-        futures = {
-            key: executor.submit(_capture_initial_panel_value, loader)
-            for key, loader in loaders.items()
-        }
-        for key, future in futures.items():
-            parallel_results[key] = future.result()
-
-    for key in ("dashboard", "candidate_read", "protection", "indicator", "workflow", "pending"):
-        bundle[key] = parallel_results[key]
-
-    candidate = bundle["candidate_read"]
-    if candidate[0] and bool(candidate[1].get("fresh")):
-        bundle["candidate_payload"] = _capture_initial_panel_value(
-            lambda: load_trading_candidate_snapshot_for_account(root, require_current=False)
-        )
-    else:
-        bundle["candidate_payload"] = (True, None)
-
-    component_errors: dict[str, str] = {}
-
-    def _preloaded_value(bundle_key: str, operations_key: str):
-        if bundle_key == "account":
-            ok, value = bundle["account"]
-        else:
-            ok, value = parallel_results[bundle_key]
-        if ok:
-            return value
-        component_errors[operations_key] = f"{type(value).__name__}: {value}"
-        return None
-
-    fill_transaction_pending = Path(resolve_trading_fill_transaction_path(root)).is_file()
-    preloaded_operations = {
-        "fill_transaction_pending": fill_transaction_pending,
-        "workflow": _preloaded_value("workflow", "workflow"),
-        "candidate": _preloaded_value("candidate_read", "candidate"),
-        "account": _preloaded_value("account", "account"),
-        "position_rollforward": _preloaded_value("position_rollforward", "position_rollforward"),
-        "orders": _preloaded_value("orders", "orders"),
-        "proposed": _preloaded_value("proposed", "proposed"),
-        "protection": _preloaded_value("protection", "protection"),
-        "indicator_exit": _preloaded_value("indicator", "indicator_exit"),
-    }
-    bundle["operations"] = _capture_initial_panel_value(
-        lambda: derive_trading_operations_status_from_preloaded(
-            workflow=preloaded_operations["workflow"],
-            account=preloaded_operations["account"],
-            orders=preloaded_operations["orders"],
-            candidate=preloaded_operations["candidate"],
-            proposed=preloaded_operations["proposed"],
-            protection=preloaded_operations["protection"],
-            indicator_exit=preloaded_operations["indicator_exit"],
-            position_rollforward=preloaded_operations["position_rollforward"],
-            pending_entries=_preloaded_value("pending", "pending_entries"),
-            fill_transaction_pending=bool(preloaded_operations["fill_transaction_pending"]),
-            component_errors=component_errors,
-        )
-    )
-    return bundle
+    return capture_panel_value(loader)
 
 
 def _load_panel_value(panel, key: str, loader):

@@ -6,6 +6,8 @@ refreshes until it is explicitly filled or closed as no-fill.
 """
 from __future__ import annotations
 
+from services.trading.state_snapshot import snapshot_state_value
+
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -136,6 +138,9 @@ def validate_trading_pending_entry_state(state: dict[str, Any]) -> None:
 
 
 def load_trading_pending_entry_state(project_root, *, required: bool = False) -> dict[str, Any] | None:
+    captured, value = snapshot_state_value(project_root, "pending", required=required)
+    if captured:
+        return value
     path = resolve_trading_pending_entry_state_path(project_root)
     if not path.is_file():
         if required:

@@ -193,10 +193,13 @@ class SupersededRobustnessCleanup:
                 revisions = {}
                 try:
                     _snapshot_science(self.root, self.root / run, revisions)
-                    result = owner._validate_completed_run(self.root / run, backfill_integrity=False)
-                    if result is not None:
+                    inspection = owner.inspect_completed_robustness_run(self.root / run)
+                    if inspection.ready:
+                        result = inspection.value
                         _unchanged(revisions)
                         completed[run] = result, revisions, _units(result["contract"])
+                    else:
+                        self.errors[run] = f"{inspection.status.value}: {inspection.reason}"
                 except (OSError, ValueError, TypeError, KeyError) as exc:
                     self.errors[run] = str(exc)
             for run, (payload, revisions) in records.items():

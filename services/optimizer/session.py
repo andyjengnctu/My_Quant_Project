@@ -1,5 +1,4 @@
 import copy
-import os
 import threading
 from collections import OrderedDict
 from contextlib import contextmanager, nullcontext
@@ -15,6 +14,7 @@ from core.raw_universe_contract import coerce_raw_universe_required_min_rows
 from core.portfolio_fast_data import get_fast_dates, pack_static_market_data
 from core.signal_utils import OPTIMIZER_TRUE_RANGE_ATTR, tv_true_range
 from core.exact_accounting import infer_security_profile
+from services.optimizer.execution_settings import OptimizerExecutionSettings
 
 
 def close_study_storage(study):
@@ -99,7 +99,12 @@ class OptimizerSession:
         fixed_strategy_param_overrides=None,
         runtime_context_factory=None,
         runtime_cache_identity=None,
+        execution_settings=None,
     ):
+        self.execution_settings = (
+            execution_settings if isinstance(execution_settings, OptimizerExecutionSettings)
+            else OptimizerExecutionSettings.from_environ(execution_settings)
+        )
         self.raw_data_cache = {}
         self._cache_lock = threading.RLock()
         self._local_min_stats_lock = threading.RLock()
@@ -221,9 +226,10 @@ class OptimizerSession:
 
     def _resolve_prepared_trial_input_cache_max_items(self):
         policy_default = resolve_optimizer_rolling_parallel_prep_cache_max_items_default()
-        raw_value = os.environ.get("OPTIMIZER_PREP_CACHE_MAX_ITEMS")
+        environ = self.execution_settings.as_environ()
+        raw_value = environ.get("OPTIMIZER_PREP_CACHE_MAX_ITEMS")
         if raw_value is None or str(raw_value).strip() == "":
-            raw_value = os.environ.get("OPTIMIZER_ROLLING_PARALLEL_PREP_CACHE_MAX_ITEMS", str(policy_default))
+            raw_value = environ.get("OPTIMIZER_ROLLING_PARALLEL_PREP_CACHE_MAX_ITEMS", str(policy_default))
         try:
             value = int(raw_value)
         except (TypeError, ValueError):
@@ -231,7 +237,7 @@ class OptimizerSession:
         return max(0, min(256, value))
 
     def _resolve_full_evaluation_cache_max_items(self):
-        return resolve_optimizer_full_evaluation_cache_max_items()
+        return resolve_optimizer_full_evaluation_cache_max_items(self.execution_settings.as_environ())
 
     def attach_shared_prepared_trial_input_cache(self, cache, *, max_items=None):
         if cache is None:

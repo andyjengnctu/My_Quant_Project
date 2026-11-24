@@ -25,9 +25,9 @@ from services.breakout_quality.formal_mintrade40_pit_source import (
     FormalMinTrade40PITSource,
     slice_formal_mintrade40_pit_source_for_fold,
 )
-from services.optimizer.strategy_param_service import _canonical_schedule_build_contract
-from services.optimizer.strategy_param_training import (
-    MIN_ROOS_SEARCH_FIELDS, _build_min_roos_schedule_contract,
+from services.optimizer.strategy_param_service import build_canonical_strategy_parameter_contract as _canonical_schedule_build_contract
+from services.optimizer.strategy_param_contracts import (
+    MIN_ROOS_SEARCH_FIELDS, build_min_roos_schedule_contract as _build_min_roos_schedule_contract,
 )
 from filters.breakout_quality.trade_path_label import (
     TRADE_PATH_SELECTION_BASELINE_FIRST_OOS_DATE,
@@ -68,7 +68,7 @@ def _expected_historical_runtime_identity(project_root: Path) -> str:
     from filters.breakout_quality.source_inventory import _build_source_data_inventory
     from filters.breakout_quality.trade_path_label import TRADE_PATH_BASE_FILTER_ID
     from services.optimizer.strategy_param_training import (
-        _runtime_contract, build_min_roos_fold_overrides,
+        build_min_roos_runtime_contract as _runtime_contract, build_min_roos_fold_overrides,
     )
     policy = _canonical_schedule_build_contract(family="min")
     reference = _build_min_roos_schedule_contract(

@@ -8,9 +8,9 @@ It does not own fold construction, selection, replay, or scientific identity.
 from __future__ import annotations
 
 import os
-from functools import wraps
 
 from core.runtime_utils import resolve_environment_flag as _env_flag
+from services.optimizer.execution_settings import isolate_optimizer_process_environment
 
 
 def _tail_text_file(path: str, *, max_lines: int = 8) -> str:
@@ -303,25 +303,4 @@ def _isolate_outer_rolling_process_environment(func):
     exactly.
     """
 
-    @wraps(func)
-    def _wrapped(*args, **kwargs):
-        before = {
-            key: value
-            for key, value in os.environ.items()
-            if key == "V16_MODELS_DIR" or key.startswith("OPTIMIZER_")
-        }
-        try:
-            return func(*args, **kwargs)
-        finally:
-            current_keys = [
-                key
-                for key in os.environ
-                if key == "V16_MODELS_DIR" or key.startswith("OPTIMIZER_")
-            ]
-            for key in current_keys:
-                if key not in before:
-                    os.environ.pop(key, None)
-            for key, value in before.items():
-                os.environ[key] = value
-
-    return _wrapped
+    return isolate_optimizer_process_environment(func)

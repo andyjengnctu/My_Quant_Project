@@ -145,6 +145,16 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
         check_true("unreviewed_model_spec_edit_invalidates_oracle_source",
                    source_owner.oracle_daily_source_fingerprint() != source_before)
 
+    # Source equivalence belongs to this existing strategy/Oracle boundary.
+    # Execute real source inventories and helper mutation probes, not source text.
+    import unittest
+    from .test_refactor_source_equivalence import SourceInventoryProofTests
+    for method in unittest.defaultTestLoader.getTestCaseNames(SourceInventoryProofTests):
+        outcome = unittest.TestResult()
+        SourceInventoryProofTests(method).run(outcome)
+        details = "\n".join(text for _case, text in outcome.failures + outcome.errors)
+        check("reviewed_source_inventory_" + method, True, outcome.wasSuccessful(), note=details)
+
     base = V16StrategyParams()
     common = {
         "breakout_quality_filter_id": BREAKOUT_QUALITY_DEFAULT_FILTER_ID,

@@ -96,7 +96,7 @@ def _true_daily_loader(*, project_root: str | Path, seed: int, authorized_build:
         project_root=project_root, seed=seed, authorized_build=authorized_build,
         horizon_sessions=None, outcome_metric="net_pnl",
     )
-    teacher = loader["target_materializer"].keywords["source"]
+    teacher = loader["target_teacher"]
     loader["target_materializer"] = partial(
         materialize_true_daily_mintrade_pit_labels,
         source=teacher, expected_seed=int(seed),

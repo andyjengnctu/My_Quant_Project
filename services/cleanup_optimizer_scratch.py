@@ -6,11 +6,11 @@ import math
 from pathlib import Path
 import re
 import sqlite3
-from types import SimpleNamespace
 
 from core.compare_csv_storage import clean_path, plain
 from core.file_integrity import file_change_signature, is_sha256_hex
-from services.optimizer.runtime import _OptimizerStudyWriteLock
+from services.optimizer.runtime import acquire_optimizer_study_file_lease
+from services.optimizer.optimizer_workspace_recovery import inspect_full_roos_preflight
 
 
 _NAME = re.compile(r"outer_oos_runtime_([0-9a-f]{20})_(\d{4}(?:\d{2})?)(?:_seed\d+_\d+)?\.db\Z")
@@ -102,47 +102,16 @@ def _record(root, relative):
         return None
     preflight_path = root / workspace / "rolling_preflight.json"
     _observe(preflight_path, revisions)
-    from services.optimizer.optimizer_workspace_recovery import verify_optimizer_runtime_preflight
-    from services.optimizer.strategy_param_training import (
-        SCHEMA_VERSION, _build_selection_full_roos_schedule_contract,
-        _selection_full_roos_runtime_contract, _selection_full_roos_optimizer_runtime_cache_identity,
-    )
-    raw = json.loads(preflight_path.read_text(encoding="utf-8-sig"))
-    if not isinstance(raw, dict):
-        raise ValueError("Optimizer signed preflight must be an object")
-    preflight = verify_optimizer_runtime_preflight(
-        preflight_path, expected_runtime_identity_sha256=raw.get("runtime_identity_sha256", ""),
-    )
-    if (preflight.get("schema_version") != SCHEMA_VERSION
-            or preflight.get("mode") != "selection_full_roos_parameter_training"
-            or preflight.get("status") != "P4_HISTORY_PREFLIGHT_PASS"
-            or preflight.get("training_dl_enabled") is not False):
-        return None
+    inspection = inspect_full_roos_preflight(preflight_path, project_root=root)
+    if not inspection.ready:
+        raise ValueError(f"{inspection.status.value}: {inspection.reason}")
+    preflight, current = inspection.value
     created = datetime.fromisoformat(preflight.get("created_at", ""))
     if (created.tzinfo is None or created.timestamp() <= path.stat().st_mtime
             or preflight_path.stat().st_mtime_ns <= path.stat().st_mtime_ns):
         return None
-    contract = {key: value for key, value in preflight.items() if key not in {"created_at", "status"}}
-    rolling = preflight["rolling_policy"]
-    schedule = _build_selection_full_roos_schedule_contract(
-        first_oos_date=rolling["first_oos_date"], last_oos_date=rolling["last_oos_date"],
-        train_window_months=rolling["train_window_months"], oos_months=rolling["oos_horizon_months"],
-    )
-    args = SimpleNamespace(**{key: preflight[key] for key in (
-        "dataset", "trials_per_fold", "fixed_risk", "max_position_cap_pct", "max_positions", "rotation",
-    )}, seed_ensemble_policy_override=preflight.get("seed_ensemble_policy"),
-        score_policy_overrides=preflight.get("score_policy_overrides"))
-    if contract != _selection_full_roos_runtime_contract(
-        root=root, args=args, schedule_contract=schedule,
-        dataset_identity_override=preflight["dataset_identity"],
-    ):
-        return None
     # The same producer can address a direct study or a fold-local study when
     # extending a schedule. Reject both current forms; never guess a protocol.
-    current = {
-        _selection_full_roos_optimizer_runtime_cache_identity(contract, optimizer_search_protocol=None),
-        _selection_full_roos_optimizer_runtime_cache_identity(contract, optimizer_search_protocol="fixed_multiseed_v1"),
-    }
     if old_identity in current:
         return None
     replacements = [path.with_name(path.name.replace(old_identity[:20], identity[:20], 1))
@@ -228,7 +197,7 @@ class OptimizerScratchCleanup:
                         raise ValueError("Optimizer writer lock path is unsafe")
                     if lock_path.exists():
                         _observe(lock_path, {})
-                    locks.append((_OptimizerStudyWriteLock(str(path)), lock_path))
+                    locks.append((acquire_optimizer_study_file_lease(str(path)), lock_path))
             self.leases.add(relative)
             yield
         finally:

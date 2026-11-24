@@ -66,14 +66,14 @@ class OutcomeCacheCleanupTest(unittest.TestCase):
         np.savez(path, **payload)
         self.assertFalse(cleanup.proof(self.root, self.relative))
         self.write_cache()
-        read = cleanup._read_cache
+        read = cleanup.inspect_formal_mintrade_cache_shard
 
         def changing_read(*args):
             result = read(*args)
             path.write_bytes(b"changed after validation")
             return result
 
-        with patch.object(cleanup, "_read_cache", side_effect=changing_read):
+        with patch.object(cleanup, "inspect_formal_mintrade_cache_shard", side_effect=changing_read):
             with self.assertRaisesRegex(ValueError, "驗證期間變動"):
                 cleanup.proof(self.root, self.relative)
 

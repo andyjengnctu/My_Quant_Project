@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Mapping, Callable
 
 import numpy as np
-from core.research_execution_equivalence import reviewed_execution_source_sha256
+from core.research_execution_equivalence import reviewed_execution_source_sha256, project_reviewed_source_inventory
 
 from core.file_integrity import (
     atomic_replace_with_retry, canonical_json_sha256,
@@ -30,6 +30,8 @@ _PRICE_SCORE_CACHE_SCHEMA = 1
 # portfolio execution, menu, rendering or experiment report source code.
 _DAILY_SCORE_SOURCE_MODULES = (
     "filters/breakout_quality/daily_ranker_data.py",
+    "filters/breakout_quality/daily_model_input_context.py",
+    "filters/breakout_quality/daily_sample_accumulator.py",
     "filters/breakout_quality/continuous_ranker_data.py",
     "filters/breakout_quality/continuous_target.py",
     "filters/breakout_quality/mfe_safety_geometry.py",
@@ -307,40 +309,45 @@ def _oracle_daily_source_fingerprints(
             source_sha = _AUDITED_NETPNL_DIAGNOSTIC_ONLY_REVISION[1]
         return source_sha
 
-    source_digest = sha256()
-    encodings = {}
+    inventory = {}
     for relative in _DAILY_SCORE_SOURCE_MODULES:
         source_file = root / relative
         if not source_file.is_file():
             raise ValueError(f"Oracle price-score source implementation unavailable: {relative}")
         physical_sha = compute_file_sha256(source_file)
-        source_sha = project_source(relative, physical_sha)
-        source_digest.update(relative.encode("utf-8") + b"\0")
-        source_digest.update(source_sha.encode("ascii") + b"\n")
         if prove_encodings:
             data = source_file.read_bytes()
             if sha256(data).hexdigest() != physical_sha:
                 raise ValueError(f"Oracle price-score source changed during attestation: {relative}")
             lf = data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
-            encodings[relative] = {
-                None: source_sha,
-                b"\n": project_source(relative, sha256(lf).hexdigest()),
-                b"\r\n": project_source(relative, sha256(lf.replace(b"\n", b"\r\n")).hexdigest()),
+            inventory[relative] = {
+                None: physical_sha,
+                b"\n": sha256(lf).hexdigest(),
+                b"\r\n": sha256(lf.replace(b"\n", b"\r\n")).hexdigest(),
             }
-    executing = source_digest.hexdigest()
+        else:
+            inventory[relative] = physical_sha
+    # Whole-group proof precedes existing per-file/encoding attestations. The
+    # extracted owners cannot disappear unless every reviewed source matches.
+    inventory = project_reviewed_source_inventory(
+        inventory, scope="oracle_daily_provider", project_root=root,
+    )
+    def fingerprint(values):
+        digest = sha256()
+        for relative, value in values.items():
+            digest.update(relative.encode("utf-8") + b"\0")
+            digest.update(project_source(relative, value).encode("ascii") + b"\n")
+        return digest.hexdigest()
+
+    current = ({name: options[None] for name, options in inventory.items()}
+               if prove_encodings else inventory)
+    executing = fingerprint(current)
     equivalents = {executing}
     if prove_encodings:
-        def fingerprint(values):
-            digest = sha256()
-            for relative in _DAILY_SCORE_SOURCE_MODULES:
-                digest.update(relative.encode("utf-8") + b"\0")
-                digest.update(values[relative].encode("ascii") + b"\n")
-            return digest.hexdigest()
-
         for newline in (None, b"\n", b"\r\n"):
-            values = {name: options[newline] for name, options in encodings.items()}
+            values = {name: options[newline] for name, options in inventory.items()}
             equivalents.add(fingerprint(values))
-            for name, options in encodings.items():
+            for name, options in inventory.items():
                 for value in set(options.values()) - {values[name]}:
                     equivalents.add(fingerprint({**values, name: value}))
     return executing, frozenset(equivalents)

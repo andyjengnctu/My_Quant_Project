@@ -1,29 +1,5 @@
 import time
 
-from core.buy_sort import (
-    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY_BASKET,
-    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS,
-    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_CAPITAL_PRESERVING,
-    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL,
-    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT,
-    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_MATCHED_FEASIBLE_ASCENT,
-    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_K_FLEX_R0_FEASIBLE_ASCENT,
-    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT_STALE_GUARD,
-    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_EXPECTED_PNL_FEASIBLE_ASCENT,
-    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_FEASIBLE_ASCENT,
-    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_NO_R0_FEASIBLE_ASCENT,
-    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_CONSTRAINED_OPTIMAL,
-    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL,
-    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_K_FLEX_R0_CONSTRAINED_OPTIMAL,
-    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_SAFETY_CONSTRAINED_OPTIMAL,
-    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_RESIDUAL_SAFETY_CONSTRAINED_OPTIMAL,
-    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_R0_CONSTRAINED_OPTIMAL,
-    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0,
-    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0_RAW_SAFETY_GATE,
-    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0_SAFETY_MFE_PRODUCT,
-    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_NO_R0_CONSTRAINED_OPTIMAL,
-    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_PARETO_NO_R0_CONSTRAINED_OPTIMAL,
-)
 from core.portfolio_entry_selection_common import (
     _candidate_binary_pass,
     _candidate_continuous_score,
@@ -69,118 +45,39 @@ from core.portfolio_entry_selection_max_dl import (
 )
 
 
-_RESOURCE_AWARE_POLICY_SPECS = {
-    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY_BASKET: (
-        'best-improvement-basket', _reorder_resource_aware_binary_basket, {},
-    ),
-    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS: (
-        'continuous-score-constrained', _reorder_resource_aware_continuous, {},
-    ),
-    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_CAPITAL_PRESERVING: (
-        'continuous-score-capital-preserving', _reorder_resource_aware_continuous_capital_preserving, {},
-    ),
-    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL: (
-        'continuous-score-max-dl', _reorder_resource_aware_continuous_max_dl, {},
-    ),
-    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT: (
-        'continuous-score-max-dl-feasible-ascent', _reorder_resource_aware_continuous_max_dl_feasible_ascent, {},
-    ),
-    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT_STALE_GUARD: (
-        'continuous-score-max-dl-feasible-ascent-stale-score-guard',
-        _reorder_resource_aware_continuous_max_dl_feasible_ascent,
-        {},
-    ),
-    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_EXPECTED_PNL_FEASIBLE_ASCENT: (
-        'continuous-expected-pnl-feasible-ascent',
-        _reorder_resource_aware_continuous_max_dl_feasible_ascent,
-        {'objective_mode': 'expected_pnl'},
-    ),
-    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_FEASIBLE_ASCENT: (
-        'continuous-excess-alpha-feasible-ascent',
-        _reorder_resource_aware_continuous_max_dl_feasible_ascent,
-        {'objective_mode': 'excess_alpha'},
-    ),
-    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_NO_R0_FEASIBLE_ASCENT: (
-        'continuous-excess-alpha-no-r0-feasible-ascent',
-        _reorder_resource_aware_continuous_max_dl_feasible_ascent,
-        {'objective_mode': 'excess_alpha', 'preserve_reserve_floor': False, 'minimum_repair_enabled': False},
-    ),
-    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_EXCESS_ALPHA_CONSTRAINED_OPTIMAL: (
-        'continuous-excess-alpha-constrained-optimal', _reorder_resource_aware_continuous_excess_alpha_constrained_optimal, {},
-    ),
-    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_CONSTRAINED_OPTIMAL: (
-        'continuous-score-constrained-optimal', _reorder_resource_aware_continuous_score_constrained_optimal, {},
-    ),
-    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_K_FLEX_R0_CONSTRAINED_OPTIMAL: (
-        'continuous-score-k-flex-r0-constrained-optimal',
-        _reorder_resource_aware_continuous_score_k_flex_r0_constrained_optimal,
-        {},
-    ),
-    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_SAFETY_CONSTRAINED_OPTIMAL: (
-        'continuous-score-safety-constrained-optimal',
-        _reorder_resource_aware_continuous_score_safety_constrained_optimal,
-        {},
-    ),
-    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_RESIDUAL_SAFETY_CONSTRAINED_OPTIMAL: (
-        'continuous-score-residual-safety-constrained-optimal',
-        _reorder_resource_aware_continuous_score_residual_safety_constrained_optimal,
-        {},
-    ),
-    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_R0_CONSTRAINED_OPTIMAL: (
-        'continuous-score-no-r0-constrained-optimal',
-        _reorder_resource_aware_continuous_score_no_r0_constrained_optimal,
-        {},
-    ),
-    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0: (
-        'continuous-score-no-k-no-r0', _reorder_resource_aware_continuous_score_no_k_no_r0, {},
-    ),
-    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0_RAW_SAFETY_GATE: (
-        'continuous-score-no-k-no-r0-raw-safety-gate',
-        _reorder_resource_aware_continuous_score_no_k_no_r0_raw_safety_gate,
-        {},
-    ),
-    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0_SAFETY_MFE_PRODUCT: (
-        'continuous-score-no-k-no-r0-safety-mfe-product',
-        _reorder_resource_aware_continuous_score_no_k_no_r0_safety_mfe_product,
-        {},
-    ),
-    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_NO_R0_CONSTRAINED_OPTIMAL: (
-        'continuous-score-capital-no-r0-constrained-optimal',
-        _reorder_resource_aware_continuous_score_capital_no_r0_constrained_optimal,
-        {},
-    ),
-    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_CAPITAL_PARETO_NO_R0_CONSTRAINED_OPTIMAL: (
-        'continuous-score-capital-pareto-no-r0-constrained-optimal',
-        _reorder_resource_aware_continuous_score_capital_pareto_no_r0_constrained_optimal,
-        {},
-    ),
-    # Preserve the historical diagnostic selector label for these two variants.
-    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_MATCHED_FEASIBLE_ASCENT: (
-        'greedy-first-improvement',
-        _reorder_resource_aware_continuous_max_dl_feasible_ascent,
-        {'matched_score_proposal': True},
-    ),
-    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_K_FLEX_R0_FEASIBLE_ASCENT: (
-        'greedy-first-improvement',
-        _reorder_resource_aware_continuous_max_dl_feasible_ascent,
-        {'allow_count_growth': True, 'matched_score_proposal': True},
-    ),
+from core.ranking_policy import get_ranking_policy_spec
+
+_SELECTOR_HANDLERS = {
+    'binary_basket': _reorder_resource_aware_binary_basket,
+    'continuous': _reorder_resource_aware_continuous,
+    'continuous_capital_preserving': _reorder_resource_aware_continuous_capital_preserving,
+    'continuous_max_dl': _reorder_resource_aware_continuous_max_dl,
+    'continuous_max_dl_feasible_ascent': _reorder_resource_aware_continuous_max_dl_feasible_ascent,
+    'continuous_excess_alpha_constrained_optimal': _reorder_resource_aware_continuous_excess_alpha_constrained_optimal,
+    'continuous_score_constrained_optimal': _reorder_resource_aware_continuous_score_constrained_optimal,
+    'continuous_score_k_flex_r0_constrained_optimal': _reorder_resource_aware_continuous_score_k_flex_r0_constrained_optimal,
+    'continuous_score_safety_constrained_optimal': _reorder_resource_aware_continuous_score_safety_constrained_optimal,
+    'continuous_score_residual_safety_constrained_optimal': _reorder_resource_aware_continuous_score_residual_safety_constrained_optimal,
+    'continuous_score_no_r0_constrained_optimal': _reorder_resource_aware_continuous_score_no_r0_constrained_optimal,
+    'continuous_score_no_k_no_r0': _reorder_resource_aware_continuous_score_no_k_no_r0,
+    'continuous_score_no_k_no_r0_raw_safety_gate': _reorder_resource_aware_continuous_score_no_k_no_r0_raw_safety_gate,
+    'continuous_score_no_k_no_r0_safety_mfe_product': _reorder_resource_aware_continuous_score_no_k_no_r0_safety_mfe_product,
+    'continuous_score_capital_no_r0_constrained_optimal': _reorder_resource_aware_continuous_score_capital_no_r0_constrained_optimal,
+    'continuous_score_capital_pareto_no_r0_constrained_optimal': _reorder_resource_aware_continuous_score_capital_pareto_no_r0_constrained_optimal,
+    'binary_greedy': _reorder_resource_aware_binary_greedy,
 }
+_SCORE_TRANSFORMS = {
+    'same_day_rank_safety_scores': _decorate_same_day_rank_safety_scores,
+    'same_day_rank_safety_mfe_product_scores': _decorate_same_day_rank_safety_mfe_product_scores,
+    'same_day_rank_residual_safety_scores': _decorate_same_day_rank_residual_safety_scores,
 
-_RESOURCE_AWARE_SCORE_DECORATORS = {
-    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0_RAW_SAFETY_GATE:
-        _decorate_same_day_rank_safety_scores,
-    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0_SAFETY_MFE_PRODUCT:
-        _decorate_same_day_rank_safety_mfe_product_scores,
-    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_RESIDUAL_SAFETY_CONSTRAINED_OPTIMAL:
-        _decorate_same_day_rank_residual_safety_scores,
 }
-
-
 def _resource_aware_dynamic_kwargs(policy, rows):
-    if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_MAX_DL_FEASIBLE_ASCENT_STALE_GUARD:
+    spec = get_ranking_policy_spec(policy)
+    dynamic_options = None if spec is None else spec.dynamic_options_key
+    if dynamic_options == "stale_guard":
         return {'stale_score_membership_guard_max_age_days': _stale_score_guard_max_age_days(rows)}
-    if policy == BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0_RAW_SAFETY_GATE:
+    if dynamic_options == "safety_percentile":
         options = dict(rows[0].get('breakout_quality_ranking_options') or {}) if rows else {}
         return {'safety_percentile_cutoff': float(options.get('safety_percentile_cutoff', 0.5))}
     return {}
@@ -250,12 +147,18 @@ def reorder_candidates_for_resource_aware_quality(
     # Rank order, K/R0, broker cash and the canonical reservation owner stay unchanged.
     from core.positive_score_admission import admit_positive_score_rows
     rows = admit_positive_score_rows(rows)
-    selector, handler, static_kwargs = _RESOURCE_AWARE_POLICY_SPECS.get(
-        policy,
-        ('greedy-first-improvement', _reorder_resource_aware_binary_greedy, {}),
-    )
+    spec = get_ranking_policy_spec(policy)
+    if spec is not None and spec.resource_aware:
+        selector = spec.selector_label
+        handler = _SELECTOR_HANDLERS[spec.selector_key]
+        static_kwargs = dict(spec.static_options)
+    else:
+        selector, handler, static_kwargs = 'greedy-first-improvement', _reorder_resource_aware_binary_greedy, {}
     residual_fit_diag = {}
-    decorator = _RESOURCE_AWARE_SCORE_DECORATORS.get(policy)
+    decorator = (
+        _SCORE_TRANSFORMS[spec.score_transform_key]
+        if spec is not None and spec.score_transform_key is not None else None
+    )
     if decorator is not None:
         rows, residual_fit_diag = decorator(rows)
     default_diag = _resource_aware_default_diag(rows, free_slots, selector=selector)

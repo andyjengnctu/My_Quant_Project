@@ -1,6 +1,8 @@
 """Persistent Trading account-state service."""
 from __future__ import annotations
 
+from services.trading.state_snapshot import snapshot_state_value
+
 import hashlib
 from pathlib import Path
 from typing import Any, Callable
@@ -108,6 +110,9 @@ def _assert_order_guard_unchanged(project_root, expected_sha: str | None) -> Non
 
 
 def load_trading_account_state(project_root, *, required: bool = True) -> dict[str, Any] | None:
+    captured, value = snapshot_state_value(project_root, "account", required=required)
+    if captured:
+        return value
     fill_tx_path = resolve_trading_fill_transaction_path(project_root)
     if fill_tx_path.is_file():
         raise RuntimeError("Trading 尚有未完成 fill transaction；必須先完成 recovery 才能讀取 account state")

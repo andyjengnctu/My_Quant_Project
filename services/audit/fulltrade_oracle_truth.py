@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 
 from core.file_integrity import canonical_json_sha256, is_sha256_hex
+from core.research_execution_equivalence import project_reviewed_source_inventory
 from core.breakout_quality_runtime import FULLTRADE_FULLCYCLE_NETPNL_TARGET_ID
 from core.breakout_quality_registry import (
     TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
@@ -46,14 +47,22 @@ def truth_producer_fingerprint() -> str:
     root = Path(__file__).resolve().parents[2]
     digest = sha256(b"formal_full_p17_netpnl_truth_v1\0")
     digest.update(min_truth_producer_fingerprint("net_pnl").encode("ascii") + b"\n")
+    sources = {}
     for relative in (
         "services/audit/fulltrade_oracle_truth.py",
         "services/breakout_quality/formal_fulltrade_training_source.py",
+        "services/optimizer/strategy_param_service.py",
+        "services/optimizer/strategy_param_training.py",
+        "services/optimizer/strategy_param_contracts.py",
     ):
         code = root / relative
         if not code.is_file():
             raise DailyTrade40OracleBlockedError(f"FullTrade Oracle source missing: {relative}")
-        digest.update(relative.encode("utf-8") + b"\0" + sha256(code.read_bytes()).hexdigest().encode("ascii") + b"\n")
+        sources[relative] = sha256(code.read_bytes()).hexdigest()
+    for relative, source_sha in project_reviewed_source_inventory(
+        sources, scope="full_oracle_teacher", project_root=root,
+    ).items():
+        digest.update(relative.encode("utf-8") + b"\0" + source_sha.encode("ascii") + b"\n")
     return digest.hexdigest()
 
 def build_fulltrade_oracle_scores(

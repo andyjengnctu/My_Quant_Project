@@ -6,6 +6,8 @@ only derives valuation/performance views and may publish read-only snapshots und
 """
 from __future__ import annotations
 
+import threading
+
 from pathlib import Path
 from typing import Any
 
@@ -17,7 +19,7 @@ from core.exact_accounting import (
     calc_risk_budget_milli,
     milli_to_money,
 )
-from core.file_integrity import atomic_write_json
+from core.file_integrity import atomic_write_json, load_json_strict, exclusive_file_lock, sibling_publication_lock_path
 from core.market_data_contract import FINMIND_ADJUSTED_PRICE_DATASET
 from core.market_data_dataset_readiness import has_current_market_data_dataset_validation
 from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_output_dir
@@ -782,6 +784,9 @@ def build_trading_account_dashboard_read_model(project_root) -> dict[str, Any]:
     }
 
 
+_DASHBOARD_PUBLICATION_LOCK = threading.Lock()
+
+
 def publish_trading_account_dashboard_snapshot(project_root, snapshot: dict[str, Any] | None = None) -> dict[str, str]:
     root = Path(project_root).resolve()
     payload = dict(snapshot or build_trading_account_dashboard_read_model(root))
@@ -789,23 +794,40 @@ def publish_trading_account_dashboard_snapshot(project_root, snapshot: dict[str,
     output_dir.mkdir(parents=True, exist_ok=True)
     account_path = output_dir / ACCOUNT_DASHBOARD_FILENAME
     performance_path = output_dir / ACCOUNT_PERFORMANCE_FILENAME
-    atomic_write_json(account_path, payload)
-    atomic_write_json(
-        performance_path,
-        {
-            "schema_version": ACCOUNT_DASHBOARD_SCHEMA_VERSION,
-            "role": "derived_read_only_trading_account_performance",
-            "generated_at": payload.get("generated_at"),
-            "source_state_path": payload.get("source_state_path"),
-            "source_account_revision": payload.get("source_account_revision"),
-            "market_date": payload.get("market_date"),
-            "scan_market_date": payload.get("scan_market_date"),
-            "performance": list(payload.get("performance") or []),
-            "buy_details": list(payload.get("buy_details") or []),
-            "sell_details": list(payload.get("sell_details") or []),
-            "closed_trades": list(payload.get("closed_trades") or []),
-        },
-    )
+    # Serialize both derived files and reject an older completed projection.
+    # This lock protects publication only, never expensive market-data reads.
+    with _DASHBOARD_PUBLICATION_LOCK, exclusive_file_lock(sibling_publication_lock_path(output_dir)):
+        if account_path.is_file():
+            existing = load_json_strict(account_path)
+            def publication_order(value):
+                revision = value.get("source_account_revision")
+                return (
+                    -1 if revision is None else int(revision),
+                    str(value.get("market_date") or ""),
+                    str(value.get("generated_at") or ""),
+                )
+            if publication_order(existing) > publication_order(payload):
+                return {
+                    "account_snapshot_path": project_relative_display_path(account_path, project_root=root),
+                    "performance_summary_path": project_relative_display_path(performance_path, project_root=root),
+                }
+        atomic_write_json(account_path, payload)
+        atomic_write_json(
+            performance_path,
+            {
+                "schema_version": ACCOUNT_DASHBOARD_SCHEMA_VERSION,
+                "role": "derived_read_only_trading_account_performance",
+                "generated_at": payload.get("generated_at"),
+                "source_state_path": payload.get("source_state_path"),
+                "source_account_revision": payload.get("source_account_revision"),
+                "market_date": payload.get("market_date"),
+                "scan_market_date": payload.get("scan_market_date"),
+                "performance": list(payload.get("performance") or []),
+                "buy_details": list(payload.get("buy_details") or []),
+                "sell_details": list(payload.get("sell_details") or []),
+                "closed_trades": list(payload.get("closed_trades") or []),
+            },
+        )
     return {
         "account_snapshot_path": project_relative_display_path(account_path, project_root=root),
         "performance_summary_path": project_relative_display_path(performance_path, project_root=root),

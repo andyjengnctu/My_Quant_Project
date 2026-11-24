@@ -32,6 +32,7 @@ from filters.breakout_quality.trade_path_label import (
     TRADE_PATH_SELECTION_BASELINE_FIRST_OOS_DATE,
     TRADE_PATH_SELECTION_BASELINE_LAST_OOS_DATE,
 )
+from filters.breakout_quality.source_inventory import _build_source_data_inventory
 from services.breakout_quality.formal_mintrade40_pit_source import (
     FormalMinTrade40PITBlocked,
     FormalMinTrade40PITSource,
@@ -40,7 +41,11 @@ from services.breakout_quality.formal_mintrade40_training_source import (
     _current_p16_seed_artifact,
     inspect_formal_mintrade40_p16_teacher,
 )
-from services.optimizer.strategy_param_service import _canonical_schedule_build_contract
+from services.optimizer.strategy_param_service import build_canonical_strategy_parameter_contract
+from services.optimizer.strategy_param_contracts import (
+    build_min_roos_schedule_contract,
+    build_min_roos_adaptation_contract as _min_roos_adaptation_contract,
+)
 from services.optimizer.optimizer_workspace_recovery import (
     nested_optimizer_workspace_candidate,
     inspect_nested_optimizer_workspace,
@@ -49,16 +54,12 @@ from services.optimizer.optimizer_workspace_recovery import (
 )
 from services.optimizer.strategy_param_training import (
     prepare_selection_historical_p2_params,
-    _build_min_roos_schedule_contract,
     build_min_roos_fold_overrides,
-    _runtime_contract,
+    build_min_roos_runtime_contract,
+    inspect_min_roos_params,
 )
 from strategies.daily.search_space import resolve_daily_search_profile
 from importlib import import_module
-from tempfile import TemporaryDirectory
-from services.optimizer.strategy_param_training import (
-    _validate_min_roos_params, _min_roos_adaptation_contract,
-)
 
 
 class DailyTradePathTeacher:
@@ -66,7 +67,7 @@ class DailyTradePathTeacher:
         self.spec = spec
 
     _canonical_schedule_build_contract = staticmethod(
-        _canonical_schedule_build_contract
+        build_canonical_strategy_parameter_contract
     )
     _current_p16_seed_artifact = staticmethod(_current_p16_seed_artifact)
     build_formal_min_execution_schedule = staticmethod(
@@ -119,27 +120,14 @@ class DailyTradePathTeacher:
         policy = self._canonical_schedule_build_contract(
             family=self.spec["param_family"]
         )
-        search = resolve_daily_search_profile(self.spec["search_profile"])
-        schedule = _build_min_roos_schedule_contract(
+        schedule = build_min_roos_schedule_contract(
             first_oos_date=TRADE_PATH_SELECTION_BASELINE_FIRST_OOS_DATE,
             last_oos_date=TRADE_PATH_SELECTION_BASELINE_LAST_OOS_DATE,
             train_window_months=int(policy["train_window_months"]),
             oos_months=int(policy["oos_horizon_months"]),
+            strategy_id="daily",
+            daily_search_profile=self.spec["search_profile"],
         )
-        reference = {
-            **schedule["reference_payload"],
-            "search_fields": list(search["fields"]),
-            "entry_strategy": "Daily",
-            "entry_universe": "unscored_all_adjacent_quote_stockdays_v1",
-            "breakout_required": False,
-            "daily_execution_contract": search["execution_contract"],
-        }
-        schedule = {
-            **schedule,
-            "reference_type": "canonical_daily_min_roos_fixed_defaults",
-            "reference_payload": reference,
-            "sha256": canonical_json_sha256(reference),
-        }
         args = SimpleNamespace(
             dataset="full",
             trials_per_fold=int(policy["trials_per_fold"]),
@@ -157,23 +145,20 @@ class DailyTradePathTeacher:
             baseline_contract=schedule, args=args, training_dl_enabled=False
         )
         if validate_path is not None:
-            with TemporaryDirectory(prefix="daily-teacher-verify-") as temporary:
-                candidate = Path(temporary) / Path(validate_path).name
-                candidate.write_bytes(Path(validate_path).read_bytes())
-                original = load_json_strict(candidate)
-                verified = _validate_min_roos_params(
-                    path=candidate,
-                    baseline_contract=schedule,
-                    fold_overrides=overrides,
-                    args=args,
-                    training_dl_enabled=False,
-                    arm_id=self.spec["historical_parameter_set"],
+            verified = inspect_min_roos_params(
+                path=validate_path,
+                baseline_contract=schedule,
+                fold_overrides=overrides,
+                args=args,
+                training_dl_enabled=False,
+                arm_id=self.spec["historical_parameter_set"],
+            )
+            if verified.migrations:
+                raise FormalMinTrade40PITBlocked(
+                    "Historical Daily teacher requires canonical metadata migration: "
+                    + "; ".join(f"{item.field}: {item.reason}" for item in verified.migrations)
                 )
-                if verified != original:
-                    raise FormalMinTrade40PITBlocked(
-                        "Historical Daily teacher requires canonical metadata migration"
-                    )
-        return _runtime_contract(
+        return build_min_roos_runtime_contract(
             root=root,
             args=args,
             baseline_contract=schedule,
@@ -182,6 +167,7 @@ class DailyTradePathTeacher:
             arm_id=self.spec["historical_parameter_set"],
             training_dl_enabled=False,
             binary_pit=None,
+            dataset_inventory=_build_source_data_inventory(root, args.dataset),
         )
 
     def _validated_records(
@@ -648,6 +634,7 @@ class DailyTradePathTeacher:
         materializer = (self.materialize_labels if self.spec.get("supervised_source") else
                         getattr(import_module(self.spec["pit_module"]), self.spec["pit_materializer"]))
         return {
+            "target_teacher": source,
             "target_materializer": partial(
                 materializer,
                 source=source,

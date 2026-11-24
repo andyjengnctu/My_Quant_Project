@@ -693,6 +693,8 @@ def validate_ranking_scoring_sanity_case(base_params):
         check("scanner_sort_value_matches_buy_sort_formula", expected_sort, buy_result["sort_value"])
         check("scanner_sort_value_comparable", True, isinstance(buy_result["sort_value"], float) and math.isfinite(float(buy_result["sort_value"])))
 
+    from .synthetic_ranking_policy_cases import append_ranking_policy_descriptor_checks
+    append_ranking_policy_descriptor_checks(check)
     summary["score_calc_method_default"] = SCORE_CALC_METHOD
     summary["score_numerator_method_default"] = SCORE_NUMERATOR_METHOD
     summary["score_mdd_power_default"] = get_score_mdd_power()
@@ -2331,8 +2333,14 @@ def validate_optimizer_walk_forward_policy_contract_case(_base_params):
     optimizer_walk_forward_source = (project_root / "services" / "optimizer" / "walk_forward.py").read_text(encoding="utf-8")
     objective_runner_source = (project_root / "services" / "optimizer" / "objective_runner.py").read_text(encoding="utf-8")
     check("optimizer_callbacks_imports_pandas_for_oos_year_parsing", True, "import pandas as pd" in callbacks_source)
-    check("search_train_date_filter_reuses_core_single_source_in_callbacks", True, "from core.walk_forward_policy import filter_search_train_dates" in callbacks_source and "def _filter_search_train_dates" not in callbacks_source)
-    check("search_train_date_filter_reuses_core_single_source_in_objective_runner", True, "from core.walk_forward_policy import filter_search_train_dates" in objective_runner_source and "def _filter_search_train_dates" not in objective_runner_source)
+    from .source_index import imports_symbol_from, read_source_top_level_function_names
+    for label, source_path in (
+        ("callbacks", Path(optimizer_callbacks.__file__)),
+        ("objective_runner", project_root / "services/optimizer/objective_runner.py"),
+    ):
+        check(f"search_train_date_filter_reuses_core_single_source_in_{label}", True,
+              imports_symbol_from(source_path, "core.walk_forward_policy", "filter_search_train_dates")
+              and "_filter_search_train_dates" not in read_source_top_level_function_names(source_path))
 
     params = V16StrategyParams()
     params.use_kc = True

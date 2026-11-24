@@ -83,6 +83,8 @@ project/
 │  ├─ exact_accounting.py             # 正式整數 ledger / cost-basis allocation / tick 正規化單一真理來源
 │  ├─ backtest_core.py                # 單股回測總控 façade
 │  ├─ portfolio_engine.py             # 投組 timeline 總控 façade；只保留run_portfolio_timeline orchestration
+│  ├─ portfolio_run_state.py          # Run-local 持倉／現金／訊號狀態與盤前資金、候選預留
+│  ├─ ranking_policy.py               # 排序能力純資料規格；selector、option、dependency role與報表投影同源
 │  ├─ portfolio_day_candidates.py    # 每日候選 gate/producer 委派與盤前資源選擇協調
 │  ├─ portfolio_day_signal_lifecycle.py # Re-entry／滿倉setup追蹤／延續訊號清理的single/multi seed路由
 │  ├─ portfolio_replay_diagnostics.py # Replay candidate/selector/order/交易診斷輸出組裝
@@ -173,6 +175,10 @@ project/
 - `config/`：宣告式設定；`tools/`：隔離診斷及驗證，不是第二套正式交易引擎。
 - 依賴原則為 `apps → services → core/filters`，不得由正式 domain 反向依賴 `apps/`、`tools/`。
 - `apps/run_bundle.py` 是日常唯一建議使用的本機 double check 與交付打包入口；`apps/test_suite.py` 是其內部 formal runner。
+- Optimizer schedule／adaptation 由 `services/optimizer/strategy_param_contracts.py` 統一建構；參數驗證只回傳正規化候選，寫入與 metadata migration 由 producer 明確發布。Research／teacher／Cleaner 透過公開 inspection 取得工件事實；`core/artifact_inspection.py` 的狀態與原因只用於工程診斷，不進入科學身分。
+- `services/optimizer/execution_settings.py` 持有不可變執行設定與有界環境變數 adapter；session 消費同一快照，Windows spawn 與既有環境變數 worker 的相容轉接須在取消或例外後復原，不改 seed／Trial／科學設定。
+- Daily 資料 loader 委派 `filters/breakout_quality/daily_sample_accumulator.py` 保留 target-valid 在前、inference-only 在後的 ticker/date 順序；teacher 以明確 reference 傳遞，context metadata 由單一投影產生。資料排除原因屬執行診斷，不改樣本及 FIT manifest。
+- `services/trading/workbench_snapshot.py` 統一 Trading 頁面與帳務中心的快照服務：先執行既有 reconcile／recovery，再以短鎖擷取 account/order/pending，鎖外投影同一 revisions；衍生報表發布不得覆寫較新 revision。`state_snapshot.py` 隔離 worker 讀取且禁止 projection 寫入；UI 使用 `services/workbench_ui/background_tasks.py` 的背景工作與過期結果防護，不持有交易規則。
 
 ## 正式入口
 

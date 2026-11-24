@@ -113,8 +113,7 @@ class TradingAccountPanel(
         self._indicator_rows: list[dict[str, object]] = []
         self._command_thread = None
         self._command_token = 0
-        self._command_results: queue.Queue = queue.Queue()
-        self._command_poll_after_id = None
+        self._command_runner = None
         self._command_context: dict[int, dict[str, object]] = {}
         self._command_saved_button_states: dict[object, str] = {}
         self._param_mode_user_selected = False

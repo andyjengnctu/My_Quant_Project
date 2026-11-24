@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import pickle
+import re
 import time
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
@@ -20,11 +21,59 @@ from core.dataset_profiles import (
 )
 from core.runtime_utils import resolve_strict_environment_flag as _env_flag
 from core.training_performance import resolve_optimizer_raw_cache_lock_stale_sec
+from core.artifact_inspection import ArtifactInspection, InspectionStatus
 
 RAW_CACHE_SCHEMA_VERSION = 2
 RAW_CACHE_LOCK_POLL_SEC = 0.25
 RAW_CACHE_REPLACE_RETRY_COUNT = 20
 RAW_CACHE_REPLACE_RETRY_SEC = 0.10
+
+
+def inspect_named_raw_cache_metadata(payload_path: Path) -> ArtifactInspection:
+    """Verify named-cache metadata/layout without unpickling or updating files."""
+    from core.compare_csv_storage import clean_path, plain
+    from core.file_integrity import file_change_signature
+
+    path = Path(payload_path)
+    meta_path = path.with_suffix(".json")
+    try:
+        for file in (path, meta_path):
+            if not clean_path(file) or not plain(file.lstat()):
+                raise ValueError("raw cache 或用途紀錄不是一般實體檔案")
+        before = file_change_signature(meta_path)
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        if not isinstance(meta, dict):
+            raise ValueError("raw cache 用途紀錄格式無效")
+        profile = meta.get("profile_key")
+        minimum = meta.get("required_min_rows")
+        signature_payload = meta.get("signature_payload")
+        if (type(meta.get("schema_version")) is not int or meta["schema_version"] != RAW_CACHE_SCHEMA_VERSION
+                or not isinstance(profile, str) or not re.fullmatch(r"[a-z][a-z0-9_]*", profile)
+                or type(minimum) is not int or minimum <= 0
+                or type(meta.get("ticker_count")) is not int or meta["ticker_count"] <= 0
+                or not isinstance(signature_payload, dict)
+                or not isinstance(signature_payload.get("source_identity"), dict)
+                or not signature_payload["source_identity"]):
+            raise ValueError("raw cache 缺少受支援的產生者 schema／來源身分")
+        signature, expected = _build_named_raw_cache_signature(
+            signature_payload["source_identity"], minimum, cache_namespace=profile,
+        )
+        paths = _build_raw_cache_paths(path.parent.parent, profile, minimum)
+        if (meta.get("signature") != signature or signature_payload != expected
+                or paths["payload_path"] != path
+                or meta.get("data_dir") != str(signature_payload["source_identity"].get("data_root") or profile)
+                or file_change_signature(meta_path) != before):
+            raise ValueError("raw cache 來源簽章、檔案位置或用途紀錄不一致")
+        return ArtifactInspection(InspectionStatus.READY, "", (meta, paths, before))
+    except FileNotFoundError as exc:
+        return ArtifactInspection(InspectionStatus.MISSING, str(exc))
+    except (OSError, ValueError, TypeError) as exc:
+        return ArtifactInspection(InspectionStatus.INVALID, f"{type(exc).__name__}: {exc}")
+
+
+def raw_cache_writer_lease(paths, *, blocking=True):
+    """Share the producer lease with maintenance without exposing its internals."""
+    return _RawCacheBuildLock(paths, blocking=blocking)
 
 
 def _raw_cache_use_enabled() -> bool:

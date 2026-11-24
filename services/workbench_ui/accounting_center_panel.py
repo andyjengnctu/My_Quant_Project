@@ -7,15 +7,11 @@ import threading
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-from services.trading.account_dashboard import (
-    build_trading_account_dashboard_read_model,
-    publish_trading_account_dashboard_snapshot,
-)
+from services.trading.workbench_snapshot import build_trading_accounting_snapshot
 from services.trading.account_state import (
     adopt_existing_trading_position,
     correct_existing_trading_position,
     delete_trading_transaction,
-    get_trading_account_read_model,
     initialize_trading_account_state,
     remove_existing_trading_position,
     set_trading_cash_balance,
@@ -24,6 +20,7 @@ from services.trading.account_trade_entry import correct_trading_account_transac
 from services.trading.order_form_constraints import build_trading_actual_fill_form_constraints
 from services.trading.scanner_state import load_trading_scanner_runtime
 from services.workbench_ui.date_picker import DatePickerField
+from services.workbench_ui.background_tasks import BackgroundTaskRunner
 from services.workbench_ui.paged_table import PagedTable, TableColumn
 from services.workbench_ui.stock_names import (
     enrich_workbench_stock_rows,
@@ -116,6 +113,7 @@ class AccountingCenterPanel(ttk.Frame):
 
     def __init__(self, master):
         super().__init__(master, padding=10, style=WORKBENCH_FRAME_STYLE)
+        self._account_command_runner = BackgroundTaskRunner(self.after, self.after_cancel)
         self._snapshot: dict = {}
         self._dashboard: dict = {}
         self._refresh_results: queue.Queue = queue.Queue()
@@ -594,10 +592,7 @@ class AccountingCenterPanel(ttk.Frame):
 
     def _load_worker(self):
         def _load():
-            account = get_trading_account_read_model(WORKBENCH_PROJECT_ROOT)
-            dashboard = build_trading_account_dashboard_read_model(WORKBENCH_PROJECT_ROOT)
-            publish_trading_account_dashboard_snapshot(WORKBENCH_PROJECT_ROOT, dashboard)
-            return account, dashboard
+            return build_trading_accounting_snapshot(WORKBENCH_PROJECT_ROOT)
 
         try:
             # Display-only TaiwanStockInfo names warm on a separate single-flight
@@ -926,6 +921,8 @@ class AccountingCenterPanel(ttk.Frame):
             if int(token) != int(self._sell_constraint_token):
                 continue
             if error is not None:
+                _warn_gui_fallback("Accounting SELL fill constraints", error)
+                self._footer_hint_var.set(f"成交限制讀取失敗：{error}")
                 self._clear_sell_fill_constraints(invalidate=False)
                 self._refresh_sell_button_state()
                 continue
@@ -982,6 +979,20 @@ class AccountingCenterPanel(ttk.Frame):
             state="normal" if valid_date and valid_price and valid_qty else "disabled"
         )
 
+    def _submit_accounting_command(self, label, worker, on_success):
+        if self._account_command_runner.busy:
+            self._refresh_status_var.set("帳務操作執行中，請等待完成。")
+            return False
+        self._refresh_status_var.set(f"{label}執行中…")
+        def complete(outcome):
+            if outcome.error is not None:
+                _warn_gui_fallback(label, outcome.error)
+                messagebox.showerror(f"{label}失敗", str(outcome.error), parent=self)
+                self._refresh_status_var.set(f"{label}失敗")
+                return
+            on_success(outcome.value)
+        return self._account_command_runner.submit(worker, complete, name="workbench-accounting-command") is not None
+
     def _record_inventory_sell(self):
         row = self._selected_inventory()
         if not row:
@@ -1009,18 +1020,16 @@ class AccountingCenterPanel(ttk.Frame):
             parent=self,
         ):
             return
-        try:
-            record_trading_account_inventory_sell(
-                WORKBENCH_PROJECT_ROOT,
-                ticker=ticker,
-                qty=qty,
-                price=price,
-                trade_date=trade_date,
-                expected_account_revision=None,
-            )
-        except Exception as exc:
-            messagebox.showerror("賣出登錄失敗", str(exc), parent=self)
-            return
+        self._submit_accounting_command(
+            "賣出登錄",
+            lambda: record_trading_account_inventory_sell(
+                WORKBENCH_PROJECT_ROOT, ticker=ticker, qty=qty, price=price,
+                trade_date=trade_date, expected_account_revision=None,
+            ),
+            lambda _result: self._finish_inventory_sell(ticker),
+        )
+
+    def _finish_inventory_sell(self, ticker):
         self._sell_selected_ticker = ""
         self._sell_constraint_programmatic_update = True
         try:
@@ -1182,23 +1191,35 @@ class AccountingCenterPanel(ttk.Frame):
             date_field = DatePickerField(body, textvariable=date_var, width=14, allowed_dates=())
             date_field.grid(row=3, column=1, sticky="ew", padx=(8, 0), pady=4)
 
+            constraint_error = tk.StringVar(value="")
+            ttk.Label(body, textvariable=constraint_error, style=WORKBENCH_LABEL_STYLE, foreground=WORKBENCH_ERROR).grid(row=4, column=0, columnspan=4, sticky="w")
+            constraint_runner = BackgroundTaskRunner(top.after, top.after_cancel)
+            top.bind("<Destroy>", lambda event: constraint_runner.close() if event.widget is top else None, add="+")
+
             def refresh_buy_constraints(*_args):
-                try:
+                ticker = ticker_var.get()
+                selected_date = date_var.get().strip() or None
+                buy_constraint_state.clear()
+                constraint_error.set("讀取成交日與價格限制中…")
+                def load():
                     runtime = load_trading_scanner_runtime(WORKBENCH_PROJECT_ROOT)
-                    constraints = build_trading_actual_fill_form_constraints(
-                        WORKBENCH_PROJECT_ROOT,
-                        ticker=ticker_var.get(),
-                        selected_date=date_var.get().strip() or None,
+                    return build_trading_actual_fill_form_constraints(
+                        WORKBENCH_PROJECT_ROOT, ticker=ticker,
+                        selected_date=selected_date,
                         latest_finalized_date=str(runtime.get("latest_data_date") or "").strip() or None,
                     )
-                except Exception:
-                    constraints = {"allowed_dates": (), "price_options": ()}
-                buy_constraint_state.clear()
-                buy_constraint_state.update(constraints)
-                allowed = tuple(constraints.get("allowed_dates") or ())
-                prices = tuple(str(value) for value in (constraints.get("price_options") or ()))
-                date_field.set_allowed_dates(allowed)
-                price_widget.configure(values=prices)
+                def complete(outcome):
+                    constraints = dict(outcome.value or {})
+                    if outcome.error is not None:
+                        _warn_gui_fallback("Accounting BUY fill constraints", outcome.error)
+                        constraint_error.set(f"成交限制讀取失敗：{type(outcome.error).__name__}: {outcome.error}")
+                    else:
+                        constraint_error.set("")
+                    buy_constraint_state.clear()
+                    buy_constraint_state.update(constraints)
+                    date_field.set_allowed_dates(tuple(constraints.get("allowed_dates") or ()))
+                    price_widget.configure(values=tuple(str(value) for value in (constraints.get("price_options") or ())))
+                constraint_runner.submit(load, complete, name="workbench-account-buy-fill-constraints", replace=True)
 
             date_var.trace_add("write", refresh_buy_constraints)
             refresh_buy_constraints()
@@ -1221,19 +1242,23 @@ class AccountingCenterPanel(ttk.Frame):
                     legal_prices = {float(value) for value in (buy_constraint_state.get("price_options") or ())}
                     if float(price) not in legal_prices:
                         raise ValueError("成交價不在所選成交日的合法市場價格 ticks 內")
-                correct_trading_account_transaction(
-                    WORKBENCH_PROJECT_ROOT,
-                    transaction_revision=int(row.get("revision") or 0),
-                    qty=qty,
-                    price=price,
-                    trade_date=trade_date,
-                    expected_account_revision=None,
-                )
             except Exception as exc:
                 messagebox.showerror("修改明細失敗", str(exc), parent=top)
                 return
-            top.destroy()
-            self._refresh_after_account_mutation()
+            def complete(_result):
+                if top.winfo_exists():
+                    top.destroy()
+                self._refresh_after_account_mutation()
+            self._submit_accounting_command(
+                "修改明細",
+                lambda: correct_trading_account_transaction(
+                    WORKBENCH_PROJECT_ROOT,
+                    transaction_revision=int(row.get("revision") or 0),
+                    qty=qty, price=price, trade_date=trade_date,
+                    expected_account_revision=None,
+                ),
+                complete,
+            )
 
         ttk.Button(body, text="儲存修改", command=save, style=WORKBENCH_BUTTON_STYLE).grid(row=5, column=0, columnspan=2, sticky="e")
 
@@ -1267,6 +1292,7 @@ class AccountingCenterPanel(ttk.Frame):
             callback(str(ticker), runtime_domain="trading", auto_run=True)
 
     def destroy(self):
+        self._account_command_runner.close()
         if self._stock_name_warm_after_id is not None:
             try:
                 self.after_cancel(self._stock_name_warm_after_id)

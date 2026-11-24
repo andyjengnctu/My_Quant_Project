@@ -2031,8 +2031,8 @@ def validate_trading_proposed_order_plan_contract_case(base_params):
         'if action == "orders"' in panel_source
         and "lambda: self._run_workflow_command(action, param_mode)" in panel_source
         and "self._submit_trading_command(" in panel_source
-        and "target=self._trading_command_worker" in panel_source
-        and "thread = threading.Thread(" in panel_source,
+        and "BackgroundTaskRunner" in panel_source
+        and "self._command_thread = runner.submit(" in panel_source,
     )
     check("workbench_does_not_confirm_fill_from_proposal_action", False, "confirm_trading_strategy_buy_fill" in panel_source)
 
@@ -7556,10 +7556,10 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
             rejected_actions.append((retired_action, "finish"))
     check("retired_data_all_actions_fail_closed_including_callbacks", 4, len(rejected_actions))
 
-    command_worker_body = panel_source.split("def _trading_command_worker", 1)[1].split("def _schedule_command_poll", 1)[0]
+    command_worker_body = panel_source.split("def _execute_trading_command", 1)[1].split("def _finish_trading_command", 1)[0]
     command_finish_body = panel_source.split("def _finish_trading_command", 1)[1].split("def _request_state_refresh", 1)[0]
     workflow_success_body = panel_source.split("def _finish_workflow_success", 1)[1].split("def _current_revision", 1)[0]
-    check("workbench_trading_commands_use_single_background_executor", True, "def _submit_trading_command" in panel_source and "_command_results.put" in panel_source)
+    check("workbench_trading_commands_use_single_background_executor", True, "def _submit_trading_command" in panel_source and "self._command_thread = runner.submit(" in panel_source)
     check("workbench_trading_command_worker_never_calls_tk", False, "self.after(" in command_worker_body or "messagebox." in command_worker_body)
     check("workbench_trading_command_builds_one_consolidated_state_bundle", True, "build_trading_account_panel_initial_bundle" in command_worker_body)
     check("workbench_trading_command_finish_applies_bundle_once", 1, command_finish_body.count("self._apply_state_bundle(bundle)"))
@@ -7570,12 +7570,9 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
     check("workbench_fill_post_plan_errors_are_traceable", True, "indicator_error = str(exc)" in fill_confirmation_body and "Indicator 計畫刷新失敗" in fill_confirmation_body)
     check("workbench_account_mutations_run_through_background_executor", True, "def _submit_account_mutation" in panel_source and "self._submit_trading_command(" in panel_source.split("def _submit_account_mutation", 1)[1].split("def refresh_account", 1)[0])
 
-    import queue as _queue
-    background_panel = SimpleNamespace(_command_results=_queue.Queue())
     with patch("services.workbench_ui.trading_account_panel_runtime.build_trading_account_panel_initial_bundle", return_value={"operations": (True, {"overall_status": "READY"})}):
-        TradingAccountPanel._trading_command_worker(background_panel, 9, lambda: {"ok": True}, True)
-    token, result, command_error, bundle, bundle_error = background_panel._command_results.get_nowait()
-    check("workbench_background_command_preserves_result", [9, True, None, None], [token, bool(result.get("ok")), command_error, bundle_error])
+        result, command_error, bundle, bundle_error = TradingAccountPanel._execute_trading_command(lambda: {"ok": True}, True)
+    check("workbench_background_command_preserves_result", [True, None, None], [bool(result.get("ok")), command_error, bundle_error])
     check("workbench_background_command_returns_consolidated_bundle", True, isinstance(bundle, dict) and "operations" in bundle)
 
     summary["checks"] = len(results)
@@ -8244,6 +8241,18 @@ def validate_trading_operational_safety_ssot_contract_case(base_params):
     check("prelive_audit_consumes_operations_sell_coverage_instead_of_recomputing", True, "open_position_sell_coverage_safe" in audit and "open_position_sell_coverage_blockers" in audit)
     check("workbench_routes_entry_submission_through_dedicated_safety_service", True, "from services.trading.entry_order_submission import confirm_trading_order_submission" in panel)
     check("new_operational_state_and_submission_modules_are_coverage_targets", True, '"services/trading/entry_order_submission.py"' in coverage and '"services/trading/proposed_order_state.py"' in coverage)
+
+    # Exercise actual isolated state barriers and worker delivery, independent
+    # of UI/file layout. These contracts are also directly runnable via unittest.
+    import unittest
+    from .test_trading_snapshot_tasks import SnapshotTests, BackgroundTaskTests
+    for test_class in (SnapshotTests, BackgroundTaskTests):
+        for method in unittest.defaultTestLoader.getTestCaseNames(test_class):
+            test = test_class(method)
+            outcome = unittest.TestResult()
+            test.run(outcome)
+            details = "\n".join(text for _case, text in outcome.failures + outcome.errors)
+            check("trading_snapshot_task_" + method, True, outcome.wasSuccessful(), note=details)
 
     summary["checks"] = len(results)
     return results, summary

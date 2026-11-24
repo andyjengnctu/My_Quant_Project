@@ -6,6 +6,7 @@ import os
 import threading
 
 from core.process_lock import try_process_lock
+from services.trading.state_snapshot import assert_live_trading_mutation
 from core.trading_state_paths import resolve_trading_state_mutation_lock_path
 
 
@@ -29,6 +30,7 @@ def _canonical_lock_key(project_root) -> str:
 def serialized_trading_state_mutation(function):
     @wraps(function)
     def wrapped(project_root, *args, **kwargs):
+        assert_live_trading_mutation()
         path = resolve_trading_state_mutation_lock_path(project_root).resolve()
         path_key = _canonical_lock_key(project_root)
         owned_path_key = getattr(_OWNED_LOCKS, "path_key", None)

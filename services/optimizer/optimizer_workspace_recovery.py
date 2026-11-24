@@ -9,6 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from core.file_integrity import canonical_json_sha256, load_json_strict
+from core.artifact_inspection import ArtifactInspection, InspectionStatus
 
 
 _PREFLIGHT_VOLATILE_FIELDS = frozenset({
@@ -44,6 +45,53 @@ def verify_optimizer_runtime_preflight(
             }) != identity):
         raise ValueError("Optimizer signed preflight identity mismatch")
     return preflight
+
+
+def inspect_full_roos_preflight(path: Path, *, project_root: Path) -> ArtifactInspection:
+    """Return the producer's verified preflight and legal direct/fold study IDs."""
+    from types import SimpleNamespace
+    from services.optimizer.strategy_param_training import (
+        SCHEMA_VERSION, build_selection_full_roos_schedule_contract,
+        build_selection_full_roos_runtime_contract,
+        selection_full_roos_optimizer_runtime_cache_identity,
+    )
+
+    try:
+        raw = load_json_strict(path)
+        if not isinstance(raw, dict):
+            raise ValueError("Optimizer signed preflight must be an object")
+        preflight = verify_optimizer_runtime_preflight(
+            path, expected_runtime_identity_sha256=raw.get("runtime_identity_sha256", ""),
+        )
+        if (preflight.get("schema_version") != SCHEMA_VERSION
+                or preflight.get("mode") != "selection_full_roos_parameter_training"
+                or preflight.get("status") != "P4_HISTORY_PREFLIGHT_PASS"
+                or preflight.get("training_dl_enabled") is not False):
+            return ArtifactInspection(InspectionStatus.INCOMPATIBLE, "unsupported Full ROOS preflight contract")
+        contract = {key: value for key, value in preflight.items() if key not in {"created_at", "status"}}
+        rolling = preflight["rolling_policy"]
+        schedule = build_selection_full_roos_schedule_contract(
+            first_oos_date=rolling["first_oos_date"], last_oos_date=rolling["last_oos_date"],
+            train_window_months=rolling["train_window_months"], oos_months=rolling["oos_horizon_months"],
+        )
+        args = SimpleNamespace(**{key: preflight[key] for key in (
+            "dataset", "trials_per_fold", "fixed_risk", "max_position_cap_pct", "max_positions", "rotation",
+        )}, seed_ensemble_policy_override=preflight.get("seed_ensemble_policy"),
+            score_policy_overrides=preflight.get("score_policy_overrides"))
+        if contract != build_selection_full_roos_runtime_contract(
+            root=project_root, args=args, schedule_contract=schedule,
+            dataset_identity_override=preflight["dataset_identity"],
+        ):
+            return ArtifactInspection(InspectionStatus.INCOMPATIBLE, "Full ROOS preflight differs from producer contract")
+        identities = frozenset(
+            selection_full_roos_optimizer_runtime_cache_identity(contract, optimizer_search_protocol=protocol)
+            for protocol in (None, "fixed_multiseed_v1")
+        )
+        return ArtifactInspection(InspectionStatus.READY, "", (preflight, identities))
+    except FileNotFoundError as exc:
+        return ArtifactInspection(InspectionStatus.MISSING, str(exc))
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, OverflowError) as exc:
+        return ArtifactInspection(InspectionStatus.INVALID, f"{type(exc).__name__}: {exc}")
 
 
 def inspect_nested_optimizer_workspace(

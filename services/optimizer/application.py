@@ -15,6 +15,10 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from filters.breakout_quality import runtime as _breakout_quality_runtime_adapter
+from services.optimizer.execution_settings import (
+    OptimizerExecutionSettings,
+    isolate_optimizer_process_environment,
+)
 
 from core.dataset_profiles import (
     DEFAULT_DATASET_PROFILE,
@@ -1259,6 +1263,8 @@ def _run_nonrolling_seed_ensemble_member_process_task(task: dict) -> dict | None
         member_session = build_optimizer_session(
             walk_forward_policy=walk_forward_policy,
             output_dir=str(task.get("output_dir") or OUTPUT_DIR),
+            execution_settings=(task.get("execution_settings")
+                                or OptimizerExecutionSettings.from_environ(task.get("environ"))),
         )
         member_session.n_trials = int(requested_trials)
         member_session.run_action = "train"
@@ -2006,6 +2012,7 @@ def _run_nonrolling_random_seed_ensemble_training(
     manifest_training_policy_override: dict | None = None,
     require_complete_ensemble: bool = False,
     required_policy_output: str | None = None,
+    execution_settings: OptimizerExecutionSettings | None = None,
     build_optimizer_session=None,
     create_optimizer_study,
     ensure_study_effective_policy_compatible,
@@ -2026,6 +2033,7 @@ def _run_nonrolling_random_seed_ensemble_training(
     policy = dict(seed_ensemble_policy_override or _resolve_nonrolling_seed_ensemble_policy())
     if not bool(policy.get("enabled", False)) or int(policy.get("seed_count", 1)) <= 1:
         return None
+    execution_settings = execution_settings or OptimizerExecutionSettings.from_environ(environ)
 
     selected_policy_for_progress = str(run_best_selector_override or candidate_selector_override or "").strip()
     selected_policy_uses_finalist_agreement = _is_finalists_agree_policy_name(selected_policy_for_progress)
@@ -2151,6 +2159,7 @@ def _run_nonrolling_random_seed_ensemble_training(
         member_session = build_optimizer_session(
             walk_forward_policy=walk_forward_policy,
             output_dir=runtime_output_dir,
+            execution_settings=execution_settings,
         )
         member_session.set_trial_prep_execution_mode(trial_prep_execution_mode)
         member_session.n_trials = int(requested_trials)
@@ -2348,6 +2357,7 @@ def _run_nonrolling_random_seed_ensemble_training(
                 "output_dir": runtime_output_dir,
                 "db_name": None,
                 "environ": dict(environ or {}),
+                "execution_settings": execution_settings,
                 "log_path": log_path,
                 "progress_context": {
                     "fold_idx": 1,
@@ -2454,6 +2464,7 @@ def _run_nonrolling_random_seed_ensemble_training(
         dashboard_session = build_optimizer_session(
             walk_forward_policy=walk_forward_policy,
             output_dir=runtime_output_dir,
+            execution_settings=execution_settings,
         )
         dashboard_session.load_raw_data(
             selected_data_dir,
@@ -3034,6 +3045,7 @@ def resolve_optimizer_model_mode(argv, environ, *, default_model: str = DEFAULT_
     return normalized, source
 
 
+@isolate_optimizer_process_environment
 def main(argv=None, environ=None):
     enable_line_buffered_stdout()
     argv = sys.argv if argv is None else argv
@@ -3156,7 +3168,11 @@ def main(argv=None, environ=None):
     optimizer_required_min_rows = get_breakout_optimizer_required_min_rows()
     walk_forward_policy[RAW_UNIVERSE_REQUIRED_MIN_ROWS_FIELD] = int(optimizer_required_min_rows)
     objective_mode = str(walk_forward_policy.get('objective_mode', 'split_train_romd'))
-    session = build_optimizer_session(walk_forward_policy=walk_forward_policy)
+    # CLI timing overrides above are final before freezing execution-only values.
+    execution_settings = OptimizerExecutionSettings.from_environ(environ)
+    session = build_optimizer_session(
+        walk_forward_policy=walk_forward_policy, execution_settings=execution_settings,
+    )
     best_trial_resolver = build_local_min_score_best_trial_resolver(session=session, objective_mode=objective_mode)
 
     try:
@@ -3232,7 +3248,9 @@ def main(argv=None, environ=None):
         )
         walk_forward_policy[RAW_UNIVERSE_REQUIRED_MIN_ROWS_FIELD] = int(optimizer_required_min_rows)
         objective_mode = str(walk_forward_policy.get('objective_mode', 'split_train_romd'))
-        session = build_optimizer_session(walk_forward_policy=walk_forward_policy)
+        session = build_optimizer_session(
+            walk_forward_policy=walk_forward_policy, execution_settings=execution_settings,
+        )
         session.n_trials = int(requested_trials)
         session.run_action = requested_action
         session.requested_model_mode = requested_model_mode
@@ -3319,6 +3337,7 @@ def main(argv=None, environ=None):
             objective_mode=objective_mode,
             walk_forward_policy=walk_forward_policy,
             requested_trials=int(session.n_trials),
+            execution_settings=execution_settings,
             build_optimizer_session=build_optimizer_session,
             create_optimizer_study=create_optimizer_study,
             ensure_study_effective_policy_compatible=_ensure_study_effective_policy_compatible,

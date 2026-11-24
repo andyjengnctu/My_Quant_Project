@@ -110,6 +110,11 @@ def _acquire_optimizer_study_write_lock(db_name):
     return _OptimizerStudyWriteLock(os.path.abspath(db_file))
 
 
+def acquire_optimizer_study_file_lease(db_file: str):
+    """Acquire the existing producer lease for an explicitly resolved SQLite file."""
+    return _OptimizerStudyWriteLock(os.path.abspath(db_file))
+
+
 OPTIMIZER_LEGACY_STUDY_NAME = "portfolio_optimization_overnight"
 OPTIMIZER_DETERMINISTIC_RESUME_STUDY_NAME = "portfolio_optimization_overnight_resume_safe_v1"
 OPTIMIZER_EXECUTION_EVIDENCE_CONTRACT = "optimizer_resume_determinism_v1"

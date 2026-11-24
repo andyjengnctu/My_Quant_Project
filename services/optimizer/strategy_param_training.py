@@ -17,6 +17,7 @@ import hashlib
 import json
 import math
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -72,7 +73,7 @@ from core.console_report import (
     render_table,
     render_title,
 )
-from filters.breakout_quality.source_inventory import build_source_data_inventory
+from filters.breakout_quality.source_inventory import build_source_data_inventory, _build_source_data_inventory
 from filters.breakout_quality.trade_path_label import (
     TRADE_PATH_BASE_FILTER_ID,
     TRADE_PATH_HISTORICAL_TEACHER_PARAMS_RELATIVE_PATH,
@@ -119,26 +120,17 @@ from services.optimizer.session_factory import (
     configure_optuna_logging,
     ensure_study_effective_policy_compatible,
 )
+from services.optimizer.execution_settings import temporary_process_environment
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_VERSION = 4
 EXPERIMENT_STATUS = "FOUR_BY_TWO_COMPLETE"
-MIN_ROOS_SEARCH_FIELDS = (
-    "high_len",
-    "atr_len",
-    "atr_buy_tol",
-    "atr_times_init",
-    "atr_times_trail",
+from services.optimizer.strategy_param_contracts import (
+    MIN_ROOS_SEARCH_FIELDS,
+    build_min_roos_adaptation_contract as _min_roos_adaptation_contract,
+    build_min_roos_schedule_contract,
+    resolve_min_roos_search_fields as _min_roos_search_fields,
 )
-def _min_roos_search_fields(strategy_id: str, daily_search_profile: str | None = None) -> tuple[str, ...]:
-    if strategy_id == "breakout":
-        if daily_search_profile is not None:
-            raise ValueError("Breakout Optimizer cannot select Daily search profile")
-        return MIN_ROOS_SEARCH_FIELDS
-    if strategy_id == "daily":
-        from strategies.daily.search_space import resolve_daily_search_profile
-        return tuple(resolve_daily_search_profile(daily_search_profile)["fields"])
-    raise ValueError(f"未知Min Optimizer策略: {strategy_id!r}")
 def _full_roos_trainable_fields() -> tuple[str, ...]:
     """Return optimizer fields that can actually vary under the current Full policy."""
 
@@ -177,31 +169,6 @@ EXTENDING_FULL_ROOS_RELATIVE_DIR = Path(
 )
 
 
-def _min_roos_adaptation_contract(
-    *, arm_id: str, training_dl_enabled: bool, strategy_id: str = "breakout",
-    daily_search_profile: str | None = None,
-) -> dict[str, Any]:
-    fields = _min_roos_search_fields(strategy_id, daily_search_profile)
-    payload = {
-        "mode": "min_roos_training",
-        "parameter_set": str(arm_id),
-        "search_fields": list(fields),
-        "fixed_rule_contract": "all_rule_filters_off",
-        "training_dl_enabled": bool(training_dl_enabled),
-    }
-    if strategy_id == "daily":
-        payload["entry_strategy"] = "Daily"
-        payload["entry_universe"] = "unscored_all_adjacent_quote_stockdays_v1"
-        if daily_search_profile is not None:
-            from strategies.daily.search_space import resolve_daily_search_profile
-            payload["daily_execution_contract"] = resolve_daily_search_profile(daily_search_profile)["execution_contract"]
-            daily_spec = resolve_daily_search_profile(daily_search_profile)
-            payload["fixed_rule_contract"] = daily_spec.get(
-                "fixed_rule_contract",
-                "daily_common_filters_search_v2" if "common_filters" in daily_search_profile
-                else "all_rule_filters_off",
-            )
-    return payload
 EXPERIMENT_RELATIVE_DIR = Path(
     "models/research/breakout_quality/binary_dl_filter_param_adaptation/risk_only_rolling"
 )
@@ -261,6 +228,47 @@ def _write_strategy_param_json(path: Path, payload: dict[str, Any]) -> dict[str,
     normalized = normalize_strategy_param_payload_for_persistence(payload)
     atomic_write_json(path, normalized)
     return normalized
+
+
+def publish_validated_strategy_params(path: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    """Commit the producer's already validated migration/publication explicitly."""
+    original = _load_json(path) or {}
+    old_seed_policy = dict((original.get("meta") or {}).get("requested_random_seed_ensemble") or {})
+    new_seed_policy = dict((payload.get("meta") or {}).get("requested_random_seed_ensemble") or {})
+    normalized = _write_strategy_param_json(path, payload)
+    if old_seed_policy and old_seed_policy != new_seed_policy:
+        print(
+            "[Optimizer] 已驗證原始fold及member seeds；"
+            "只修正既有rolling工件的seed metadata，不重新訓練或改動策略參數。"
+        )
+    return normalized
+
+
+@dataclass(frozen=True)
+class StrategyParameterMigration:
+    field: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class ValidatedStrategyParameters:
+    payload: dict[str, Any]
+    migrations: tuple[StrategyParameterMigration, ...]
+
+
+def _parameter_validation_result(original: dict[str, Any], payload: dict[str, Any]) -> ValidatedStrategyParameters:
+    normalized = normalize_strategy_param_payload_for_persistence(payload)
+    descriptions = {
+        "breakout_quality_param_adaptation": "attach canonical training adaptation metadata",
+        "meta": "normalize verified producer provenance metadata",
+        "random_seed_ensemble": "recover verified single-seed metadata",
+    }
+    migrations = tuple(
+        StrategyParameterMigration(key, descriptions.get(key, "normalize strict JSON persistence"))
+        for key in sorted(original.keys() | normalized.keys())
+        if key not in original or key not in normalized or original[key] != normalized[key]
+    )
+    return ValidatedStrategyParameters(normalized, migrations)
 
 
 def _load_baseline_contract(*, root: Path, args) -> dict[str, Any]:
@@ -645,7 +653,8 @@ def _validate_binary_pit_optimizer_coverage(
     return binary_pit
 
 
-def _runtime_contract(*, root, args, baseline_contract, fold_overrides, model_artifact, arm_id, training_dl_enabled, binary_pit, dataset_inventory=None):
+def build_min_roos_runtime_contract(*, root, args, baseline_contract, fold_overrides, model_artifact, arm_id, training_dl_enabled, binary_pit, dataset_inventory=None):
+    """Resolve signed runtime inputs without publishing a source-content witness."""
     reference_path = baseline_contract.get("path")
     payload = {
         "schema_version": SCHEMA_VERSION,
@@ -653,7 +662,7 @@ def _runtime_contract(*, root, args, baseline_contract, fold_overrides, model_ar
         "arm_id": str(arm_id),
         "training_dl_enabled": bool(training_dl_enabled),
         "dataset": str(args.dataset),
-        "dataset_identity": (build_source_data_inventory(root, args.dataset) if dataset_inventory is None else dict(dataset_inventory)),
+        "dataset_identity": (_build_source_data_inventory(root, args.dataset) if dataset_inventory is None else dict(dataset_inventory)),
         "parameter_reference": {
             "type": str(
                 baseline_contract.get("reference_type")
@@ -722,10 +731,22 @@ def _runtime_contract(*, root, args, baseline_contract, fold_overrides, model_ar
     return payload
 
 
-def _validate_min_roos_params(*, path, baseline_contract, fold_overrides, args, training_dl_enabled, arm_id):
+def _runtime_contract(*, root, args, baseline_contract, fold_overrides, model_artifact, arm_id, training_dl_enabled, binary_pit, dataset_inventory=None):
+    """Producer compatibility adapter; source-witness publication stays explicit here."""
+    inventory = build_source_data_inventory(root, args.dataset) if dataset_inventory is None else dataset_inventory
+    return build_min_roos_runtime_contract(
+        root=root, args=args, baseline_contract=baseline_contract, fold_overrides=fold_overrides,
+        model_artifact=model_artifact, arm_id=arm_id, training_dl_enabled=training_dl_enabled,
+        binary_pit=binary_pit, dataset_inventory=inventory,
+    )
+
+
+def inspect_min_roos_params(*, path, baseline_contract, fold_overrides, args, training_dl_enabled, arm_id) -> ValidatedStrategyParameters:
+    """Read and validate; return a normalized migration candidate without writing."""
     payload = _load_json(path)
     if payload is None:
         raise FileNotFoundError(f"{arm_id} optimizer未產生參數工件: {path}")
+    original = copy.deepcopy(payload)
     meta = dict(payload.get("meta") or {})
     for key in ("first_oos_date", "last_oos_date"):
         try:
@@ -799,8 +820,15 @@ def _validate_min_roos_params(*, path, baseline_contract, fold_overrides, args, 
             f"adaptation={existing_adaptation!r}"
         )
     payload["breakout_quality_param_adaptation"] = expected_adaptation
-    payload = _write_strategy_param_json(path, payload)
-    return payload
+    return _parameter_validation_result(original, payload)
+
+
+def validate_min_roos_params(**kwargs) -> dict[str, Any]:
+    """Compatibility payload view of the read-only validation result."""
+    return inspect_min_roos_params(**kwargs).payload
+
+
+_validate_min_roos_params = validate_min_roos_params
 
 
 def _reuse_existing_min_roos_params_if_compatible(
@@ -846,19 +874,7 @@ def _reuse_existing_min_roos_params_if_compatible(
 
 
 def _temporary_environment(values: dict[str, str]):
-    class _Env:
-        def __enter__(self):
-            self.before = {key: os.environ.get(key) for key in values}
-            os.environ.update(values)
-            return self
-        def __exit__(self, exc_type, exc, tb):
-            for key, prior in self.before.items():
-                if prior is None:
-                    os.environ.pop(key, None)
-                else:
-                    os.environ[key] = prior
-            return False
-    return _Env()
+    return temporary_process_environment(values)
 
 
 def _resolve_optimizer_arm_requested_policy_params_path(
@@ -1084,6 +1100,7 @@ def _run_optimizer_arm(*, root, args, settings, baseline_contract, model_artifac
             arm_id=arm_id,
         )
     )
+    params_payload = publish_validated_strategy_params(params_path, params_payload)
     summary = {
         "parameter_set": arm_id,
         "training_dl_enabled": bool(training_dl_enabled),
@@ -1254,40 +1271,10 @@ def _build_min_roos_schedule_contract(
     ``build_min_roos_fold_overrides``.
     """
 
-    first = pd.Timestamp(str(first_oos_date)).normalize()
-    last = pd.Timestamp(str(last_oos_date)).normalize()
-    if pd.isna(first) or pd.isna(last) or last < first:
-        raise ValueError("Selection Min ROOS期間不合法")
-    if int(train_window_months) < 1 or int(oos_months) < 1:
-        raise ValueError("Selection Min ROOS rolling months必須>=1")
-    meta = {
-        "window_mode": "fixed",
-        "first_oos_date": first.strftime("%Y-%m-%d"),
-        "last_oos_date": last.strftime("%Y-%m-%d"),
-        "train_window_months": int(train_window_months),
-        "oos_horizon_months": int(oos_months),
-    }
-    reference_payload = {
-        "reference_type": "canonical_min_roos_fixed_defaults",
-        "rolling_policy": meta,
-        "search_fields": list(MIN_ROOS_SEARCH_FIELDS),
-        "breakout_defaults": {
-            key: spec["default"] for key, spec in BREAKOUT_PARAM_SPECS.items()
-        },
-        "selection_defaults": {
-            key: spec["default"]
-            for key, spec in SELECTION_POLICY_PARAM_SPECS.items()
-        },
-        "optimizer_fixed_tp_percent": OPTIMIZER_FIXED_TP_PERCENT,
-    }
-    return {
-        "path": None,
-        "payload": {},
-        "meta": meta,
-        "sha256": _canonical_hash(reference_payload),
-        "reference_type": "canonical_min_roos_fixed_defaults",
-        "reference_payload": reference_payload,
-    }
+    return build_min_roos_schedule_contract(
+        first_oos_date=first_oos_date, last_oos_date=last_oos_date,
+        train_window_months=train_window_months, oos_months=oos_months,
+    )
 
 
 def _resolve_selection_historical_oos_period(
@@ -1393,31 +1380,14 @@ def prepare_selection_historical_p2_params(
                 },
             }
 
-    schedule_contract = _build_min_roos_schedule_contract(
+    schedule_contract = build_min_roos_schedule_contract(
         first_oos_date=resolved_first_oos_date,
         last_oos_date=resolved_last_oos_date,
         train_window_months=int(train_window_months),
         oos_months=int(oos_months),
+        strategy_id=strategy_id,
+        daily_search_profile=daily_search_profile,
     )
-    if strategy_id == "daily":
-        # A different source policy is required: no Breakout legacy schedule
-        # can certify a Daily-trained parameter fit.
-        reference = dict(schedule_contract["reference_payload"])
-        reference.update({
-            "search_fields": list(search_fields),
-            "entry_strategy": "Daily",
-            "entry_universe": "unscored_all_adjacent_quote_stockdays_v1",
-            "breakout_required": False,
-        })
-        if daily_search_profile is not None:
-            from strategies.daily.search_space import resolve_daily_search_profile
-            reference["daily_execution_contract"] = resolve_daily_search_profile(daily_search_profile)["execution_contract"]
-        schedule_contract = {
-            **schedule_contract,
-            "sha256": _canonical_hash(reference),
-            "reference_type": "canonical_daily_min_roos_fixed_defaults",
-            "reference_payload": reference,
-        }
     args = SimpleNamespace(
         dataset=str(dataset),
         filter_id=TRADE_PATH_BASE_FILTER_ID,
@@ -1988,7 +1958,7 @@ def prepare_extending_full_roos_params(
     )
 
 
-def _build_selection_full_roos_schedule_contract(
+def build_selection_full_roos_schedule_contract(
     *,
     first_oos_date: str,
     last_oos_date: str,
@@ -2024,13 +1994,17 @@ def _build_selection_full_roos_schedule_contract(
     }
 
 
-def _selection_full_roos_runtime_contract(
+_build_selection_full_roos_schedule_contract = build_selection_full_roos_schedule_contract
+
+
+def build_selection_full_roos_runtime_contract(
     *,
     root: Path,
     args,
     schedule_contract,
     dataset_identity_override: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """Resolve Full runtime inputs using only observed source data and settings."""
     payload = {
         "schema_version": SCHEMA_VERSION,
         "mode": "selection_full_roos_parameter_training",
@@ -2040,7 +2014,7 @@ def _selection_full_roos_runtime_contract(
         "dataset_identity": (
             dict(dataset_identity_override)
             if isinstance(dataset_identity_override, dict)
-            else build_source_data_inventory(root, args.dataset)
+            else _build_source_data_inventory(root, args.dataset)
         ),
         "parameter_reference": {
             "type": str(schedule_contract["reference_type"]),
@@ -2081,7 +2055,21 @@ def _selection_full_roos_runtime_contract(
     return payload
 
 
-def _selection_full_roos_optimizer_runtime_cache_identity(
+def _selection_full_roos_runtime_contract(
+    *, root: Path, args, schedule_contract, dataset_identity_override=None,
+) -> dict[str, Any]:
+    """Producer compatibility adapter; inspections use the public read-only builder."""
+    inventory = (
+        dataset_identity_override if isinstance(dataset_identity_override, dict)
+        else build_source_data_inventory(root, args.dataset)
+    )
+    return build_selection_full_roos_runtime_contract(
+        root=root, args=args, schedule_contract=schedule_contract,
+        dataset_identity_override=inventory,
+    )
+
+
+def selection_full_roos_optimizer_runtime_cache_identity(
     contract: dict[str, Any],
     *,
     optimizer_search_protocol: str | None,
@@ -2111,6 +2099,9 @@ def _selection_full_roos_optimizer_runtime_cache_identity(
     payload["parameter_reference"] = parameter_reference
     payload["schedule_extension_cache_contract"] = "fold_local_v1"
     return _canonical_hash(payload)
+
+
+_selection_full_roos_optimizer_runtime_cache_identity = selection_full_roos_optimizer_runtime_cache_identity
 
 
 def _recover_selection_full_roos_single_seed_metadata(
@@ -2184,17 +2175,15 @@ def _recover_selection_full_roos_single_seed_metadata(
     meta["random_seed_ensemble"] = effective
     repaired["meta"] = meta
     repaired["random_seed_ensemble"] = effective
-    print(
-        "[Optimizer] 已驗證原始fold及member seeds；"
-        "只修正既有rolling工件的seed metadata，不重新訓練或改動策略參數。"
-    )
-    return _write_strategy_param_json(path, repaired)
+    return normalize_strategy_param_payload_for_persistence(repaired)
 
 
-def _validate_selection_full_roos_params(*, path: Path, schedule_contract, args) -> dict[str, Any]:
+def inspect_selection_full_roos_params(*, path: Path, schedule_contract, args) -> ValidatedStrategyParameters:
+    """Validate a Full schedule without committing seed/adaptation migrations."""
     payload = _load_json(path)
     if payload is None:
         raise FileNotFoundError(f"Selection Full ROOS optimizer未產生參數工件: {path}")
+    original = copy.deepcopy(payload)
     meta = dict(payload.get("meta") or {})
     for key in ("first_oos_date", "last_oos_date"):
         try:
@@ -2347,8 +2336,15 @@ def _validate_selection_full_roos_params(*, path: Path, schedule_contract, args)
             else {}
         ),
     }
-    payload = _write_strategy_param_json(path, payload)
-    return payload
+    return _parameter_validation_result(original, payload)
+
+
+def validate_selection_full_roos_params(**kwargs) -> dict[str, Any]:
+    """Compatibility payload view of the read-only validation result."""
+    return inspect_selection_full_roos_params(**kwargs).payload
+
+
+_validate_selection_full_roos_params = validate_selection_full_roos_params
 
 
 def prepare_selection_historical_full_roos_params(
@@ -2645,6 +2641,7 @@ def prepare_selection_historical_full_roos_params(
             schedule_contract=schedule_contract,
             args=args,
         )
+    payload = publish_validated_strategy_params(params_path, payload)
     return {
         "params_path": params_path,
         "summary": {

@@ -2,6 +2,7 @@
 
 import ast
 import inspect
+from dataclasses import FrozenInstanceError, replace
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -12,6 +13,7 @@ from .checks import add_check, bind_synthetic_case
 
 def validate_portfolio_day_event_equity_owner_contract_case(_base_params):
     from core import portfolio_day_events, portfolio_day_equity, portfolio_engine
+    from core.portfolio_run_state import PortfolioRunState, PremarketReservation
 
     case_id = "META_PORTFOLIO_EVENT_EQUITY_OWNER"
     results, summary, check, _ = bind_synthetic_case(case_id, "portfolio_event_equity")
@@ -42,28 +44,62 @@ def validate_portfolio_day_event_equity_owner_contract_case(_base_params):
             return kwargs["cash"] - 50, kwargs["total_missed_buys"] + 2
         raise AssertionError(f"Unexpected portfolio phase: {phase}")
 
+    shadow_position = {"qty": 1000}
+    candidates = [{"ticker": "2330", "limit_px": 100.0, "qty": 1000,
+                   "proj_cost_milli": 100000000, "params_obj": _base_params,
+                   "shadow_position_state": shadow_position}]
+    reservation = PremarketReservation.capture(
+        available_cash=pre_market_cash, sizing_equity=1000,
+        action_candidates=candidates, max_positions=2, no_entry_capacity=False,
+    )
+    candidates.append({"ticker": "later"})
+    check("reserved_membership_does_not_follow_candidate_list_mutation", ("2330",),
+          tuple(row["ticker"] for row in reservation.action_candidates))
+    candidates[0].update(limit_px=200.0, qty=2000, proj_cost_milli=400000000)
+    reserved_order = reservation.action_candidates[0]
+    check("reserved_order_terms_do_not_follow_candidate_record_mutation",
+          (100.0, 1000, 100000000),
+          (reserved_order["limit_px"], reserved_order["qty"], reserved_order["proj_cost_milli"]))
+    try:
+        reserved_order["qty"] = 2000
+        order_read_only = False
+    except TypeError:
+        order_read_only = True
+    check("reserved_order_terms_reject_direct_mutation", (True, 1000),
+          (order_read_only, reserved_order["qty"]))
+    check("reservation_preserves_canonical_parameter_and_live_shadow_owners", True,
+          reserved_order["params_obj"] is _base_params
+          and reserved_order["shadow_position_state"] is shadow_position)
+    try:
+        reservation.available_cash = 5000
+        frozen = False
+    except FrozenInstanceError:
+        frozen = True
+    check("pre_market_spending_authority_is_frozen", True, frozen)
+    independent = PortfolioRunState(cash=1)
+    another = PortfolioRunState(cash=2)
+    independent.portfolio["one"] = {}
+    independent.fee_rebate_state["receivable_milli"] = 100
+    check("run_state_has_no_cross_run_mutable_defaults", ({}, 0),
+          (another.portfolio, another.fee_rebate_state["receivable_milli"]))
+    rotated_state = PortfolioRunState(
+        cash=1000, portfolio=portfolio, closed_trades_stats=closed,
+        trade_history=rows, fee_rebate_state=fee_rebate,
+    )
+    settled_state = PortfolioRunState(
+        cash=1020, portfolio=portfolio, closed_trades_stats=closed,
+        trade_history=rows, total_missed_sells=3, total_missed_buys=4,
+        normal_trade_count=1, extended_trade_count=2, fee_rebate_state=fee_rebate,
+    )
     rotate_args = dict(
-        today=today, day_context=context, portfolio=portfolio,
-        resource_action_candidates_today=[{"ticker": "2330"}],
-        max_positions=2, enable_rotation=True, sold_today=sold_today,
-        cash=1000, closed_trades_stats=closed, trade_history=rows,
-        is_training=False, normal_trade_count=0, extended_trade_count=0,
-        active_level_rows=active_levels, fee_rebate_state=fee_rebate,
-        profile_timing_enabled=False,
+        today=today, day_context=context, state=rotated_state, reservation=reservation,
+        enable_rotation=True, sold_today=sold_today, is_training=False,
+        active_level_rows=active_levels, profile_timing_enabled=False,
     )
     settle_args = dict(
-        today=today, day_context=context, portfolio=portfolio,
-        sold_today=sold_today, cash=1020, closed_trades_stats=closed,
-        trade_history=rows, is_training=False, total_missed_sells=3,
-        total_missed_buys=4, normal_trade_count=1, extended_trade_count=2,
-        active_level_rows=active_levels, active_reentry_watchlist={},
-        active_reentry_watchlists_by_member={}, fee_rebate_state=fee_rebate,
-        no_entry_capacity_today=False,
-        resource_action_candidates_today=[{"ticker": "2330"}],
-        max_positions=2, active_extended_signals={},
-        available_cash=pre_market_cash, sizing_equity=1000,
-        portfolio_entry_stats={}, replay_execution_rows=[],
-        extended_day_market_cache={}, profile_timing_enabled=False,
+        today=today, day_context=context, state=settled_state, reservation=reservation,
+        sold_today=sold_today, is_training=False, active_level_rows=active_levels,
+        replay_execution_rows=[], extended_day_market_cache={}, profile_timing_enabled=False,
     )
     # A future orchestrator edit must not invert the pre-market rotation,
     # settlement, entry, mark-to-market, and exposure chronology.
@@ -109,18 +145,21 @@ def validate_portfolio_day_event_equity_owner_contract_case(_base_params):
               snapshots[0][2] is portfolio_day_events.try_rotate_weakest_position
               and snapshots[1][2] is portfolio_day_events.settle_portfolio_positions
               and snapshots[2][2] is portfolio_day_events.execute_reserved_entries_for_day)
+        check("phase_result_matches_run_state", tuple(completed[:5]),
+              (settled_state.cash, settled_state.total_missed_sells, settled_state.total_missed_buys,
+               settled_state.normal_trade_count, settled_state.extended_trade_count))
         check("event_clock_off_is_zero", (0.0, 0.0, 0.0),
               (rotated.elapsed_sec, completed.settle_sec, completed.buy_sec))
-        check("one_member_reentry_routing", (settle_args["active_reentry_watchlist"], None),
+        check("one_member_reentry_routing", (settled_state.active_reentry_watchlist, None),
               (snapshots[1][1]["active_reentry_watchlist"],
                snapshots[1][1]["active_reentry_watchlists_by_member"]))
 
         stages.clear()
-        portfolio_day_events.settle_and_execute_portfolio_day(**{**settle_args, "no_entry_capacity_today": True})
+        portfolio_day_events.settle_and_execute_portfolio_day(**{**settle_args, "reservation": replace(reservation, no_entry_capacity=True)})
         check("capacity_full_does_not_allow_buy", ["settle_positions"], stages)
         stages.clear()
         portfolio_day_events.settle_and_execute_portfolio_day(**{
-            **settle_args, "resource_action_candidates_today": [],
+            **settle_args, "reservation": replace(reservation, action_candidates=()),
         })
         check("no_premarket_order_does_not_allow_buy", ["settle_positions"], stages)
         stages.clear()
@@ -133,8 +172,8 @@ def validate_portfolio_day_event_equity_owner_contract_case(_base_params):
         portfolio_day_events.settle_and_execute_portfolio_day(**{
             **settle_args,
             "day_context": SimpleNamespace(**{**vars(context), "use_param_ensemble": True}),
-            "active_reentry_watchlists_by_member": ensemble_watchlists,
-            "no_entry_capacity_today": True,
+            "state": replace(settled_state, active_reentry_watchlists_by_member=ensemble_watchlists),
+            "reservation": replace(reservation, no_entry_capacity=True),
         })
         check("multi_seed_reentry_routes_only_ensemble", (None, ensemble_watchlists),
               (snapshots[-1][1]["active_reentry_watchlist"],

@@ -7889,15 +7889,17 @@ class OracleEffectiveArtifactContractCases(TestCase):
                 for fn in (contracts.source_implementation_sha256, contracts._source_implementation_encodings):
                     fn.cache_clear()
 
-    def test_input_context_extension_preserves_certified_daily_oracle_truth(self):
+    def test_historical_loader_attestations_keep_current_metadata_owner_strict(self):
         from services.audit import daily_trade40_oracle as daily
         from services.audit import oracle_score_artifacts as sources
 
         shared_loader = ROOT / "filters/breakout_quality/daily_ranker_data.py"
-        model_input_files = {
-            ROOT / "filters/breakout_quality/daily_model_input_context.py",
-            ROOT / "filters/breakout_quality/trade_decision_context.py",
-        }
+        # The context module now owns the Oracle provider's sample metadata.
+        # The exact extraction is certified as a whole group; later changes to
+        # that owner are real source changes. FIT-only trade context stays out.
+        self.assertIn("filters/breakout_quality/daily_model_input_context.py",
+                      sources._DAILY_SCORE_SOURCE_MODULES)
+        model_input_files = {ROOT / "filters/breakout_quality/trade_decision_context.py"}
         hash_file = sources.compute_file_sha256
 
         def fingerprints(loader_sha):

@@ -4,6 +4,7 @@ CORE_TRADING_COVERAGE_TARGETS = [
     "core/backtest_core.py",
     "core/backtest_finalize.py",
     "core/portfolio_engine.py",
+    "core/portfolio_run_state.py",
     "core/portfolio_day_candidates.py",
     "core/portfolio_day_signal_lifecycle.py",
     "core/portfolio_replay_diagnostics.py",
@@ -29,6 +30,8 @@ CORE_TRADING_COVERAGE_TARGETS = [
     "core/trading_stop_exit_progress.py",
     "core/trading_fill_transaction.py",
     "services/trading/account_state.py",
+    "services/trading/state_snapshot.py",
+    "services/trading/workbench_snapshot.py",
     "services/trading/order_state.py",
     "services/trading/fill_reconciliation.py",
     "services/trading/daily_workflow.py",
@@ -98,6 +101,10 @@ TEST_SUITE_ORCHESTRATOR_COVERAGE_TARGETS = [
     "apps/test_suite.py",
 ]
 POLICY_CONTRACT_COVERAGE_TARGETS = [
+    "core/ranking_policy.py",
+    "core/artifact_inspection.py",
+    "services/optimizer/strategy_param_contracts.py",
+    "services/optimizer/execution_settings.py",
     "core/capital_policy.py",
     "core/selection_policy.py",
     "core/strategy_params.py",

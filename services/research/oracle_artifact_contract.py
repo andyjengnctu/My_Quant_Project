@@ -22,7 +22,7 @@ from uuid import uuid4
 from core.file_integrity import (
     canonical_json_sha256, is_sha256_hex, exclusive_file_lock, atomic_replace_with_retry,
 )
-from core.research_execution_equivalence import reviewed_calculation_sha256
+from core.research_execution_equivalence import reviewed_calculation_sha256, project_reviewed_source_inventory
 
 from core.daily_trade_path_capabilities import DAILY_TRUTH_CAPABILITIES, daily_truth_capability
 
@@ -359,6 +359,7 @@ def portfolio_candidate_execution_sha256(*, daily_execution_contract: str | None
         "core/portfolio_entry_policy.py", "core/portfolio_param_runtime.py",
         "core/portfolio_fast_data.py", "core/portfolio_stats.py",
         "core/portfolio_fast_access.py",
+        "core/ranking_policy.py", "core/portfolio_run_state.py",
         "core/buy_sort.py", "core/backtest_core.py", "core/backtest_finalize.py",
         "core/seed_ensemble_policy.py", "core/history_filters.py",
         "services/portfolio_replay.py", "services/portfolio_replay_runtime.py",
@@ -384,7 +385,9 @@ def portfolio_candidate_execution_sha256(*, daily_execution_contract: str | None
         parsed = ast.parse(path.read_text(encoding="utf-8-sig"))
         parts[relative] = canonical_json_sha256(
             _syntax_payload(_CalculationSyntax().visit(parsed)))
-    return canonical_json_sha256(parts)
+    return canonical_json_sha256(project_reviewed_source_inventory(
+        parts, scope="portfolio_candidates", project_root=code_root,
+    ))
 
 
 def _source_implementation_parts(recipe: str, profile_id: str) -> dict[str, str]:

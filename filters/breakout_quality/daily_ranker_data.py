@@ -8,6 +8,8 @@ materialized on demand by the existing breakout-quality feature function.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from copy import deepcopy
+import logging
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from time import monotonic
@@ -113,6 +115,12 @@ from filters.breakout_quality.workflow_io import (
     load_dataset_frame,
     load_validated_dataset_bundle,
 )
+
+
+from filters.breakout_quality.daily_sample_accumulator import DailySampleAccumulator, DailyTickerSamples
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class LazyDailyFeatureBank:
@@ -1252,6 +1260,17 @@ def _eligible_real_path_materialization_positions(
 
 
 @dataclass(frozen=True)
+class DailyTickerExclusion:
+    """Execution diagnostics only; never part of sample or FIT identity."""
+
+    ticker: str
+    stage: str
+    reason_code: str
+    exception_type: str | None = None
+    message: str | None = None
+
+
+@dataclass(frozen=True)
 class _PreparedRealPathTicker:
     """One verified stock preparation, returned to the ordered dataset consumer.
 
@@ -1264,6 +1283,31 @@ class _PreparedRealPathTicker:
     benchmark_positions: np.ndarray | None = None
     frame_dates: pd.DatetimeIndex | None = None
     completed: Any = None
+    exclusion: DailyTickerExclusion | None = None
+
+
+def _read_daily_ticker(ticker: str, path: Path, *, min_rows: int) -> _PreparedRealPathTicker:
+    """Preserve the existing skip policy while retaining its original cause."""
+    try:
+        return _PreparedRealPathTicker(frame=load_dataset_frame(path, ticker, min_rows=min_rows))
+    except (OSError, UnicodeDecodeError, ValueError, KeyError, TypeError) as exc:
+        return _PreparedRealPathTicker(
+            frame=None,
+            exclusion=DailyTickerExclusion(
+                ticker=ticker, stage="read", reason_code="dataset_read_failed",
+                exception_type=type(exc).__name__, message=str(exc),
+            ),
+        )
+
+
+def _record_daily_exclusion(exclusion: DailyTickerExclusion) -> None:
+    """The parent records serial and worker outcomes in canonical input order."""
+    log = _LOGGER.warning if exclusion.exception_type else _LOGGER.info
+    log(
+        "Daily ticker excluded: ticker=%s stage=%s reason=%s exception=%s message=%s",
+        exclusion.ticker, exclusion.stage, exclusion.reason_code,
+        exclusion.exception_type, exclusion.message,
+    )
 
 
 def _prepare_real_path_ticker(
@@ -1278,10 +1322,10 @@ def _prepare_real_path_ticker(
     read and materializer call would otherwise repeat all source parsing,
     eligibility, teacher preflight and cache hash checks for every ticker.
     """
-    try:
-        frame = load_dataset_frame(path, ticker, min_rows=min_rows)
-    except (OSError, UnicodeDecodeError, ValueError, KeyError, TypeError):
-        return _PreparedRealPathTicker(frame=None)
+    prepared = _read_daily_ticker(ticker, path, min_rows=min_rows)
+    frame = prepared.frame
+    if frame is None:
+        return prepared
     if len(frame) <= first_pos:
         return _PreparedRealPathTicker(frame=frame)
     positions, benchmark_positions, frame_dates = _eligible_daily_stock_positions(
@@ -1317,6 +1361,7 @@ def load_daily_universal_ranker_data(
     extend_score_eligibility_to_source_tail: bool = False,
     oracle_evaluation_start_date: str | None = None,
     target_materializer=None,
+    target_teacher=None,
     target_lineage: dict[str, Any] | None = None,
     feature_price_source: dict[str, Any] | None = None,
     feature_trade_count_source: dict[str, Any] | None = None,
@@ -1415,7 +1460,7 @@ def load_daily_universal_ranker_data(
 
         model_input_context = bind_daily_model_input_context(
             architecture_descriptor, trade_path_mode=trade_path_mode,
-            target_materializer=target_materializer,
+            target_teacher=target_teacher,
         )
     if bool(model_spec.use_dataset_context) != (has_shared_context or model_input_context is not None):
         raise ValueError("daily universal ranker architecture/context contract不一致")
@@ -1516,49 +1561,16 @@ def load_daily_universal_ranker_data(
             get_strategy_comparison_settings("selection_pit").param_policy
         ).strip()
         risk_schedule = load_min_roos_risk_schedule(root, param_policy=risk_param_policy)
-    tickers: list[str] = []
-    frames: list[pd.DataFrame] = []
-
-    # Keep target-valid rows first in the exact historical ticker/date order.  This preserves
-    # the scientific training universe while allowing additional inference-only rows to be
-    # appended without making score availability depend on future target completion.
-    valid_ticker_id_chunks: list[np.ndarray] = []
-    valid_source_pos_chunks: list[np.ndarray] = []
-    valid_benchmark_pos_chunks: list[np.ndarray] = []
-    valid_date_chunks: list[np.ndarray] = []
-    valid_label_end_chunks: list[np.ndarray] = []
-    valid_target_chunks: list[np.ndarray] = []
-    # Only money-denominated targets need a separate, canonical R diagnostic.
-    valid_trade_r_diagnostic_chunks: list[np.ndarray] = []
-    # Only money-denominated targets need a separate, canonical R diagnostic.
-    valid_trade_r_diagnostic_chunks: list[np.ndarray] = []
-    valid_context_chunks: list[np.ndarray] = []
-    valid_favorable_chunks: list[np.ndarray] = []
-    valid_adverse_chunks: list[np.ndarray] = []
-    valid_opportunity_bar_chunks: list[np.ndarray] = []
-    valid_first_breach_bar_chunks: list[np.ndarray] = []
-    valid_opportunity_date_chunks: list[np.ndarray] = []
-    valid_first_breach_date_chunks: list[np.ndarray] = []
-    valid_minimum_low_return_chunks: list[np.ndarray] = []
-    valid_standard_price_mature_chunks: list[np.ndarray] = []
-
-    inference_ticker_id_chunks: list[np.ndarray] = []
-    inference_source_pos_chunks: list[np.ndarray] = []
-    inference_benchmark_pos_chunks: list[np.ndarray] = []
-    inference_date_chunks: list[np.ndarray] = []
-    inference_context_chunks: list[np.ndarray] = []
-    # Common 40D prices have already been computed by the canonical target
-    # batch before valid/NULL rows are separated. Carry the inference-only
-    # values forward instead of recomputing the same 40-session windows after
-    # constructing the group table (potentially hundreds of thousands of rows).
-    inference_price_favorable_chunks: list[np.ndarray] = []
-    inference_price_adverse_chunks: list[np.ndarray] = []
-    pending_inference_only_tickers: list[tuple] = []
     skipped_tickers = 0
     processed_tickers = 0
     target_valid_so_far = 0
     trade_diagnostic_r_required = (
         trade_path_mode and str(target_lineage.get("value_field") or "raw_net_r") == "raw_net_pnl"
+    )
+    samples = DailySampleAccumulator(
+        sample_universe_horizon=sample_universe_horizon,
+        trade_path_mode=trade_path_mode,
+        trade_diagnostic_r_required=trade_diagnostic_r_required,
     )
     stock_input_count = sum(1 for raw_ticker, _path in csv_inputs if str(raw_ticker) != benchmark_ticker)
     if progress_callback is not None:
@@ -1609,21 +1621,20 @@ def load_daily_universal_ranker_data(
         processed_tickers += 1
         prepared = None if prepared_stocks is None else prepared_stocks.pop(input_index)
         if prepared is None:
-            try:
-                frame = load_dataset_frame(path, ticker, min_rows=min_rows)
-            except (OSError, UnicodeDecodeError, ValueError, KeyError, TypeError):
-                skipped_tickers += 1
-                if progress_callback is not None:
-                    progress_callback(processed_tickers, stock_input_count, target_valid_so_far, skipped_tickers)
-                continue
+            read_outcome = _read_daily_ticker(ticker, path, min_rows=min_rows)
         else:
-            frame = prepared.frame
-            if frame is None:
-                skipped_tickers += 1
-                if progress_callback is not None:
-                    progress_callback(processed_tickers, stock_input_count, target_valid_so_far, skipped_tickers)
-                continue
+            read_outcome = prepared
+        frame = read_outcome.frame
+        if frame is None:
+            if read_outcome.exclusion is None:
+                raise ValueError("Prepared daily ticker lacks exclusion evidence")
+            _record_daily_exclusion(read_outcome.exclusion)
+            skipped_tickers += 1
+            if progress_callback is not None:
+                progress_callback(processed_tickers, stock_input_count, target_valid_so_far, skipped_tickers)
+            continue
         if len(frame) <= first_pos:
+            _record_daily_exclusion(DailyTickerExclusion(ticker, "eligibility", "insufficient_history"))
             skipped_tickers += 1
             if progress_callback is not None:
                 progress_callback(processed_tickers, stock_input_count, target_valid_so_far, skipped_tickers)
@@ -1643,6 +1654,7 @@ def load_daily_universal_ranker_data(
                 )
             )
         if len(local_positions) == 0:
+            _record_daily_exclusion(DailyTickerExclusion(ticker, "eligibility", "no_eligible_stock_days"))
             skipped_tickers += 1
             if progress_callback is not None:
                 progress_callback(processed_tickers, stock_input_count, target_valid_so_far, skipped_tickers)
@@ -1793,6 +1805,7 @@ def load_daily_universal_ranker_data(
                 local_first_breach_bar = local_first_breach_bar[keep]
                 local_minimum_low_return = local_minimum_low_return[keep]
                 if len(local_positions) == 0:
+                    _record_daily_exclusion(DailyTickerExclusion(ticker, "context", "no_context_eligible_stock_days"))
                     skipped_tickers += 1
                     if progress_callback is not None:
                         progress_callback(processed_tickers, stock_input_count, target_valid_so_far, skipped_tickers)
@@ -1802,154 +1815,43 @@ def load_daily_universal_ranker_data(
         if progress_callback is not None:
             progress_callback(processed_tickers, stock_input_count, target_valid_so_far, skipped_tickers)
 
-        valid_positions = local_positions[local_target_valid]
-        valid_benchmark_positions = local_benchmark_positions[local_target_valid]
-        valid_targets = local_targets[local_target_valid]
-        valid_context = local_context[local_target_valid]
-        valid_favorable = local_favorable[local_target_valid]
-        valid_adverse = local_adverse[local_target_valid]
-        valid_opportunity_bar = local_opportunity_bar[local_target_valid]
-        valid_first_breach_bar = local_first_breach_bar[local_target_valid]
-        valid_minimum_low_return = local_minimum_low_return[local_target_valid]
-        invalid_positions = local_positions[~local_target_valid]
-        invalid_benchmark_positions = local_benchmark_positions[~local_target_valid]
-        invalid_context = local_context[~local_target_valid]
+        samples.append(DailyTickerSamples(
+            ticker=ticker,
+            frame=frame,
+            local_positions=local_positions,
+            local_benchmark_positions=local_benchmark_positions,
+            frame_dates=frame_dates,
+            local_target_valid=local_target_valid,
+            local_targets=local_targets,
+            local_context=local_context,
+            local_favorable=local_favorable,
+            local_adverse=local_adverse,
+            local_opportunity_bar=local_opportunity_bar,
+            local_first_breach_bar=local_first_breach_bar,
+            local_minimum_low_return=local_minimum_low_return,
+            local_label_end_dates=local_label_end_dates,
+            local_standard_price_mature=local_standard_price_mature,
+            local_trade_r_diagnostic=(local_trade_r_diagnostic if trade_diagnostic_r_required else None),
+        ))
 
-        if len(valid_positions):
-            ticker_id = len(tickers)
-            tickers.append(ticker)
-            frames.append(frame)
-            count = len(valid_positions)
-            valid_ticker_id_chunks.append(np.full(count, ticker_id, dtype=np.int32))
-            valid_source_pos_chunks.append(np.asarray(valid_positions, dtype=np.int32))
-            valid_benchmark_pos_chunks.append(
-                np.asarray(valid_benchmark_positions, dtype=np.int32)
-            )
-            valid_date_chunks.append(
-                frame_dates.take(valid_positions).to_numpy(dtype="datetime64[D]")
-            )
-            valid_label_end_chunks.append(
-                np.asarray(local_label_end_dates[local_target_valid], dtype="datetime64[D]")
-                if local_label_end_dates is not None else
-                frame_dates.take(valid_positions + sample_universe_horizon).to_numpy(
-                    dtype="datetime64[D]"
-                )
-            )
-            valid_target_chunks.append(np.asarray(valid_targets, dtype=np.float32))
-            if trade_diagnostic_r_required:
-                valid_trade_r_diagnostic_chunks.append(np.asarray(
-                    local_trade_r_diagnostic[local_target_valid], dtype=np.float32,
-                ))
-            valid_context_chunks.append(np.asarray(valid_context, dtype=np.float32))
-            valid_favorable_chunks.append(np.asarray(valid_favorable, dtype=np.float32))
-            valid_adverse_chunks.append(np.asarray(valid_adverse, dtype=np.float32))
-            valid_opportunity_bar_chunks.append(np.asarray(valid_opportunity_bar, dtype=np.int16))
-            valid_first_breach_bar_chunks.append(np.asarray(valid_first_breach_bar, dtype=np.int16))
-            opportunity_dates = np.full(
-                len(valid_positions), np.datetime64("NaT"), dtype="datetime64[D]"
-            )
-            opportunity_mask = np.asarray(valid_opportunity_bar, dtype=np.int64) >= 1
-            if bool(np.any(opportunity_mask)):
-                opportunity_positions = (
-                    valid_positions[opportunity_mask]
-                    + np.asarray(valid_opportunity_bar, dtype=np.int64)[opportunity_mask]
-                )
-                opportunity_dates[opportunity_mask] = frame_dates.take(
-                    opportunity_positions
-                ).to_numpy(dtype="datetime64[D]")
-            valid_opportunity_date_chunks.append(opportunity_dates)
-            breach_dates = np.full(len(valid_positions), np.datetime64("NaT"), dtype="datetime64[D]")
-            breach_mask = np.asarray(valid_first_breach_bar, dtype=np.int64) >= 1
-            if bool(np.any(breach_mask)):
-                breach_positions = (
-                    valid_positions[breach_mask]
-                    + np.asarray(valid_first_breach_bar, dtype=np.int64)[breach_mask]
-                )
-                breach_dates[breach_mask] = frame_dates.take(breach_positions).to_numpy(
-                    dtype="datetime64[D]"
-                )
-            valid_first_breach_date_chunks.append(breach_dates)
-            valid_minimum_low_return_chunks.append(np.asarray(valid_minimum_low_return, dtype=np.float32))
-            if trade_path_mode:
-                valid_standard_price_mature_chunks.append(
-                    np.asarray(local_standard_price_mature[local_target_valid], dtype=bool)
-                )
-            if len(invalid_positions):
-                inference_ticker_id_chunks.append(
-                    np.full(len(invalid_positions), ticker_id, dtype=np.int32)
-                )
-                inference_source_pos_chunks.append(
-                    np.asarray(invalid_positions, dtype=np.int32)
-                )
-                inference_benchmark_pos_chunks.append(
-                    np.asarray(invalid_benchmark_positions, dtype=np.int32)
-                )
-                inference_date_chunks.append(
-                    frame_dates.take(invalid_positions).to_numpy(dtype="datetime64[D]")
-                )
-                inference_context_chunks.append(np.asarray(invalid_context, dtype=np.float32))
-                if trade_path_mode:
-                    inference_price_favorable_chunks.append(np.asarray(
-                        local_favorable[~local_target_valid], dtype=np.float32,
-                    ))
-                    inference_price_adverse_chunks.append(np.asarray(
-                        local_adverse[~local_target_valid], dtype=np.float32,
-                    ))
-        else:
-            # A ticker with no target-valid row can still be score-eligible.  Append these
-            # tickers after the historical training tickers so existing target-valid ticker
-            # identities and group ordering remain stable.
-            pending_inference_only_tickers.append(
-                (
-                    ticker,
-                    frame,
-                    np.asarray(invalid_positions, dtype=np.int32),
-                    np.asarray(invalid_benchmark_positions, dtype=np.int32),
-                    frame_dates,
-                    np.asarray(invalid_context, dtype=np.float32),
-                    np.asarray(local_favorable[~local_target_valid], dtype=np.float32) if trade_path_mode else None,
-                    np.asarray(local_adverse[~local_target_valid], dtype=np.float32) if trade_path_mode else None,
-                )
-            )
-
-    if not valid_target_chunks:
+    if not samples.valid_target_chunks:
         raise ValueError("daily universal ranker沒有任何有效target stock-day sample")
 
-    for (ticker, frame, positions, benchmark_positions_local, frame_dates,
-         pending_context, pending_favorable, pending_adverse) in pending_inference_only_tickers:
-        if len(positions) == 0:
-            continue
-        ticker_id = len(tickers)
-        tickers.append(ticker)
-        frames.append(frame)
-        inference_ticker_id_chunks.append(
-            np.full(len(positions), ticker_id, dtype=np.int32)
-        )
-        inference_source_pos_chunks.append(np.asarray(positions, dtype=np.int32))
-        inference_benchmark_pos_chunks.append(
-            np.asarray(benchmark_positions_local, dtype=np.int32)
-        )
-        inference_date_chunks.append(
-            frame_dates.take(positions).to_numpy(dtype="datetime64[D]")
-        )
-        inference_context_chunks.append(np.asarray(pending_context, dtype=np.float32))
-        if trade_path_mode:
-            inference_price_favorable_chunks.append(np.asarray(pending_favorable, dtype=np.float32))
-            inference_price_adverse_chunks.append(np.asarray(pending_adverse, dtype=np.float32))
+    samples.finish_inference_only_tickers()
 
-    valid_ticker_ids = np.concatenate(valid_ticker_id_chunks)
-    valid_source_positions = np.concatenate(valid_source_pos_chunks)
-    valid_benchmark_positions = np.concatenate(valid_benchmark_pos_chunks)
-    valid_dates = np.concatenate(valid_date_chunks)
-    valid_label_end_dates = np.concatenate(valid_label_end_chunks)
-    valid_targets = np.concatenate(valid_target_chunks)
-    valid_favorable = np.concatenate(valid_favorable_chunks)
-    valid_adverse = np.concatenate(valid_adverse_chunks)
-    valid_opportunity_bar = np.concatenate(valid_opportunity_bar_chunks)
-    valid_first_breach_bar = np.concatenate(valid_first_breach_bar_chunks)
-    valid_opportunity_dates = np.concatenate(valid_opportunity_date_chunks)
-    valid_first_breach_dates = np.concatenate(valid_first_breach_date_chunks)
-    valid_minimum_low_return = np.concatenate(valid_minimum_low_return_chunks)
+    valid_ticker_ids = np.concatenate(samples.valid_ticker_id_chunks)
+    valid_source_positions = np.concatenate(samples.valid_source_pos_chunks)
+    valid_benchmark_positions = np.concatenate(samples.valid_benchmark_pos_chunks)
+    valid_dates = np.concatenate(samples.valid_date_chunks)
+    valid_label_end_dates = np.concatenate(samples.valid_label_end_chunks)
+    valid_targets = np.concatenate(samples.valid_target_chunks)
+    valid_favorable = np.concatenate(samples.valid_favorable_chunks)
+    valid_adverse = np.concatenate(samples.valid_adverse_chunks)
+    valid_opportunity_bar = np.concatenate(samples.valid_opportunity_bar_chunks)
+    valid_first_breach_bar = np.concatenate(samples.valid_first_breach_bar_chunks)
+    valid_opportunity_dates = np.concatenate(samples.valid_opportunity_date_chunks)
+    valid_first_breach_dates = np.concatenate(samples.valid_first_breach_date_chunks)
+    valid_minimum_low_return = np.concatenate(samples.valid_minimum_low_return_chunks)
     valid_mfe_percentile = None
     valid_low_adverse_percentile = None
     if (
@@ -1966,14 +1868,14 @@ def load_daily_universal_ranker_data(
                 valid_dates,
             )
         )
-    valid_context = np.concatenate(valid_context_chunks, axis=0)
+    valid_context = np.concatenate(samples.valid_context_chunks, axis=0)
 
-    if inference_source_pos_chunks:
-        inference_ticker_ids = np.concatenate(inference_ticker_id_chunks)
-        inference_source_positions = np.concatenate(inference_source_pos_chunks)
-        inference_benchmark_positions = np.concatenate(inference_benchmark_pos_chunks)
-        inference_dates = np.concatenate(inference_date_chunks)
-        inference_context = np.concatenate(inference_context_chunks, axis=0)
+    if samples.inference_source_pos_chunks:
+        inference_ticker_ids = np.concatenate(samples.inference_ticker_id_chunks)
+        inference_source_positions = np.concatenate(samples.inference_source_pos_chunks)
+        inference_benchmark_positions = np.concatenate(samples.inference_benchmark_pos_chunks)
+        inference_dates = np.concatenate(samples.inference_date_chunks)
+        inference_context = np.concatenate(samples.inference_context_chunks, axis=0)
     else:
         inference_ticker_ids = np.empty(0, dtype=np.int32)
         inference_source_positions = np.empty(0, dtype=np.int32)
@@ -2004,10 +1906,10 @@ def load_daily_universal_ranker_data(
         ]
     )
     if trade_path_mode:
-        inference_favorable = (np.concatenate(inference_price_favorable_chunks)
-                               if inference_price_favorable_chunks else np.empty(0, dtype=np.float32))
-        inference_adverse = (np.concatenate(inference_price_adverse_chunks)
-                             if inference_price_adverse_chunks else np.empty(0, dtype=np.float32))
+        inference_favorable = (np.concatenate(samples.inference_price_favorable_chunks)
+                               if samples.inference_price_favorable_chunks else np.empty(0, dtype=np.float32))
+        inference_adverse = (np.concatenate(samples.inference_price_adverse_chunks)
+                             if samples.inference_price_adverse_chunks else np.empty(0, dtype=np.float32))
         if len(inference_favorable) != len(inference_dates) or len(inference_adverse) != len(inference_dates):
             raise ValueError("Real-path 40D evaluation price evidence / inference rows mismatch")
     else:
@@ -2033,7 +1935,7 @@ def load_daily_universal_ranker_data(
     target_valid_count = int(target_valid.sum())
     inference_only_count = int(group_count - target_valid_count)
     group_index = np.arange(group_count, dtype=np.int64)
-    ticker_categorical = pd.Categorical.from_codes(ticker_ids, categories=tickers)
+    ticker_categorical = pd.Categorical.from_codes(ticker_ids, categories=samples.tickers)
     group_table = pd.DataFrame(
         {
             "ticker": ticker_categorical,
@@ -2059,7 +1961,7 @@ def load_daily_universal_ranker_data(
         # diagnostics consume the R value from the very same executed trade.
         # Do not substitute it for the NetPnL training target or FIT identity.
         diagnostic_r = np.concatenate([
-            np.concatenate(valid_trade_r_diagnostic_chunks),
+            np.concatenate(samples.valid_trade_r_diagnostic_chunks),
             np.full(len(inference_dates), np.nan, dtype=np.float32),
         ])
         if np.any(target_valid & ~np.isfinite(diagnostic_r)):
@@ -2078,9 +1980,9 @@ def load_daily_universal_ranker_data(
         # for every ticker, without rescanning the full stock-day population
         # once per security. Preserve increasing group-index order within each.
         ticker_order = np.argsort(ticker_ids, kind="stable")
-        ticker_counts = np.bincount(ticker_ids, minlength=len(frames))
+        ticker_counts = np.bincount(ticker_ids, minlength=len(samples.frames))
         ticker_offsets = np.concatenate(([0], np.cumsum(ticker_counts)))
-        for ticker_id, frame in enumerate(frames):
+        for ticker_id, frame in enumerate(samples.frames):
             group_ids = ticker_order[ticker_offsets[ticker_id]:ticker_offsets[ticker_id + 1]]
             positions = np.asarray(source_positions[group_ids], dtype=np.int64)
             valid_future = positions + evaluation_horizon < len(frame)
@@ -2110,7 +2012,7 @@ def load_daily_universal_ranker_data(
         group_table["standard_common_40d_matured"] = price_mature
         group_table["standard_common_40d_price_end_date"] = pd.to_datetime(evaluation_maturity)
         if bool(np.any(target_valid & (price_mature != np.concatenate([
-                np.concatenate(valid_standard_price_mature_chunks),
+                np.concatenate(samples.valid_standard_price_mature_chunks),
                 np.zeros(len(inference_dates), dtype=bool),
             ])))):
             raise ValueError("Real-path 40D price maturity disagrees with canonical source")
@@ -2226,13 +2128,13 @@ def load_daily_universal_ranker_data(
         loader = load_aligned_observed_raw_quote_frame if use_quote_mask else load_aligned_alternate_ohlcv_frame
         raw_feature_benchmark = loader(raw_dir, benchmark_ticker, benchmark)
         raw_feature_frames = tuple(
-            loader(raw_dir, ticker, frame) for ticker, frame in zip(tickers, frames)
+            loader(raw_dir, ticker, frame) for ticker, frame in zip(samples.tickers, samples.frames)
         )
 
     trade_count_input = None
     if feature_trade_count_source is not None:
         trade_count_input = dict(feature_trade_count_source)
-        trade_count_input["ticker_names"] = tuple(tickers)
+        trade_count_input["ticker_names"] = tuple(samples.tickers)
         trade_count_input["benchmark_ticker"] = benchmark_ticker
         # A genuinely historical, independently timestamped source is mandatory.
         # Mask=0 is valid for occasional missing data; it is not permission to
@@ -2243,7 +2145,7 @@ def load_daily_universal_ranker_data(
                 pd.DatetimeIndex(frame.index)[pd.DatetimeIndex(frame.index) < cutoff],
                 ticker=ticker, calendar=trade_count_input["calendar"],
                 observations=trade_count_input["rows"],
-            )[1])) for ticker, frame in zip(tickers, frames)
+            )[1])) for ticker, frame in zip(samples.tickers, samples.frames)
         ]
         if sum(eligible) == 0:
             raise ValueError(
@@ -2260,7 +2162,7 @@ def load_daily_universal_ranker_data(
             raise ValueError("A1 PIT Data Gate BLOCKED: no contemporaneous 0050 transaction count in Selection")
 
     feature_bank = LazyDailyFeatureBank(
-        frames=tuple(frames),
+        frames=tuple(samples.frames),
         benchmark=benchmark,
         feature_frames=raw_feature_frames,
         feature_benchmark=raw_feature_benchmark,
@@ -2301,6 +2203,16 @@ def load_daily_universal_ranker_data(
         # The declarative target identity includes horizon; do not persist a
         # 40-bar ID with a 20-bar contract. Historical contracts are untouched.
         target_contract = {**target_contract, "target_id": target_id}
+    from filters.breakout_quality.daily_model_input_context import daily_context_metadata
+
+    context_metadata = daily_context_metadata(
+        model_input_context=model_input_context,
+        risk_context_features=RISK_GEOMETRY_CONTEXT_FEATURES,
+        use_risk_context=use_risk_context,
+        predicted_context_column=(predicted_context_spec.context_column if predicted_context_spec is not None else None),
+        use_predicted_scalar_context=use_predicted_scalar_context,
+        use_predicted_pair_weight_context=use_predicted_safety_pair_weight_context,
+    )
     target_manifest = {
         "target_id": target_id,
         "target_contract": target_contract,
@@ -2315,29 +2227,14 @@ def load_daily_universal_ranker_data(
         "target_valid_sample_count": target_valid_count,
         "score_eligible_sample_count": group_count,
         "inference_only_sample_count": inference_only_count,
-        "ticker_count": int(len(tickers)),
+        "ticker_count": int(len(samples.tickers)),
         "date_range": {
             "start": str(pd.Timestamp(group_table["date"].min()).date()),
             "end": str(pd.Timestamp(group_table["date"].max()).date()),
         },
         "feature_storage": "lazy_from_canonical_ohlcv_no_expanded_daily_feature_bank",
         "input_window_bars": input_window_bars,
-        **({"input_decision_context": dict(model_input_context.contract)}
-           if model_input_context is not None else {}),
-        "context_features": (
-            list(model_input_context.features)
-            if model_input_context is not None
-            else list(RISK_GEOMETRY_CONTEXT_FEATURES)
-            if use_risk_context
-            else [predicted_context_spec.context_column]
-            if use_predicted_scalar_context and predicted_context_spec is not None
-            else []
-        ),
-        "pair_weight_context_features": (
-            [predicted_context_spec.context_column]
-            if use_predicted_safety_pair_weight_context and predicted_context_spec is not None
-            else []
-        ),
+        **deepcopy(context_metadata),
         "pair_weight_context_contract": (
             get_predicted_safety_pair_weight_contract(execution_recipe.objective_policy.pair_weight_policy)
             if use_predicted_safety_pair_weight_context
@@ -2366,25 +2263,10 @@ def load_daily_universal_ranker_data(
         "score_eligible_sample_count": group_count,
         "target_valid_sample_count": target_valid_count,
         "inference_only_sample_count": inference_only_count,
-        "ticker_count": int(len(tickers)),
+        "ticker_count": int(len(samples.tickers)),
         "skipped_ticker_count": int(skipped_tickers),
         "feature_storage": "lazy",
-        **({"input_decision_context": dict(model_input_context.contract)}
-           if model_input_context is not None else {}),
-        "context_features": (
-            list(model_input_context.features)
-            if model_input_context is not None
-            else list(RISK_GEOMETRY_CONTEXT_FEATURES)
-            if use_risk_context
-            else [predicted_context_spec.context_column]
-            if use_predicted_scalar_context and predicted_context_spec is not None
-            else []
-        ),
-        "pair_weight_context_features": (
-            [predicted_context_spec.context_column]
-            if use_predicted_safety_pair_weight_context and predicted_context_spec is not None
-            else []
-        ),
+        **deepcopy(context_metadata),
         "risk_param_coverage_start": (
             None if risk_schedule is None else min(item.start_date for item in risk_schedule).date().isoformat()
         ),

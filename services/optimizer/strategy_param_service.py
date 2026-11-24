@@ -873,7 +873,7 @@ def _schedule_training_policy_reuse_projection(policy: dict[str, Any]) -> dict[s
     return {key: policy.get(key) for key in keys}
 
 
-def _canonical_schedule_build_contract(
+def build_canonical_strategy_parameter_contract(
     *,
     family: str,
     dataset: str | None = None,
@@ -915,6 +915,9 @@ def _canonical_schedule_build_contract(
         "search_fields": list(FULL_ROOS_SEARCH_FIELDS if family == "full" else MIN_ROOS_SEARCH_FIELDS),
         "schedule_start": "2021-01-01",
     }
+
+
+_canonical_schedule_build_contract = build_canonical_strategy_parameter_contract
 
 
 def _strategy_param_execution_overrides(

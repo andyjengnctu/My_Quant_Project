@@ -46,9 +46,9 @@ from core.trading_order_state import (
 from core.trading_stop_exit_progress import build_trading_stop_exit_progress
 from core.trading_tp_progress import build_trading_tp_half_progress
 from core.runtime_utils import get_taipei_now
-from services.trading.account_state import resolve_trading_account_state_path
+from services.trading.account_state import resolve_trading_account_state_path, load_trading_account_state
 from services.trading.fill_reconciliation import recover_trading_fill_transaction
-from services.trading.order_state import resolve_trading_order_state_path
+from services.trading.order_state import load_trading_order_state, resolve_trading_order_state_path
 from services.trading.strategy_param_runtime import resolve_trading_position_management_binding
 
 PROTECTION_PLAN_SCHEMA_VERSION = 1
@@ -561,16 +561,12 @@ def get_trading_protection_plan_read_model(
             "text_path": project_relative_display_path(text_path, project_root=root),
         }
 
-    account_path = resolve_trading_account_state_path(root)
-    order_path = resolve_trading_order_state_path(root)
+    account = load_trading_account_state(root, required=False)
+    orders = load_trading_order_state(root, required=False)
+    has_order_state = orders is not None
     fresh = False
-    if account_path.is_file():
-        account = load_json_strict(account_path)
-        validate_trading_account_state(account)
-        if order_path.is_file():
-            orders = load_json_strict(order_path)
-            validate_trading_order_state(orders)
-        else:
+    if account is not None:
+        if orders is None:
             orders = build_empty_trading_order_state(
                 timestamp=get_taipei_now().isoformat(timespec="seconds"),
                 mutation_id="position-lineage-read-only-order-state",
@@ -584,7 +580,7 @@ def get_trading_protection_plan_read_model(
 
     stale_active_order_ids: list[str] = []
     stale_active_tickers: set[str] = set()
-    if fresh and account_path.is_file() and order_path.is_file():
+    if fresh and account is not None and has_order_state:
         current_positions = {str(row.get("ticker") or ""): row for row in plan.get("positions") or []}
         for order in active_trading_protection_orders(orders):
             ticker = str(order.get("ticker") or "")

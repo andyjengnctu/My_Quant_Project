@@ -29,6 +29,7 @@ import tempfile
 from threading import Lock
 import time
 from typing import Any, Callable
+from core.artifact_inspection import ArtifactInspection, InspectionStatus
 
 import numpy as np
 import pandas as pd
@@ -87,6 +88,7 @@ from core.file_integrity import (
     exclusive_file_lock,
     sibling_publication_lock_path,
     load_json_object_or_none,
+    load_json_strict,
 )
 from core.training_progress import (
     read_trainer_epoch_progress,
@@ -3492,9 +3494,9 @@ def _load_validated_scientific_observations(
     }
 
 
-def _validate_scientific_observation_manifest(
+def inspect_robustness_scientific_observations(
     run_root: Path,
-) -> dict[str, Any] | None:
+) -> ArtifactInspection[dict[str, Any]]:
     """Validate exact-fingerprint scientific evidence.
 
     This validator authenticates one source run under its exact fingerprint.
@@ -3505,31 +3507,38 @@ def _validate_scientific_observation_manifest(
 
     evidence_path = _scientific_observation_manifest_path(run_root)
     if not evidence_path.is_file():
-        return None
+        return ArtifactInspection(InspectionStatus.MISSING, "scientific observation manifest is missing")
     try:
-        evidence = _read_json(evidence_path)
+        evidence = load_json_strict(evidence_path)
+        if not isinstance(evidence, dict):
+            raise ValueError("scientific observation manifest must be an object")
         if int(evidence.get("schema_version") or 0) != SCIENTIFIC_OBSERVATIONS_SCHEMA_VERSION:
-            return None
+            return ArtifactInspection(InspectionStatus.INCOMPATIBLE, "scientific observation schema version is unsupported")
         if str(evidence.get("status") or "") != "READY":
-            return None
+            return ArtifactInspection(InspectionStatus.INCOMPATIBLE, "scientific observation status is not READY")
         contract = dict(evidence.get("contract") or {})
         fingerprint = str(contract.get("fingerprint") or "")
         if not fingerprint or fingerprint != str(evidence.get("scientific_fingerprint") or ""):
-            return None
+            return ArtifactInspection(InspectionStatus.INVALID, "scientific observation fingerprint is inconsistent")
         if fingerprint != Path(run_root).name:
-            return None
+            return ArtifactInspection(InspectionStatus.INVALID, "scientific observation fingerprint does not match run directory")
         validated = _load_validated_scientific_observations(
             run_root,
             contract=contract,
             scientific_artifacts=dict(evidence.get("artifacts") or {}),
         )
-        return {
+        return ArtifactInspection(InspectionStatus.READY, "", {
             "evidence": evidence,
             "contract": contract,
             **validated,
-        }
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError, ValueError):
-        return None
+        })
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+        return ArtifactInspection(InspectionStatus.INVALID, f"{type(exc).__name__}: {exc}")
+
+
+def _validate_scientific_observation_manifest(run_root: Path) -> dict[str, Any] | None:
+    result = inspect_robustness_scientific_observations(run_root)
+    return result.value if result.ready else None
 
 
 
@@ -4137,27 +4146,28 @@ def _materialize_registered_strategy_only_scientific_reuse(
         _write_seed_yearly_results(yearly_path, merged_yearly)
     return provenance
 
-def _validate_completed_run(
+def inspect_completed_robustness_run(
     run_root: Path,
     *,
     expected_contract: dict[str, Any] | None = None,
-    backfill_integrity: bool,
-) -> dict[str, Any] | None:
-    """Validate one completed result for exact-fingerprint no-op REUSE."""
+) -> ArtifactInspection[dict[str, Any]]:
+    """Inspect exact-fingerprint evidence without repairs, publication or training."""
 
     manifest_path = run_root / MANIFEST_FILENAME
     if not manifest_path.is_file():
-        return None
+        return ArtifactInspection(InspectionStatus.MISSING, "manifest.json is missing")
     try:
-        manifest = _read_json(manifest_path)
+        manifest = load_json_strict(manifest_path)
+        if not isinstance(manifest, dict):
+            raise ValueError("completed manifest must be an object")
         if str(manifest.get("status") or "") != "COMPLETED":
-            return None
+            return ArtifactInspection(InspectionStatus.INCOMPATIBLE, "manifest status is not COMPLETED")
         contract = dict(manifest.get("contract") or {})
         fingerprint = str(contract.get("fingerprint") or "")
         if not fingerprint or fingerprint != run_root.name:
-            return None
+            return ArtifactInspection(InspectionStatus.INVALID, "manifest fingerprint does not match run directory")
         if expected_contract is not None and fingerprint != str(expected_contract.get("fingerprint") or ""):
-            return None
+            return ArtifactInspection(InspectionStatus.INCOMPATIBLE, "requested fingerprint does not match completed run")
         validated = _load_validated_scientific_observations(
             run_root,
             contract=contract,
@@ -4170,21 +4180,17 @@ def _validate_completed_run(
         summary = _read_json(run_root / SUMMARY_FILENAME)
         summary_contract = dict(summary.get("contract") or {})
         if str(summary_contract.get("fingerprint") or "") != fingerprint:
-            return None
+            return ArtifactInspection(InspectionStatus.INVALID, "summary fingerprint does not match manifest")
         _validate_summary_seed_aggregates(summary, seed_frame=seed_frame, contract=contract)
         if not (run_root / REPORT_FILENAME).is_file():
-            return None
+            return ArtifactInspection(InspectionStatus.MISSING, "robustness_report.md is missing")
         durable = dict(manifest.get("durable_artifacts") or {})
         if durable:
             if not _validate_durable_result_artifacts(
                 run_root, durable, keys=tuple(DURABLE_RESULT_FILENAMES.keys())
             ):
-                return None
-        elif backfill_integrity:
-            manifest["durable_artifacts"] = _build_durable_result_artifacts(run_root)
-            manifest["integrity_backfilled_at_utc"] = datetime.now(timezone.utc).isoformat()
-            _write_json(manifest_path, manifest)
-        return {
+                return ArtifactInspection(InspectionStatus.INVALID, "durable artifact SHA/size does not match manifest")
+        return ArtifactInspection(InspectionStatus.READY, "", {
             "manifest": manifest,
             "contract": contract,
             "stochastic_arms": stochastic,
@@ -4192,9 +4198,30 @@ def _validate_completed_run(
             "seed_frame": seed_frame,
             "seed_yearly_frame": yearly_frame,
             "summary": summary,
-        }
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError, ValueError):
-        return None
+        })
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+        return ArtifactInspection(InspectionStatus.INVALID, f"{type(exc).__name__}: {exc}")
+
+
+def _validate_completed_run(
+    run_root: Path, *, expected_contract: dict[str, Any] | None = None,
+    backfill_integrity: bool = False,
+) -> dict[str, Any] | None:
+    """Compatibility projection; validation is always read-only.
+
+    The legacy flag is accepted for existing callers. The producer now commits
+    integrity backfills explicitly after successful inspection under its lock.
+    """
+    result = inspect_completed_robustness_run(run_root, expected_contract=expected_contract)
+    return result.value if result.ready else None
+
+
+def _publish_completed_integrity_backfill(run_root: Path, completed: dict[str, Any]) -> None:
+    manifest = completed["manifest"]
+    if not manifest.get("durable_artifacts"):
+        manifest["durable_artifacts"] = _build_durable_result_artifacts(run_root)
+        manifest["integrity_backfilled_at_utc"] = datetime.now(timezone.utc).isoformat()
+        _write_json(run_root / MANIFEST_FILENAME, manifest)
 
 
 def _resolve_existing_scientific_unit_states(
@@ -5842,9 +5869,10 @@ def _reuse_completed_robustness_run(
     """Validate/reuse an existing scientific run; upgrade presentation only."""
     if cfg.reuse_completed:
         completed_run = _validate_completed_run(
-            run_root, expected_contract=contract, backfill_integrity=True
+            run_root, expected_contract=contract
         )
         if completed_run is not None:
+            _publish_completed_integrity_backfill(run_root, completed_run)
             summary = dict(completed_run["summary"])
             seed_frame = completed_run["seed_frame"]
             seed_yearly_frame = completed_run["seed_yearly_frame"]

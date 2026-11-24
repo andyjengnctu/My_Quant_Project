@@ -244,3 +244,162 @@ def reviewed_calculation_sha256(relative: str, file_sha256: str, syntax_sha256: 
     if proof is not None and file_sha256 == proof["file_sha256"]:
         return proof["calculations"].get(syntax_sha256, syntax_sha256)
     return syntax_sha256
+
+
+# 714e22a4 behavior-preserving extraction proof (2026-11-24).
+# Original physical sources: test-branch-1_20261124_110521_714e22a4.zip
+# SHA256 a2abf3ec36259175936607decefe1975ba77f3b25c4f2c5ada1e2362b0f1be18.
+# Evidence: daily_equivalence.json (11 cases incl. FIT samples),
+# portfolio_fully_isolated_equivalence.json (75 complete replay/report cases), and
+# ranking_policy_equivalence.json (metadata/sort/selector + 5825 validations).
+# Optimizer public contracts: optimizer_contract_equivalence.json (10 payloads).
+# Full teacher schedule AST remains identical; daily_equivalence covers loader FIT.
+# Only this complete reviewed source subgraph is interchangeable. Extracted
+# helpers participate in the proof and remain normal sources after ANY edit.
+# Raw tuples are (actual, LF, CRLF); AST scopes use the existing calculation
+# projection. Baseline entries are the original inventory, not result hashes.
+_REVIEWED_SOURCE_INVENTORIES = {
+    'oracle_daily_provider': {
+        'current': {
+            'filters/breakout_quality/daily_ranker_data.py': (
+                'e2b61e98476854365099f2cddb7ce3bbb5c100110589e73bcfaab698628abbd3',
+                'e2b61e98476854365099f2cddb7ce3bbb5c100110589e73bcfaab698628abbd3',
+                'fe6fb8ae03e76037974822d286eb3e31e3af83542fe25a2bef7b2ddb18a45b78',
+            ),
+            'filters/breakout_quality/profile_ranker_data.py': (
+                'cb8722b62cd69dd0c598457ed0ba73ae3ce321e8e174824c7e9decf76d024c14',
+                'aa3513e0368dd9e5c10f1244c808a88ac702a8d5b8178b4ca76d8ccd66145de4',
+                'cb8722b62cd69dd0c598457ed0ba73ae3ce321e8e174824c7e9decf76d024c14',
+            ),
+            'filters/breakout_quality/daily_model_input_context.py': (
+                '7128ad7183a5291980565284948a9c8644f2962294d52b9604f51e7aa0f5b8ce',
+                '7128ad7183a5291980565284948a9c8644f2962294d52b9604f51e7aa0f5b8ce',
+                'c43ac2774516bc1bf24604240964688bd1426d78972b8badb169319d90248792',
+            ),
+            'filters/breakout_quality/daily_sample_accumulator.py': (
+                '157ee1eece719d53751ed9e478479406705eecd5ec0836fdf70505bf7e95f96e',
+                '157ee1eece719d53751ed9e478479406705eecd5ec0836fdf70505bf7e95f96e',
+                'acfa95a4323fa3bf24ab4287c9e0e211c763a96172e2cf118679dcd93ab28bc0',
+            ),
+        },
+        'baseline': {
+            'filters/breakout_quality/daily_ranker_data.py': (
+                '121be1928f6f1538e9678ace4f036bfff17d48688a6d84e3e0e95d8c40c34a0f',
+                '3ba49651c71a28574431646146c62fcfe0b2ae9ec88d467b9224e2eab44df00e',
+                '121be1928f6f1538e9678ace4f036bfff17d48688a6d84e3e0e95d8c40c34a0f',
+            ),
+            'filters/breakout_quality/profile_ranker_data.py': (
+                'd32a9fa95bed048591d886214da81b0b6fc4f9c128977514d742613263b4ec70',
+                '16166646333272683f5a0103a242a7a4a05f1c2433ae52031cb6bef91981fb38',
+                'd32a9fa95bed048591d886214da81b0b6fc4f9c128977514d742613263b4ec70',
+            ),
+        },
+    },
+    'portfolio_candidates': {
+        'current': {
+            'core/portfolio_engine.py': '7c21f8370583f494adcd1c32ead2f6fe9797ff8514e5a4f50797fd587517db0c',
+            'core/portfolio_day_events.py': '6862fd9d4be982c3ad0c4301a710ce7d4c929734129ff2cb85e797a8030cf5fd',
+            'core/portfolio_entry_selection.py': '710340465712a6fd981cb26e50a24f5491c7df9b9e55d8158a962c0c94927d3d',
+            'core/portfolio_entry_selection_common.py': '8d9b27ad4d13826468e68cc99db30f2dc9d742a6efce5512fba5be5fdab4dd68',
+            'core/buy_sort.py': 'cbeb650a94a4b5fae64c8874823e78ff1cad24d00377dd99a45c7fbad010d8a6',
+            'core/ranking_policy.py': 'a387239cf7a68b810eae75bb2547e713d7f10fad1dd3be91faa2740d59a2e96a',
+            'core/portfolio_run_state.py': '305cfec53a4aaf43ed24d3cd53c1d8d933704bad65e02e0c22bcf7d7753d2612',
+        },
+        'baseline': {
+            'core/portfolio_engine.py': '873926b452c753461ed6f2f3e48ecf9fd90a49a5b4f6fb18a5ef342ff9dc386a',
+            'core/portfolio_day_events.py': 'dbe579cf179949f616358833cda65ccae2b7435e9dfdf779ce208031889a3490',
+            'core/portfolio_entry_selection.py': '86f0aa7c0ecc82b2b0c8fe9be7b79a2afaa8fdf759cac9936357304af21da908',
+            'core/portfolio_entry_selection_common.py': '68eeba7b93662bb9dbc4b8936958c71f147ab2a1b88188f0c90f4501f1418438',
+            'core/buy_sort.py': 'f8867277b95b63d2ce7bba17c9ac31e5ceb095631d6e2079db461826f4c65893',
+        },
+    },
+    'full_oracle_teacher': {
+        'current': {
+            'services/audit/fulltrade_oracle_truth.py': (
+                'ca938aac814b0c79fcaed0e967de2b0cb9a1b7c55aa13e93e0eb354d9d66aad8',
+                'ca938aac814b0c79fcaed0e967de2b0cb9a1b7c55aa13e93e0eb354d9d66aad8',
+                '5890d09e9323b29958a02b3c3f793dd3cf4aaa0a36dad413f26f22e437aee41f',
+            ),
+            'services/breakout_quality/formal_fulltrade_training_source.py': (
+                '537b5ebf1babd809359da198aa5e51e3e28c159116a02ed589b77803fbaaab4a',
+                '537b5ebf1babd809359da198aa5e51e3e28c159116a02ed589b77803fbaaab4a',
+                '2bb6af226ab08a6e4c7f6858d0c4cb9b03d18ba1b5fc3e9a7a5fd3f8f9de1df8',
+            ),
+            'services/optimizer/strategy_param_service.py': (
+                '101edb44502a467b72b9e5f6fec46e29f8637d849718194a4f49976783d819ce',
+                '101edb44502a467b72b9e5f6fec46e29f8637d849718194a4f49976783d819ce',
+                'd1b7171126b546b1b2dc9cea497a6d820817bf1fb045c3d899c1c0085c9ce97e',
+            ),
+            'services/optimizer/strategy_param_training.py': (
+                'd8afe8fb44a734aa996a31aab531d46bcea197688b275fab4a932eb33acafc3d',
+                'c8538ceb13ecf497f8bb29539908e58e3eced10458e0aa8ec34d8f9d27ee05d6',
+                'd8afe8fb44a734aa996a31aab531d46bcea197688b275fab4a932eb33acafc3d',
+            ),
+            'services/optimizer/strategy_param_contracts.py': (
+                '4611f0888b8e5507189d6dc9998168fd98987e8eb4c7498879f1c7d669dc2bbb',
+                '4611f0888b8e5507189d6dc9998168fd98987e8eb4c7498879f1c7d669dc2bbb',
+                '65bee9800244a82eb572e9845f026409020bb25251321f7f5fdf5615e762cdf7',
+            ),
+        },
+        'baseline': {
+            'services/audit/fulltrade_oracle_truth.py': (
+                '9364926c2e44ae2187f960949150a91726594f95cac827d6059119e9d84585c0',
+                '9364926c2e44ae2187f960949150a91726594f95cac827d6059119e9d84585c0',
+                'e7dd953b0f5da048e478b029ec1950c6f4b96e0ec9112de29554abb31be342dc',
+            ),
+            'services/breakout_quality/formal_fulltrade_training_source.py': (
+                '9353261063413b6415f397c169731487de1c97875721656142a8b4001d72cba7',
+                '9353261063413b6415f397c169731487de1c97875721656142a8b4001d72cba7',
+                '2f32bc55283ad3bec50c5f46d1e20ab613ea86c69d180529a2030d47dae68e2f',
+            ),
+        },
+    },
+}
+
+def project_reviewed_source_inventory(parts, *, scope: str, project_root=None):
+    """Project one fully pinned refactor subgraph; preserve all other sources.
+
+    Raw values may be SHA strings or {None/LF/CRLF: SHA} encoding alternatives.
+    An external source fixture, incomplete group, or unreviewed owner/helper
+    revision retains the entire current group. No result identity is hardcoded.
+    """
+    from collections.abc import Mapping
+    from pathlib import Path
+
+    result = dict(parts)
+    code_root = Path(__file__).resolve().parents[1]
+    if project_root is not None and Path(project_root).resolve() != code_root:
+        return result
+    proof = _REVIEWED_SOURCE_INVENTORIES.get(scope)
+    if proof is None:
+        return result
+    encoded = None
+    for name, expected in proof["current"].items():
+        value = result.get(name)
+        is_encoded = isinstance(value, Mapping)
+        if encoded is None:
+            encoded = is_encoded
+        elif encoded != is_encoded:
+            return result
+        if isinstance(expected, str):
+            if value != expected:
+                return result
+        elif is_encoded:
+            if (set(value) != {None, b"\n", b"\r\n"}
+                    or value[None] not in expected
+                    or value[b"\n"] != expected[1]
+                    or value[b"\r\n"] != expected[2]):
+                return result
+        elif value not in expected:
+            return result
+    for name in proof["current"]:
+        previous = proof["baseline"].get(name)
+        if previous is None:
+            result.pop(name)
+        elif isinstance(previous, str):
+            result[name] = previous
+        elif encoded:
+            result[name] = {None: previous[0], b"\n": previous[1], b"\r\n": previous[2]}
+        else:
+            result[name] = previous[0]
+    return result

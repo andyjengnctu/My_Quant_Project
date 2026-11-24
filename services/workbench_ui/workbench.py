@@ -82,7 +82,6 @@ WORKBENCH_STARTUP_PANEL_DELAY_MS = 60
 # AI: Workbench can expose the same zero-quota consumer reconcile from more than
 # one center.  Serialize that mutation inside this GUI process so rapid tab
 # switching cannot rebuild/publish the same consumer generation concurrently.
-_WORKBENCH_LOCAL_RECONCILE_LOCK = threading.Lock()
 
 
 def run_workbench_local_reconcile_serialized(callback):
@@ -95,8 +94,8 @@ def run_workbench_local_reconcile_serialized(callback):
     consumer generation concurrently.
     """
 
-    with _WORKBENCH_LOCAL_RECONCILE_LOCK:
-        return callback()
+    from services.trading.workbench_snapshot import run_trading_local_reconcile_serialized
+    return run_trading_local_reconcile_serialized(callback)
 
 
 def _scale_right_sidebar_font_size(base_size):

@@ -40,10 +40,11 @@ from services.breakout_quality.formal_mintrade40_pit_source import (
 from services.breakout_quality.formal_mintrade40_training_source import (
     _current_p16_seed_artifact, inspect_formal_mintrade40_p16_teacher,
 )
-from services.optimizer.strategy_param_service import _canonical_schedule_build_contract
+from services.optimizer.strategy_param_service import build_canonical_strategy_parameter_contract as _canonical_schedule_build_contract
 from services.optimizer.strategy_param_training import (
-    FULL_ROOS_SEARCH_FIELDS, _build_selection_full_roos_schedule_contract,
-    _selection_full_roos_runtime_contract,
+    FULL_ROOS_SEARCH_FIELDS,
+    build_selection_full_roos_schedule_contract as _build_selection_full_roos_schedule_contract,
+    build_selection_full_roos_runtime_contract as _selection_full_roos_runtime_contract,
     prepare_selection_historical_full_roos_params,
 )
 
@@ -345,6 +346,7 @@ def resolve_fulltrade_loader_kwargs(*, project_root: str | Path, seed: int,
         project_root=project_root, seed=seed, authorized_build=authorized_build,
     )
     return {
+        "target_teacher": source,
         "target_materializer": partial(
             materialize_formal_mintrade40_pit_labels,
             source=source, expected_seed=seed, horizon_sessions=None,

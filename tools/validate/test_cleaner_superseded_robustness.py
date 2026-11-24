@@ -14,6 +14,7 @@ from unittest.mock import patch
 import pandas as pd
 
 from core.file_integrity import compute_observed_file_sha256, exclusive_file_lock, sibling_publication_lock_path
+from core.artifact_inspection import ArtifactInspection, InspectionStatus
 from services import cleanup_superseded_robustness as cleanup
 
 
@@ -88,7 +89,14 @@ class SupersededRobustnessTest(unittest.TestCase):
         stack.enter_context(patch.object(cleanup, "get_strategy_multi_seed_robustness_profiles", return_value=({"robustness_id": "generic"},)))
         stack.enter_context(patch.object(cleanup, "get_strategy_multi_seed_robustness_settings", return_value=self.cfg))
         stack.enter_context(patch.object(cleanup, "get_strategy_comparison_settings", return_value=self.settings))
-        stack.enter_context(patch.object(cleanup.owner, "_validate_completed_run", side_effect=lambda path, **kw: self.validated if path == self.root / self.new else None))
+        stack.enter_context(patch.object(
+            cleanup.owner, "inspect_completed_robustness_run",
+            side_effect=lambda path, **kw: (
+                ArtifactInspection(InspectionStatus.READY, "", self.validated)
+                if path == self.root / self.new else
+                ArtifactInspection(InspectionStatus.MISSING, "synthetic source missing")
+            ),
+        ))
         self.worker = SimpleNamespace(apply=True, hash_file=compute_observed_file_sha256,
                                       lifecycle=SimpleNamespace(removed=lambda path: None))
 

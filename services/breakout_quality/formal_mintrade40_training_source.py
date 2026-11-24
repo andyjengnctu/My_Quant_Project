@@ -284,6 +284,7 @@ def resolve_formal_mintrade40_loader_kwargs(
         if full_cycle else {}
     )
     return {
+        'target_teacher': source,
         'target_materializer': partial(
             materialize_formal_mintrade40_pit_labels,
             source=source, expected_seed=int(seed),

@@ -1,9 +1,9 @@
 import math
 
+from core.ranking_policy import get_ranking_policy_spec
+
 from core.capital_policy import resolve_portfolio_entry_budget
 from core.buy_sort import (
-    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY,
-    BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY_BASKET,
     RESOURCE_AWARE_BREAKOUT_QUALITY_RANKING_POLICIES,
     resolve_breakout_quality_ranking_policy,
 )
@@ -12,10 +12,8 @@ from core.portfolio_entry_plans import _build_cash_capped_entry_plan_for_candida
 
 
 def _candidate_binary_pass(candidate_row):
-    if candidate_row.get('breakout_quality_ranking_policy') not in {
-        BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY,
-        BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_BINARY_BASKET,
-    }:
+    spec = get_ranking_policy_spec(candidate_row.get('breakout_quality_ranking_policy'))
+    if spec is None or spec.score_kind != "binary":
         return False
     rank_payload = candidate_row.get('breakout_quality_rank')
     if not isinstance(rank_payload, dict) or not bool(rank_payload.get('available', False)):

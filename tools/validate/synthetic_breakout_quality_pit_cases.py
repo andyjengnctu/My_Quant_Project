@@ -2498,8 +2498,9 @@ def validate_breakout_quality_pit_training_performance_semantics_case(_base_para
 
     from .check_result_utils import run_unittest_capability_cases
     from .synthetic_daily_trade40_cases import ExecutionAccelerationCases
+    from .test_daily_sample_pipeline import DailySamplePipelineTests
     acceleration_checks, _details = run_unittest_capability_cases(
-        case_id, "synthetic_breakout_quality", (ExecutionAccelerationCases,),
+        case_id, "synthetic_breakout_quality", (ExecutionAccelerationCases, DailySamplePipelineTests),
     )
     results.extend(acceleration_checks)
 
