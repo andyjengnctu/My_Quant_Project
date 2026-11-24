@@ -250,6 +250,9 @@ def compute_counterfactual_trade40_batch(
     dates = pd.DatetimeIndex(frame.index).normalize()
     if (positions < 0).any() or (positions >= len(dates)).any():
         raise ValueError("counterfactual Trade40 positions outside sanitized price dates")
+    # Reuse the same normalized Timestamp objects during overlapping paths.
+    # Keep the index for vectorized alignment and signal-origin lookup.
+    date_values = tuple(dates)
     calendar_index = calendar.get_indexer(dates.take(positions))
     cutoff = (calendar[-1] if research_cutoff is None else
               pd.Timestamp(research_cutoff).normalize())
@@ -317,9 +320,9 @@ def compute_counterfactual_trade40_batch(
     previous_trade_day = None
     for information_pos in range(max_info_pos + 1):
         executable_pos = information_pos + 1
-        if executable_pos >= len(dates) or dates[information_pos] >= cutoff:
+        if executable_pos >= len(dates) or date_values[information_pos] >= cutoff:
             continue
-        trade_day = dates[executable_pos]
+        trade_day = date_values[executable_pos]
         # A historical teacher is allowed before OOS for FIT labels, but its
         # pending signal must not leak into the official evaluation segment.
         # The Oracle starts with no pending state on its first P16 session.
@@ -345,7 +348,7 @@ def compute_counterfactual_trade40_batch(
                 cache[3][information_pos], cache[0][information_pos],
                 active_period.params, ticker=ticker,
                 security_profile=frame.attrs.get("security_profile"),
-                signal_date=dates[information_pos],
+                signal_date=date_values[information_pos],
             )
         if information_pos in requested and pending is not None:
             decisions[information_pos] = deepcopy(
@@ -375,7 +378,7 @@ def compute_counterfactual_trade40_batch(
     cutoff_closeouts = 0
     prepared_inputs = prepare_trade_path_inputs(frame)
     for row, (position, calendar_pos) in enumerate(zip(positions, calendar_index)):
-        if calendar_pos < 0 or dates[position] >= last_research_session:
+        if calendar_pos < 0 or date_values[position] >= last_research_session:
             reasons.append("no_future_executable_research_session")
             continue
         horizon_expiry = (None if horizon_sessions is None or
@@ -395,7 +398,7 @@ def compute_counterfactual_trade40_batch(
         # An actual normal setup or a still-live continuation is required.
         # All other feature-eligible rows stay in the score cohort but have a
         # censored (NULL) economic outcome; they are NOT artificial new buys.
-        if active_period_for_date(dates[position + 1]) is None:
+        if active_period_for_date(date_values[position + 1]) is None:
             reasons.append("no_historical_effective_Min_param")
             continue
         state = decisions.get(int(position))
@@ -412,14 +415,14 @@ def compute_counterfactual_trade40_batch(
             reasons.append("diagnostic_signal_episode_only")
             continue
         params = state["_params_obj"]
-        active_period = active_period_for_date(dates[position + 1])
+        active_period = active_period_for_date(date_values[position + 1])
         if active_period is None:
             reasons.append("no_historical_effective_Min_param")
             continue
         observation = simulate_realized_trade_path_label(
             frame, ticker=ticker, signal_pos=origin_pos, params=params,
             teacher_effective_date=str(origin_day.date()),
-            precomputed_signals=active_signal_cache_for_date(dates[position + 1]),
+            precomputed_signals=active_signal_cache_for_date(date_values[position + 1]),
             horizon_end_date=expiry, decision_pos=int(position),
             starting_signal_state=state,
             active_signal_cache_resolver=active_signal_cache_for_date,
@@ -439,7 +442,7 @@ def compute_counterfactual_trade40_batch(
             raise ValueError("completed formal Min trade path has no executable exit date")
         if observed_end is not None:
             observed_day = pd.Timestamp(observed_end).normalize()
-            if observed_day < dates[position] or observed_day > expiry:
+            if observed_day < date_values[position] or observed_day > expiry:
                 raise ValueError("formal Min target completed outside its legal observation window")
             maturity_dates[row] = observed_day.to_datetime64().astype("datetime64[D]")
         if observation.realized_net_r is None:

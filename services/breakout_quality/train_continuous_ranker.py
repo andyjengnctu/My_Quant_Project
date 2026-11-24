@@ -932,8 +932,23 @@ def _date_coherent_batches(
     if len(dates) <= int(ids.max(initial=-1)):
         raise ValueError("date-coherent ranker group_dates長度不足")
     by_date: dict[pd.Timestamp, list[int]] = {}
-    for group_id in ids:
-        by_date.setdefault(pd.Timestamp(dates.iloc[int(group_id)]), []).append(int(group_id))
+    selected_dates = dates.iloc[ids].to_numpy()
+    if bool(pd.isna(selected_dates).any()):
+        # Preserve the historical ordering of NaT dictionary keys as well as its
+        # ordinary date keys. Normal research dates take the grouped fast path.
+        for group_id, date in zip(ids, selected_dates):
+            by_date.setdefault(pd.Timestamp(date), []).append(int(group_id))
+    else:
+        # Group in native pandas code instead of performing one pandas scalar
+        # lookup per stock/day on every epoch. Grouping preserves input order
+        # within each date (including repeated/negative IDs). Keep the original
+        # date sort, RNG shuffle and whole-date packing below unchanged.
+        by_date = {
+            pd.Timestamp(date): day_ids.tolist()
+            for date, day_ids in pd.Series(ids, index=selected_dates).groupby(
+                level=0, sort=False
+            )
+        }
     date_keys = np.asarray(sorted(by_date), dtype=object)
     rng = np.random.default_rng(int(seed))
     rng.shuffle(date_keys)

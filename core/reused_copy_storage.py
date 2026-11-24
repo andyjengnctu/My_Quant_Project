@@ -6,6 +6,7 @@ original CSV bytes even when its completed source predates scientific hashes.
 """
 from copy import deepcopy
 from contextvars import ContextVar
+from functools import lru_cache
 from hashlib import sha256
 import json
 from pathlib import Path
@@ -20,7 +21,7 @@ from core.strategy_compare_storage_evidence import (
 )
 from core.file_integrity import (
     atomic_write_json, compute_file_sha256, compute_observed_file_sha256, file_change_signature,
-    is_sha256_hex, load_json_strict,
+    is_sha256_hex, load_json_strict, load_json_object_or_none,
 )
 
 _SCHEMA = "unfinished_reused_copy_storage_v1"
@@ -269,6 +270,34 @@ def receipt_detail_source(path):
         _READING.reset(token)
 
 
+class _UnavailableRunReceipt(Exception):
+    """A failed read is absent for this call, never a reusable observation."""
+
+
+@lru_cache(maxsize=16)
+def _run_pair_integrity_record(path: Path, revision: tuple):
+    """Retain only the small receipt, never the run's large result tables."""
+    payload = load_json_object_or_none(path)
+    if file_change_signature(path) != revision:
+        raise ValueError("REUSE 完整性收據在讀取期間變動")
+    if not isinstance(payload, dict):
+        raise _UnavailableRunReceipt
+    return payload.get("pair_file_integrity")
+
+
+def _current_run_pair_integrity_record(path: Path):
+    # AI: Cache parsing, not authorization. Re-observe the physical revision on
+    # every read, including Windows ChangeTime for restored-mtime rewrites.
+    revision = file_change_signature(path)
+    try:
+        record = _run_pair_integrity_record(path, revision)
+    except _UnavailableRunReceipt:
+        return None
+    if file_change_signature(path) != revision:
+        raise ValueError("REUSE 完整性收據在驗證期間變動")
+    return record
+
+
 def detail_read_path(path):
     path = Path(path)
     if path.is_file():
@@ -280,14 +309,13 @@ def detail_read_path(path):
         return path
     # For pinned publications the inherited bytes must still match THIS pair's
     # existing receipt, even when an audit reads the CSV directly.
-    from core.file_integrity import compute_observed_file_sha256, load_json_object_or_none
+    from core.file_integrity import compute_observed_file_sha256
     from core import caller_baseline_storage as caller
     if caller.root_for(path) is not None:
         if compute_observed_file_sha256(source) != caller.expected_sha256(path):
             raise ValueError("caller baseline 來源與原有儲存收據不同")
         return source
-    payload = load_json_object_or_none(path.parents[2] / "strategy_comparison.json")
-    record = payload.get("pair_file_integrity") if isinstance(payload, dict) else None
+    record = _current_run_pair_integrity_record(path.parents[2] / "strategy_comparison.json")
     if record is not None:
         try:
             expected = record["pairs"][path.parent.name][path.name]

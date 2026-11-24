@@ -4,6 +4,7 @@ import contextlib
 from copy import deepcopy
 import io
 import json
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -82,6 +83,61 @@ class ReusedCopyStorageTest(unittest.TestCase):
                 source.write_bytes(b"!" * len(self.data))
                 with self.assertRaises(ValueError):
                     detail_read_path(target)
+
+    def test_repeated_detail_reads_share_only_unchanged_run_receipt(self):
+        source = self.complete(self.pair("original"))
+        target = self.complete(self.pair("copy", source))
+        target.unlink()
+        marker = target.parents[2] / "strategy_comparison.json"
+        storage._run_pair_integrity_record.cache_clear()
+        self.addCleanup(storage._run_pair_integrity_record.cache_clear)
+        reader = storage.load_json_object_or_none
+        with patch.object(storage, "load_json_object_or_none", wraps=reader) as reads:
+            for _ in range(4):
+                self.assertEqual(detail_read_path(target), source)
+            self.assertEqual(sum(call.args[0] == marker for call in reads.call_args_list), 1)
+
+        before = marker.stat()
+        payload = json.loads(marker.read_text())
+        payload["pair_file_integrity"]["pairs"]["arm"][self.filename] = "0" * 64
+        self.write(marker, payload)
+        os.utime(marker, ns=(before.st_atime_ns, before.st_mtime_ns))
+        with self.assertRaisesRegex(ValueError, "發布時內容不同"):
+            detail_read_path(target)
+
+    def test_run_receipt_changes_during_read_are_never_cached(self):
+        source = self.complete(self.pair("original"))
+        target = self.complete(self.pair("copy", source))
+        target.unlink()
+        marker = target.parents[2] / "strategy_comparison.json"
+        storage._run_pair_integrity_record.cache_clear()
+        self.addCleanup(storage._run_pair_integrity_record.cache_clear)
+        reader = storage.load_json_object_or_none
+
+        def changed(path):
+            result = reader(path)
+            if path == marker:
+                marker.write_text(marker.read_text() + " ")
+            return result
+
+        with patch.object(storage, "load_json_object_or_none", side_effect=changed):
+            with self.assertRaisesRegex(ValueError, "讀取期間變動"):
+                detail_read_path(target)
+        self.assertEqual(storage._run_pair_integrity_record.cache_info().currsize, 0)
+        self.assertEqual(detail_read_path(target), source)
+
+    def test_unavailable_receipt_is_not_cached_and_deleted_marker_is_rechecked(self):
+        marker = self.root / "receipt.json"
+        self.write(marker, {"pair_file_integrity": {"pairs": {}}})
+        storage._run_pair_integrity_record.cache_clear()
+        self.addCleanup(storage._run_pair_integrity_record.cache_clear)
+        expected = {"pairs": {}}
+        with patch.object(storage, "load_json_object_or_none", side_effect=[None, {"pair_file_integrity": expected}]) as reader:
+            self.assertIsNone(storage._current_run_pair_integrity_record(marker))
+            self.assertEqual(storage._current_run_pair_integrity_record(marker), expected)
+            self.assertEqual(reader.call_count, 2)
+        marker.unlink()
+        self.assertIsNone(storage._current_run_pair_integrity_record(marker))
 
     def test_partial_or_malformed_target_publication_never_uses_unfinished_proof(self):
         source, target = self.fixture()

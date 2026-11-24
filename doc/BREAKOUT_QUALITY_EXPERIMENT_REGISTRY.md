@@ -1006,3 +1006,5 @@ The canonical `config/research_summary.py` roster alone determines current Model
 歷史擴充的唯一資料設定為 `config/breakout_quality_history.py`，由 `services/breakout_quality/training_history.py` 組合合法前綴與未改動的原標籤。2014 起資料已包含於控制組，不將其計為新增歷史；2021 起是迭代研究 OOS。新增訓練歷史不產生新的 Oracle 真值，C193 使用原 CO 的 NetPnL Exact Target。原始訊號數由 canonical pending-signal lifecycle 的純診斷投影取得，不能以 ticker/date 數冒充。先前獨立排程已停止，已發布的合法 teacher／FIT 工件保留供 canonical validator 驗證重用。法人研究依使用者當輪指示暫不進行，沒有新增法人模型／架構／策略身分；研究結果不自動升格 Trading。
 
 **2026-11-24 實測決策。** 新增 32,013 筆成熟資訊列／4,336 個原始訊號，原資訊列真值與成熟日期完全不變。2018～2020 Top-10 lift 僅 1/3 年改善、平均 Pair −0.6207 個百分點；原 Research Seed42 Rolling 的 C193−C123 ΔRoMD=−1.351416（9.531304−10.882721），MDD −0.285105 個百分點、總報酬 −21.927051 個百分點。依事前條件不續跑四 seed Robustness／Target、不搜尋其他起始年份；研究比較列與完整原始證據保留，沒有 Trading promotion。詳見 Experiment Log 同日條目。
+
+**後續使用者續測指示（2026-11-24）。** 使用者明確要求執行穩定性測試，因此續行原 Research `end_to_end_v1` 四 seed Rolling 模型與策略 Robustness；Seed42 的原始負結果與前置篩選決策保留，不回寫成通過。沿用相同 Target／模型／P16 Exact／時間切分與 benchmark seeds，逐 seed 準備合法早期 teacher，完成後比較同 seed 的 C193−C123。此為續測授權，沒有新增科學身分或 Trading promotion。

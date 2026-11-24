@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 import hashlib
+from itertools import islice
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -26,6 +27,8 @@ from filters.breakout_quality.ranking_score_store import (
 SCORE_PROJECTION_SCHEMA_VERSION = 1
 SELECTION_PIT_PRIMARY_SCORE_COLUMN = "breakout_quality_score"
 CONTINUOUS_PRIMARY_SCORE_COLUMN = "model_score"
+# AI: Bound temporary text to a small block while preserving the v1 byte stream.
+_PROJECTION_HASH_BLOCK_ROWS = 8192
 
 
 def primary_score_column_for_source(score_source: str) -> str:
@@ -116,17 +119,34 @@ def _projection_digest(*, table, score_column: str) -> str:
         )
     )
     values = table[score_column].to_numpy(dtype=np.float64, copy=False)
-    for (ticker, date_text), value in zip(table.index, values, strict=True):
-        digest.update(str(ticker).encode("utf-8"))
-        digest.update(b"\0")
-        digest.update(str(date_text).encode("ascii"))
-        digest.update(b"\0")
-        digest.update(float(value).hex().encode("ascii"))
-        digest.update(b"\n")
+    # AI: Dates were ASCII in v1. Validate distinct used values before encoding
+    # a whole UTF-8 block, so batching cannot silently accept non-ASCII dates.
+    if len(values):
+        if table.index.nlevels == 2:
+            for code, date_text in enumerate(table.index.levels[1]):
+                if not str(date_text).isascii() and np.any(table.index.codes[1] == code):
+                    str(date_text).encode("ascii")
+        else:
+            for _ticker, date_text in table.index:
+                str(date_text).encode("ascii")
+    rows = iter(table.index)
+    for start in range(0, len(values), _PROJECTION_HASH_BLOCK_ROWS):
+        stop = start + _PROJECTION_HASH_BLOCK_ROWS
+        # AI: tolist gives the same Python float as float(np.float64(value));
+        # hex retains signed zero, subnormals, NaN/inf and every finite bit.
+        block = "".join(
+            f"{str(ticker)}\0{str(date_text)}\0{value.hex()}\n"
+            for (ticker, date_text), value in zip(
+                islice(rows, _PROJECTION_HASH_BLOCK_ROWS), values[start:stop].tolist(), strict=True,
+            )
+        )
+        digest.update(block.encode("utf-8"))
     return digest.hexdigest().lower()
 
 
-@lru_cache(maxsize=12)
+# AI: Cache only tiny digest tuples, not score tables. Keep enough revisions
+# for multi-source/seed planning so one pass does not evict the next pass.
+@lru_cache(maxsize=256)
 def _selection_pit_projection_cached(
     score_path: str,
     signature: tuple[int, int, str],

@@ -67,6 +67,9 @@ class DatasetReuseTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
+        # AI: Mock/exception cycles can retain mmap views until cyclic GC.
+        # Run after cache cleanup and before Windows removes the fixture files.
+        self.addCleanup(gc.collect)
         self.paths, self.summary = make_dataset(Path(self.tmp.name))
         io._load_validated_dataset_payload.cache_clear()
         dataset_store._revision_verified_sha256.cache_clear()

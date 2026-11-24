@@ -228,6 +228,38 @@ _REVIEWED.setdefault('config/research_summary.py', {"file_sha256": 'cac2cb283535
 _REVIEWED["filters/breakout_quality/daily_trade40_target.py"].setdefault(
     "reviewed_model_only_revisions", {}).update({'d716d6007511d42f19388d5e0535b145c275adebb7563cfe06bd6e0605f32883': '4df90ba6d95a22cd0a78845141dc6bfb91683e7fa2ecc612cafa6f66e6bd3370', '9bea022a543d347d5f46815d9189bec08e1ac5b57451ee7e8580a781ef2edf45': 'e569741dc258f637757d42cdd3febd39818f2136224a23b4fc26d7c505d4ada1'})
 
+# 2026-11-24: materialize normalized dates once for scalar path indexing.
+# test_research_realpath_dates reconstructs the complete d716d6 predecessor
+# byte-for-byte and compares every outcome field across horizons/reset dates.
+# Six real tickers (30,728 samples, three paired repetitions) also preserve
+# every label array byte and PIT preflight field; aggregate cold speedup 1.395x.
+# Each encoding AND calculation is exact-pinned. Any other edit hashes live.
+_REVIEWED["filters/breakout_quality/daily_trade40_target.py"][
+    "reviewed_model_only_revisions"
+].update({
+    "ea88b0473a4c6f822b3de719f54e6810e3b88a662e59ce585133b972d04b731d":
+        "4df90ba6d95a22cd0a78845141dc6bfb91683e7fa2ecc612cafa6f66e6bd3370",
+    "d326779477bc01952fa954189b1161fa2a1362f3e8e8ef29a4ca9eddeff2bff1":
+        "e569741dc258f637757d42cdd3febd39818f2136224a23b4fc26d7c505d4ada1",
+})
+_REVIEWED["filters/breakout_quality/daily_trade40_target.py"][
+    "reviewed_calculation_revisions"
+] = {
+    physical_sha: {
+        "ac73c2b627b75e3a5dd60c45ae8a206363fa64f27362a8ac05581865ddd8de4e":
+            "7d22c5edbd455bb9715a24be5ae71feab98a2248620d00b9238c731bdf2f5b9e",
+        "737dc103e2d564e69021881b3a21e564f5bb70dc7ffbd1bcf44a33b9565f7b27":
+            "98c80c47584be11046fb2dc562c7184fa2112ec4672e695bad016d967c1e0513",
+        "725e36feb4ea4885276ccd5ede1b65876bf7b59866452eb646d6fc2806dc4217":
+            "d09aa292059cd3d446e52aed5ddd18b78f17121e1d5e9d0ee225b1414c813f73",
+    }
+    for physical_sha in (
+        "ea88b0473a4c6f822b3de719f54e6810e3b88a662e59ce585133b972d04b731d",
+        "d326779477bc01952fa954189b1161fa2a1362f3e8e8ef29a4ca9eddeff2bff1",
+    )
+}
+
+
 def reviewed_execution_source_sha256(relative: str, actual: str) -> str:
     normalized = _certified_model_selection_only_config_sha256(relative, actual)
     if normalized == actual:
@@ -251,6 +283,10 @@ def reviewed_calculation_sha256(relative: str, file_sha256: str, syntax_sha256: 
     proof = _REVIEWED.get(relative)
     if proof is not None and file_sha256 == proof["file_sha256"]:
         return proof["calculations"].get(syntax_sha256, syntax_sha256)
+    if proof is not None:
+        return proof.get("reviewed_calculation_revisions", {}).get(
+            file_sha256, {},
+        ).get(syntax_sha256, syntax_sha256)
     return syntax_sha256
 
 
