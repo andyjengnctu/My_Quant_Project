@@ -1278,6 +1278,14 @@ def _reviewed_optimizer_execution_sha256(relative: str, actual: str) -> str:
     return _OPTIMIZER_EXECUTION_PHYSICAL_PINS.get(relative, {}).get(actual, actual)
 
 
+@lru_cache(maxsize=32)
+def _independent_queue_resource_syntax_sha256(content: bytes) -> str:
+    """Reuse pure syntax work by complete bytes, never by path or timestamp."""
+    import ast
+    from core.source_calculation_syntax import calculation_syntax_attestation
+    return calculation_syntax_attestation(ast.parse(content))[1]
+
+
 def _reviewed_source_group(scope: str):
     proof = _REVIEWED_SOURCE_INVENTORIES.get(scope)
     updates = _OPTIMIZER_EXECUTION_GROUP_UPDATES.get(scope)
@@ -1289,9 +1297,7 @@ def _reviewed_source_group(scope: str):
             continue
         certificate = _independent_queue_resource_certificate(relative)
         if certificate is not None:
-            import ast
-            from core.source_calculation_syntax import calculation_syntax_attestation
-            current[relative] = calculation_syntax_attestation(ast.parse(certificate[2]))[1]
+            current[relative] = _independent_queue_resource_syntax_sha256(certificate[2])
     return {**proof, "current": current}
 
 

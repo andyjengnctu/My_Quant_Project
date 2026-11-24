@@ -84,12 +84,32 @@ class OptimizerExecutionEquivalenceTests(unittest.TestCase):
         path = ROOT / name
         raw = path.read_bytes()
         mutate = raw + b'\n_UNKNOWN_RESOURCE_CONSUMER = True\n'
+        # Warm the live group first; a cached known version cannot admit edits.
+        proof._reviewed_source_group('portfolio_candidates')
         original = Path.read_bytes
         with patch.object(Path, 'read_bytes', lambda p: mutate if p == path else original(p)):
             self.assertEqual(proof.reviewed_execution_source_sha256(name, sha256(mutate).hexdigest()),
                              sha256(mutate).hexdigest())
             self.assertNotEqual(proof._reviewed_source_group('portfolio_candidates')['current'][name],
                                 contracts._source_content_attestation(mutate, is_python=True)[1])
+
+    def test_resource_syntax_cache_keys_complete_bytes_and_returns_immutable_digest(self):
+        from core import source_calculation_syntax as syntax
+        calculate = proof._independent_queue_resource_syntax_sha256
+        calculate.cache_clear()
+        first, changed = b'VALUE = 1\n', b'VALUE = 2\n'
+        self.assertEqual(len(first), len(changed))
+        try:
+            with patch.object(syntax, 'calculation_syntax_attestation', wraps=syntax.calculation_syntax_attestation) as parse:
+                expected = calculate(first)
+                for _ in range(5):
+                    self.assertEqual(calculate(bytes(bytearray(first))), expected)
+                self.assertEqual(parse.call_count, 1)
+                self.assertIsInstance(expected, str)
+                self.assertNotEqual(calculate(changed), expected)
+                self.assertEqual(parse.call_count, 2)
+        finally:
+            calculate.cache_clear()
 
     def test_calculation_owner_extraction_requires_entire_helper_and_provider(self):
         owner = (ROOT / 'services/research/oracle_artifact_contract.py').read_bytes()
