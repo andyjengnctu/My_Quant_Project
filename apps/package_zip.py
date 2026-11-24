@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 import re
-import io
 import shutil
 import subprocess
 import sys
 import time
-import tarfile
 import zipfile
 from pathlib import Path, PurePosixPath
 from dataclasses import dataclass
@@ -31,7 +29,6 @@ COMMIT_MESSAGE_OPTION = "--commit-message"
 RUN_TEST_SUITE_OPTION = "--run-test-suite"
 CACHE_CLEANUP_MAX_ATTEMPTS = 4
 CACHE_CLEANUP_RETRY_SECONDS = 0.05
-ORACLE_DELIVERY_MANIFEST = "outputs/local_regression/oracle_contract/delivery.json"
 ORACLE_EVIDENCE_SUFFIX = re.compile(r"\.oracle-evidence-[0-9a-f]{16}\.tar\.xz$")
 
 
@@ -61,28 +58,9 @@ def verify_frozen_package(snapshot: FrozenPackageSnapshot) -> None:
             raise RuntimeError(f"packaged source changed during formal verification: {name}")
 
 
-def _write_oracle_evidence_archive(path: Path, contents: dict[str, bytes]) -> str:
-    """Solid-compress complete, original evidence bytes in a standard TAR/XZ."""
-    with tarfile.open(path, "w:xz", preset=6) as archive:
-        # Keep small shared inventories ahead of the larger parity outputs so
-        # the bounded XZ dictionary can reuse them without format-specific rules.
-        for name, content in sorted(contents.items(), key=lambda item: (len(item[1]), item[0])):
-            member = tarfile.TarInfo(name)
-            member.size = len(content)
-            archive.addfile(member, io.BytesIO(content))
-    with tarfile.open(path, "r:xz") as archive:
-        members = archive.getmembers()
-        if len(members) != len(contents) or {member.name for member in members} != set(contents):
-            raise RuntimeError("Oracle evidence archive member set changed")
-        for member in members:
-            if not member.isfile() or archive.extractfile(member).read() != contents[member.name]:
-                raise RuntimeError("Oracle evidence archive changed original bytes")
-    return sha256(path.read_bytes()).hexdigest()
-
-
 def finalize_frozen_package(snapshot: FrozenPackageSnapshot, *, attestation: dict,
                             evidence_files: dict[str, dict] | None = None) -> Path:
-    """Add the exact certificate; deliver complete evidence in a pinned sidecar."""
+    """Add the runtime certificate; complete engineering evidence stays local."""
     from services.research.oracle_build_attestation import ATTESTATION_RELATIVE_PATH, oracle_evidence_role
     verify_frozen_package(snapshot)
     records = dict(evidence_files or {})
@@ -95,7 +73,6 @@ def finalize_frozen_package(snapshot: FrozenPackageSnapshot, *, attestation: dic
         raise RuntimeError("Oracle delivery may contain only the current formal run")
     certificate = json_publication_bytes(attestation)
     additions = {ATTESTATION_RELATIVE_PATH: certificate}
-    evidence_contents = {}
     for name, record in records.items():
         expected = dict(attestation.get("evidence_artifacts") or {}).get(name)
         if (not name.startswith("outputs/local_regression/oracle_contract/evidence/")
@@ -104,25 +81,8 @@ def finalize_frozen_package(snapshot: FrozenPackageSnapshot, *, attestation: dic
         content = Path(record["path"]).read_bytes()
         if sha256(content).hexdigest() != expected:
             raise RuntimeError("Oracle package evidence changed during verification")
-        evidence_contents[name] = content
     pending = snapshot.path.with_suffix(".zip.certifying")
-    pending_evidence = snapshot.path.with_suffix(".oracle-evidence.tar.xz.certifying")
-    evidence_path = None
     try:
-        if evidence_contents:
-            evidence_sha = _write_oracle_evidence_archive(pending_evidence, evidence_contents)
-            evidence_path = snapshot.path.with_name(f"{snapshot.path.stem}.oracle-evidence-{evidence_sha[:16]}.tar.xz")
-            additions[ORACLE_DELIVERY_MANIFEST] = json_publication_bytes({
-                "schema": "oracle_evidence_delivery.v1", "archive": evidence_path.name,
-                "sha256": evidence_sha, "format": "tar.xz",
-                "certificate_sha256": sha256(certificate).hexdigest(),
-                "artifacts": dict(attestation["evidence_artifacts"]),
-                "restore": {
-                    "required_for": "Preparing another certified build; runtime reuse needs only the source ZIP.",
-                    "argv_template": ["tar", "-xf", evidence_path.name, "-C", "<project_root>"],
-                    "verify_first": "Match the archive SHA-256 and the extracted artifact SHA-256 values above.",
-                },
-            })
         with zipfile.ZipFile(snapshot.path) as original, zipfile.ZipFile(
             pending, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9,
         ) as finalized:
@@ -143,18 +103,9 @@ def finalize_frozen_package(snapshot: FrozenPackageSnapshot, *, attestation: dic
                 if archive.read(name) != content:
                     raise RuntimeError("finalized package certificate/evidence mismatch")
         verify_frozen_package(snapshot)
-        if evidence_path is not None:
-            if evidence_path.exists():
-                if sha256(evidence_path.read_bytes()).hexdigest() != evidence_sha:
-                    raise RuntimeError("Oracle evidence sidecar conflicts with an existing file")
-            else:
-                atomic_replace_with_retry(pending_evidence, evidence_path)
         atomic_replace_with_retry(pending, snapshot.path)
     finally:
         pending.unlink(missing_ok=True)
-        pending_evidence.unlink(missing_ok=True)
-    if evidence_path is not None:
-        print(f"[package_zip] oracle_evidence={project_relative_display_path(evidence_path, project_root=PROJECT_ROOT)}")
     return snapshot.path
 
 
@@ -313,9 +264,6 @@ def _archive_existing_root_package_zips() -> tuple[int, int]:
             continue
         archived_zip_path = archive_dir / zip_path.name
         shutil.move(str(zip_path), archived_zip_path)
-        for evidence_path in sorted(PROJECT_ROOT.glob(f"{zip_path.stem}.oracle-evidence-*.tar.xz")):
-            if evidence_path.is_file() and ORACLE_EVIDENCE_SUFFIX.search(evidence_path.name):
-                shutil.move(str(evidence_path), archive_dir / evidence_path.name)
         stripped_member_count += _strip_reduced_data_from_archived_zip(archived_zip_path)
         moved_count += 1
 

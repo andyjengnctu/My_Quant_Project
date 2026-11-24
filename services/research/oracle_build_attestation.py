@@ -416,19 +416,10 @@ def prepare_oracle_build_candidate(project_root: str | Path, *, review_path: Pat
         evidence = {"kind": "unchanged_sources", "previous_attestation_sha256": previous["attestation_sha256"],
                     "baseline_source_digest": digest, "current_source_digest": digest}
         origins = dict(previous.get("legacy_origins") or {})
-        evidence_files = {name: {"path": str(root / name), "sha256": digest}
-                          for name, digest in dict(previous.get("evidence_artifacts") or {}).items()
-                          if oracle_evidence_role(name) == "review"}
+        # The verified certificate already covers these exact sources. A normal
+        # rebuild must not depend on historical engineering files being shipped.
+        evidence_files = {}
         baseline_reference = dict(dict(previous.get("equivalence_evidence") or {}).get("baseline_snapshot") or {})
-        # Older certificates packaged the baseline itself. Its pinned lightweight
-        # review retains the original external locator after that duplicate is
-        # removed from delivery. No archive is deleted or opened by runtime.
-        for name, reference in evidence_files.items():
-            if PurePosixPath(name).name.startswith("review_") and name.endswith(".json"):
-                baseline = dict(_read_pinned_json(reference, relative_to=root).get("baseline") or {})
-                baseline_reference = {"path": str(baseline["snapshot_path"]),
-                                      "sha256": baseline["snapshot_sha256"], "storage": "external_audit"}
-                break
         if baseline_reference:
             evidence["baseline_snapshot"] = {**baseline_reference, "storage": "external_audit"}
     else:

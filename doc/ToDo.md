@@ -1,4 +1,4 @@
-
+我現在跟的你對話模式，有沒有什麼不必要的檔案輸出/輸入，是在浪費tokens的?
 
 - bug
     - 0050 cannot be selected by any DL
