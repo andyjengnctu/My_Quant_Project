@@ -90,6 +90,49 @@ def forward_breakout_quality_model(
     return model(feature_tensor, context_tensor)
 
 
+def _iter_prefetched_cuda_inputs(torch, jobs, materialize, device):
+    """Stage one following batch without changing inference jobs or model order."""
+
+    copy_stream = torch.cuda.Stream(device=device)
+    compute_stream = torch.cuda.current_stream(device=device)
+
+    def stage(positions):
+        batch_features, batch_context, _, _ = materialize(positions)
+        # AI: This worker only prepares immutable inputs. The model and its
+        # output transfer remain on the caller's original compute stream.
+        with torch.inference_mode():
+            feature_host = torch.from_numpy(batch_features).pin_memory()
+            context_host = torch.from_numpy(batch_context).pin_memory()
+            with torch.cuda.stream(copy_stream):
+                feature_tensor = feature_host.to(device, non_blocking=True)
+                context_tensor = context_host.to(device, non_blocking=True)
+                ready = torch.cuda.Event()
+                ready.record(copy_stream)
+        return positions, feature_tensor, context_tensor, ready, (feature_host, context_host)
+
+    with ThreadPoolExecutor(
+        max_workers=1, thread_name_prefix="breakout-quality-cuda-inputs"
+    ) as executor:
+        pending = executor.submit(stage, jobs[0])
+        try:
+            for index in range(len(jobs)):
+                positions, feature_tensor, context_tensor, ready, host_refs = pending.result()
+                if index + 1 < len(jobs):
+                    pending = executor.submit(stage, jobs[index + 1])
+                compute_stream.wait_event(ready)
+                feature_tensor.record_stream(compute_stream)
+                context_tensor.record_stream(compute_stream)
+                # Host buffers remain referenced through the consuming forward
+                # and synchronous result transfer, including the final batch.
+                yield positions, feature_tensor, context_tensor
+                del host_refs
+        finally:
+            # Drain the one outstanding host job before releasing staging data
+            # if a caller's forward or a later materialization raises.
+            executor.shutdown(wait=True, cancel_futures=True)
+            copy_stream.synchronize()
+
+
 def strict_parallel_batched_logits(
     torch: Any,
     model: Any,
@@ -262,6 +305,28 @@ def strict_parallel_batched_logits(
 
     if worker_count == 1:
         device = torch.device("cpu") if execution_plan is None else execution_plan.device
+        from config.breakout_quality import BREAKOUT_QUALITY_CUDA_INFERENCE_PREFETCH
+
+        prefetch_cuda = bool(
+            device_type == "cuda"
+            and BREAKOUT_QUALITY_CUDA_INFERENCE_PREFETCH
+            and len(jobs) > 1
+            and market_set_bank is None
+            and not requires_same_date_relations
+        )
+        if prefetch_cuda:
+            inputs = _iter_prefetched_cuda_inputs(torch, jobs, _batch_inputs, device)
+            try:
+                with torch.inference_mode():
+                    for positions, feature_tensor, context_tensor in inputs:
+                        with autocast_context(torch, execution_plan):
+                            batch_logits = forward_breakout_quality_model(
+                                model, feature_tensor, context_tensor, output_head=output_head,
+                            )
+                        logits_np[positions] = batch_logits.float().cpu().numpy()
+            finally:
+                inputs.close()
+            return logits_np
         with torch.inference_mode():
             for positions in jobs:
                 batch_features, batch_context, market_batch, relation_history_features = _batch_inputs(positions)

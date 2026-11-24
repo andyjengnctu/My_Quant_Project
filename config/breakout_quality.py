@@ -254,6 +254,7 @@ BREAKOUT_QUALITY_MODEL_ROBUSTNESS_PROGRESS_LOG_INTERVAL_SECONDS = 30.0  # Redire
 
 BREAKOUT_QUALITY_EVALUATION_BATCH_SIZE = 4096  # Train／Validation／Selection 完整評估與分數匯出的分批大小；不抽樣、不改模型更新或輸出列序。
 BREAKOUT_QUALITY_EVALUATION_WORKERS = 4  # CPU評估可平行；CUDA固定使用單一GPU serial batches，batch與最終列序不變。
+BREAKOUT_QUALITY_CUDA_INFERENCE_PREFETCH = True  # Stage one following CUDA batch; preserve model call and output order.
 BREAKOUT_QUALITY_PARALLEL_SPLIT_EVALUATION = False  # 同時評估 Inner Train 與 Validation；峰值最多使用 2 × EVALUATION_WORKERS，只做 read-only inference。
 BREAKOUT_QUALITY_PIT_EPOCH_SELECTION_LIGHTWEIGHT_METRICS = True  # PIT每個epoch只計算真正參與checkpoint selection的Validation metric；完整Joint/geometry diagnostics保留於fold正式score/audit，避免GPU等待CPU O(N²)診斷。
 

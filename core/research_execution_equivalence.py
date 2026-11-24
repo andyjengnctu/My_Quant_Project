@@ -149,7 +149,7 @@ def canonical_ast_schema(tree):
 
 
 def _certified_model_selection_only_config_sha256(relative: str, actual: str) -> str:
-    """Preserve the price source identity for an AST-proven model-menu choice.
+    """Preserve price identity for reviewed non-numerical config declarations.
 
     No arbitrary model-selection expressions can receive this equivalence:
     the sole exempt assignment must be a side-effect-free literal string pair.
@@ -165,7 +165,18 @@ def _certified_model_selection_only_config_sha256(relative: str, actual: str) ->
         return actual
     tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
     count = 0
-    for statement in tree.body:
+    prefetch_count = 0
+    for statement in list(tree.body):
+        if (isinstance(statement, ast.Assign) and len(statement.targets) == 1
+                and isinstance(statement.targets[0], ast.Name)
+                and statement.targets[0].id == "BREAKOUT_QUALITY_CUDA_INFERENCE_PREFETCH"):
+            # AI: Independently verified ordered input staging only. Removing
+            # this literal still requires the entire remaining AST certificate.
+            if not isinstance(statement.value, ast.Constant) or type(statement.value.value) is not bool:
+                return actual
+            prefetch_count += 1
+            tree.body.remove(statement)
+            continue
         if (not isinstance(statement, ast.Assign) or len(statement.targets) != 1
                 or not isinstance(statement.targets[0], ast.Name)
                 or statement.targets[0].id != "BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE"):
@@ -181,7 +192,7 @@ def _certified_model_selection_only_config_sha256(relative: str, actual: str) ->
             ctx=ast.Load(),
         )
         count += 1
-    if count != 1:
+    if count != 1 or prefetch_count > 1:
         return actual
     selection_free_ast = ast.dump(canonical_ast_schema(tree), annotate_fields=True, include_attributes=False)
     syntax_sha = sha256(selection_free_ast.encode("utf-8")).hexdigest()

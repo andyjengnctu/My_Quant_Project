@@ -28,6 +28,30 @@ class SourceInventoryProofTests(unittest.TestCase):
         replay.portfolio_candidate_execution_sha256.cache_clear()
         full_truth.truth_producer_fingerprint.cache_clear()
 
+    def test_inference_prefetch_literal_preserves_only_the_certified_config(self):
+        from core.research_execution_equivalence import _certified_model_selection_only_config_sha256
+        relative = "config/breakout_quality.py"
+        path = ROOT / relative
+        source = path.read_text(encoding="utf-8")
+        declaration = "BREAKOUT_QUALITY_CUDA_INFERENCE_PREFETCH = True"
+        self.assertEqual(source.count(declaration), 1)
+        actual = sha256(path.read_bytes()).hexdigest()
+        expected = _certified_model_selection_only_config_sha256(relative, actual)
+        self.assertNotEqual(expected, actual)
+        cases = (
+            (source.replace(declaration, declaration.replace("True", "False")), True),
+            (source.replace(declaration, declaration.replace("True", "bool(1)")), False),
+            (source + "\nBREAKOUT_QUALITY_CUDA_INFERENCE_PREFETCH = False\n", False),
+            (source + "\n_UNKNOWN_FEATURE_EDIT = True\n", False),
+        )
+        read_bytes, read_text = Path.read_bytes, Path.read_text
+        for candidate, admitted in cases:
+            digest = sha256(candidate.encode("utf-8")).hexdigest()
+            with (patch.object(Path, "read_bytes", lambda p: candidate.encode("utf-8") if p == path else read_bytes(p)),
+                  patch.object(Path, "read_text", lambda p, **kw: candidate if p == path else read_text(p, **kw))):
+                observed = _certified_model_selection_only_config_sha256(relative, digest)
+            self.assertEqual(observed, expected if admitted else digest)
+
     def test_whole_group_is_required_and_unknown_owners_remain_effective(self):
         for scope, proof in _REVIEWED_SOURCE_INVENTORIES.items():
             current = {name: value if isinstance(value, str) else value[0]

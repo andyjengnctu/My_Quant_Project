@@ -65,6 +65,7 @@ _NON_EXECUTABLE_MODEL_SELECTION_FIELDS = frozenset((
 _NON_EXECUTABLE_RESOURCE_FIELDS = frozenset((
     "BREAKOUT_QUALITY_DAILY_REAL_PATH_WORKERS",
     "BREAKOUT_QUALITY_MODEL_ROBUSTNESS_SEED_WORKERS",
+    "BREAKOUT_QUALITY_CUDA_INFERENCE_PREFETCH",
 ))
 # Configuration is projected by *ownership*, not by the current finite model
 # roster.  Future MR additions/deletions may add constants with the same
