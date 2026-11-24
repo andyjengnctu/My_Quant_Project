@@ -851,7 +851,7 @@ class CleanupTest(unittest.TestCase):
             for name in DETAIL_NAMES:
                 self.write(pair / name, self.payload)
         with patch.object(Path, "is_file", side_effect=AssertionError("redundant pair-file stat")), \
-             patch("core.compare_csv_storage.reused_detail_source", side_effect=AssertionError("unneeded provenance probe")):
+             patch("core.reused_copy_storage.reused_detail_source", side_effect=AssertionError("unneeded provenance probe")):
             for pair in (a.parent, b.parent):
                 inventory = _tracked_pair_files(pair)
                 self.assertTrue(DETAIL_NAMES.issubset(inventory))
@@ -859,6 +859,7 @@ class CleanupTest(unittest.TestCase):
 
     def test_only_absent_details_resolve_provenance_and_directories_stay_invalid(self):
         from core import compare_csv_storage as storage
+        from core import reused_copy_storage as aliases
         from services.research.strategy_compare_pair_integrity import _tracked_pair_files
         from services.research.strategy_compare_reuse import _required_pair_files_present
         a = self.publish("a")
@@ -874,7 +875,7 @@ class CleanupTest(unittest.TestCase):
                 raise AssertionError("already listed detail was queried again")
             return is_file(path)
         with patch.object(Path, "is_file", guard), \
-             patch.object(storage, "reused_detail_source", wraps=storage.reused_detail_source) as inherited:
+             patch.object(aliases, "reused_detail_source", wraps=aliases.reused_detail_source) as inherited:
             inventory = _tracked_pair_files(b.parent)
             self.assertTrue(storage.DETAIL_NAMES.issubset(inventory))
             self.assertTrue(_required_pair_files_present(b.parent, tuple(b.parent / n for n in storage.DETAIL_NAMES)))

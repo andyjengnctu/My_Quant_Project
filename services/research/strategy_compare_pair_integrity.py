@@ -19,9 +19,10 @@ from core.file_integrity import (
     load_json_object_or_none,
 )
 from core.compare_csv_storage import detail_sha256, inherited_detail_files
+from core.reused_copy_storage import completed_detail_storage_evidence
 from core.strategy_compare_storage_evidence import (
     PAIR_FILE_INTEGRITY_FIELD, PAIR_FILE_INTEGRITY_SCHEMA_VERSION,
-    _completed_run_manifest, completed_detail_storage_evidence,
+    _completed_run_manifest,
 )
 
 _INTEGRITY_SUFFIXES = frozenset({".csv", ".md", ".json"})

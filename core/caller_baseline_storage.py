@@ -7,7 +7,7 @@ Neither receipt grants scientific REUSE or changes the original research state.
 from pathlib import Path
 import re
 
-from core.artifact_lifecycle import relative_path
+from core.storage_paths import clean_path, plain, relative_path
 from core.file_integrity import (
     atomic_write_text, canonical_json_sha256, compute_observed_file_sha256,
     file_change_signature, load_json_strict,
@@ -37,7 +37,6 @@ def root_for(path: Path) -> Path | None:
 
 
 def _read(path: Path, revisions: dict) -> dict:
-    from core.compare_csv_storage import clean_path, plain
     if not clean_path(path) or not plain(path.lstat()):
         raise ValueError("caller baseline 收據不是一般實體檔案")
     before = file_change_signature(path)
@@ -54,7 +53,6 @@ def _publication(path: Path, revisions: dict) -> dict:
     root = root_for(path)
     if root is None or path.name != BASELINE_NAME:
         raise ValueError("不是受支援的 caller baseline 儲存位置")
-    from core.compare_csv_storage import clean_path
     if not clean_path(path) or not path.resolve().is_relative_to(root):
         raise ValueError("caller baseline 路徑經過連結或離開專案")
     selection = path.parents[2]
@@ -164,7 +162,6 @@ def expected_sha256(path: Path) -> str:
 def record_alias(path: Path, source: Path, digest: str) -> None:
     """Pin verified original bytes before unlink; caller holds storage_lock."""
     import json
-    from core.compare_csv_storage import clean_path, plain
     path, source = Path(path).absolute(), Path(source).absolute()
     root = root_for(path)
     if (root is None or root_for(source) != root or source.parents[2] != path.parents[2]

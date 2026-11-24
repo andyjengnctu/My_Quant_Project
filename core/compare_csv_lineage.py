@@ -1,0 +1,80 @@
+"""Recorded Strategy Compare detail provenance, independent of byte aliases."""
+import json
+from pathlib import Path, PureWindowsPath
+
+from core.storage_paths import clean_path, plain
+
+DETAIL_NAMES = frozenset(
+    f"{side}_{detail}.csv" for side in ("no_filter", "score_ranking")
+    for detail in ("orderable_candidates", "orderable_target_diagnostics")
+)
+
+
+def compare_root(path):
+    """Recognize owned comparison outputs with a verifiable storage contract."""
+    p = Path(path).absolute()
+    if len(p.parents) >= 7 and p.parents[1].name == "pairs" and p.parents[3].name == "runs":
+        # Current and historical profile roots have different depths. The run
+        # and pair publication boundaries, not a fixed depth, establish ownership.
+        for parent in p.parents[4:]:
+            if parent.name == "strategy_compare" and parent.parent.name == "outputs":
+                return parent.parent.parent
+    from core.caller_baseline_storage import root_for
+    return root_for(p)
+
+
+def _recorded_detail_source(metadata, filename):
+    if not isinstance(metadata, dict):
+        return None
+    source = metadata.get("cache_reused_from")
+    if source is not None:
+        return source if isinstance(source, str) and source.strip() else None
+    # The baseline producer reuses the candidate rows. Target diagnostics are
+    # joined again against the current model and have no baseline-file lineage.
+    if filename == "no_filter_orderable_candidates.csv" and metadata.get("baseline_reused") is True:
+        source = metadata.get("baseline_reuse_source")
+        if isinstance(source, str) and source.strip():
+            return source
+    return None
+
+
+def reused_detail_source(path, *, revisions=None):
+    """Follow the producer's existing REUSE provenance; create no new storage format."""
+    path = Path(path).absolute()
+    root = compare_root(path)
+    if root is None or path.name not in DETAIL_NAMES:
+        return None
+    from core import caller_baseline_storage as caller
+    seen = {path}
+    while True:
+        if caller.root_for(path) is not None:
+            source = caller.recorded_source(path, revisions=revisions)
+            if source is None:
+                return None
+            path = source.absolute()
+        else:
+            marker = path.parent / "strategy_comparison.json"
+            if not clean_path(marker) or not marker.is_file():
+                return None
+            from core.file_integrity import file_change_signature
+            before = file_change_signature(marker)
+            payload = json.loads(marker.read_text(encoding="utf-8-sig"))
+            if file_change_signature(marker) != before:
+                raise ValueError("讀取 REUSE 來源紀錄時內容變動")
+            if revisions is not None:
+                revisions[marker] = before
+            metadata = payload.get("metadata") if isinstance(payload, dict) else None
+            source = _recorded_detail_source(metadata, path.name)
+            if source is None:
+                return None
+            parent = Path(source)
+            if parent.is_absolute() or PureWindowsPath(source).anchor:
+                raise ValueError("舊 REUSE 紀錄使用絕對來源路徑；保留副本，避免專案搬移後失去來源")
+            path = (root / parent / path.name).absolute()
+        if (path in seen or compare_root(path) != root or not clean_path(path)):
+            raise ValueError("REUSE 明細來源循環或離開正式專案路徑")
+        seen.add(path)
+        if path.is_file():
+            if not plain(path.lstat()):
+                raise ValueError("REUSE 明細來源不是一般檔案")
+            return path

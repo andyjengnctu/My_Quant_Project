@@ -10,10 +10,10 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 import json
 import os
-from pathlib import Path, PurePosixPath, PureWindowsPath
+from pathlib import Path
 from typing import Iterable, Mapping
 
-from core.compare_csv_storage import clean_path, plain
+from core.storage_paths import clean_path, plain, relative_path
 from core.file_integrity import (
     compute_observed_file_sha256, exclusive_file_lock, file_change_signature,
     is_sha256_hex,
@@ -24,17 +24,6 @@ SCHEMA = "artifact_lifecycle_v1"
 ROLES = frozenset({"result", "evidence", "resume", "work", "cache", "replica"})
 STATES = frozenset({"RUNNING", "RESUMABLE", "COMPLETED", "SUPERSEDED", "ABANDONED"})
 RETAINED_ROLES = frozenset({"result", "evidence", "resume"})
-
-
-def relative_path(value: str) -> Path:
-    """Project-relative paths only, including when inspected on another OS."""
-    if not isinstance(value, str) or not value or "\\" in value or "\x00" in value or ":" in value:
-        raise ValueError("工件路徑必須是使用 / 的專案相對路徑")
-    path = PurePosixPath(value)
-    if (path.is_absolute() or PureWindowsPath(value).drive
-            or any(part in {"", ".", ".."} for part in value.split("/"))):
-        raise ValueError("工件路徑不允許絕對路徑或父目錄")
-    return Path(*path.parts)
 
 
 def lifecycle_lock_path(root: Path) -> Path:

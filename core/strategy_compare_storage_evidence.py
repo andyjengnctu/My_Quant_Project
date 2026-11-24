@@ -9,8 +9,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from core.compare_csv_storage import DETAIL_NAMES, clean_path, compare_root, detail_sha256, plain
-from core.file_integrity import compute_file_sha256, is_sha256_hex, load_json_object_or_none
+from core.compare_csv_lineage import DETAIL_NAMES, compare_root
+from core.storage_paths import clean_path, plain
+from core.file_integrity import is_sha256_hex, load_json_object_or_none
 
 PAIR_FILE_INTEGRITY_FIELD = "pair_file_integrity"
 PAIR_FILE_INTEGRITY_SCHEMA_VERSION = 1
@@ -50,14 +51,16 @@ def _completed_run_manifest(run_dir: Path, run_payload: Mapping[str, Any], proje
 
 def completed_detail_storage_evidence(
     *, path: Path, run_payload: Mapping[str, Any], project_root: Path,
-    file_hasher: Callable[[Path], str] = compute_file_sha256,
+    detail_hasher: Callable[[Path], str],
 ) -> str | None:
     """Prove this optional detail was committed, without accepting a whole run.
 
     Only byte-identical duplicates with an existing reader fallback may be
     removed by the caller. Unrelated pair/report failures remain failures for
     scientific REUSE and are not rewritten or repaired by this storage check.
-    The return value is its existing pinned SHA, or None for legacy unpinned.
+    The caller supplies logical-path hashing; this evidence owner never resolves
+    storage aliases or depends on their readers. The return value is its existing
+    pinned SHA, or None for legacy unpinned.
     """
     path = Path(path)
     root = Path(project_root).resolve()
@@ -86,7 +89,7 @@ def completed_detail_storage_evidence(
     if not is_sha256_hex(digest):
         raise ValueError("此 CSV 缺少有效的發布 SHA256")
     expected = str(digest).strip().lower()
-    if detail_sha256(path, file_hasher=file_hasher) != expected:
+    if detail_hasher(path) != expected:
         raise ValueError("此 CSV 內容與已發布 SHA256 不符")
     return expected
 

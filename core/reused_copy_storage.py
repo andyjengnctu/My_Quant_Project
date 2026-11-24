@@ -1,4 +1,4 @@
-"""Byte-preserving storage aliases for unfinished, producer-copied compare pairs.
+"""Logical reads and byte-preserving proofs for producer-owned CSV aliases.
 
 This is not a scientific completion or reuse record. The producer's original
 pair JSON proves the copy operation; the separate cleanup receipt pins the
@@ -7,11 +7,19 @@ original CSV bytes even when its completed source predates scientific hashes.
 from copy import deepcopy
 from contextvars import ContextVar
 from hashlib import sha256
+import json
 from pathlib import Path
+from typing import Any, Callable, Mapping
 
-from core.artifact_lifecycle import relative_path
+from core.storage_paths import clean_path, plain, relative_path
+from core.compare_csv_lineage import (
+    DETAIL_NAMES, _recorded_detail_source, compare_root, reused_detail_source,
+)
+from core.strategy_compare_storage_evidence import (
+    completed_detail_storage_evidence as _completed_detail_storage_evidence,
+)
 from core.file_integrity import (
-    atomic_write_json, compute_observed_file_sha256, file_change_signature,
+    atomic_write_json, compute_file_sha256, compute_observed_file_sha256, file_change_signature,
     is_sha256_hex, load_json_strict,
 )
 
@@ -22,7 +30,6 @@ _READING = ContextVar("reused_copy_storage_reading", default=frozenset())
 
 
 def root_for(path):
-    from core.compare_csv_storage import DETAIL_NAMES, compare_root
     path = Path(path).absolute()
     if (path.name not in DETAIL_NAMES or len(path.parents) < 5
             or path.parents[1].name != "pairs" or path.parents[3].name != "runs"):
@@ -40,7 +47,6 @@ def receipt_path(path):
 
 
 def _remember(path, revisions):
-    from core.compare_csv_storage import clean_path
     if not clean_path(path):
         raise ValueError("副本證據路徑經過連結")
     current = file_change_signature(path)
@@ -50,7 +56,6 @@ def _remember(path, revisions):
 
 
 def _read(path, revisions):
-    from core.compare_csv_storage import plain
     before = _remember(path, revisions)
     if not plain(path.lstat()):
         raise ValueError("副本證據不是一般實體 JSON")
@@ -61,7 +66,6 @@ def _read(path, revisions):
 
 
 def _hash(path, revisions, file_hasher):
-    from core.compare_csv_storage import plain
     before = _remember(path, revisions)
     if not plain(path.lstat()):
         raise ValueError("明細不是一般實體檔案")
@@ -101,7 +105,6 @@ def _metadata(path, revisions):
 
 
 def _completed(path, revisions, file_hasher):
-    from core.strategy_compare_storage_evidence import completed_detail_storage_evidence
     run = path.parents[2]
     _read(run / "manifest.json", revisions)
     payload = _read(run / "strategy_comparison.json", revisions)
@@ -125,7 +128,6 @@ def _same_copied_payload(target, source):
 
 def _physical_source(path, revisions, file_hasher):
     """Validate every completed publication encountered in recorded lineage."""
-    from core.compare_csv_storage import reused_detail_source
     if path.is_file():
         return path
     observed = {}
@@ -166,7 +168,6 @@ def _receipt(path, revisions):
 
 
 def _unchanged(revisions):
-    from core.compare_csv_storage import clean_path
     if any(not clean_path(path) or file_change_signature(path) != stamp
            for path, stamp in revisions.items()):
         raise ValueError("副本、來源或發布紀錄在驗證後變動")
@@ -207,7 +208,6 @@ def record_alias(path, source, digest, *, file_hasher=compute_observed_file_sha2
     The caller's revision-keyed file_hasher avoids rereading large CSVs inside
     the short commit lock after publication_evidence checked their full bytes.
     """
-    from core.compare_csv_storage import clean_path, plain, reused_detail_source
     path, source = Path(path).absolute(), Path(source).absolute()
     root = root_for(path)
     if root is None or root_for(source) != root or source.name != path.name or source == path:
@@ -267,3 +267,73 @@ def receipt_detail_source(path):
         return _receipt_detail_source(path)
     finally:
         _READING.reset(token)
+
+
+def detail_read_path(path):
+    path = Path(path)
+    if path.is_file():
+        return path
+    source = receipt_detail_source(path)
+    if source is None:
+        source = reused_detail_source(path)
+    if source is None:
+        return path
+    # For pinned publications the inherited bytes must still match THIS pair's
+    # existing receipt, even when an audit reads the CSV directly.
+    from core.file_integrity import compute_observed_file_sha256, load_json_object_or_none
+    from core import caller_baseline_storage as caller
+    if caller.root_for(path) is not None:
+        if compute_observed_file_sha256(source) != caller.expected_sha256(path):
+            raise ValueError("caller baseline 來源與原有儲存收據不同")
+        return source
+    payload = load_json_object_or_none(path.parents[2] / "strategy_comparison.json")
+    record = payload.get("pair_file_integrity") if isinstance(payload, dict) else None
+    if record is not None:
+        try:
+            expected = record["pairs"][path.parent.name][path.name]
+        except (KeyError, TypeError) as exc:
+            raise ValueError("REUSE 明細缺少原有的完整性收據") from exc
+        if compute_observed_file_sha256(source) != expected:
+            raise ValueError("REUSE 明細來源與發布時內容不同")
+    return source
+
+
+def detail_exists(path):
+    try:
+        return detail_read_path(path).is_file()
+    except (OSError, ValueError):
+        return False
+
+
+def detail_sha256(path, *, file_hasher=None):
+    from core.file_integrity import compute_file_sha256
+    return (file_hasher or compute_file_sha256)(detail_read_path(path))
+
+
+def inherited_detail_files(pair_dir, *, present_names):
+    """Resolve only names absent from the caller's fresh directory inventory."""
+    pair_dir = Path(pair_dir)
+    missing = DETAIL_NAMES.difference(present_names)
+    if not missing or compare_root(pair_dir / "strategy_comparison.json") is None:
+        return {}
+    # An original pair may legitimately omit optional diagnostics. Without
+    # recorded REUSE provenance there is nothing to inherit. Do not re-stat
+    # files whose presence/type the caller already obtained from scandir.
+    try:
+        payload = json.loads((pair_dir / "strategy_comparison.json").read_text(encoding="utf-8-sig"))
+    except FileNotFoundError:
+        return {}
+    metadata = payload.get("metadata") if isinstance(payload, dict) else None
+    return {name: pair_dir / name for name in missing
+            if _recorded_detail_source(metadata, name) is not None and detail_exists(pair_dir / name)}
+
+
+def completed_detail_storage_evidence(
+    *, path: Path, run_payload: Mapping[str, Any], project_root: Path,
+    file_hasher: Callable[[Path], str] = compute_file_sha256,
+) -> str | None:
+    """Compose publication evidence with the same alias-aware reader as consumers."""
+    return _completed_detail_storage_evidence(
+        path=path, run_payload=run_payload, project_root=project_root,
+        detail_hasher=lambda logical_path: detail_sha256(logical_path, file_hasher=file_hasher),
+    )
