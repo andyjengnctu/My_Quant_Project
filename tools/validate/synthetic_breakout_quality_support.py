@@ -105,9 +105,7 @@ from core.breakout_quality_registry import (
     TRAINING_LABEL_SCOPE_ALL,
     TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS,
     TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
-    build_breakout_quality_pretraining_profile_payload,
     get_breakout_quality_experiment_profile,
-    get_breakout_quality_pretraining_profile,
 )
 from core.breakout_quality_runtime import (
     CONTINUOUS_RANKER_PAIRWISE_REDUCTION_EQUAL_PAIR,
@@ -119,7 +117,6 @@ from config.breakout_quality import (
     BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
     BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD,
     BREAKOUT_QUALITY_TIME_WEIGHT_MODE,
-    BREAKOUT_QUALITY_PRETRAINING_PROFILE,
     BREAKOUT_QUALITY_TORCH_DEVICE,
     BREAKOUT_QUALITY_USE_MIXED_PRECISION,
     BREAKOUT_QUALITY_MIXED_PRECISION_DTYPE,
@@ -246,9 +243,7 @@ from .checks import add_check, bind_checks
 CONFIGURED_EXPERIMENT = get_breakout_quality_experiment_profile(
     BREAKOUT_QUALITY_EXPERIMENT_PROFILE
 )
-CONFIGURED_PRETRAINING = get_breakout_quality_pretraining_profile(
-    BREAKOUT_QUALITY_PRETRAINING_PROFILE
-)
+
 
 __all__ = tuple(
     name for name in globals()

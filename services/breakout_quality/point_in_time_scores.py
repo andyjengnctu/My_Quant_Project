@@ -357,7 +357,6 @@ def parse_args(argv=None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-
 def build_rolling_first_fold_fit_proof(*, bundle, forward_args, score_start: str):
     """Supply PIT-native fold facts to the FIT owner without a reverse import.
 
@@ -437,8 +436,6 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise ValueError("early stopping patience/min delta不可為負")
 
 
-
-
 def _resolve_training_universe_start(bundle, *, selection_start: pd.Timestamp) -> pd.Timestamp:
     """Resolve model-history lower bound without leaking optimizer period policy into Daily Universal."""
 
@@ -473,15 +470,6 @@ def _json_fingerprint(payload: dict[str, Any]) -> str:
 # filters.breakout_quality.point_in_time_schedule so every caller uses one schedule.
 _stable_fold_id = stable_point_in_time_fold_id
 _build_fold_periods = build_point_in_time_fold_periods
-
-
-
-
-
-
-
-
-
 
 
 def _score_output_policy(bundle):
@@ -851,7 +839,6 @@ def _unverified_fit_checkpoint_reasons(
         ) as exc:
             reasons.append(f"{label}: {type(exc).__name__} while checking checkpoint evidence")
     return tuple(reasons)
-
 
 
 def _reload_fold_manifest_after_checkpoint_cache_sync(
@@ -1790,14 +1777,6 @@ def _train_fold(
         selected_epoch=selected_epoch,
         fold_contract=fold_contract,
     )
-    final_encoder_pretraining = getattr(model, "_encoder_pretraining_summary", None)
-    encoder_pretraining_audit = None
-    if final_encoder_pretraining is not None:
-        encoder_pretraining_audit = {
-            "epoch_selection": epoch_selection.get("encoder_pretraining"),
-            "final_refit": final_encoder_pretraining,
-        }
-        checkpoint_payload["encoder_pretraining"] = encoder_pretraining_audit
     torch.save(checkpoint_payload, model_path)
     frame.to_csv(score_path, index=False, encoding="utf-8-sig")
     validation_frame.to_csv(validation_score_path, index=False, encoding="utf-8-sig")
@@ -1827,8 +1806,6 @@ def _train_fold(
             "validation_scores": build_file_manifest(validation_score_path),
         },
     }
-    if encoder_pretraining_audit is not None:
-        manifest["encoder_pretraining"] = encoder_pretraining_audit
     write_json(fold_dir / FOLD_MANIFEST_FILENAME, manifest)
     return frame, manifest
 
@@ -2020,7 +1997,6 @@ def _snapshot_superseded_point_in_time_aggregate(
         if not target_path.exists():
             shutil.copy2(source_path, target_path)
     return snapshot_dir
-
 
 
 def _pit_aggregate_baseline_sha256(manifest_path: Path) -> str | None:

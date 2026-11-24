@@ -19,7 +19,6 @@ from core.breakout_quality_registry import (
     TRAINING_SAMPLING_ALL_EVENT_ROWS,
     TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
     TRAINING_OBJECTIVE_BINARY_CLASSIFICATION,
-    build_breakout_quality_pretraining_profile_payload,
     get_breakout_quality_experiment_profile,
     normalize_breakout_quality_experiment_profile,
 )
@@ -27,7 +26,6 @@ from config.breakout_quality import (
     BREAKOUT_QUALITY_CLASS_WEIGHT_MODE,
     BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
     BREAKOUT_QUALITY_FINAL_REFIT_MODE,
-    BREAKOUT_QUALITY_PRETRAINING_PROFILE,
     BREAKOUT_QUALITY_TIME_WEIGHT_MODE,
 )
 
@@ -96,7 +94,6 @@ class BreakoutQualityRuntimeContract:
     required_signal_start: date
     execution_start: date
     shared_group_score_broadcast: bool
-
 
 
 def build_file_manifest(path: str | Path) -> dict[str, Any]:
@@ -416,7 +413,7 @@ def load_model_artifact_contract(
     validate_model_sequence_length(model_spec, int(manifest.get("sequence_length", 0)))
     _validate_torch_execution_record(
         manifest,
-        required=model_spec.family in {"inception_time", "ts2vec_frozen_linear"},
+        required=model_spec.family == "inception_time",
     )
     if int(manifest.get("trainable_parameter_count", 0)) < 1:
         raise ValueError("breakout quality trainable_parameter_count 必須 >=1")
@@ -429,31 +426,6 @@ def load_model_artifact_contract(
         raise ValueError("breakout quality total/frozen/trainable parameter count 不一致")
 
 
-    if model_spec.family == "ts2vec_frozen_linear":
-        if frozen_parameter_count < 1:
-            raise ValueError("TS2Vec frozen probe 必須包含 frozen encoder parameters")
-        pretraining = _require_mapping(manifest, "self_supervised_pretraining")
-        pretraining_manifest = _require_mapping(pretraining, "manifest")
-        pretraining_dataset = _require_mapping(pretraining, "dataset_summary")
-        if bool(pretraining_manifest.get("oos_windows_used")):
-            raise ValueError("TS2Vec pretraining 不得使用 OOS windows")
-        if bool(pretraining_manifest.get("pass_reject_labels_used")):
-            raise ValueError("TS2Vec pretraining 不得使用 PASS/REJECT labels")
-        if str(pretraining_manifest.get("model_architecture") or "") != model_spec.architecture:
-            raise ValueError("TS2Vec pretraining architecture 不一致")
-        if pretraining_manifest.get("model_spec") != model_spec.as_manifest_payload():
-            raise ValueError("TS2Vec pretraining model_spec 不一致")
-        expected_pretraining_profile = build_breakout_quality_pretraining_profile_payload(
-            BREAKOUT_QUALITY_PRETRAINING_PROFILE
-        )
-        if pretraining_manifest.get("pretraining_profile") != expected_pretraining_profile:
-            raise ValueError(
-                "TS2Vec pretraining_profile 與 active named profile 不一致"
-            )
-        if str(pretraining_dataset.get("configuration_fingerprint") or "") != str(
-            pretraining_manifest.get("pretraining_dataset_fingerprint") or ""
-        ):
-            raise ValueError("TS2Vec pretraining dataset fingerprint 不一致")
     model_policy = _require_mapping(manifest, "policy")
     expected_model_policy = expected_label_policy_for_filter_id(paths.filter_id)
     if dict(model_policy) != expected_model_policy:

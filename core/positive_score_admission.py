@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping
+from typing import Any
 
 from core.positive_netpnl_contract import (
     POSITIVE_P_CLASS_COLUMN,
@@ -101,3 +102,62 @@ def positive_score_admitted(row: Mapping) -> bool:
 
 def admit_positive_score_rows(rows):
     return [row for row in list(rows or ()) if positive_score_admitted(row)]
+
+
+def perfect_positive_arms_equivalent(arm: Mapping[str, Any], reference: Mapping[str, Any], *,
+                                    sources: Mapping[str, Any], target_id: str) -> bool:
+    """Certify sign-perfect binary actions against sign-perfect probabilities.
+
+    This applies ONLY to the user-approved hindsight intervention: mature
+    positive NetPnL -> 1, nonpositive -> 0, unavailable -> no admission.
+    It never equates learned probabilities/payoff mass, FITs or strategy runs.
+    All ranking, teacher, entry, allocation and date/source semantics must
+    otherwise match the already certified Oracle reference.
+    """
+    from dataclasses import asdict
+    from core.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
+
+    presentation = {"name", "description", "robustness_role", "replay_contract_version",
+                    "dl_runtime_options"}
+    if ({k: v for k, v in arm.items() if k not in presentation}
+            != {k: v for k, v in reference.items() if k not in presentation}):
+        return False
+    policies, executions, input_contracts = [], [], []
+    for selected in (arm, reference):
+        options = dict(selected.get("dl_runtime_options") or {})
+        if not requires_positive_score(options):
+            return False
+        source = sources.get(options.get("positive_dl_id"))
+        if not source:
+            return False
+        recipe = get_continuous_ranker_execution_recipe(source["experiment_profile"])
+        policy = recipe.training_policy
+        if (recipe.continuous_target_id != target_id
+                or policy.target_builder != "netpnl_positive_binary"
+                or policy.loss_handler != "categorical_cross_entropy"
+                or policy.categorical_class_count != 2 or policy.categorical_primary_class != 1
+                or policy.uses_pairwise_loss):
+            return False
+        if uses_model_positive_decision(options):
+            if options.get("positive_score_column") != getattr(policy, "categorical_decision_column", None):
+                return False
+            policies.append("decision")
+        else:
+            if (getattr(policy, "categorical_decision_column", None) is not None
+                    or options.get("positive_score_column") != POSITIVE_P_CLASS_COLUMN
+                    or POSITIVE_P_CLASS_COLUMN not in policy.categorical_score_columns
+                    or options.get("positive_probability_threshold") != 0.5):
+                return False
+            policies.append("probability")
+        input_contracts.append({
+            "source": {key: value for key, value in source.items()
+                       if key not in {"description", "experiment_profile"}},
+            "recipe": {key: asdict(recipe)[key] for key in (
+                "model_architecture", "continuous_target_id", "training_label_scope",
+                "training_sample_scope", "target_policy", "context_policy")},
+        })
+        executions.append({key: value for key, value in options.items()
+                           if key not in {"positive_dl_id", "positive_score_column",
+                                          "positive_source_mode", "positive_probability_threshold"}})
+    return (policies == ["decision", "probability"] and
+            input_contracts[0] == input_contracts[1] and executions[0] == executions[1])

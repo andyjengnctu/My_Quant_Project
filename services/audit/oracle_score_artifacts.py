@@ -160,20 +160,25 @@ _AUDITED_PARALLEL_DATA_ONLY_REVISION = (
 # Oracle price eligibility only consumes the unchanged provider specifications.
 # Pin both newline encodings; unknown edits still use their own source hash.
 _RETIRED_MODEL_SPEC_SOURCES = {
-    "filters/breakout_quality/models/architectures.py": (
-        "dff30439ad2dee75eec374afc3d408c0fb77fed8bd58e72e3fc8996d1668a19c",
-        "e4e65d64d69238d856bf73d554247dbea25c0f38ab7200c6c8d459f361d0904c",
-        "7759ecf25673d4e1709376f19f1dffb885e00fa8294b3275d718d1dda473f302",
+    'filters/breakout_quality/models/architectures.py': (
+        'a60ebd43a8cc0559d6c4a7cc9861eff07bb16c456426b7c58bba06758c1fa9c0',
+        'd1e73cd3212c75953221c80f64f53469f3ac9934b7daa348acf18ea2f98f8abb',
+        '7759ecf25673d4e1709376f19f1dffb885e00fa8294b3275d718d1dda473f302',
     ),
-    "filters/breakout_quality/models/spec_registry.py": (
-        "6c1d70b79fa8ab307c5a5a36fa8545dfccdb0d954f5bd6ba62186035e7730bbd",
-        "923d6615c83782379930b037bfd276d54c3563b063e7c2235c345d388cc0178b",
-        "ee2f9c496d6dafcaf7d810c8e0cb10c6dabee3f88159b46fc371bfea9122f329",
+    'filters/breakout_quality/models/spec_registry.py': (
+        '34da4432a37c456a23bf88ea9a498db5d2adbbc80ff22658e31a533ff50b3f89',
+        'e90c8c69dcf8207345d545015fcd5c03dd6c02d1e240ef7704ab10ba05b165a6',
+        'ee2f9c496d6dafcaf7d810c8e0cb10c6dabee3f88159b46fc371bfea9122f329',
     ),
-    "filters/breakout_quality/models/spec_builders.py": (
-        "5d2cd6b9ac072797d5f205201a0ab04df55abe865c0c611ee250de16d1f6aa42",
-        "0dece696b753b7182873b14daf0091cdf03da3a7846a27ee3a20a7585dbfed6e",
-        "82ffabeea6b096e09370ab2ae871e95f5c4f430ab119984ffd1fad89bbe158ca",
+    'filters/breakout_quality/models/spec_builders.py': (
+        '78443aa7a0b82eff439841430bdb274b5943ef3fdfc55a9eb51a7415c5268ba7',
+        'f3527a2e7216e873e016d91fb50fca99d9682efc7834937dfc8423654f406ae0',
+        '82ffabeea6b096e09370ab2ae871e95f5c4f430ab119984ffd1fad89bbe158ca',
+    ),
+    'core/breakout_quality_policy.py': (
+        'ea0eaf68463884eb8b4ff8ce02da4ce0b11ac0f3e50ed21b287d1cdfe8f2db7a',
+        '5accc376790cedd0a46c132030489f45b98dd0c7e820a8d50e88b89291434b29',
+        '8c6a1d59c13d87efca83b10587b0d23027f36af9c2403b9ff165fcd1e2fd943f',
     ),
 }
 

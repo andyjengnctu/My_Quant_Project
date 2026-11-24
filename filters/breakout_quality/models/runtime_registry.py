@@ -17,14 +17,8 @@ def _build_inception(nn, torch, *, feature_count, context_count, spec, pretraine
     return build_inception_time(nn, torch, feature_count=int(feature_count), context_count=int(context_count), spec=spec)
 
 
-def _build_ts2vec(nn, torch, *, feature_count, context_count, spec, pretrained_encoder_state=None):
-    from filters.breakout_quality.models.ts2vec import build_ts2vec_frozen_linear
-    return build_ts2vec_frozen_linear(nn, torch, feature_count=int(feature_count), context_count=int(context_count), spec=spec, pretrained_encoder_state=pretrained_encoder_state)
-
-
 _RUNTIME_BUILDERS_BY_KEY: dict[str, RuntimeBuilder] = {
     "inception_time": _build_inception,
-    "ts2vec": _build_ts2vec,
 }
 
 

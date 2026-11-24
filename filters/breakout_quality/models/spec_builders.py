@@ -24,28 +24,6 @@ from filters.breakout_quality.models.spec_contract import BreakoutQualityModelSp
 ModelSpecBuilder = Callable[[str], BreakoutQualityModelSpec]
 
 
-def build_ts2vec_spec(architecture: str) -> BreakoutQualityModelSpec:
-    depth, hidden_dims, output_dims, kernel_size = 8, 128, 320, 3
-    return BreakoutQualityModelSpec(
-        architecture=architecture,
-        family="ts2vec_frozen_linear",
-        channels=hidden_dims,
-        kernel_size=kernel_size,
-        dilations=tuple(2**index for index in range(depth)),
-        convolutions_per_block=2,
-        pooling=("global_max",),
-        dropout=0.10,
-        receptive_field_bars=1 + 2 * (kernel_size - 1) * sum(2**index for index in range(depth)),
-        normalization=None,
-        use_dataset_context=False,
-        sequence_input_paths=("raw_level",),
-        ts2vec_hidden_dims=hidden_dims,
-        ts2vec_output_dims=output_dims,
-        ts2vec_depth=depth,
-        ts2vec_temporal_unit=0,
-    )
-
-
 def _build_inception_spec(
     architecture: str,
     *,

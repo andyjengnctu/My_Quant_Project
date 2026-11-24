@@ -1186,7 +1186,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
             }
         )
         pair_execution = {}
-        for active_arm_id in ("C59", "C65"):
+        for active_arm_id in ("C111", "C112"):
             pair_dir = run_dir / "pairs" / active_arm_id.lower()
             pair_dir.mkdir(parents=True)
             (pair_dir / "strategy_comparison.json").write_text(
@@ -1253,9 +1253,9 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
                 "current_pair_dir": str(pair_dir.relative_to(project_root))
             }
 
-        settings = get_strategy_comparison_settings("extending_window_oos")
+        settings = get_strategy_comparison_settings("broker_cash_dl_conversion_oos")
         audit_source = StrategyCompareAuditSource(
-            profile_id="extending_window_oos",
+            profile_id="broker_cash_dl_conversion_oos",
             settings=settings,
             result_dir=run_dir,
             run_dir=run_dir,
@@ -1266,29 +1266,29 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         baseline_evidence = load_strategy_arm_replay_sidecars(
             project_root,
             source=audit_source,
-            arm_id="C58",
+            arm_id="C96",
         )
         active_evidence = load_strategy_arm_replay_sidecars(
             project_root,
             source=audit_source,
-            arm_id="C65",
+            arm_id="C112",
         )
         pipeline_evidence = load_strategy_arm_pipeline_sidecars(
             project_root,
             source=audit_source,
-            arm_id="C65",
+            arm_id="C112",
         )
         planned_evidence = load_strategy_arm_planned_sidecars(
             project_root,
             source=audit_source,
-            arm_id="C65",
+            arm_id="C112",
         )
         check_true(
             "formal_audit_resolves_shared_dl_off_baseline_via_canonical_execution_group_without_replay",
             bool(
                 baseline_evidence["prefix"] == "no_filter"
                 and baseline_evidence["paired_baseline_resolved"] is True
-                and baseline_evidence["pair_execution_source_arm_id"] == "C59"
+                and baseline_evidence["pair_execution_source_arm_id"] == "C111"
                 and len(baseline_evidence["orderable"]) == 1
                 and len(baseline_evidence["selected"]) == 1
                 and active_evidence["prefix"] == "score_ranking"
@@ -1339,20 +1339,20 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
             "trade_date": ["2025-01-02"] * 3,
             "breakout_quality_score_date": ["2025-01-01"] * 3,
         })
-        sidecar_selected_c68 = sidecar_orderable.iloc[[0]].copy()
-        sidecar_selected_c69 = sidecar_orderable.copy()
+        sidecar_selected_baseline = sidecar_orderable.iloc[[0]].copy()
+        sidecar_selected_ranked = sidecar_orderable.copy()
         sidecar_orderable.to_csv(pair_dir / "no_filter_orderable_candidates.csv", index=False, encoding="utf-8-sig")
-        sidecar_selected_c68.to_csv(pair_dir / "no_filter_selected_buys.csv", index=False, encoding="utf-8-sig")
+        sidecar_selected_baseline.to_csv(pair_dir / "no_filter_selected_buys.csv", index=False, encoding="utf-8-sig")
         sidecar_orderable.to_csv(pair_dir / "score_ranking_orderable_candidates.csv", index=False, encoding="utf-8-sig")
-        sidecar_selected_c69.to_csv(pair_dir / "score_ranking_selected_buys.csv", index=False, encoding="utf-8-sig")
-        c68_arm = SimpleNamespace(arm_id="C68", name="Control")
-        c69_arm = SimpleNamespace(arm_id="C69", name="Treatment")
+        sidecar_selected_ranked.to_csv(pair_dir / "score_ranking_selected_buys.csv", index=False, encoding="utf-8-sig")
+        baseline_arm = SimpleNamespace(arm_id="C96", name="Control")
+        ranked_arm = SimpleNamespace(arm_id="C112", name="Treatment")
         geometry_settings = SimpleNamespace(
-            profile_id="extending_window_oos", enabled_arms=(c68_arm, c69_arm)
+            profile_id="broker_cash_dl_conversion_oos", enabled_arms=(baseline_arm, ranked_arm)
         )
         pair_payloads = {
             "pair": {
-                "arm_contract": ("min_oos", "all_off", c68_arm, c69_arm),
+                "arm_contract": ("min_oos", "all_off", baseline_arm, ranked_arm),
                 "payload": {
                     "metadata": {
                         "output_dir": str(pair_dir.relative_to(geometry_root)),
@@ -1368,6 +1368,9 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
             "safety_percentile": [0.90, 0.20, 0.80],
         })
         with patch.object(
+            strategy_diag, "STRATEGY_COMPARE_MFE_SAFETY_GEOMETRY_PROFILE_IDS",
+            (geometry_settings.profile_id,),
+        ), patch.object(
             strategy_diag,
             "build_mfe_safety_truth_geometry",
             return_value=(canonical_truth, {"provider": "synthetic"}),
@@ -1388,9 +1391,9 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
                 and geometry_payload["cohort"] == "filled_buys"
                 and geometry_payload["population"]["raw_rows"] == 2
                 and geometry_payload["population"]["name"] == "Breakout candidate truth"
-                and geometry_payload["arms"]["C68"]["raw_rows"] == 1
-                and geometry_payload["arms"]["C69"]["raw_rows"] == 3
-                and geometry_payload["arms"]["C69"]["high_mfe_total_pct"] > geometry_payload["arms"]["C68"]["high_mfe_total_pct"]
+                and geometry_payload["arms"]["C96"]["raw_rows"] == 1
+                and geometry_payload["arms"]["C112"]["raw_rows"] == 3
+                and geometry_payload["arms"]["C112"]["high_mfe_total_pct"] > geometry_payload["arms"]["C96"]["high_mfe_total_pct"]
             ),
         )
 
@@ -1406,15 +1409,15 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
                 "high_safety_total_pct": 66.67,
             },
             "arms": {
-                "C68": {
-                    "arm_id": "C68", "name": "Control", "raw_rows": 1,
+                "C96": {
+                    "arm_id": "C96", "name": "Control", "raw_rows": 1,
                     "truth_coverage_pct": 100.0, "high_mfe_high_safety_pct": 0.0,
                     "high_mfe_low_safety_pct": 0.0, "low_mfe_high_safety_pct": 100.0,
                     "low_mfe_low_safety_pct": 0.0, "high_mfe_total_pct": 0.0,
                     "high_safety_total_pct": 100.0,
                 },
-                "C69": {
-                    "arm_id": "C69", "name": "Treatment", "raw_rows": 3,
+                "C112": {
+                    "arm_id": "C112", "name": "Treatment", "raw_rows": 3,
                     "truth_coverage_pct": 100.0, "high_mfe_high_safety_pct": 33.33,
                     "high_mfe_low_safety_pct": 33.33, "low_mfe_high_safety_pct": 33.34,
                     "low_mfe_low_safety_pct": 0.0, "high_mfe_total_pct": 66.66,
@@ -1426,8 +1429,8 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     check_true(
         "strategy_compare_main_report_geometry_renderer_contains_population_and_arm_quadrants",
         "All eligible truth" in geometry_text
-        and "C68" in geometry_text
-        and "C69" in geometry_text
+        and "C96" in geometry_text
+        and "C112" in geometry_text
         and "HM/HS" in geometry_text
         and "High-MFE" in geometry_text
         and "Filled buys" in geometry_text,
@@ -1549,5 +1552,97 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     # accepted finding is now encoded by the formal PARAM-P12/C91 producer contract,
     # so the dedicated implementation/registration synthetic is intentionally retired.
 
+    _append_retained_strategy_source_checks(check_true)
     summary["workflow"] = "config_driven_formal_audit_topology"
     return results, summary
+
+
+def _append_retained_strategy_source_checks(check_true):
+    """Closed execution profiles remain readable only through a verified artifact pin."""
+    from dataclasses import replace
+    from core.strategy_compare_policy import get_strategy_comparison_settings
+    from core.strategy_comparison import strategy_comparison_fingerprint
+    from services.audit import strategy_compare_source as reader
+
+    current = get_strategy_comparison_settings("broker_cash_dl_conversion_oos")
+    dl_id = str(current.arms["C111"].dl_id)
+    archived = replace(
+        current, profile_id="closed_synthetic", profile_label="Closed scientific comparison",
+        output_root="outputs/strategy_compare/retained_fixture", contrasts={},
+        arms={
+            "C58": replace(current.arms["C96"], arm_id="C58"),
+            "C71": replace(current.arms["C111"], arm_id="C71"),
+            "C74": replace(current.arms["C112"], arm_id="C74"),
+        },
+        dl_sources={**current.dl_sources, dl_id: replace(
+            current.dl_sources[dl_id], model_architecture="retired_architecture",
+            experiment_profile="retired_scientific_profile",
+        )},
+    )
+    identities = {"param:source": {"path": "models/retained.json", "sha256": "a" * 64}}
+    fingerprint = strategy_comparison_fingerprint(archived, artifact_identities=identities)
+    with TemporaryDirectory(prefix="retained_audit_source_") as temp:
+        root = Path(temp)
+        run = root / archived.output_root / "runs" / "completed"
+        pair = run / "pairs" / "original_C71"
+        pair.mkdir(parents=True)
+        (pair / "strategy_comparison.json").write_text(json.dumps({
+            "metadata": {"comparison_mode": "score-ranking"},
+        }), encoding="utf-8")
+        for prefix in ("no_filter", "score_ranking"):
+            for kind in ("orderable_candidates", "selected_buys"):
+                pd.DataFrame({"ticker": ["2330"], "signal_date": ["2025-01-02"]}).to_csv(
+                    pair / f"{prefix}_{kind}.csv", index=False,
+                )
+        execution = {"C71": {"current_pair_dir": pair.relative_to(root).as_posix()}}
+        payload = {
+            "status": "COMPLETED", "config_fingerprint": fingerprint,
+            "settings": archived.as_dict(), "artifact_identities": identities,
+            "pair_execution": execution,
+        }
+        manifest = {"config_fingerprint": fingerprint, "pair_execution": execution,
+                    "artifact_identities": identities, "run_dir": run.relative_to(root).as_posix()}
+        result_path, manifest_path = run / "strategy_comparison.json", run / "manifest.json"
+        result_path.write_text(json.dumps(payload), encoding="utf-8")
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        original_bytes = result_path.read_bytes(), manifest_path.read_bytes()
+        def load(pin=fingerprint):
+            return reader.load_strategy_compare_source(root, profile_id=archived.profile_id,
+                                                       pinned_config_fingerprint=pin)
+        source = load()
+        baseline = reader.load_strategy_arm_replay_sidecars(root, source=source, arm_id="C58")
+        active = reader.load_strategy_arm_replay_sidecars(root, source=source, arm_id="C71")
+        check_true("retained_audit_restores_only_signed_read_descriptor_without_model_registry",
+                   source.settings.profile_id == archived.profile_id
+                   and set(source.settings.arms) == {"C58", "C71", "C74"}
+                   and not hasattr(source.settings, "dl_sources")
+                   and baseline["pair_execution_source_arm_id"] == "C71"
+                   and baseline["paired_baseline_resolved"]
+                   and active["prefix"] == "score_ranking"
+                   and original_bytes == (result_path.read_bytes(), manifest_path.read_bytes()))
+        check_true("retired_audit_without_explicit_pin_fails_closed",
+                   raises_expected(reader.AuditSourceBlockedError, lambda: load(None)))
+        mutations = {
+            "incomplete_status": lambda value: value.update(status="RUNNING"),
+            "missing_settings": lambda value: value.pop("settings"),
+            "missing_source_contract": lambda value: value["settings"]["dl_sources"].pop(dl_id),
+            "changed_legacy_calibration": lambda value: value["settings"]["dl_sources"][dl_id].update(calibration_id="altered"),
+            "missing_param_policy": lambda value: value["settings"].pop("param_policy"),
+            "changed_rule_group": lambda value: value["settings"]["arms"]["C71"].update(rule_policy="formal"),
+            "escaped_output_root": lambda value: value["settings"].update(output_root="../escaped"),
+            "artifact_identity_mismatch": lambda value: value.update(artifact_identities={}),
+        }
+        for label, mutate in mutations.items():
+            changed = json.loads(json.dumps(payload))
+            mutate(changed)
+            result_path.write_text(json.dumps(changed), encoding="utf-8")
+            check_true(f"retained_audit_rejects_{label}",
+                       raises_expected(reader.AuditSourceBlockedError, load))
+        result_path.write_bytes(original_bytes[0])
+        inconsistent = {**manifest, "pair_execution": {}}
+        manifest_path.write_text(json.dumps(inconsistent), encoding="utf-8")
+        check_true("retained_audit_rejects_manifest_execution_mapping_drift",
+                   raises_expected(reader.AuditSourceBlockedError, load))
+        manifest_path.write_bytes(original_bytes[1])
+        check_true("retained_audit_descriptor_does_not_enable_closed_execution_profile",
+                   raises_expected(ValueError, lambda: get_strategy_comparison_settings(archived.profile_id)))

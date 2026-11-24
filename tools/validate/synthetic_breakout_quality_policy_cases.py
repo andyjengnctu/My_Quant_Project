@@ -58,10 +58,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
     )
     from filters.breakout_quality.models.active import ACTIVE_MODEL_ARCHITECTURES, get_active_model_spec
-    from filters.breakout_quality.models.legacy_compatibility import (
-        LEGACY_MODEL_ARCHITECTURES,
-        resolve_legacy_model_spec,
-    )
+    from filters.breakout_quality.models.architectures import LEGACY_MODEL_ARCHITECTURES
 
     config_tree = read_source_ast("config/breakout_quality.py")
     registry_tree = read_source_ast("core/breakout_quality_registry.py")
@@ -118,10 +115,9 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     run_bound_checks(
         check_true,
         (
-            ('active_and_legacy_architecture_sets_are_disjoint', bool(active) and bool(legacy) and (not set(active).intersection(legacy)),),
+            ('active_and_legacy_architecture_sets_are_disjoint', bool(active) and (not set(active).intersection(legacy)),),
             ('configured_new_training_architecture_is_active', cfg.BREAKOUT_QUALITY_MODEL_ARCHITECTURE in set(active),),
             ('all_active_architectures_resolve_through_active_factory', all((get_active_model_spec(name).architecture == name for name in active)),),
-            ('all_legacy_architectures_resolve_only_through_compatibility_factory', all((resolve_legacy_model_spec(architecture=name).architecture == name for name in legacy)),),
         ),
     )
 
@@ -176,7 +172,6 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     from services.breakout_quality.train import parse_args as parse_binary_train_args
     from services.breakout_quality.export_scores import parse_args as parse_export_args
     from services.breakout_quality.binary_point_in_time_scores import _parse_args as parse_binary_pit_args
-    from tools.filters.breakout_quality.pretrain import parse_args as parse_pretrain_args
     from services.research.breakout_quality_application import (
         _parse_workflow_args, _train_defaults,
     )
@@ -194,7 +189,6 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
         ("binary_train", parse_binary_train_args, expected_torch_defaults),
         ("export_scores", parse_export_args, expected_torch_defaults),
         ("binary_pit", parse_binary_pit_args, expected_torch_defaults),
-        ("pretrain", parse_pretrain_args, expected_torch_defaults),
         ("research_workflow", _parse_workflow_args, workflow_torch_defaults),
     ):
         check(
@@ -412,24 +406,24 @@ def validate_breakout_quality_active_legacy_model_isolation_contract_case(_base_
         configured_model_spec.as_manifest_payload(),
         active_spec.as_manifest_payload(),
     )
-    legacy_architecture = next(iter(LEGACY_MODEL_ARCHITECTURES))
+    legacy_architecture = "ts2vec_frozen_linear_v1"
     try:
         get_active_model_spec(legacy_architecture)
         active_spec_rejects_legacy = False
     except ValueError as exc:
-        active_spec_rejects_legacy = "正式新訓練只允許 active architecture" in str(exc)
+        active_spec_rejects_legacy = legacy_architecture in str(exc)
     check_true("formal_active_model_api_rejects_legacy_architecture", active_spec_rejects_legacy)
     try:
         build_active_model(10, 4, architecture=legacy_architecture)
         active_builder_rejects_legacy = False
     except ValueError as exc:
-        active_builder_rejects_legacy = "正式新訓練只允許 active architecture" in str(exc)
+        active_builder_rejects_legacy = legacy_architecture in str(exc)
     check_true("formal_active_model_builder_rejects_legacy_architecture", active_builder_rejects_legacy)
     try:
         breakout_quality_train.get_model_spec(legacy_architecture)
         binary_trainer_rejects_legacy = False
     except ValueError as exc:
-        binary_trainer_rejects_legacy = "正式新訓練只允許 active architecture" in str(exc)
+        binary_trainer_rejects_legacy = legacy_architecture in str(exc)
     check_true("binary_formal_trainer_uses_active_model_spec_api", binary_trainer_rejects_legacy)
     active_factory_source = read_source_text(
         project_root / "filters" / "breakout_quality" / "models" / "active.py"
@@ -447,7 +441,7 @@ def validate_breakout_quality_active_legacy_model_isolation_contract_case(_base_
         check_true,
         (
             ('active_model_factory_does_not_import_legacy_builders', all((token not in active_factory_source for token in ('models.moment', 'models.mantis_v2', 'models.ts2vec', 'models.tiny_cnn', 'models.patch_transformer', 'models.modern_tcn', 'models.residual_tcn'))),),
-            ('compatibility_factory_lazy_loads_historical_builder_owner', 'from filters.breakout_quality.models.legacy_compatibility import build_legacy_model' in compatibility_factory_source,),
+            ('compatibility_factory_has_no_retired_builder_dependency', 'legacy_compatibility' not in compatibility_factory_source,),
             ('formal_trainers_do_not_import_compatibility_model_factory', 'filters.breakout_quality.models.factory' not in binary_train_source and 'filters.breakout_quality.model import' not in binary_train_source and ('filters.breakout_quality.models.factory' not in continuous_train_source) and ('filters.breakout_quality.model import' not in continuous_train_source) and ('filters.breakout_quality.models.active' in binary_train_source) and ('filters.breakout_quality.models.active' in continuous_train_source),),
         ),
     )

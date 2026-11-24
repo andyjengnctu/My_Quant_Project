@@ -571,6 +571,27 @@ def validate_oracle_compare_family_coverage(
         if arm_id in claimed_arms:
             raise ValueError(f"Strategy has duplicate Oracle comparisons: {arm_id}")
         claimed_arms[arm_id] = row
+    # A declared sign-perfect decision may share an already certified binary
+    # Oracle only after the canonical capability proves all other execution
+    # and supervised-source fields identical. This is not a new replay arm.
+    from core.research_summary import get_research_summary_rows
+    from core.positive_score_admission import perfect_positive_arms_equivalent
+    from core.strategy_compare_registry import STRATEGY_DL_SOURCES
+    source_catalog = {row["target"]: row for row in source.get("oracle_source_catalog", ())}
+    for group in get_research_summary_rows():
+        reference_id = group.get("oracle_equivalent_arm_id")
+        if reference_id is None:
+            continue
+        row = claimed_arms.get(reference_id)
+        origin = source_catalog.get((row or {}).get("score_source"), row or {})
+        for binding in group.get("bindings", ()):
+            arm_id = binding.get("arm_id")
+            if (row is None or not row.get("positive_output") or arm_id not in arm_registry
+                    or not perfect_positive_arms_equivalent(
+                        arm_registry[arm_id], arm_registry[reference_id], sources=STRATEGY_DL_SOURCES,
+                        target_id=str(oracle_supervised_target_id(origin) or ""))):
+                raise ValueError(f"Uncertified Oracle perfect-output equivalence: {arm_id}/{reference_id}")
+            claimed_arms[arm_id] = row
     for family, control_id in baselines.items():
         if family == "min":
             continue

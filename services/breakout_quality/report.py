@@ -96,8 +96,6 @@ def parse_args(argv=None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-
-
 def _paint(text: object, tone: str, *, enabled: bool, bold: bool = False) -> str:
     normalized_tone = "cyan" if str(tone) == "blue" else str(tone)
     return console_paint(text, normalized_tone, enabled=enabled, bold=bold)
@@ -1270,21 +1268,6 @@ def _markdown_model_detail_lines(training: dict) -> list[str]:
             "- **Encoder Training**：`official external pretraining; frozen downstream`",
             "- **Downstream Head**：`linear`",
         ]
-    if family == "ts2vec_frozen_linear":
-        pretraining = training.get("self_supervised_pretraining") or {}
-        pretraining_manifest = pretraining.get("manifest") or {}
-        pretraining_profile = pretraining_manifest.get("pretraining_profile") or {}
-        return [
-            f"- **Model Family**：`{family}`",
-            f"- **Encoder Depth**：`{spec.get('ts2vec_depth')}`",
-            f"- **Hidden Dimensions**：`{spec.get('ts2vec_hidden_dims')}`",
-            f"- **Representation Dimensions**：`{spec.get('ts2vec_output_dims')}`",
-            "- **Encoder Training**：`Selection-only self-supervised; frozen downstream`",
-            "- **Downstream Head**：`linear`",
-            f"- **Pretraining Profile**：`{pretraining_profile.get('name', '-')}`",
-            f"- **Pretraining Optimizer**：`{pretraining_profile.get('optimizer_name', '-')}`",
-            f"- **Pretraining Epochs / Batch**：`{pretraining_profile.get('epochs', '-')} / {pretraining_profile.get('batch_size', '-')}`",
-        ]
     if family == "patch_transformer":
         return [
             f"- **Model Family**：`{family}`",
@@ -1391,21 +1374,6 @@ def _console_model_detail_lines(training: dict) -> list[str]:
             f"Representation   : {spec.get('mantis_embedding_dim')} per channel",
             "Encoder Training : official external pretraining; frozen downstream",
             "Downstream Head  : linear",
-        ]
-    if family == "ts2vec_frozen_linear":
-        pretraining = training.get("self_supervised_pretraining") or {}
-        pretraining_manifest = pretraining.get("manifest") or {}
-        pretraining_profile = pretraining_manifest.get("pretraining_profile") or {}
-        return [
-            f"Model Family    : {family}",
-            f"Encoder Depth   : {spec.get('ts2vec_depth')}",
-            f"Hidden Dims     : {spec.get('ts2vec_hidden_dims')}",
-            f"Representation  : {spec.get('ts2vec_output_dims')}",
-            "Encoder Training : Selection-only SSL; frozen downstream",
-            "Downstream Head  : linear",
-            f"Pretrain Profile : {pretraining_profile.get('name', '-')}",
-            f"Pretrain Optimizer: {pretraining_profile.get('optimizer_name', '-')}",
-            f"Pretrain E/B      : {pretraining_profile.get('epochs', '-')} / {pretraining_profile.get('batch_size', '-')}",
         ]
     if family == "patch_transformer":
         return [

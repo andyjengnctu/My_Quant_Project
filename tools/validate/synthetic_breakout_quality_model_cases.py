@@ -1764,68 +1764,28 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
     finally:
         ranker_stage_owner._train_epoch = _previous_epoch_impl
 
-    # Encoder pretraining is optional but must receive the same sampling IDs,
-    # model inputs and fixed stage labels in both fitting phases.
-    _saved_pretraining = ranker_stage_owner.pretrain_encoder_state
-    _saved_model = ranker_stage_owner._new_model_and_optimizer
-    _saved_scaler = ranker_stage_owner.build_grad_scaler
-    _pretrain_records = []
+    # Both fitting stages retain the shared model/optimizer/scaler return contract.
     _stage_init_errors = []
-    def _capture_pretraining(_torch, **kwargs):
-        _pretrain_records.append(kwargs)
-        return object(), {"stage": kwargs["stage"]}
-    class _FittingStageStubModel:
-        def eval(self):
-            return self
-    try:
-        ranker_stage_owner.pretrain_encoder_state = _capture_pretraining
-        ranker_stage_owner._new_model_and_optimizer = (
-            lambda _torch, **kwargs: (_FittingStageStubModel(), object())
-        )
-        ranker_stage_owner.build_grad_scaler = lambda *_args, **_kwargs: object()
-        _registered_profiles = [
-            get_breakout_quality_experiment_profile(name)
-            for name in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES
-        ]
-        _profiles_with_pretraining = [
-            profile for profile in _registered_profiles
-            if profile.encoder_pretraining_profile is not None
-        ]
-        _no_pretrain_profiles = [
-            profile for profile in _registered_profiles
-            if profile.encoder_pretraining_profile is None
-        ]
-        _test_profiles = _profiles_with_pretraining + _no_pretrain_profiles[:1]
-        _sample_ids = np.asarray([0, 1], dtype=np.int64)
-        _feature_bank = np.empty((2, 3, 1), dtype=np.float32)
-        _group_context = np.empty((2, 0), dtype=np.float32)
-        _group_table = pd.DataFrame({"date": pd.to_datetime(["2020-01-02"] * 2)})
-        for _candidate_profile in _test_profiles:
+    _model_sentinel = SimpleNamespace(eval=lambda: None)
+    _optimizer_sentinel, _scaler_sentinel = object(), object()
+    with patch.object(ranker_stage_owner, "_new_model_and_optimizer",
+                      return_value=(_model_sentinel, _optimizer_sentinel)), patch.object(
+        ranker_stage_owner, "build_grad_scaler", return_value=_scaler_sentinel,
+    ):
+        for _profile_name in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES:
+            _candidate_profile = get_breakout_quality_experiment_profile(_profile_name)
             for _stage in ("inner_train_epoch_selection", "full_selection_final_refit"):
-                _pretrain_records.clear()
-                _stage_args = SimpleNamespace(seed=42, model_architecture="model_sentinel")
-                _, _, _scaler, _summary = ranker_stage_owner._initialize_ranker_fitting_stage(
-                    None, _feature_bank, _group_context, _sample_ids, _group_table,
-                    profile=_candidate_profile, args=_stage_args, plan=None, stage=_stage,
+                _initialized = ranker_stage_owner._initialize_ranker_fitting_stage(
+                    None, np.empty((2, 3, 1), dtype=np.float32), np.empty((2, 0), dtype=np.float32),
+                    np.asarray([0, 1], dtype=np.int64),
+                    pd.DataFrame({"date": pd.to_datetime(["2020-01-02"] * 2)}),
+                    profile=_candidate_profile,
+                    args=SimpleNamespace(seed=42, model_architecture="model_sentinel"),
+                    plan=None, stage=_stage,
                 )
-                if _candidate_profile.encoder_pretraining_profile is None:
-                    valid = not _pretrain_records and _summary is None
-                else:
-                    valid = len(_pretrain_records) == 1 and all([
-                        _pretrain_records[0].get("fit_ids") is _sample_ids,
-                        _pretrain_records[0].get("group_table") is _group_table,
-                        _pretrain_records[0].get("stage") == _stage,
-                        _pretrain_records[0].get("pretraining_profile_name") == str(_candidate_profile.encoder_pretraining_profile),
-                        _pretrain_records[0].get("seed") == 42,
-                        _summary == {"stage": _stage},
-                    ])
-                if not valid or _scaler is None:
-                    _stage_init_errors.append((_candidate_profile.name, _stage))
-        check("ranker_pretraining_selection_refit_stage_context_is_shared", [], _stage_init_errors)
-    finally:
-        ranker_stage_owner.pretrain_encoder_state = _saved_pretraining
-        ranker_stage_owner._new_model_and_optimizer = _saved_model
-        ranker_stage_owner.build_grad_scaler = _saved_scaler
+                if _initialized != (_model_sentinel, _optimizer_sentinel, _scaler_sentinel, None):
+                    _stage_init_errors.append((_profile_name, _stage))
+    check("ranker_selection_refit_stage_preserves_shared_return_contract", [], _stage_init_errors)
 
     # Shared multi-head numerical guards and epoch selection consume the same
     # canonical training composition.  A new experiment which recomposes an
@@ -3642,43 +3602,7 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
             ),
         )
 
-    from filters.breakout_quality.models.frozen_encoder_contract import (
-        freeze_encoder_parameters, train_with_frozen_encoder,
-    )
-    import torch as _frozen_torch
-    class _FrozenEncoderProbe(_frozen_torch.nn.Module):
-        def __init__(self):
-            super().__init__()
-            self.encoder = _frozen_torch.nn.Linear(2, 2)
-            self.head = _frozen_torch.nn.Linear(2, 2)
-
-        def freeze_encoder(self):
-            freeze_encoder_parameters(self.encoder)
-
-        def train(self, mode=True):
-            return train_with_frozen_encoder(
-                parent_train=super().train, encoder=self.encoder, mode=mode,
-            )
-
-    probe = _FrozenEncoderProbe()
-    probe.freeze_encoder()
-    check_true(
-        "all_frozen_encoder_parameters_excluded_from_training",
-        all(not parameter.requires_grad for parameter in probe.encoder.parameters())
-        and all(parameter.requires_grad for parameter in probe.head.parameters()),
-    )
-    probe.train(True)
-    check_true(
-        "frozen_encoder_stays_in_eval_when_classifier_is_training",
-        probe.training and probe.head.training and not probe.encoder.training,
-    )
-    probe.train(False)
-    check_true(
-        "frozen_encoder_train_override_preserves_return_self_and_eval_state",
-        not probe.training and not probe.head.training and not probe.encoder.training,
-    )
-
-    summary["components"] = ("execution_recipe", "architecture_registry", "independent_head_composition", "frozen_encoder")
+    summary["components"] = ("execution_recipe", "architecture_registry", "independent_head_composition")
     from filters.breakout_quality.inference import strict_parallel_batched_logits
     torch, _nn = require_torch()
     torch.manual_seed(42)

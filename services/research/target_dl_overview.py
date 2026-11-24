@@ -1211,9 +1211,25 @@ def collect_target_dl_overview(project_root: Path) -> dict[str, Any]:
                     arm, parameter_sources=STRATEGY_EXPERIMENTAL_PARAM_SOURCES,
                 )
                 target = research_summary_target_label(target, parameter_version=parameter_version)
+            equivalent_metrics = {}
+            reference_id = group.get("oracle_equivalent_arm_id")
+            if reference_id is not None:
+                from core.positive_score_admission import perfect_positive_arms_equivalent
+                references = [candidate for candidate in groups if "oracle" in candidate
+                              and any(item.get("arm_id") == reference_id
+                                      for item in candidate.get("bindings", ()))]
+                if len(references) != 1:
+                    raise ValueError("Summary perfect-output equivalence requires one registered Oracle reference")
+                key = oracle_comparison_key(references[0]["oracle"])
+                if (not references[0]["oracle"].get("positive_output")
+                        or not perfect_positive_arms_equivalent(
+                            arm, STRATEGY_COMPARE_ARMS[reference_id], sources=STRATEGY_DL_SOURCES,
+                            target_id=str(score_targets.get(key) or ""))):
+                    raise ValueError(f"Summary perfect-output execution differs: {arm_id}/{reference_id}")
+                equivalent_metrics = oracle.get(key) or {}
             append_row(
                 target=target, entry=entry_label,
-                selector=selector, model=model, arm=arm_id, metrics={},
+                selector=selector, model=model, arm=arm_id, metrics=equivalent_metrics,
                 classifier=(binding.get("positive_model") or (None, None))[1],
             )
     return {"rows": sort_target_dl_overview_rows(rows), "oracle": oracle_info,

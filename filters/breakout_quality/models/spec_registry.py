@@ -10,13 +10,11 @@ from filters.breakout_quality.models.architectures import (
 from filters.breakout_quality.models.spec_builders import (
     ModelSpecBuilder,
     build_inception_variant_spec,
-    build_ts2vec_spec,
 )
 from filters.breakout_quality.models.spec_contract import BreakoutQualityModelSpec
 
 
 _SPEC_BUILDERS_BY_KEY: dict[str, ModelSpecBuilder] = {
-    "ts2vec": build_ts2vec_spec,
     "inception_variant": build_inception_variant_spec,
 }
 

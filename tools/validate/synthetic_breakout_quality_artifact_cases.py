@@ -6,7 +6,6 @@ from .checks import (
 
 from .synthetic_breakout_quality_support import (
     BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
-    BREAKOUT_QUALITY_PRETRAINING_PROFILE,
     BREAKOUT_QUALITY_TIME_WEIGHT_MODE,
     CONFIGURED_EXPERIMENT,
     DEFAULT_LABEL_POLICY,
@@ -18,7 +17,6 @@ from .synthetic_breakout_quality_support import (
     add_check,
     breakout_quality_export_scores,
     build_breakout_quality_model,
-    build_breakout_quality_pretraining_profile_payload,
     build_report_payload,
     count_trainable_parameters,
     generate_signals,
@@ -449,45 +447,6 @@ def _validate_breakout_quality_report_rendering(results, case_id):
     console = render_console_summary(payload)
     colored_console = render_console_summary(payload, color=True)
 
-    legacy_ts2vec_architecture = "ts2vec_frozen_linear_v1"
-    legacy_ts2vec_model = build_breakout_quality_model(
-        10,
-        4,
-        architecture=legacy_ts2vec_architecture,
-    )
-    legacy_ts2vec_trainable_parameter_count = count_trainable_parameters(
-        legacy_ts2vec_model
-    )
-    legacy_ts2vec_total_parameter_count = sum(
-        int(parameter.numel()) for parameter in legacy_ts2vec_model.parameters()
-    )
-    legacy_ts2vec_manifest = {
-        **context["model_manifest"],
-        "model_architecture": legacy_ts2vec_architecture,
-        "model_spec": get_model_spec(legacy_ts2vec_architecture).as_manifest_payload(),
-        "trainable_parameter_count": legacy_ts2vec_trainable_parameter_count,
-        "total_parameter_count": legacy_ts2vec_total_parameter_count,
-        "frozen_parameter_count": (
-            legacy_ts2vec_total_parameter_count
-            - legacy_ts2vec_trainable_parameter_count
-        ),
-        "self_supervised_pretraining": {
-            "manifest": {
-                "pretraining_profile": build_breakout_quality_pretraining_profile_payload(
-                    BREAKOUT_QUALITY_PRETRAINING_PROFILE
-                )
-            }
-        },
-    }
-    legacy_ts2vec_payload = build_report_payload(
-        metrics_by_split=payload["full_metrics"],
-        context={
-            **context,
-            "model_manifest": legacy_ts2vec_manifest,
-        },
-    )
-    legacy_ts2vec_markdown = render_markdown_report(legacy_ts2vec_payload)
-    legacy_ts2vec_console = render_console_summary(legacy_ts2vec_payload)
     no_oos_payload = build_report_payload(
         metrics_by_split={
             split_name: metrics
@@ -501,7 +460,6 @@ def _validate_breakout_quality_report_rendering(results, case_id):
     add_check(results, "synthetic_breakout_quality", case_id, "report_uses_group_weighted_headline", "ticker_date_group_weighted", payload["headline_basis"])
     add_check(results, "synthetic_breakout_quality", case_id, "report_schema_v4", 4, payload["schema_version"])
     add_check(results, "synthetic_breakout_quality", case_id, "report_markdown_header_includes_fixed_training_parameters", True, f"- **Experiment Profile**：`{BREAKOUT_QUALITY_EXPERIMENT_PROFILE}`" in markdown and "- **Pretraining Profile**" not in markdown and "- **Threshold**：`0.5`" in markdown and f"- **Optimizer**：`{CONFIGURED_EXPERIMENT.optimizer_name}`" in markdown and f"- **LR Schedule**：`{CONFIGURED_EXPERIMENT.lr_schedule_name}`" in markdown and f"- **LR Schedule Parameters**：`{CONFIGURED_EXPERIMENT.lr_schedule_parameters() or '-'}`" in markdown and f"- **Augmentation**：`{CONFIGURED_EXPERIMENT.augmentation_name}`" in markdown and f"- **Augmentation Parameters**：`{CONFIGURED_EXPERIMENT.augmentation_parameters() or '-'}`" in markdown and "- **Learning Rate**：`0.001`" in markdown and "- **Weight Decay**：`0.0001`" in markdown and "- **Gradient Clip Norm**：`1.0`" in markdown and "- **Batch Size**：`256`" in markdown and "- **Random Seed**：`42`" in markdown and "## 1. 固定訓練參數" not in markdown)
-    add_check(results, "synthetic_breakout_quality", case_id, "report_legacy_ts2vec_markdown_header_includes_pretraining_parameters", True, f"- **Pretraining Profile**：`{BREAKOUT_QUALITY_PRETRAINING_PROFILE}`" in legacy_ts2vec_markdown and "- **Encoder Training**：`Selection-only self-supervised; frozen downstream`" in legacy_ts2vec_markdown and "- **Downstream Head**：`linear`" in legacy_ts2vec_markdown)
     add_check(results, "synthetic_breakout_quality", case_id, "report_markdown_has_epoch_comparison", True, "## 1. Epoch 選擇結果" in markdown and "最終模型" in markdown and "Validation Loss" in markdown)
     selection_matrix = markdown.split("## 2. Selection Confusion Matrix", 1)[1].split("### 分類品質", 1)[0]
     normalized_selection_matrix = selection_matrix.replace("**", "")
@@ -582,7 +540,6 @@ def _validate_breakout_quality_report_rendering(results, case_id):
     add_check(results, "synthetic_breakout_quality", case_id, "report_console_has_epoch_and_confusion_tables", True, "1. Epoch 選擇結果" in console and "2. Selection Confusion Matrix" in console and "3. OOS Confusion Matrix" in console and "4. 各資料區段比較" in console and "5. 排序與校準診斷" in console and "6. OOS 年度診斷" in console and "7. OOS 綜合判定" in console and "Inner Train" in console and "Validation*" in console and "Precision" in console)
     add_check(results, "synthetic_breakout_quality", case_id, "report_confusion_omits_redundant_orientation_text", True, "統計口徑：Ticker/Date Group Weighted" not in console and "列 = 原始結果；欄 = 模型判定" not in console and "ticker/date group weighted`；列為原始結果" not in markdown)
     add_check(results, "synthetic_breakout_quality", case_id, "report_header_merges_fixed_training_parameters", True, f"Experiment      : {BREAKOUT_QUALITY_EXPERIMENT_PROFILE}" in console and "Pretrain Profile :" not in console and "Threshold       : 0.5" in console and f"Optimizer       : {CONFIGURED_EXPERIMENT.optimizer_name}" in console and f"LR Schedule     : {CONFIGURED_EXPERIMENT.lr_schedule_name}" in console and f"LR Schedule Args: {CONFIGURED_EXPERIMENT.lr_schedule_parameters() or '-' }" in console and f"Augmentation    : {CONFIGURED_EXPERIMENT.augmentation_name}" in console and f"Augmentation Args: {CONFIGURED_EXPERIMENT.augmentation_parameters() or '-'}" in console and "Learning Rate   : 0.001" in console and "Weight Decay    : 0.0001" in console and "Gradient Clip   : 1.0" in console and "Batch Size      : 256" in console and "Random Seed     : 42" in console and "固定訓練參數" not in console)
-    add_check(results, "synthetic_breakout_quality", case_id, "report_legacy_ts2vec_header_includes_pretraining_parameters", True, f"Pretrain Profile : {BREAKOUT_QUALITY_PRETRAINING_PROFILE}" in legacy_ts2vec_console and "Encoder Training : Selection-only SSL; frozen downstream" in legacy_ts2vec_console and "Downstream Head  : linear" in legacy_ts2vec_console)
     add_check(results, "synthetic_breakout_quality", case_id, "report_epoch_summary_uses_bullets", True, "- Epoch 上限：20" in console and "- 最終模型：Inner Validation 選出 Epoch 2" in console and "| Epoch 上限" not in console)
     add_check(results, "synthetic_breakout_quality", case_id, "report_split_and_date_are_separate_columns", True, "區段 / 日期" not in console and "|    區段" in console and "|          日期" in console and "| 區段 | 日期 |" in markdown)
     markdown_section_4 = markdown.split("## 4. 各資料區段比較", 1)[1].split("## 5. 排序與校準診斷", 1)[0]
@@ -895,11 +852,10 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
             )
 
     from filters.breakout_quality.models.active import ACTIVE_MODEL_ARCHITECTURES
-    from filters.breakout_quality.models.legacy_compatibility import LEGACY_MODEL_ARCHITECTURES
+    from filters.breakout_quality.models.architectures import LEGACY_MODEL_ARCHITECTURES
     check_true(
         "runtime_new_training_and_historical_reconstruction_architectures_are_isolated",
         bool(ACTIVE_MODEL_ARCHITECTURES)
-        and bool(LEGACY_MODEL_ARCHITECTURES)
         and not set(ACTIVE_MODEL_ARCHITECTURES).intersection(LEGACY_MODEL_ARCHITECTURES),
     )
 

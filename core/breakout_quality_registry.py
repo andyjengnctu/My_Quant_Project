@@ -1,6 +1,6 @@
 """Breakout-quality scientific/profile registry and immutable contract schemas.
 
-This module owns scientific profile identifiers, experiment/pretraining declarations,
+This module owns scientific profile identifiers, experiment declarations,
 research-spec metadata, and reusable context scientific contracts.  It must not depend
 on user-selected current settings from ``config.breakout_quality``.
 """
@@ -562,15 +562,6 @@ DAILY_UNIVERSAL_FULL_HORIZON_NO_BREACH_PATCH_TRANSFORMER_FULL_LIST_NDCG_PAIRWISE
 DAILY_UNIVERSAL_RISK_NORMALIZED_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE = "daily_universal_risk_normalized_net_full_list_ndcg_pairwise"
 DAILY_UNIVERSAL_RISK_CONTEXT_NET_FULL_LIST_NDCG_PAIRWISE_PROFILE = "daily_universal_risk_context_net_full_list_ndcg_pairwise"
 
-TS2VEC_SELECTION_ONLY_PRETRAINING_PROFILE = "ts2vec_selection_only"
-STOCK_CODE_CLASSIFICATION_ENCODER_PRETRAINING_PROFILE = "stock_code_classification_v1"
-FUTURE_PATH_STATISTICS_ENCODER_PRETRAINING_PROFILE = "future_path_statistics_v1"
-FUTURE_PATH_STATISTICS_TARGET_NAMES = (
-    "terminal_return_5d", "terminal_return_10d", "terminal_return_20d", "terminal_return_40d",
-    "max_downside_10d", "max_downside_20d", "max_downside_40d",
-    "max_upside_10d", "max_upside_20d", "max_upside_40d",
-    "realized_volatility_10d", "realized_volatility_20d",
-)
 
 TRAINING_SAMPLING_ALL_EVENT_ROWS = "all_event_rows_group_weighted"
 TRAINING_SAMPLING_UNIQUE_TICKER_DATE = "unique_ticker_date"
@@ -729,9 +720,7 @@ class BreakoutQualityExperimentProfile:
         if type(self.fit_contract_version) is not int or self.fit_contract_version < 1:
             raise ValueError("FIT contract version must be a positive integer")
         if self.encoder_pretraining_profile is not None:
-            get_breakout_quality_encoder_pretraining_profile(
-                self.encoder_pretraining_profile
-            )
+            raise ValueError("Encoder pretraining profiles are retired")
         if self.portfolio_score_scale not in {"raw", "daily_percentile"}:
             raise ValueError("unsupported portfolio score scale")
         if self.training_objective == TRAINING_OBJECTIVE_BINARY_CLASSIFICATION:
@@ -869,12 +858,6 @@ class BreakoutQualityExperimentProfile:
             payload["score_calibration"] = self.score_calibration
         if self.fit_contract_version != 1:
             payload["fit_contract_version"] = int(self.fit_contract_version)
-        if self.encoder_pretraining_profile is not None:
-            payload["encoder_pretraining"] = (
-                get_breakout_quality_encoder_pretraining_profile(
-                    self.encoder_pretraining_profile
-                ).as_manifest_payload()
-            )
         if self.numerical_execution_policy != NUMERICAL_EXECUTION_POLICY_ARCHITECTURE_DEFAULT:
             payload["numerical_execution_policy"] = str(self.numerical_execution_policy)
             payload["bf16_backward_retry_scales"] = [
@@ -882,305 +865,6 @@ class BreakoutQualityExperimentProfile:
             ]
         return payload
 
-
-@dataclass(frozen=True)
-class BreakoutQualityPretrainingProfile:
-    name: str
-    family: str
-    optimizer_name: str
-    epochs: int
-    batch_size: int
-    learning_rate: float
-    weight_decay: float
-    gradient_clip_norm: float
-    min_crop_bars: int
-    mask_probability: float
-    contrastive_alpha: float
-    temporal_unit: int
-
-    def __post_init__(self) -> None:
-        normalized_name = str(self.name).strip().lower()
-        if not normalized_name or normalized_name != self.name:
-            raise ValueError("pretraining profile name 必須是非空白小寫名稱")
-        if any(token in normalized_name for token in ("/", "\\", "\x00")):
-            raise ValueError("pretraining profile name 必須是安全的單一資料夾名稱")
-        if str(self.family).strip().lower() != self.family or not self.family:
-            raise ValueError("pretraining family 必須是非空白小寫名稱")
-        if any(token in self.family for token in ("/", "\\", "\x00")):
-            raise ValueError("pretraining family 必須是安全的單一資料夾名稱")
-        if self.optimizer_name not in SUPPORTED_BREAKOUT_QUALITY_OPTIMIZERS:
-            raise ValueError(f"不支援的 pretraining optimizer: {self.optimizer_name!r}")
-        if int(self.epochs) < 1 or int(self.batch_size) < 2:
-            raise ValueError("pretraining epochs 必須 >=1 且 batch_size 必須 >=2")
-        if (
-            float(self.learning_rate) <= 0.0
-            or float(self.weight_decay) < 0.0
-            or float(self.gradient_clip_norm) < 0.0
-        ):
-            raise ValueError(
-                "pretraining learning_rate 必須 >0，weight_decay與gradient_clip_norm必須 >=0"
-            )
-        if int(self.min_crop_bars) < 2 or int(self.temporal_unit) < 0:
-            raise ValueError("pretraining min_crop_bars 必須 >=2 且 temporal_unit 必須 >=0")
-        if not 0.0 <= float(self.mask_probability) < 1.0:
-            raise ValueError("pretraining mask_probability 必須介於0（含）與1（不含）")
-        if not 0.0 <= float(self.contrastive_alpha) <= 1.0:
-            raise ValueError("pretraining contrastive_alpha 必須介於0與1")
-
-    def as_manifest_payload(self) -> dict[str, Any]:
-        return {
-            "name": self.name,
-            "family": self.family,
-            "optimizer_name": self.optimizer_name,
-            "epochs": int(self.epochs),
-            "batch_size": int(self.batch_size),
-            "learning_rate": float(self.learning_rate),
-            "weight_decay": float(self.weight_decay),
-            "gradient_clip_norm": float(self.gradient_clip_norm),
-            "min_crop_bars": int(self.min_crop_bars),
-            "mask_probability": float(self.mask_probability),
-            "contrastive_alpha": float(self.contrastive_alpha),
-            "temporal_unit": int(self.temporal_unit),
-        }
-
-
-_PRETRAINING_PROFILES = {
-    TS2VEC_SELECTION_ONLY_PRETRAINING_PROFILE: BreakoutQualityPretrainingProfile(
-        name=TS2VEC_SELECTION_ONLY_PRETRAINING_PROFILE,
-        family="ts2vec_v1",
-        optimizer_name="adamw",
-        epochs=10,
-        batch_size=128,
-        learning_rate=0.001,
-        weight_decay=0.0,
-        gradient_clip_norm=1.0,
-        min_crop_bars=60,
-        mask_probability=0.5,
-        contrastive_alpha=0.5,
-        temporal_unit=0,
-    ),
-}
-SUPPORTED_BREAKOUT_QUALITY_PRETRAINING_PROFILES = tuple(_PRETRAINING_PROFILES)
-
-
-def normalize_breakout_quality_pretraining_profile(value: str) -> str:
-    normalized = str(value).strip().lower()
-    if normalized not in _PRETRAINING_PROFILES:
-        allowed = ", ".join(SUPPORTED_BREAKOUT_QUALITY_PRETRAINING_PROFILES)
-        raise ValueError(
-            f"不支援的 breakout quality pretraining profile: {value!r}；可用值: {allowed}"
-        )
-    return normalized
-
-
-def get_breakout_quality_pretraining_profile(
-    value: str,
-) -> BreakoutQualityPretrainingProfile:
-    return _PRETRAINING_PROFILES[normalize_breakout_quality_pretraining_profile(value)]
-
-
-def build_breakout_quality_pretraining_profile_payload(
-    value: str,
-    *,
-    epochs: int | None = None,
-    batch_size: int | None = None,
-    learning_rate: float | None = None,
-    weight_decay: float | None = None,
-    gradient_clip_norm: float | None = None,
-    min_crop_bars: int | None = None,
-    mask_probability: float | None = None,
-    contrastive_alpha: float | None = None,
-    temporal_unit: int | None = None,
-) -> dict[str, Any]:
-    """Return the named profile payload with explicit CLI overrides applied.
-
-    Formal workflow runs use the profile defaults. The override path remains available for
-    isolated development experiments, while downstream canonical training can reject an
-    encoder whose stored payload differs from the active named profile.
-    """
-
-    profile = get_breakout_quality_pretraining_profile(value)
-    resolved = BreakoutQualityPretrainingProfile(
-        name=profile.name,
-        family=profile.family,
-        optimizer_name=profile.optimizer_name,
-        epochs=profile.epochs if epochs is None else int(epochs),
-        batch_size=profile.batch_size if batch_size is None else int(batch_size),
-        learning_rate=(
-            profile.learning_rate if learning_rate is None else float(learning_rate)
-        ),
-        weight_decay=profile.weight_decay if weight_decay is None else float(weight_decay),
-        gradient_clip_norm=(
-            profile.gradient_clip_norm
-            if gradient_clip_norm is None
-            else float(gradient_clip_norm)
-        ),
-        min_crop_bars=(
-            profile.min_crop_bars if min_crop_bars is None else int(min_crop_bars)
-        ),
-        mask_probability=(
-            profile.mask_probability
-            if mask_probability is None
-            else float(mask_probability)
-        ),
-        contrastive_alpha=(
-            profile.contrastive_alpha
-            if contrastive_alpha is None
-            else float(contrastive_alpha)
-        ),
-        temporal_unit=profile.temporal_unit if temporal_unit is None else int(temporal_unit),
-    )
-    return resolved.as_manifest_payload()
-
-
-@dataclass(frozen=True)
-class BreakoutQualityEncoderPretrainingProfile:
-    """Formal encoder-initialization recipe for downstream ranker experiments.
-
-    This is deliberately separate from the legacy TS2Vec artifact profile above.
-    Encoder pretraining here is part of the downstream experiment identity and is
-    rebuilt inside each fitting scope; it is not a reusable cross-fold checkpoint.
-    """
-
-    name: str
-    task: str
-    optimizer_name: str
-    epochs: int
-    batch_size: int
-    learning_rate: float
-    weight_decay: float
-    gradient_clip_norm: float
-    sampling_mode: str
-    source_scope: str
-    downstream_finetune: str
-    loss_name: str = "cross_entropy"
-    target_names: tuple[str, ...] = ()
-    target_standardization: str | None = None
-    smooth_l1_beta: float | None = None
-    future_path_max_horizon_bars: int | None = None
-
-    def __post_init__(self) -> None:
-        normalized_name = str(self.name).strip().lower()
-        if not normalized_name or normalized_name != self.name:
-            raise ValueError("encoder pretraining profile name 必須是非空白小寫名稱")
-        if any(token in normalized_name for token in ("/", "\\", "\x00")):
-            raise ValueError("encoder pretraining profile name 必須是安全名稱")
-        supported_tasks = {"stock_code_classification", "future_path_statistics_regression"}
-        if self.task not in supported_tasks:
-            raise ValueError(f"不支援的 encoder pretraining task: {self.task!r}")
-        if self.optimizer_name != "adam":
-            raise ValueError("encoder pretraining 固定使用 Adam")
-        if int(self.epochs) < 1 or int(self.batch_size) < 2:
-            raise ValueError("encoder pretraining epochs 必須>=1且batch_size必須>=2")
-        if float(self.learning_rate) <= 0.0:
-            raise ValueError("encoder pretraining learning_rate 必須>0")
-        if float(self.weight_decay) < 0.0 or float(self.gradient_clip_norm) < 0.0:
-            raise ValueError("encoder pretraining weight_decay/gradient_clip_norm 必須>=0")
-        if self.sampling_mode != "ticker_balanced_one_window_per_ticker_per_epoch":
-            raise ValueError("encoder pretraining sampling mode 不符合scientific contract")
-        if self.downstream_finetune != "full_unfrozen":
-            raise ValueError("encoder pretraining downstream 必須full-unfrozen fine-tune")
-        if self.task == "stock_code_classification":
-            if self.source_scope != "downstream_fitting_rows_only":
-                raise ValueError("SCC encoder pretraining source scope 必須限制於downstream fitting rows")
-            if self.loss_name != "cross_entropy":
-                raise ValueError("SCC encoder pretraining 必須使用cross_entropy")
-            if (
-                self.target_names
-                or self.target_standardization is not None
-                or self.smooth_l1_beta is not None
-                or self.future_path_max_horizon_bars is not None
-            ):
-                raise ValueError("SCC encoder pretraining 不得宣告future-path regression設定")
-        else:
-            expected_targets = FUTURE_PATH_STATISTICS_TARGET_NAMES
-            if self.source_scope != "matured_downstream_fitting_rows_only":
-                raise ValueError("future-path pretraining source scope 必須限制於fitting cutoff前已成熟rows")
-            if self.loss_name != "smooth_l1":
-                raise ValueError("future-path encoder pretraining 必須使用smooth_l1")
-            if tuple(self.target_names) != expected_targets:
-                raise ValueError("future-path encoder pretraining target set不符合scientific contract")
-            if self.target_standardization != "fitting_scope_zscore":
-                raise ValueError("future-path encoder pretraining 必須使用fitting-scope z-score")
-            if self.smooth_l1_beta is None or not math.isfinite(float(self.smooth_l1_beta)) or float(self.smooth_l1_beta) <= 0.0:
-                raise ValueError("future-path encoder pretraining smooth_l1_beta必須為有限正數")
-            if int(self.future_path_max_horizon_bars or 0) != 40:
-                raise ValueError("future-path encoder pretraining max horizon必須為40 bars")
-
-    def as_manifest_payload(self) -> dict[str, Any]:
-        payload = {
-            "name": self.name,
-            "task": self.task,
-            "optimizer_name": self.optimizer_name,
-            "epochs": int(self.epochs),
-            "batch_size": int(self.batch_size),
-            "learning_rate": float(self.learning_rate),
-            "weight_decay": float(self.weight_decay),
-            "gradient_clip_norm": float(self.gradient_clip_norm),
-            "sampling_mode": self.sampling_mode,
-            "source_scope": self.source_scope,
-            "downstream_finetune": self.downstream_finetune,
-        }
-        if self.task == "future_path_statistics_regression":
-            payload.update({
-                "loss_name": self.loss_name,
-                "target_names": list(self.target_names),
-                "target_standardization": self.target_standardization,
-                "smooth_l1_beta": float(self.smooth_l1_beta),
-                "future_path_max_horizon_bars": int(self.future_path_max_horizon_bars),
-            })
-        return payload
-
-
-_ENCODER_PRETRAINING_PROFILES = {
-    STOCK_CODE_CLASSIFICATION_ENCODER_PRETRAINING_PROFILE: BreakoutQualityEncoderPretrainingProfile(
-        name=STOCK_CODE_CLASSIFICATION_ENCODER_PRETRAINING_PROFILE,
-        task="stock_code_classification",
-        optimizer_name="adam",
-        epochs=100,
-        batch_size=128,
-        learning_rate=0.001,
-        weight_decay=0.0001,
-        gradient_clip_norm=1.0,
-        sampling_mode="ticker_balanced_one_window_per_ticker_per_epoch",
-        source_scope="downstream_fitting_rows_only",
-        downstream_finetune="full_unfrozen",
-    ),
-    FUTURE_PATH_STATISTICS_ENCODER_PRETRAINING_PROFILE: BreakoutQualityEncoderPretrainingProfile(
-        name=FUTURE_PATH_STATISTICS_ENCODER_PRETRAINING_PROFILE,
-        task="future_path_statistics_regression",
-        optimizer_name="adam",
-        epochs=100,
-        batch_size=128,
-        learning_rate=0.001,
-        weight_decay=0.0001,
-        gradient_clip_norm=1.0,
-        sampling_mode="ticker_balanced_one_window_per_ticker_per_epoch",
-        source_scope="matured_downstream_fitting_rows_only",
-        downstream_finetune="full_unfrozen",
-        loss_name="smooth_l1",
-        target_names=FUTURE_PATH_STATISTICS_TARGET_NAMES,
-        target_standardization="fitting_scope_zscore",
-        smooth_l1_beta=1.0,
-        future_path_max_horizon_bars=40,
-    ),
-}
-SUPPORTED_BREAKOUT_QUALITY_ENCODER_PRETRAINING_PROFILES = tuple(
-    _ENCODER_PRETRAINING_PROFILES
-)
-
-
-def get_breakout_quality_encoder_pretraining_profile(
-    value: str,
-) -> BreakoutQualityEncoderPretrainingProfile:
-    normalized = str(value).strip().lower()
-    try:
-        return _ENCODER_PRETRAINING_PROFILES[normalized]
-    except KeyError as exc:
-        allowed = ", ".join(SUPPORTED_BREAKOUT_QUALITY_ENCODER_PRETRAINING_PROFILES)
-        raise ValueError(
-            f"不支援的 encoder pretraining profile: {value!r}；可用值: {allowed}"
-        ) from exc
 
 _EXPERIMENT_PROFILES = {
     UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE: BreakoutQualityExperimentProfile(
@@ -2204,4 +1888,3 @@ def get_continuous_ranker_research_spec(
             f"continuous ranker profile缺少research spec登記: {profile_name}"
         )
     return spec
-

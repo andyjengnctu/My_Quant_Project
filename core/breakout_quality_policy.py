@@ -24,7 +24,6 @@ from core.breakout_quality_registry import (
     TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS,
     TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
     get_breakout_quality_experiment_profile,
-    get_breakout_quality_pretraining_profile,
     get_continuous_ranker_research_spec,
     normalize_breakout_quality_experiment_profile,
 )
@@ -87,24 +86,6 @@ BREAKOUT_QUALITY_WORKFLOW_MODEL_ARCHITECTURE = cfg.BREAKOUT_QUALITY_MODEL_ARCHIT
 # =============================================================================
 # 9. Derived values and helper calculations (not user-adjustable)
 # =============================================================================
-
-# 下列 pretraining 欄位由具名 profile 自動展開，請調整 profile 定義而非直接修改衍生值。
-_BREAKOUT_QUALITY_PRETRAINING_SETTINGS = get_breakout_quality_pretraining_profile(
-    cfg.BREAKOUT_QUALITY_PRETRAINING_PROFILE
-)
-BREAKOUT_QUALITY_PRETRAINING_FAMILY = _BREAKOUT_QUALITY_PRETRAINING_SETTINGS.family
-BREAKOUT_QUALITY_PRETRAINING_EPOCHS = _BREAKOUT_QUALITY_PRETRAINING_SETTINGS.epochs
-BREAKOUT_QUALITY_PRETRAINING_BATCH_SIZE = _BREAKOUT_QUALITY_PRETRAINING_SETTINGS.batch_size
-BREAKOUT_QUALITY_PRETRAINING_LEARNING_RATE = _BREAKOUT_QUALITY_PRETRAINING_SETTINGS.learning_rate
-BREAKOUT_QUALITY_PRETRAINING_WEIGHT_DECAY = _BREAKOUT_QUALITY_PRETRAINING_SETTINGS.weight_decay
-BREAKOUT_QUALITY_PRETRAINING_GRADIENT_CLIP_NORM = (
-    _BREAKOUT_QUALITY_PRETRAINING_SETTINGS.gradient_clip_norm
-)
-BREAKOUT_QUALITY_PRETRAINING_MIN_CROP_BARS = _BREAKOUT_QUALITY_PRETRAINING_SETTINGS.min_crop_bars
-BREAKOUT_QUALITY_PRETRAINING_MASK_PROBABILITY = _BREAKOUT_QUALITY_PRETRAINING_SETTINGS.mask_probability
-BREAKOUT_QUALITY_PRETRAINING_CONTRASTIVE_ALPHA = _BREAKOUT_QUALITY_PRETRAINING_SETTINGS.contrastive_alpha
-BREAKOUT_QUALITY_PRETRAINING_TEMPORAL_UNIT = _BREAKOUT_QUALITY_PRETRAINING_SETTINGS.temporal_unit
-
 
 def build_breakout_quality_default_high_len_values() -> tuple[int, ...]:
     values = set(build_breakout_optimizer_high_len_values())
@@ -674,7 +655,6 @@ class BreakoutQualityWorkflowSettings:
         if self.training_sample_scope != TRAINING_SAMPLE_SCOPE_BREAKOUT_EVENT_GROUPS:
             payload["training_sample_scope"] = self.training_sample_scope
         return payload
-
 
 
 def _resolve_strategy_defaults(training_objective: str) -> tuple[str, str, str]:

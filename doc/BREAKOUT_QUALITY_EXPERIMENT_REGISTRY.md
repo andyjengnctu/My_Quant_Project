@@ -935,7 +935,7 @@ The canonical `config/research_summary.py` roster alone determines current Model
 | 身分 | 現行定義 | 狀態 |
 |---|---|---|
 | `MR-13DJ` / `DL-CONT13DJ_ROLL` | `daily_universal_min_p21_netpnl_utility_binary`；原生 300×10 InceptionTime，獨立二類 payoff-weighted CE；輸入只含既有合法股價特徵，不讀 DH／DI 分數 | CURRENT / FIT v4 / USER_REPORTED_ROLLING_AND_4SEED_RESULT_2026_11_12 / NO_TRADING |
-| `SR-C186` | 與 C183 同 P21、DH Rank、Direct、費稅、出場與資金規則；第二個模型改為 DJ 的 `positive_trade_allowed`，無可調 probability threshold、無 DI 依賴 | CURRENT / REPLAY v4 / USER_REPORTED_ROLLING_AND_4SEED_RESULT_2026_11_12 / ORACLE_CONTRACT_UNRESOLVED |
+| `SR-C186` | 與 C183 同 P21、DH Rank、Direct、費稅、出場與資金規則；第二個模型改為 DJ 的 `positive_trade_allowed`，無可調 probability threshold、無 DI 依賴 | CURRENT / REPLAY v4 / USER_REPORTED_ROLLING_AND_4SEED_RESULT_2026_11_12 / ORACLE_PERFECT_OUTPUT_EQUIVALENT |
 | `SR-C183` / `MR-13DH` / `MR-13DI` | 原 DH＋DI 控制組完整保留；DI 仍為原本等權 CE 與 P(Positive)>0.5 | EXISTING_IDENTITY_UNCHANGED |
 
 - 監督真值保持同 seed P21 合法成熟 broker NetPnL；no-fill／未成熟仍 NULL。訓練類別為 NetPnL>0，權重為 abs(NetPnL) / mean(abs(NetPnL of FIT rows))。選 epoch 的 Train 與 final refit 各用自己明列的合法 FIT rows 計算尺度；不讀 OOS／未來 fold 的統計。
@@ -943,7 +943,7 @@ The canonical `config/research_summary.py` roster alone determines current Model
 - 給定股價特徵 x，理想加權 CE 的 q(x)=E[max(Y,0)|x] / E[abs(Y)|x]；兩類比較等價於 E[Y|x]>0。這是單筆淨損益決策目標，**不保證**組合 RoMD／Exposure 最佳。若整個 FIT 或 Validation 全為零損益，無有效加權訊號則 fail-fast；零損益 minibatch 跳過。
 - Epoch selection 使用該合法 Validation cohort 的 abs(NetPnL)-weighted CE、同口徑 Brier tie-break；無 threshold grid、無額外校準、無 OOS 選模。既有 Forward／Rolling、逐 fold FIT owner、四 seed Robustness 與七項工作選單共用原生流程。現行 Training Model 設為 DJ，正式 Model Compare／Strategy Compare 均從 Summary 同源投影。
 - C186 由 DH＋DJ 兩份 PIT 分數同資訊日對齊，任一缺失不入場；比對只消費模型保存的 0/1 action，不在策略端計算 probability cutoff。C183 與 C186 共用既有 DH、teacher 合法工件；DJ FIT／C186 Replay 不重用先前錯誤三模型工件。
-- 新輸出尚無核准的 perfect-score 映射與端到端 Oracle parity。Summary 保留正式比較列與實際模型／策略結果，Oracle 欄位留白，不借用 C183 Oracle。此狀態不阻擋已授權模型訓練與策略比較；不新增虛構 Oracle 成果或改寫舊簽章。
+- 初始版本因 perfect-score 映射尚未核准而保留 Oracle 空白。2026-11-24 使用者核准：成熟 NetPnL＞0 的完美 `positive_trade_allowed` 為 1，≤0 為 0，缺值不可交易。相同 signed NetPnL 百分位 Rank、同資訊日與此 0/1 完美輸出下，決策 admission 與原獨立二類 Positive admission 等價；真實投組引擎的 PIT／Oracle、Forward／Rolling、跨年、正負零／缺值與資訊日錯配對照已驗證逐日帳務及完整交易相同。Summary 僅在 canonical owner 核對 teacher、Target、特徵母體、Rank、參數與所有其他執行設定一致後，共用既有 C183 的 signed Oracle 證據；無證據仍留白，設定不符則拒絕。此等價只適用完美輸出，不等同 DI／DJ 實際預測，不重訓、不重算既有 Replay、不更動歷史收據。
 - 2026-11-12 已取得使用者 Summary 的 Rolling／四 Seed 結果，數值與限制登錄於 Experiment Log；未附原始 FIT／Replay 工件，不宣稱已獨立驗證。
 
 ## 2026-11-12：P16 payoff Positive 退役（MR-13DK／C187／C188）

@@ -10,6 +10,7 @@ from contextlib import nullcontext
 from dataclasses import dataclass
 import json
 from pathlib import Path
+from types import MappingProxyType, SimpleNamespace
 from typing import Any, Mapping, Sequence
 
 import pandas as pd
@@ -28,6 +29,117 @@ from filters.breakout_quality.strategy_compare_runtime import (
 
 class AuditSourceBlockedError(RuntimeError):
     """Raised when canonical read-only Strategy Compare evidence is unavailable."""
+
+
+@dataclass(frozen=True)
+class _PersistedContract:
+    fields: Mapping[str, Any]
+
+    def __getattr__(self, name: str) -> Any:
+        try:
+            return self.fields[name]
+        except KeyError as exc:
+            raise AttributeError(name) from exc
+
+    def as_dict(self) -> dict[str, Any]:
+        return dict(self.fields)
+
+
+@dataclass(frozen=True)
+class _RetainedAuditArm:
+    arm_id: str
+    dl_enabled: bool
+    param_source: str
+    param_policy: str
+    rule_policy: str
+
+
+@dataclass(frozen=True)
+class _RetainedAuditSettings:
+    profile_id: str
+    profile_label: str
+    dataset: str
+    param_policy: str
+    arms: Mapping[str, _RetainedAuditArm]
+
+
+def _retained_audit_settings(
+    *, project_root: Path, result_dir: Path, result: Mapping[str, Any],
+    profile_id: str, fingerprint: str,
+) -> _RetainedAuditSettings:
+    """Verify a persisted contract, then expose only fields needed by read-only Audits."""
+    try:
+        raw = result["settings"]
+        if not isinstance(raw, Mapping) or result.get("status") != "COMPLETED":
+            raise ValueError("completed settings contract missing")
+        for key in ("profile_id", "profile_label", "dataset", "param_policy", "output_root"):
+            if not isinstance(raw.get(key), str) or not raw[key].strip():
+                raise ValueError(f"settings.{key} missing")
+        if raw["profile_id"] != profile_id:
+            raise ValueError("persisted profile identity mismatch")
+        output_root = (project_root / raw["output_root"]).resolve()
+        output_root.relative_to((project_root / "outputs" / "strategy_compare").resolve())
+        if result_dir.resolve().parent != output_root / "runs":
+            raise ValueError("persisted output root does not own completed run")
+        adapter = SimpleNamespace(**raw)
+        adapter.preparation = _PersistedContract(raw["preparation"])
+        for field in ("parameter_sources", "dl_sources", "arms", "contrasts"):
+            records = raw[field]
+            if not isinstance(records, Mapping) or any(not isinstance(v, Mapping) for v in records.values()):
+                raise ValueError(f"settings.{field} malformed")
+            setattr(adapter, field, {key: _PersistedContract(value) for key, value in records.items()})
+        for field in ("arms", "contrasts"):
+            if any(type(record.enabled) is not bool for record in getattr(adapter, field).values()):
+                raise ValueError(f"settings.{field}.enabled must be boolean")
+        adapter.enabled_arms = tuple(row for row in adapter.arms.values() if row.enabled)
+        adapter.enabled_contrasts = tuple(row for row in adapter.contrasts.values() if row.enabled)
+        identities = result["artifact_identities"]
+        if not isinstance(identities, Mapping) or not adapter.enabled_arms:
+            raise ValueError("completed artifact identities or enabled arms missing")
+        if strategy_comparison_fingerprint(adapter, artifact_identities=identities) != fingerprint:
+            raise ValueError("persisted settings/artifact fingerprint mismatch")
+        arms = {}
+        for key, row in adapter.arms.items():
+            if not row.enabled:
+                continue
+            if row.arm_id != key or type(row.dl_enabled) is not bool:
+                raise ValueError(f"arm {key} identity or DL flag malformed")
+            if not isinstance(row.param_source, str) or not row.param_source or not isinstance(row.rule_policy, str) or not row.rule_policy:
+                raise ValueError(f"arm {key} parameter/rule grouping missing")
+            arms[key] = _RetainedAuditArm(
+                key, row.dl_enabled, row.param_source,
+                resolve_strategy_comparison_arm_param_policy(adapter, row), row.rule_policy,
+            )
+        return _RetainedAuditSettings(
+            profile_id, raw["profile_label"], raw["dataset"], raw["param_policy"], MappingProxyType(arms),
+        )
+    except (KeyError, AttributeError, TypeError, ValueError) as exc:
+        raise AuditSourceBlockedError(f"retained Audit缺少完整且identity一致的只讀契約: {profile_id} | {exc}") from exc
+
+
+def _find_retained_strategy_run(project_root: Path, *, profile_id: str, fingerprint: str) -> Path:
+    """Discover completed evidence by its explicit pin, without executable registry entries."""
+    if len(fingerprint) != 12 or any(character not in "0123456789abcdef" for character in fingerprint):
+        raise AuditSourceBlockedError(f"retained Audit需要明確canonical fingerprint: {profile_id}")
+    domain = (project_root / "outputs" / "strategy_compare").resolve()
+    candidates = []
+    unreadable = []
+    for path in domain.glob("**/runs/*/strategy_comparison.json"):
+        try:
+            path.resolve().relative_to(domain)
+            payload = _read_json(path)
+        except (ValueError, AuditSourceBlockedError) as exc:
+            unreadable.append(f"{path.name}: {exc}")
+            continue
+        if not isinstance(payload, Mapping) or _primary_strategy_fingerprints(payload) != {fingerprint}:
+            continue
+        settings = payload.get("settings")
+        if isinstance(settings, Mapping) and settings.get("profile_id") == profile_id:
+            candidates.append(path.parent.resolve())
+    if not candidates:
+        detail = f"; unreadable={unreadable[:1]}" if unreadable else ""
+        raise AuditSourceBlockedError(f"缺少retained Audit指定completed contract: {profile_id}/{fingerprint}{detail}")
+    return max(candidates, key=lambda path: path.name)
 
 
 @dataclass(frozen=True)
@@ -306,15 +418,22 @@ def load_strategy_compare_source(
     profile_key = str(profile_id).strip()
     if not profile_key:
         raise ValueError("Strategy Compare profile_id不可空白")
-    settings = get_strategy_comparison_settings(profile_key)
     pinned = str(pinned_config_fingerprint or "").strip()
-    result_dir = (
-        resolve_strategy_result_dir_for_fingerprint(
-            root, settings.output_root, config_fingerprint=pinned
+    try:
+        settings = get_strategy_comparison_settings(profile_key)
+    except ValueError as exc:
+        if not pinned:
+            raise AuditSourceBlockedError(
+                f"退役Strategy Compare profile只可讀明確pinned completed evidence: {profile_key}"
+            ) from exc
+        settings = None
+    if settings is None:
+        result_dir = _find_retained_strategy_run(root, profile_id=profile_key, fingerprint=pinned)
+    else:
+        result_dir = (
+            resolve_strategy_result_dir_for_fingerprint(root, settings.output_root, config_fingerprint=pinned)
+            if pinned else resolve_latest_strategy_result_dir(root, settings.output_root)
         )
-        if pinned
-        else resolve_latest_strategy_result_dir(root, settings.output_root)
-    )
     # Immutable run directories need no presentation lock. Mutable latest
     # is read as one snapshot under the publisher's shared stable lock.
     latest_read_guard = (
@@ -348,6 +467,16 @@ def load_strategy_compare_source(
                 f"pinned={pinned}, stored={sorted(stored_fingerprints)}"
             )
         fingerprint = pinned
+        if settings is None:
+            if manifest_raw is not None and any(
+                manifest_raw.get(field) != result.get(field)
+                for field in ("pair_execution", "artifact_identities")
+            ):
+                raise AuditSourceBlockedError("retained Audit result/manifest execution或artifact identity不一致")
+            settings = _retained_audit_settings(
+                project_root=root, result_dir=result_dir, result=result,
+                profile_id=profile_key, fingerprint=fingerprint,
+            )
     else:
         fingerprint = validate_strategy_result_identity(
             settings=settings,

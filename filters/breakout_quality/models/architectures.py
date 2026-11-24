@@ -142,7 +142,6 @@ def _descriptor(
 _ARCHITECTURE_DESCRIPTORS = (
     _descriptor(INCEPTION_TIME_V1, active=True, active_order=0, spec_builder="inception_variant", runtime_builder="inception_time", family="inception_time", pooling=("global_average",), use_dataset_context=False, sequence_input_paths=("raw_level",), head_width=None),
     _descriptor(INCEPTION_TIME_SHARED_SAFETY_MFE_V1, active=True, active_order=6, spec_builder="inception_variant", runtime_builder="inception_time", capabilities=("shared_safety_mfe",), family="inception_time_shared_safety_mfe", pooling=("global_average", "raw_safety_head", "raw_mfe_head"), use_dataset_context=False, sequence_input_paths=("raw_level",), head_width=None),
-    _descriptor(TS2VEC_FROZEN_LINEAR_V1, active=False, spec_builder="ts2vec", runtime_builder="ts2vec"),
 )
 
 ARCHITECTURE_DESCRIPTORS: dict[str, ArchitectureDescriptor] = {
