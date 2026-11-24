@@ -27,20 +27,51 @@ def _write(path, payload):
 def _publish(directory, report):
     report['updated_at'] = datetime.now(timezone.utc).isoformat()
     _write(directory / 'summary.json', report)
+    def fmt(value, *, percent=False):
+        if value is None:
+            return '缺少有效證據'
+        return f'{100*value:.3f}%' if percent else f'{value:,.6f}'
     lines = ['# CO 真實事件歷史擴充', '', f"狀態：{report['status']}",
-             '', '2021 年起屬迭代研究 OOS；四 seed 是同一市場歷史的配對重複。', '']
+             '', 'A：原 CO；B：相同模型、目標與交易契約，加上 2008～2013 的合法成熟事件。',
+             'Top-10 lift 使用原始 NetPnL 單位，僅計同日候選數大於 10 的競爭日；年度等權。',
+             '2021 年起屬迭代研究 OOS；四 seed 是同一市場歷史的配對重複。', '']
     if report.get('reason'):
         lines += [str(report['reason']), '']
     lines += ['| 年度 | A Top-10 lift | B Top-10 lift | A Pair | B Pair |', '|---|---:|---:|---:|---:|']
     for year, row in report.get('screen', {}).items():
-        def fmt(value):
-            return '缺少有效證據' if value is None else f'{value:.6f}'
-        lines.append(f"| {year} | {fmt(row['a']['top10_lift'])} | {fmt(row['b']['top10_lift'])} | {fmt(row['a']['pair_accuracy'])} | {fmt(row['b']['pair_accuracy'])} |")
-    for key in ('screen_decision', 'rolling_model', 'rolling_decision', 'robustness_decision', 'samples', 'target'):
+        lines.append(f"| {year} | {fmt(row['a']['top10_lift'])} | {fmt(row['b']['top10_lift'])} | {fmt(row['a']['pair_accuracy'],percent=True)} | {fmt(row['b']['pair_accuracy'],percent=True)} |")
+    if report.get('rolling_model'):
+        lines += ['', '## Rolling 模型（共同突破候選）', '',
+                  '| 年度 | A Top-10 lift | B Top-10 lift | A Pair | B Pair |', '|---|---:|---:|---:|---:|']
+        for year, row in report['rolling_model'].items():
+            lines.append(f"| {year} | {fmt(row['a']['top10_lift'])} | {fmt(row['b']['top10_lift'])} | {fmt(row['a']['pair_accuracy'],percent=True)} | {fmt(row['b']['pair_accuracy'],percent=True)} |")
+    if report.get('strategies'):
+        lines += ['', '## 配對策略回放', '',
+                  '| Seed / 階段 | A RoMD | B RoMD | ΔRoMD | A MDD % | B MDD % | A 總報酬 % | B 總報酬 % |',
+                  '|---|---:|---:|---:|---:|---:|---:|---:|']
+        for label, row in report['strategies'].items():
+            a, b = row['a'], row['b']
+            lines.append(f"| {label} | {fmt(a['romd'])} | {fmt(b['romd'])} | {fmt(b['romd']-a['romd'])} | {fmt(a['mdd'])} | {fmt(b['mdd'])} | {fmt(a['return'])} | {fmt(b['return'])} |")
+    for key in ('screen_decision', 'rolling_decision', 'robustness_decision', 'samples', 'target'):
         if key in report:
             lines += ['', key + '：' + json.dumps(report[key], ensure_ascii=False, default=str)]
     for label, row in report.get('strategies', {}).items():
-        lines += ['', f"{label}：" + json.dumps(row, ensure_ascii=False, default=str)]
+        if row.get('trade_attribution'):
+            attribution = row['trade_attribution']
+            lines += ['', f'## {label} 交易歸因', '', attribution['note'], '',
+                      '| 各自獨有的已平倉交易 | 筆數 | 贏家筆數 | 贏家 R | 虧損絕對 R | 現金淨損益 |',
+                      '|---|---:|---:|---:|---:|---:|']
+            for arm, name in (('a','A 有、B 漏掉'), ('b','B 新增替代')):
+                trade = attribution[arm+'_only']
+                lines.append(f"| {name} | {trade['closed_trades']} | {trade['winner_count']} | {fmt(trade['winner_r'])} | {fmt(trade['loser_r_abs'])} | {fmt(trade['realized_pnl'])} |")
+            for arm, name in (('a','A 有、B 漏掉'), ('b','B 新增替代')):
+                trade = attribution[arm+'_only']
+                lines += ['', f'{name}的最大贏家：', '', '| 股票 | 進場日 | 出場日 | R | 現金損益 |', '|---|---|---|---:|---:|']
+                for winner in trade['largest_winners']:
+                    lines.append(f"| {winner['ticker']} | {winner['entry_date']} | {winner['exit_date']} | {fmt(winner['r_multiple'])} | {fmt(winner['pnl'])} |")
+        for arm in ('a','b'):
+            if row[arm].get('artifact'):
+                lines += ['', f"{label} {arm.upper()} 原始回放：`{row[arm]['artifact']}`"]
     (directory / 'summary.md').write_text('\n'.join(lines) + '\n', encoding='utf-8')
     _write(directory.parent.parent / 'latest.json', {'contract_sha256': report['contract_sha256'],
                                                     'summary': str((directory / 'summary.json').relative_to(ROOT)).replace('\\','/')})
@@ -184,6 +215,45 @@ def _replay(study, *, seed, start, end, paths_a, paths_b, directory):
         if not isinstance(observation, dict):
             raise ValueError('Canonical Strategy Compare lacks active economic observation')
         result[key] = _economic_observation(observation)
+        result[key]['artifact'] = str((directory / arm.arm_id / 'strategy_comparison.json').relative_to(ROOT)).replace('\\','/')
+    result['trade_attribution'] = _paired_trade_diagnostics(
+        directory / control.arm_id, directory / candidate.arm_id)
+    return result
+
+
+def _paired_trade_diagnostics(control_directory, treatment_directory):
+    """Describe displaced closed trades using the canonical trade identity.
+
+    Realized R and cash PnL are descriptive outcomes of each portfolio path;
+    their sums do not represent the counterfactual return of switching one trade.
+    """
+    from filters.breakout_quality.trade_attribution import reconstruct_round_trips
+    frames = {}
+    for label, directory in (('a', control_directory), ('b', treatment_directory)):
+        history = pd.read_csv(directory / 'score_ranking_trades.csv',
+                              dtype={'Ticker': str}, encoding='utf-8-sig')
+        frames[label] = reconstruct_round_trips(history, scenario=label)
+    keys = {label: set(frame['match_key']) for label, frame in frames.items()}
+    exclusive = {label: frame.loc[~frame['match_key'].isin(keys['b' if label == 'a' else 'a'])]
+                 for label, frame in frames.items()}
+    result = {
+        'basis': 'canonical_closed_trade_identity; realized_portfolio_paths',
+        'common_closed_trades': len(keys['a'] & keys['b']),
+        'note': 'R 與現金損益屬各自持倉路徑的描述歸因，不能相加推論替換交易的投組報酬。',
+    }
+    for label, frame in exclusive.items():
+        wins = frame.loc[frame['r_multiple'] > 0]
+        losses = frame.loc[frame['r_multiple'] <= 0]
+        result[label + '_only'] = {
+            'closed_trades': len(frame), 'winner_count': len(wins),
+            'winner_r': float(wins['r_multiple'].sum()), 'winner_pnl': float(wins['pnl'].sum()),
+            'loser_count': len(losses), 'loser_r_abs': float(abs(losses['r_multiple'].sum())),
+            'realized_pnl': float(frame['pnl'].sum()),
+            'largest_winners': wins.nlargest(8, 'r_multiple')[
+                ['ticker', 'entry_date', 'exit_date', 'r_multiple', 'pnl']].to_dict('records'),
+        }
+        frame.to_csv(treatment_directory.parent / f'{label}_exclusive_closed_trades.csv',
+                     index=False, encoding='utf-8-sig')
     return result
 
 
