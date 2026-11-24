@@ -1,4 +1,4 @@
-"""Disabled candidate proof: exact source reconstruction and unknown-edit rejection."""
+"""Reviewed optimizer proof: exact source reconstruction and unknown-edit rejection."""
 from hashlib import sha256
 from pathlib import Path
 import unittest

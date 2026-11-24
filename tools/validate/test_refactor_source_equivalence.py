@@ -132,6 +132,7 @@ class SourceInventoryProofTests(unittest.TestCase):
         from core.research_execution_equivalence import (
             ORACLE_STRATEGY_OBSERVATION_SCOPE, _ORACLE_BENCHMARK_SOURCE,
             _ORACLE_OBSERVATION_CONSUMERS, project_oracle_observation_sources,
+            _reviewed_source_group,
         )
         benchmark = "core/portfolio_benchmark.py"
         removed = _REVIEWED_SOURCE_INVENTORIES["replay_numerics"]["current"]
@@ -162,11 +163,16 @@ class SourceInventoryProofTests(unittest.TestCase):
             relative = Path(path).relative_to(ROOT).as_posix()
             return payload, _ORACLE_OBSERVATION_CONSUMERS.get(relative, digest)
 
-        proof = _REVIEWED_SOURCE_INVENTORIES["portfolio_candidates"]
+        # Current fixture pins include every independently reviewed transition;
+        # the original baseline records remain immutable.
+        proof = _reviewed_source_group("portfolio_candidates")
         try:
             replay.replay_implementation_sha256.cache_clear()
             replay.portfolio_candidate_execution_sha256.cache_clear()
-            with patch.object(replay, "_source_owner_attestation", approved_consumer_fixture):
+            # Isolate the historical observation certificate from the separately
+            # verified optimizer predecessor certificate; this fixture uses live ASTs.
+            with (patch.object(replay, "_source_owner_attestation", approved_consumer_fixture),
+                  patch.object(replay, "reviewed_replay_predecessor_sources", return_value={})):
                 historical = replay.replay_implementation_sha256(
                     observation_scope=ORACLE_STRATEGY_OBSERVATION_SCOPE)
                 self.assertEqual(legacy_digest, historical)
@@ -192,7 +198,7 @@ class SourceInventoryProofTests(unittest.TestCase):
         for scope in ("replay_numerics", "portfolio_candidates"):
             with self.subTest(scope=scope):
                 approved = {**evidence, "@execution_sources":
-                            _REVIEWED_SOURCE_INVENTORIES[scope]["current"]["@execution_sources"]}
+                            _reviewed_source_group(scope)["current"]["@execution_sources"]}
                 self.assertNotEqual(approved, project_oracle_observation_sources(
                     approved, scope=scope, project_root=ROOT))
                 current = {**approved, **current_consumer_records}

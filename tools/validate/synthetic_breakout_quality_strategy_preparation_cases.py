@@ -720,8 +720,17 @@ def append_strategy_compare_preparation_contract_checks(
     append_optimizer_rolling_seed_provenance_checks(results=results, case_id=case_id)
     from .check_result_utils import run_unittest_capability_cases
     from .test_optimizer_boundaries import OptimizerBoundaryTests
+    from .test_optimizer_deferred_signal_reuse import OptimizerDeferredSignalReuseTests
+    from .test_optimizer_entry_sizing import OptimizerEntrySizingTests
+    from .test_optimizer_execution_equivalence import OptimizerExecutionEquivalenceTests
+    from .test_optimizer_oos_context_reuse import OptimizerOOSContextReuseTests
+    from .test_optimizer_shadow_context import OptimizerShadowContextTests
     boundary_rows, boundary_summary = run_unittest_capability_cases(
-        case_id, "synthetic_breakout_quality", [OptimizerBoundaryTests],
+        case_id, "synthetic_breakout_quality", [
+            OptimizerBoundaryTests, OptimizerDeferredSignalReuseTests,
+            OptimizerEntrySizingTests, OptimizerExecutionEquivalenceTests,
+            OptimizerOOSContextReuseTests, OptimizerShadowContextTests,
+        ],
     )
     results.extend(boundary_rows)
     add_check(
