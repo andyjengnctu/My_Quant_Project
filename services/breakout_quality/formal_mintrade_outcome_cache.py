@@ -27,6 +27,7 @@ import numpy as np
 import pandas as pd
 from core.research_execution_equivalence import reviewed_execution_source_sha256
 from core.artifact_inspection import ArtifactInspection, InspectionStatus
+from core.file_integrity import atomic_replace_with_retry
 
 from filters.breakout_quality.daily_trade40_target import CounterfactualTrade40Batch
 
@@ -273,7 +274,7 @@ def _write_cache(path: Path, key: str, batch: CounterfactualTrade40Batch) -> Non
             truncated=np.asarray(batch.cutoff_truncated_rows, dtype=np.int64),
             cutoff_closeouts=np.asarray(batch.research_cutoff_closeout_rows, dtype=np.int64),
         )
-        os.replace(temporary, path)
+        atomic_replace_with_retry(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -294,19 +295,26 @@ def load_or_compute_formal_mintrade_outcomes(
         horizon_sessions=horizon_sessions, cutoff=research_cutoff,
         signal_state_reset_date=signal_state_reset_date,
     )
-    # One replaceable shard per ticker/seed/horizon/cutoff. Source/data/code
-    # changes replace stale bytes instead of accumulating every research edit.
-    # The full content identity stays inside the file and is ALWAYS checked.
-    slot = sha256(json.dumps({
+    # A pending-order lifecycle is an execution scope. Retain one shard per
+    # scope so an early prefix cannot evict the unchanged original history.
+    # Source/data/code edits still replace that scope's stale bytes. The full
+    # content identity is ALWAYS checked, including when reading legacy slots.
+    slot_contract = {
         "ticker": str(ticker), "seed": int(seed),
         "horizon_sessions": horizon_sessions,
         "cutoff": str(pd.Timestamp(research_cutoff).date()),
-    }, sort_keys=True).encode("utf-8")).hexdigest()
+    }
+    legacy_slot = sha256(json.dumps(slot_contract, sort_keys=True).encode("utf-8")).hexdigest()
+    slot_contract['signal_state_reset_date'] = signal_state_reset_date
+    slot = sha256(json.dumps(slot_contract, sort_keys=True).encode("utf-8")).hexdigest()
     path = Path(project_root) / _CACHE_SUBDIR / slot[:2] / f"{slot}.npz"
+    legacy_path = Path(project_root) / _CACHE_SUBDIR / legacy_slot[:2] / f"{legacy_slot}.npz"
     try:
         with formal_mintrade_cache_access(project_root):
             hit = _read_cache(path, key, len(positions))
-    except RuntimeError as exc:
+            if hit is None:
+                hit = _read_cache(legacy_path, key, len(positions))
+    except (OSError, RuntimeError) as exc:
         # Memoization contention cannot block the canonical simulator.
         _LOG.debug("Formal Min execution cache read skipped: %s", exc)
         hit = None
@@ -316,6 +324,6 @@ def load_or_compute_formal_mintrade_outcomes(
     try:
         with formal_mintrade_cache_access(project_root):
             _write_cache(path, key, batch)
-    except RuntimeError as exc:
+    except (OSError, RuntimeError) as exc:
         _LOG.debug("Formal Min execution cache publication skipped: %s", exc)
     return batch
