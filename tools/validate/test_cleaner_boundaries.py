@@ -7,6 +7,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from core.file_integrity import file_change_signature
+from services import cleanup_rules
 from services.project_cleaner import retained
 from tools.validate import test_project_cleaner as existing
 
@@ -41,9 +43,11 @@ class CleanerBoundaryTest(unittest.TestCase):
         unknown = self.write(second.parent / "notes.txt", b"keep")
         empty = self.root / "core/__pycache__"
         empty.mkdir(parents=True)
-        self.menu(["1", "0"])
-        self.assertTrue(first.exists() and second.exists())
-        self.menu(["2", "0"])
+        cold_now = max(*file_change_signature(first)[3:], *file_change_signature(second)[3:]) + cleanup_rules.BYTECODE_COLD_GRACE_NS + 1
+        with patch.object(cleanup_rules.time, "time_ns", return_value=cold_now):
+            self.menu(["1", "0"])
+            self.assertTrue(first.exists() and second.exists())
+            self.menu(["2", "0"])
         self.assertFalse(first.parent.exists())
         self.assertFalse(second.exists())
         self.assertEqual(unknown.read_bytes(), b"keep")

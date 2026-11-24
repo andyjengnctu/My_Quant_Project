@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
-from zipfile import ZipFile, BadZipFile
+import time
 
 from core.compare_csv_storage import clean_path
 from core.file_integrity import compute_file_sha256, exclusive_file_lock, file_change_signature, sibling_publication_lock_path
@@ -14,6 +14,7 @@ from core.regression_fixture_access import fixture_access
 STAGING = Path("outputs/local_regression/_staging")
 ROBUST = Path("outputs/strategy_compare/robustness")
 DIAGNOSTICS = Path("outputs/filters/breakout_quality/real_path_diagnostic_cache")
+BYTECODE_COLD_GRACE_NS = 24 * 60 * 60 * 1_000_000_000
 PROBE = re.compile(r"quick_gate_(missing_run_best_params|broken_run_best_params|broken_optimizer_db|optimizer_study_db)_[a-z0-9_]{8}\Z")
 
 
@@ -67,6 +68,28 @@ def generated_bytecode(root, rel, tracked):
             and int.from_bytes(header[4:8], "little") in {0, 1, 3})
 
 
+def bytecode_cleanup_ready(root, rel, tracked, *, now_ns=None):
+    """Ownership plus a cold-cache veto; age alone never authorizes removal.
+
+    NTFS ChangeTime detects recent rewrites even if mtime was restored. The
+    cleaner calls this proof again for apply and checks the file revision at
+    unlink, so a prior preview cannot authorize deleting a regenerated cache.
+    """
+    if not generated_bytecode(root, rel, tracked):
+        return False
+    try:
+        stamp = file_change_signature(root / rel)
+        if len(stamp) != 5:
+            return False
+        now = time.time_ns() if now_ns is None else now_ns
+        modified, changed = stamp[3], stamp[4]
+        return (type(now) is int and now > 0
+                and all(type(value) is int and 0 < value <= now - BYTECODE_COLD_GRACE_NS
+                        for value in (modified, changed)))
+    except OSError:
+        return False
+
+
 def active_artifact_subjects(root):
     """Read the configured suites and their transitive canonical dependencies."""
     from config import breakout_quality, strategy_compare, trading
@@ -108,47 +131,27 @@ def active_artifact_subjects(root):
     return live
 
 
-def retired_diagnostics(root):
-    """Map only recognized historical model+seed slots of this disposable projection."""
-    from config import breakout_quality
-    from core.strategy_compare_policy import _compatibility_catalogs
-    from core.training_policy import resolve_robustness_benchmark_seeds
-    from services.breakout_quality.real_path_diagnostic_cache import _slot
-    live = active_artifact_subjects(root)
-    seeds = {*resolve_robustness_benchmark_seeds(), breakout_quality.BREAKOUT_QUALITY_RANDOM_SEED}
-    historical = _compatibility_catalogs()[1]
-    slots = {}
-    for data in historical.values():
-        profile = data.get("experiment_profile")
-        architecture = data.get("model_architecture")
-        filter_id = data.get("filter_id")
-        if profile and architecture and filter_id and profile not in live:
-            for seed in seeds:
-                slot = _slot(root, filter_id, architecture, profile, seed)
-                slots[slot.relative_to(root)] = profile
-    return slots
+def disposable_cache(rel):
+    """Cache ownership and proof come from producers, never the model roster."""
+    if rel.suffix != ".npz":
+        return None
+    from services.breakout_quality.real_path_diagnostic_cache import real_path_diagnostic_cache_candidate
+    from services import cleanup_outcome_cache
+    if real_path_diagnostic_cache_candidate(rel):
+        return "diagnostic_cache", DIAGNOSTICS
+    if cleanup_outcome_cache.candidate(rel):
+        return "outcome_cache", cleanup_outcome_cache.CACHE_ROOT
+    return None
 
 
-def is_projection(path):
-    # This producer stores a disposable projection only; its FIT/PIT inputs live elsewhere.
-    expected = {"identity", "ticker", "dates", "labels", "raw_r", "valid", "payload_sha256"}
-    try:
-        from numpy.lib.format import read_array
-        with ZipFile(path) as archive:
-            members = archive.namelist()
-            if len(members) != len(expected) or set(members) != {name + ".npy" for name in expected}:
-                return False
-            # Both fingerprints are short scalar strings emitted by the producer.
-            for name in ("identity.npy", "payload_sha256.npy"):
-                if archive.getinfo(name).file_size > 1024:
-                    return False
-                with archive.open(name) as entry:
-                    token = read_array(entry, allow_pickle=False)
-                if token.shape != () or not re.fullmatch("[0-9a-f]{64}", str(token.item())):
-                    return False
-        return True
-    except (BadZipFile, ValueError, EOFError):
-        return False
+def disposable_cache_proof(root, kind, rel):
+    if kind == "diagnostic_cache":
+        from services.breakout_quality.real_path_diagnostic_cache import real_path_diagnostic_cache_proof
+        return real_path_diagnostic_cache_proof(root, rel)
+    if kind == "outcome_cache":
+        from services.cleanup_outcome_cache import proof
+        return proof(root, rel)
+    return ""
 
 
 def legacy_parameters(root):
@@ -223,7 +226,15 @@ def robust_disposable(run):
 
 @contextmanager
 def deletion_lease(root, key, *, preview=False):
-    if key == STAGING:
+    from services import cleanup_outcome_cache
+    if key == DIAGNOSTICS:
+        from services.breakout_quality.real_path_diagnostic_cache import real_path_diagnostic_cache_access
+        with real_path_diagnostic_cache_access(root, preview=preview):
+            yield
+    elif key == cleanup_outcome_cache.CACHE_ROOT:
+        with cleanup_outcome_cache.deletion_lease(root):
+            yield
+    elif key == STAGING:
         with fixture_access(root / STAGING, cleanup=True):
             yield
     elif key and key.is_relative_to(ROBUST):

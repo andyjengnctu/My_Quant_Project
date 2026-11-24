@@ -8,20 +8,23 @@ future outcomes.  A miss falls back to the ordinary canonical sample provider.
 from __future__ import annotations
 
 from functools import lru_cache
+from contextlib import contextmanager
 from hashlib import sha256
 import json
 import logging
 import os
+import re
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
-from zipfile import BadZipFile
+from zipfile import BadZipFile, ZipFile
 import zlib
 
 import numpy as np
 import pandas as pd
 
-from core.file_integrity import compute_file_sha256, file_change_signature
+from core.file_integrity import compute_file_sha256, exclusive_file_lock, file_change_signature
+from core.compare_csv_storage import clean_path, plain
 from core.research_execution_equivalence import (
     RESOURCE_ONLY_DEPENDENCIES, reviewed_execution_source_sha256,
 )
@@ -35,6 +38,33 @@ from services.breakout_quality.formal_mintrade_outcome_cache import (
 _SCHEMA = 1
 _CACHE_SUBDIR = Path("outputs/filters/breakout_quality/real_path_diagnostic_cache")
 _LOG = logging.getLogger(__name__)
+_PROJECTION_FIELDS = frozenset({"identity", "ticker", "dates", "labels", "raw_r", "valid", "payload_sha256"})
+
+
+def real_path_diagnostic_cache_candidate(relative: Path) -> bool:
+    """Recognize only this producer's sharded projection slots, never by age/ID."""
+    relative = Path(relative)
+    if relative.is_absolute() or ".." in relative.parts:
+        return False
+    try:
+        parts = relative.relative_to(_CACHE_SUBDIR).parts
+    except ValueError:
+        return False
+    return (len(parts) == 2 and re.fullmatch(r"[0-9a-f]{64}\.npz", parts[1]) is not None
+            and parts[0] == parts[1][:2])
+
+
+@contextmanager
+def real_path_diagnostic_cache_access(root: Path, *, preview: bool = False):
+    """Coordinate short projection reads/publication with disposable cleanup."""
+    lock = Path(root) / "outputs/project_cleanup/real_path_diagnostic.lock"
+    if not clean_path(lock) or (lock.exists() and (not plain(lock.lstat()) or lock.stat().st_nlink != 1)):
+        raise ValueError("診斷快取協調鎖路徑異常")
+    if preview and not lock.exists():
+        yield
+        return
+    with exclusive_file_lock(lock, conflict_message="診斷快取正在讀取、發布或清理"):
+        yield
 
 
 def _digest_json(value) -> str:
@@ -198,6 +228,55 @@ def _payload_digest(ticker, dates, labels, raw_r, valid) -> str:
     return digest.hexdigest()
 
 
+def _read_projection(path: Path):
+    """Read the producer schema without pickle, checking the recorded payload."""
+    with ZipFile(path) as archive:
+        names = archive.namelist()
+        if len(names) != len(_PROJECTION_FIELDS) or set(names) != {name + ".npy" for name in _PROJECTION_FIELDS}:
+            raise ValueError("診斷快取包含未知或重複欄位")
+    with np.load(path, allow_pickle=False) as store:
+        identity = store["identity"]
+        integrity = store["payload_sha256"]
+        if (identity.shape != () or integrity.shape != ()
+                or re.fullmatch(r"[0-9a-f]{64}", str(identity.item())) is None
+                or re.fullmatch(r"[0-9a-f]{64}", str(integrity.item())) is None):
+            raise ValueError("診斷快取缺少身分或內容校驗")
+        arrays = tuple(np.asarray(store[name]) for name in ("ticker", "dates", "labels", "raw_r", "valid"))
+    ticker, dates, labels, raw_r, valid = arrays
+    if (ticker.dtype.kind != "U" or dates.dtype != np.dtype("datetime64[ns]")
+            or labels.dtype != np.dtype("int64") or raw_r.dtype != np.dtype("float64")
+            or valid.dtype != np.dtype("bool")):
+        raise ValueError("診斷快取欄位型別不符產生者格式")
+    if (any(values.ndim != 1 for values in arrays) or not len(ticker)
+            or any(len(values) != len(ticker) for values in arrays)
+            or np.isnat(dates).any() or not np.isfinite(raw_r[valid]).all()
+            or str(integrity.item()) != _payload_digest(*arrays)):
+        raise ValueError("診斷快取內容或逐列校驗不一致")
+    return str(identity.item()), arrays
+
+
+def real_path_diagnostic_cache_proof(root: Path, relative: Path) -> str:
+    """All valid projections are disposable; canonical inputs/results stay put.
+
+    This is a storage proof, not scientific readiness: cache misses already use
+    the canonical sample provider, and no FIT/Replay consumes this projection.
+    The caller holds real_path_diagnostic_cache_access through unlink.
+    """
+    if not real_path_diagnostic_cache_candidate(relative):
+        return ""
+    path = Path(root) / relative
+    if not clean_path(path) or not plain(path.lstat()):
+        raise ValueError("診斷快取不是專案內的一般檔案")
+    revision = file_change_signature(path)
+    try:
+        _read_projection(path)
+    except (ValueError, TypeError, KeyError, BadZipFile, zlib.error, EOFError) as exc:
+        raise ValueError("診斷快取未通過產生者格式與內容驗證") from exc
+    if file_change_signature(path) != revision:
+        raise ValueError("診斷快取在驗證時變動")
+    return "產生者確認可重建的回放後診斷投影，正式來源與研究成果保留"
+
+
 def publish_real_path_diagnostic(
     *, root: Path, filter_id: str, architecture: str, profile: str,
     seed: int, target_lineage: dict, bundle,
@@ -243,7 +322,8 @@ def publish_real_path_diagnostic(
                 dates=dates, labels=labels, raw_r=raw_r, valid=valid,
                 payload_sha256=np.asarray(_payload_digest(ticker, dates, labels, raw_r, valid)),
             )
-            os.replace(staging, path)
+            with real_path_diagnostic_cache_access(root):
+                os.replace(staging, path)
         finally:
             staging.unlink(missing_ok=True)
     except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
@@ -263,23 +343,12 @@ def load_verified_real_path_diagnostic(
     try:
         identity = _identity(root=root, filter_id=filter_id, architecture=architecture,
                              profile=profile, seed=seed, target_lineage=target_lineage)
-        with np.load(path, allow_pickle=False) as store:
-            if set(store.files) != {"identity", "ticker", "dates", "labels", "raw_r", "valid", "payload_sha256"}:
-                return None
-            if str(store["identity"].item()) != identity:
-                return None
-            ticker = np.asarray(store["ticker"], dtype=str)
-            dates = np.asarray(store["dates"], dtype="datetime64[ns]")
-            labels = np.asarray(store["labels"], dtype=np.int64)
-            raw_r = np.asarray(store["raw_r"], dtype=np.float64)
-            valid = np.asarray(store["valid"], dtype=bool)
-            integrity = str(store["payload_sha256"].item())
-        count = len(ticker)
-        if (any(x.ndim != 1 or len(x) != count for x in (ticker, dates, labels, raw_r, valid))
-                or count == 0 or np.isnat(dates).any()
-                or not np.isfinite(raw_r[valid]).all()
-                or integrity != _payload_digest(ticker, dates, labels, raw_r, valid)):
+        with real_path_diagnostic_cache_access(root):
+            stored_identity, arrays = _read_projection(path)
+        if stored_identity != identity:
             return None
+        ticker, dates, labels, raw_r, valid = arrays
+        count = len(ticker)
         group_table = pd.DataFrame({
             "group_index": np.arange(count, dtype=np.int64),
             "ticker": ticker, "date": pd.to_datetime(dates), "label": labels,

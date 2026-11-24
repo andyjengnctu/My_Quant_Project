@@ -9,9 +9,11 @@ This cache is not an Oracle publication, a model artifact or a source of truth.
 from __future__ import annotations
 
 import ast
+from contextlib import contextmanager
 from functools import lru_cache
 from hashlib import sha256
 import json
+import logging
 import os
 import sys
 from pathlib import Path
@@ -39,6 +41,21 @@ _CACHE_EXECUTION_CONFIG = (
     "config/training_policy.py",
 )
 _CACHE_SUBDIR = Path("outputs/filters/breakout_quality/formal_mintrade_outcome_cache")
+_LOG = logging.getLogger(__name__)
+
+
+@contextmanager
+def formal_mintrade_cache_access(project_root: Path):
+    """Coordinate fully materialized cache reads, publication, and cleanup."""
+    from core.compare_csv_storage import clean_path, plain
+    from core.file_integrity import exclusive_file_lock
+    root = Path(project_root).resolve()
+    lock = root / "outputs/project_cleanup/formal_mintrade_cache.lock"
+    if (not clean_path(lock) or (lock.exists()
+            and (not plain(lock.lstat()) or lock.stat().st_nlink != 1))):
+        raise ValueError("Formal Min execution cache lock path is unsafe")
+    with exclusive_file_lock(lock, conflict_message="Formal Min execution cache is in use"):
+        yield
 
 
 def _execution_dependency_files(
@@ -253,9 +270,19 @@ def load_or_compute_formal_mintrade_outcomes(
         "cutoff": str(pd.Timestamp(research_cutoff).date()),
     }, sort_keys=True).encode("utf-8")).hexdigest()
     path = Path(project_root) / _CACHE_SUBDIR / slot[:2] / f"{slot}.npz"
-    hit = _read_cache(path, key, len(positions))
+    try:
+        with formal_mintrade_cache_access(project_root):
+            hit = _read_cache(path, key, len(positions))
+    except RuntimeError as exc:
+        # Memoization contention cannot block the canonical simulator.
+        _LOG.debug("Formal Min execution cache read skipped: %s", exc)
+        hit = None
     if hit is not None:
         return hit
     batch = compute()
-    _write_cache(path, key, batch)
+    try:
+        with formal_mintrade_cache_access(project_root):
+            _write_cache(path, key, batch)
+    except RuntimeError as exc:
+        _LOG.debug("Formal Min execution cache publication skipped: %s", exc)
     return batch

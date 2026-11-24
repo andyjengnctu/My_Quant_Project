@@ -18,6 +18,10 @@ from services import cleanup_rules as rules
 from services.cleanup_report import LABEL, receipt, recover, report_path, show_summary
 from services.cleanup_lifecycle import LifecycleCleanup
 from core.artifact_lifecycle import relative_path
+from core import caller_baseline_storage, reused_copy_storage
+from services.cleanup_raw_cache import RawCacheCleanup
+from services.cleanup_optimizer_scratch import OptimizerScratchCleanup
+from services.cleanup_superseded_robustness import SupersededRobustnessCleanup
 
 PROTECTED = {
     "apps": "專案程式", "services": "專案程式", "core": "專案程式",
@@ -101,6 +105,7 @@ class Cleaner:
         self.units = {}
         self.detail_publications = {}
         self.detail_failures = {}
+        self.unfinished_copies = set()
         self.publication_revisions = {}
         self.pinned_hashes = {}
         self.hashes = {}
@@ -108,12 +113,20 @@ class Cleaner:
         self.deletes = defaultdict(list)
         self.work_dirs = defaultdict(set)
         self.cleared_bytecode_dirs = set()
+        self.cleared_cache_dirs = set()
         self.git_ok = True
         self.lifecycle = LifecycleCleanup(root, self.progress)
         self.lifecycle_candidates = []
+        self.raw_cache = RawCacheCleanup(root)
+        self.storage_adapters = {
+            "raw_cache": self.raw_cache,
+            "optimizer_scratch": OptimizerScratchCleanup(root),
+            "superseded_robustness": SupersededRobustnessCleanup(root),
+        }
+        self.storage_candidates = {kind: [] for kind in self.storage_adapters}
+        self.raw_candidates = self.storage_candidates["raw_cache"]
         self.refresh_tracking()
         self.legacy = self.lookup(rules.legacy_parameters, Path("models"))
-        self.retired = self.lookup(rules.retired_diagnostics, rules.DIAGNOSTICS)
         from core.research_summary import get_research_summary_model_profiles
         self.live = {p for _, p in get_research_summary_model_profiles()}
 
@@ -210,10 +223,26 @@ class Cleaner:
             self.detail_failures[rel] = "manifest／run／pair 在驗證後變動"
             return False
         path = self.root / rel
+        if caller_baseline_storage.root_for(path) is not None:
+            try:
+                revisions, digest = caller_baseline_storage.publication_evidence(path)
+                self.detail_publications[rel] = revisions
+                if digest is not None:
+                    self.pinned_hashes[path] = digest
+                return True
+            except FAILURES as exc:
+                self.detail_failures[rel] = str(exc)
+                return False
         run = path.parents[2]
         markers = (run / "manifest.json", run / "strategy_comparison.json", path.parent / "strategy_comparison.json")
         try:
             revisions = {p: file_change_signature(p) for p in markers}
+            if all(revisions[p] == ("missing",) for p in markers[:2]):
+                revisions, digest = reused_copy_storage.publication_evidence(path, file_hasher=self.hash_file)
+                self.detail_publications[rel] = revisions
+                self.pinned_hashes[path] = digest
+                self.unfinished_copies.add(rel)
+                return True
             if any(not clean_path(p) or not p.is_file() or not plain(p.lstat()) for p in markers):
                 raise ValueError("manifest／run／pair JSON 缺少或不是一般檔案")
             payload = load_json_object_or_none(run / "strategy_comparison.json")
@@ -239,8 +268,9 @@ class Cleaner:
     def kind(self, rel):
         if rel in self.legacy:
             return "legacy", None
-        if rel in self.retired:
-            return "retired_cache", None
+        cache = rules.disposable_cache(rel)
+        if cache:
+            return cache
         if (rel.suffix == ".pyc" and rel.parent.name == "__pycache__"
                 and rel.parts[0].casefold() not in {"models", "outputs", "state", "data", ".git"}):
             return "pyc", None
@@ -259,14 +289,14 @@ class Cleaner:
 
     def proof(self, kind, rel, scope):
         path = self.root / rel
-        if kind == "pyc" and rules.generated_bytecode(self.root, rel, self.tracked):
+        if kind == "pyc" and rules.bytecode_cleanup_ready(self.root, rel, self.tracked):
             return "可由現存原始碼重建的 Python 快取"
         if kind == "legacy" and rel in self.legacy:
             evidence = rules.legacy_parameters(self.root).get(rel)
             if evidence:
                 return "Optimizer 已驗證遷移：" + evidence
-        if kind == "retired_cache" and rel in self.retired and rules.is_projection(path):
-            return "已離開現行清單的診斷投影快取：" + self.retired[rel]
+        if kind in {"diagnostic_cache", "outcome_cache"}:
+            return rules.disposable_cache_proof(self.root, kind, rel)
         if kind == "fixture":
             return rules.fixture_reason(self.root, rel)
         if kind == "abandoned" and rules.abandoned_pid(path, rel):
@@ -277,6 +307,8 @@ class Cleaner:
             if (path.parent / "strategy_comparison.md").is_file():
                 return "已發布比較的退役 HTML 匯出，正式報表已存在"
         if kind == "lifecycle":
+            return scope.proof(self, rel)
+        if kind in self.storage_adapters:
             return scope.proof(self, rel)
         return ""
 
@@ -310,12 +342,46 @@ class Cleaner:
                     self.note("SKIP", rel, size, exc)
                 continue
             deferred.append((rel, size))
+        for kind, scope in self.storage_adapters.items():
+            self.progress("核對產生者的副本、工作取代與保留證據…")
+            scope.prepare(self.lifecycle.files)
+            self.lifecycle.extra_targets.update(scope.reference_targets)
+            self.lifecycle.extra_roots.update(scope.sources.values())
+            self.lifecycle.extra_roots.update(getattr(scope, "retained_roots", ()))
+            for marker, fields in getattr(scope, "ownership_references", {}).items():
+                owned = self.lifecycle.ownership_references.setdefault(marker, {})
+                if any(field in owned and owned[field] != value for field, value in fields.items()):
+                    raise ValueError("產生者的用途欄位證明互相衝突")
+                owned.update(fields)
+            for rel, reason in scope.errors.items():
+                self.note("SKIP", rel, self.lifecycle.files.get(rel, 0), reason)
+
+        def storage_kind(relative):
+            claims = [kind for kind, scope in self.storage_adapters.items() if scope.candidate(relative)]
+            if len(claims) > 1:
+                raise ValueError("檔案有互相重疊的清理用途")
+            return claims[0] if claims else None
+
+        # A superseded attempt was initially recognized by the older completed-
+        # run rule. Route its proven subset through the stronger adapter lease.
+        for lease, rows in self.deletes.items():
+            remaining = []
+            for kind, rel, size in rows:
+                adapter_kind = storage_kind(rel)
+                if adapter_kind:
+                    self.storage_candidates[adapter_kind].append((rel, size))
+                else:
+                    remaining.append((kind, rel, size))
+            self.deletes[lease] = remaining
         try:
             self.lifecycle.prepare(rules.active_artifact_subjects(self.root))
         except FAILURES as exc:
             self.lifecycle.errors[Path("config")] = f"現行依賴解析失敗：{exc}"
         for rel, size in deferred:
-            if self.git_ok and self.lifecycle.candidate(rel):
+            adapter_kind = storage_kind(rel) if self.git_ok else None
+            if adapter_kind:
+                self.storage_candidates[adapter_kind].append((rel, size))
+            elif self.git_ok and self.lifecycle.candidate(rel):
                 self.lifecycle_candidates.append((rel, size))
             else:
                 reason = self.lifecycle.retained_reason(rel)
@@ -337,7 +403,6 @@ class Cleaner:
             if not self.git_ok:
                 return
             self.legacy = self.lookup(rules.legacy_parameters, Path("models"))
-            self.retired = self.lookup(rules.retired_diagnostics, rules.DIAGNOSTICS)
         try:
             if self.git_ok:
                 self.lifecycle.active = rules.active_artifact_subjects(self.root)
@@ -345,11 +410,21 @@ class Cleaner:
                     self._clear_unused()
         except FAILURES as exc:
             rows = list(self.lifecycle_candidates)
+            rows.extend(item for candidates in self.storage_candidates.values() for item in candidates)
             rows.extend((rel, size) for entries in self.deletes.values() for _, rel, size in entries)
             for rel, size in rows:
                 self.note("SKIP", rel, size, f"用途或保留依賴無法驗證：{exc}")
 
     def _clear_unused(self):
+        for kind, candidates in self.storage_candidates.items():
+            scope = self.storage_adapters[kind]
+            for index, (rel, size) in enumerate(candidates, 1):
+                self.progress(f"核對工作取代／副本 {index:,}/{len(candidates):,}")
+                try:
+                    with scope.deletion_lease(self, rel):
+                        self.remove_one(kind, rel, size, scope)
+                except FAILURES as exc:
+                    self.note("SKIP", rel, size, exc)
         self.lifecycle.clear(self, self.lifecycle_candidates)
         # Also consider known empty error-probe folders. Empty arbitrary folders are kept.
         staging = self.root / rules.STAGING
@@ -358,9 +433,15 @@ class Cleaner:
         for lease, rows in self.deletes.items():
             try:
                 with rules.deletion_lease(self.root, lease, preview=not self.apply):
-                    scope = rules.robust_disposable(self.root / lease) if lease and lease != rules.STAGING else set()
-                    for kind, rel, size in rows:
+                    scope = rules.robust_disposable(self.root / lease) if lease and lease.is_relative_to(rules.ROBUST) else set()
+                    for index, (kind, rel, size) in enumerate(rows, 1):
+                        self.progress(f"核對可清理工件 {index:,}/{len(rows):,}")
                         self.remove_one(kind, rel, size, scope)
+                    if self.apply and lease:
+                        self.empty_generated_dirs(
+                            {p for p in self.cleared_cache_dirs if p.is_relative_to(lease)},
+                            "可重建快取清除後的空分片目錄",
+                        )
                     if lease == rules.STAGING and self.apply:
                         self.empty_fixtures(staging)
                     elif self.apply and scope:
@@ -376,7 +457,10 @@ class Cleaner:
     def empty_bytecode_dirs(self):
         # Only folders from which this invocation removed proven bytecode.
         # rmdir is nonrecursive, so a concurrent writer or an unknown file wins.
-        for rel in sorted(self.cleared_bytecode_dirs):
+        self.empty_generated_dirs(self.cleared_bytecode_dirs, "可重建 Python 快取清除後的空目錄")
+
+    def empty_generated_dirs(self, directories, reason):
+        for rel in sorted(directories):
             try:
                 path = self.deletion_path(rel)
                 if (self.protected_by_git(rel) or self.lifecycle.protected(rel)
@@ -384,7 +468,7 @@ class Cleaner:
                     continue
                 path.rmdir()
                 self.lifecycle.removed(rel)
-                self.note("RMDIR", rel, 0, "可重建 Python 快取清除後的空目錄")
+                self.note("RMDIR", rel, 0, reason)
             except FAILURES as exc:
                 self.note("SKIP", rel, 0, exc)
 
@@ -442,7 +526,9 @@ class Cleaner:
             revision = file_change_signature(path)
             reason = self.proof(kind, rel, scope)
             if not reason or self.protected_by_git(rel):
-                self.note("KEEP", rel, size, "現行、工作尚未完成或刪除證據不足")
+                keep_reason = ("Python 快取尚未通過用途與 24 小時冷卻驗證" if kind == "pyc" and not reason
+                               else "現行、工作尚未完成或刪除證據不足")
+                self.note("KEEP", rel, size, keep_reason)
                 return
             if info.st_nlink != 1 or info.st_size != size:
                 self.note("SKIP", rel, size, "多重連結或尺寸已變動")
@@ -450,18 +536,21 @@ class Cleaner:
             if os.name == "nt":
                 file_metadata(path, info)  # Preserve files with additional NTFS data streams.
             space = disk_bytes(path, info)
+            retained_source = scope.sources.get(rel) if kind in self.storage_adapters else None
             if self.apply:
                 if (self.protected_by_git(rel) or not clean_path(path)
                         or file_change_signature(path) != revision):
                     raise ValueError("檔案已變動")
-                if kind == "lifecycle":
+                if kind == "lifecycle" or kind in self.storage_adapters:
                     scope.verify_before_delete(self, rel)
-                self.note("INTENT", rel, size, reason)
+                self.note("INTENT", rel, size, reason, source=retained_source)
                 path.unlink()
                 self.lifecycle.removed(rel)
                 if kind == "pyc":
                     self.cleared_bytecode_dirs.add(rel.parent)
-            self.note("DELETE" if self.apply else "PLAN_DELETE", rel, size, reason, space)
+                elif kind in {"outcome_cache", "diagnostic_cache"}:
+                    self.cleared_cache_dirs.add(rel.parent)
+            self.note("DELETE" if self.apply else "PLAN_DELETE", rel, size, reason, space, retained_source)
         except FAILURES as exc:
             self.note("SKIP", rel, size, exc)
 
@@ -544,6 +633,12 @@ class Cleaner:
                     # not free those data blocks a second time.
                     space = disk_bytes(path, regular(path)) if regular(path).st_nlink == 1 else 0
                     if self.apply:
+                        if caller_baseline_storage.root_for(path) is not None:
+                            caller_baseline_storage.record_alias(path, source, digest)
+                            self.detail_publications.pop(rel, None)
+                        elif rel in self.unfinished_copies:
+                            reused_copy_storage.record_alias(path, source, digest, file_hasher=self.hash_file)
+                            self.detail_publications.pop(rel, None)
                         self.note("INTENT", rel, size, reason, source=source_rel)
                         path.unlink()
                         self.lifecycle.removed(rel)
@@ -594,7 +689,7 @@ def run(root, apply=False):
     with session(root), receipt(root, "apply" if apply else "preview") as log:
         cleaner = Cleaner(root, log, apply)
         cleaner.scan()
-        print(f"進入用途驗證 {sum(map(len, cleaner.deletes.values())) + len(cleaner.lifecycle_candidates):,} 個檔案；"
+        print(f"進入用途驗證 {sum(map(len, cleaner.deletes.values())) + len(cleaner.lifecycle_candidates) + sum(map(len, cleaner.storage_candidates.values())):,} 個檔案；"
               f"核對 REUSE 副本 {sum(map(len, cleaner.groups.values())):,} 個明細。", flush=True)
         cleaner.clear_unused()
         cleaner.clear_reused_details()

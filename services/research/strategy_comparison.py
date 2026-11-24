@@ -1,7 +1,7 @@
 """Config-driven Breakout Quality strategy performance comparison orchestration."""
 
 from __future__ import annotations
-from core.compare_csv_storage import copy_reused_detail
+from core.compare_csv_storage import comparison_publication_lock, copy_reused_detail
 from core.research_orchestration import ResearchArtifactAction, ResearchArtifactPlan
 
 from core.file_integrity import load_json_object_or_none as _read_json
@@ -175,7 +175,8 @@ def _json_native(value: Any) -> Any:
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
-    atomic_write_json(path, _json_native(payload))
+    with comparison_publication_lock(path):
+        atomic_write_json(path, _json_native(payload))
 
 
 

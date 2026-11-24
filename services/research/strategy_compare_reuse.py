@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from core.compare_csv_storage import DETAIL_NAMES, detail_exists, detail_read_path
+from core.compare_csv_storage import DETAIL_NAMES, detail_exists
+from core.compare_csv_reader import read_detail_csv
 from core.research_orchestration import ResearchArtifactAction, ResearchArtifactPlan
 
 from core.file_integrity import (
@@ -943,7 +944,7 @@ def _legacy_pair_score_projection_matches_current(
     if not detail_exists(sidecar_path):
         return False
     try:
-        sidecar = pd.read_csv(detail_read_path(sidecar_path), encoding="utf-8-sig")
+        sidecar = read_detail_csv(sidecar_path, encoding="utf-8-sig")
     except (OSError, ValueError, pd.errors.ParserError):
         return False
     if sidecar.empty or "ticker" not in sidecar.columns:

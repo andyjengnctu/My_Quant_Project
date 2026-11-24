@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from core.compare_csv_storage import detail_exists, detail_read_path
+from core.compare_csv_storage import detail_exists
+from core.compare_csv_reader import read_detail_csv
 
 import argparse
 import json
@@ -724,7 +725,7 @@ def _orderable_coverage(
     )
     if not detail_exists(path):
         return {"available": False, "path": str(path), "reason": "orderable candidate工件不存在"}
-    candidates = pd.read_csv(detail_read_path(path), encoding="utf-8-sig", dtype={"ticker": "string"})
+    candidates = read_detail_csv(path, encoding="utf-8-sig", dtype={"ticker": "string"})
     date_column = next(
         (
             column

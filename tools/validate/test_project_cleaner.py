@@ -99,11 +99,14 @@ class CleanupTest(unittest.TestCase):
 
     def diagnostic_projection(self, rel):
         import numpy as np
+        from services.breakout_quality.real_path_diagnostic_cache import _payload_digest
         path = self.root / rel
         path.parent.mkdir(parents=True, exist_ok=True)
-        fields = ("identity", "ticker", "dates", "labels", "raw_r", "valid", "payload_sha256")
-        values = {key: np.array([0]) for key in fields}
-        values.update(identity=np.asarray("a" * 64), payload_sha256=np.asarray("b" * 64))
+        values = dict(ticker=np.array(["0050"]), dates=np.array(["2026-01-02"], dtype="datetime64[ns]"),
+                      labels=np.array([1], dtype=np.int64), raw_r=np.array([1.0], dtype=np.float64),
+                      valid=np.array([True], dtype=bool))
+        digest = _payload_digest(*(values[name] for name in ("ticker", "dates", "labels", "raw_r", "valid")))
+        values.update(identity=np.asarray("a" * 64), payload_sha256=np.asarray(digest))
         np.savez(path, **values)
         return path
 
@@ -130,12 +133,61 @@ class CleanupTest(unittest.TestCase):
         self.git("add", "doc/PROJECT_SETTINGS.md")
         source = self.write("services/local_extension.py", b"value = 42\n")
         pyc = Path(py_compile.compile(str(source), doraise=True))
-        self.menu(["1", "0"])
-        self.assertTrue(pyc.is_file())
-        self.assertEqual(self.summary("preview")[0]["counts"].get("PLAN_DELETE"), 1)
-        self.menu(["2", "0"])
+        stamp = rules.file_change_signature(pyc)
+        cold_now = max(stamp[3:]) + rules.BYTECODE_COLD_GRACE_NS + 1_000_000_000
+        with patch.object(rules.time, "time_ns", return_value=cold_now):
+            self.menu(["1", "0"])
+            self.assertTrue(pyc.is_file())
+            self.assertEqual(self.summary("preview")[0]["counts"].get("PLAN_DELETE"), 1)
+            self.menu(["2", "0"])
         self.assertFalse(pyc.exists())
         self.assertEqual(source.read_bytes(), b"value = 42\n")
+
+    def test_bytecode_cooldown_requires_old_mtime_and_change_time(self):
+        source = self.write("services/local_extension.py", b"value = 42\n")
+        pyc = Path(py_compile.compile(str(source), doraise=True))
+        rel = pyc.relative_to(self.root)
+        stamp = rules.file_change_signature(pyc)
+        now = max(stamp[3:]) + 1_000_000_000
+        self.assertFalse(rules.bytecode_cleanup_ready(self.root, rel, set(), now_ns=now))
+        cold_now = now + rules.BYTECODE_COLD_GRACE_NS
+        self.assertTrue(rules.bytecode_cleanup_ready(self.root, rel, set(), now_ns=cold_now))
+        self.assertFalse(rules.bytecode_cleanup_ready(self.root, rel, {rel}, now_ns=cold_now))
+        # Restoring old mtime does not erase a real recent rewrite's ChangeTime.
+        old = now - 2 * rules.BYTECODE_COLD_GRACE_NS
+        os.utime(pyc, ns=(old, old))
+        self.assertFalse(rules.bytecode_cleanup_ready(self.root, rel, set(), now_ns=now))
+        future = cold_now + 1_000_000_000
+        os.utime(pyc, ns=(future, future))
+        self.assertFalse(rules.bytecode_cleanup_ready(self.root, rel, set(), now_ns=cold_now))
+
+    def test_recent_bytecode_is_kept_by_preview_and_apply(self):
+        source = self.write("services/current_worker.py", b"value = 42\n")
+        pyc = Path(py_compile.compile(str(source), doraise=True))
+        for mode, answer in (("preview", "1"), ("apply", "2")):
+            self.menu([answer, "0"])
+            summary, _ = self.summary(mode)
+            self.assertEqual(summary["counts"].get("PLAN_DELETE" if mode == "preview" else "DELETE", 0), 0)
+            self.assertTrue(pyc.exists())
+
+    def test_bytecode_rewritten_after_cold_proof_is_preserved_at_unlink(self):
+        source = self.write("services/current_worker.py", b"value = 42\n")
+        pyc = Path(py_compile.compile(str(source), doraise=True))
+        rel = pyc.relative_to(self.root)
+        stamp = rules.file_change_signature(pyc)
+        cold_now = max(stamp[3:]) + rules.BYTECODE_COLD_GRACE_NS + 1_000_000_000
+        real = rules.bytecode_cleanup_ready
+        def rewrite_after_proof(root, relative, tracked):
+            ready = real(root, relative, tracked)
+            if relative == rel and ready:
+                pyc.write_bytes(pyc.read_bytes() + b"\x00")
+            return ready
+        with patch.object(rules.time, "time_ns", return_value=cold_now):
+            worker, rows = self.scanned_cleaner()
+            with patch.object(rules, "bytecode_cleanup_ready", side_effect=rewrite_after_proof):
+                worker.clear_unused()
+        self.assertTrue(pyc.exists())
+        self.assertTrue(any(row[0] == "SKIP" and row[1] == rel for row in rows))
 
     def test_bytecode_requires_regular_source_and_valid_current_header(self):
         source = self.write("services/local_extension.py", b"value = 42\n")
@@ -224,8 +276,9 @@ class CleanupTest(unittest.TestCase):
         from core.strategy_comparison import StrategyArtifactBuilder
         from filters.breakout_quality.strategy_compare_dl_artifacts import resolve_required_artifact_sources
         source, target = self.migrated_parameter()
-        slots = rules.retired_diagnostics(self.root)
-        retired_slot, retired_profile = next(iter(slots.items()))
+        from services.breakout_quality.real_path_diagnostic_cache import _slot
+        retired_profile = "synthetic_teacher_profile"
+        retired_slot = _slot(self.root, "filter", "architecture", retired_profile, 123).relative_to(self.root)
         cache = self.diagnostic_projection(retired_slot)
         settings = policy.get_strategy_comparison_settings()
         arm = settings.enabled_arms[0]
@@ -248,10 +301,10 @@ class CleanupTest(unittest.TestCase):
             params, dl, _ = resolve_required_artifact_sources(settings)
             self.assertIn("CLEANUP_UPSTREAM", params)
             self.assertIn("CLEANUP_TEACHER", dl)
-            self.assertFalse(retired_slot in rules.retired_diagnostics(self.root))
+            self.assertIn(retired_profile, rules.active_artifact_subjects(self.root))
             self.menu(["2", "0"])
             self.assertEqual(source.read_bytes(), target.read_bytes())
-            self.assertTrue(cache.is_file())
+            self.assertFalse(cache.exists())  # Optional projection, not the teacher truth.
         self.menu(["2", "0"])
         self.assertFalse(source.exists())
         self.assertFalse(cache.exists())
@@ -624,19 +677,16 @@ class CleanupTest(unittest.TestCase):
         self.assertTrue(os.path.samefile(b,alias))
         self.assertEqual(self.summary("apply")[0]["counts"].get("LINK",0),0)
 
-    def test_change_in_model_roster_preserves_cache_and_fit(self):
-        from core.strategy_compare_policy import _compatibility_catalogs
+    def test_change_in_model_roster_preserves_fit_but_not_optional_projection(self):
+        from services.breakout_quality.real_path_diagnostic_cache import _slot
         from config import breakout_quality
-        slots = rules.retired_diagnostics(self.root)
-        self.assertTrue(slots)
-        rel, profile = next(iter(slots.items()))
+        profile = "synthetic_current_profile"
+        rel = _slot(self.root, "filter", "architecture", profile, 123).relative_to(self.root)
         eligible = self.diagnostic_projection(rel)
         fit = self.write(Path("models/research") / profile / "model.pt", b"unique historical model")
-        self.assertIn(profile, {v.get("experiment_profile") for v in _compatibility_catalogs()[1].values()})
         with patch.object(breakout_quality, "BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE", profile):
-            self.assertNotIn(rel, rules.retired_diagnostics(self.root))
             self.menu(["2", "0"])
-            self.assertTrue(eligible.exists())
+            self.assertFalse(eligible.exists())
         self.menu(["2", "0"])
         self.assertFalse(eligible.exists())
         self.assertTrue(fit.is_file())
@@ -781,9 +831,12 @@ class CleanupTest(unittest.TestCase):
         keep = [self.write(p, b"keep") for p in (
             "data/raw.csv", "state/trading/account.json", "models/research/fitting_checkpoints/model.pt",
             "outputs/optimizer/unfinished/study.db", "outputs/unclassified/draft.csv")]
-        self.menu(["1", "0"])
-        self.assertTrue(pyc.exists() and fixture.exists())
-        self.menu(["2", "0"])
+        stamp = rules.file_change_signature(pyc)
+        cold_now = max(stamp[3:]) + rules.BYTECODE_COLD_GRACE_NS + 1_000_000_000
+        with patch.object(rules.time, "time_ns", return_value=cold_now):
+            self.menu(["1", "0"])
+            self.assertTrue(pyc.exists() and fixture.exists())
+            self.menu(["2", "0"])
         self.assertFalse(pyc.exists() or fixture.exists())
         self.assertTrue(all(p.exists() for p in keep))
 

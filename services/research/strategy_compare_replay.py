@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from core.compare_csv_storage import detail_exists, detail_read_path
+from core.compare_csv_storage import detail_exists
+from core.compare_csv_reader import read_detail_csv
 
 from contextlib import ExitStack
-from core.compare_csv_storage import publish_detail_csv
+from core.compare_csv_storage import comparison_publication_lock, publish_detail_csv
+from core.file_integrity import atomic_write_text
 from core.portfolio_entry_policy import portfolio_entry_policy_context, daily_execution_contract_from_params
 import json
 from pathlib import Path
@@ -310,7 +312,7 @@ def _load_reusable_no_filter_baseline(
     equity = pd.read_csv(required_paths["equity"], encoding="utf-8-sig")
     trades = pd.read_csv(required_paths["trades"], encoding="utf-8-sig")
     capacity = pd.read_csv(required_paths["capacity"], encoding="utf-8-sig")
-    orderable = pd.read_csv(detail_read_path(required_paths["orderable"]), encoding="utf-8-sig")
+    orderable = read_detail_csv(required_paths["orderable"], encoding="utf-8-sig")
     yearly = pd.read_csv(required_paths["yearly"], encoding="utf-8-sig")
 
     yearly_rows: list[dict[str, Any]] = []
@@ -644,10 +646,9 @@ def run_standalone_baseline(
         "no_filter": baseline,
         "yearly": yearly.to_dict("records"),
     })
-    (output_dir / "strategy_comparison.json").write_text(
-        json.dumps(json_payload, ensure_ascii=False, indent=2, allow_nan=False) + "\n",
-        encoding="utf-8",
-    )
+    json_path = output_dir / "strategy_comparison.json"
+    with comparison_publication_lock(json_path):
+        atomic_write_text(json_path, json.dumps(json_payload, ensure_ascii=False, indent=2, allow_nan=False) + "\n")
     (output_dir / "strategy_comparison.md").write_text(
         _standalone_baseline_report(json_payload, markdown=True), encoding="utf-8"
     )

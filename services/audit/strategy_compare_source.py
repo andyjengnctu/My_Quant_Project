@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from core.compare_csv_storage import detail_exists, detail_read_path
+from core.compare_csv_storage import detail_exists
+from core.compare_csv_reader import read_detail_csv
 
 from contextlib import nullcontext
 
@@ -501,7 +502,7 @@ def load_strategy_arm_replay_sidecars(
             "Audit不得重跑策略補資料"
         )
     try:
-        orderable = pd.read_csv(detail_read_path(orderable_path), encoding="utf-8-sig", low_memory=False)
+        orderable = read_detail_csv(orderable_path, encoding="utf-8-sig", low_memory=False)
         selected = pd.read_csv(selected_path, encoding="utf-8-sig", low_memory=False)
     except (OSError, ValueError, UnicodeError) as exc:
         raise AuditSourceBlockedError(

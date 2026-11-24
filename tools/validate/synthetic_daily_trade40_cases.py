@@ -2955,7 +2955,7 @@ class RealPathDiagnosticCacheCases(unittest.TestCase):
         return data_path, inventory
 
     def _bundle(self, *, profile=PROFILE_R, root=None):
-        dates = pd.to_datetime(["2023-01-03", "2023-01-03", "2023-01-04"])
+        dates = pd.to_datetime(["2023-01-03", "2023-01-03", "2023-01-04"]).as_unit("ns")
         data = pd.DataFrame({
             "group_index": [0, 1, 2], "ticker": ["0050", "2330", "0050"],
             "date": dates, "label": [-1, -1, -1],

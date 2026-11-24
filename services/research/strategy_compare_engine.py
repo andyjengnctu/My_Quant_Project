@@ -22,7 +22,8 @@ from filters.breakout_quality.strategy_compare_contracts import (
     comparison_labels as _comparison_labels,
     comparison_switch_spec as _comparison_switch_spec,
 )
-from core.compare_csv_storage import publish_detail_csv
+from core.compare_csv_storage import comparison_publication_lock, publish_detail_csv
+from core.file_integrity import atomic_write_text
 from core.breakout_quality_runtime import (
     CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH,
 )
@@ -341,10 +342,9 @@ def run_existing_attribution(*, project_root=PROJECT_ROOT) -> dict[str, Any]:
         f"{labels['active_name']}_minus_no_filter": deltas,
         "yearly": yearly.to_dict("records"),
     })
-    (output_dir / "strategy_comparison.json").write_text(
-        json.dumps(refreshed, ensure_ascii=False, indent=2, allow_nan=False) + "\n",
-        encoding="utf-8",
-    )
+    json_path = output_dir / "strategy_comparison.json"
+    with comparison_publication_lock(json_path):
+        atomic_write_text(json_path, json.dumps(refreshed, ensure_ascii=False, indent=2, allow_nan=False) + "\n")
     materialize_strategy_pair_readable_report(
         refreshed,
         output_dir=output_dir,
@@ -1169,10 +1169,9 @@ def run_comparison(
         "yearly": yearly.to_dict("records"),
         "selection_diagnostics": strategy_diagnostics,
     })
-    (output_dir / "strategy_comparison.json").write_text(
-        json.dumps(json_payload, ensure_ascii=False, indent=2, allow_nan=False) + "\n",
-        encoding="utf-8",
-    )
+    json_path = output_dir / "strategy_comparison.json"
+    with comparison_publication_lock(json_path):
+        atomic_write_text(json_path, json.dumps(json_payload, ensure_ascii=False, indent=2, allow_nan=False) + "\n")
     materialize_strategy_pair_readable_report(
         json_payload,
         output_dir=output_dir,

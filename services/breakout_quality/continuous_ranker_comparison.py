@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from core.compare_csv_storage import detail_exists, detail_read_path
+from core.compare_csv_storage import detail_exists
+from core.compare_csv_reader import open_detail
 
 import argparse
 import json
@@ -404,11 +405,12 @@ def _dynamic_orderable_frame(
         "breakout_quality_score",
         "breakout_quality_score_unavailable_reason",
     }
-    orderable = read_breakout_quality_csv(
-        detail_read_path(pair_dir / "score_ranking_orderable_candidates.csv"),
-        encoding="utf-8-sig",
-        usecols=lambda column: column in (required_orderable | optional_orderable),
-    )
+    with open_detail(pair_dir / "score_ranking_orderable_candidates.csv") as stream:
+        orderable = read_breakout_quality_csv(
+            stream,
+            encoding="utf-8-sig",
+            usecols=lambda column: column in (required_orderable | optional_orderable),
+        )
     required_capacity = {
         "Date",
         "Resource_Aware_Max_DL_Eligible",

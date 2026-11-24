@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from core.compare_csv_storage import detail_exists, detail_read_path
+from core.compare_csv_storage import detail_exists
+from core.compare_csv_reader import read_detail_csv
 
 import copy
 from functools import lru_cache
@@ -1291,14 +1292,14 @@ def backfill_pair_selection_diagnostics(
     )
     baseline_diag, baseline_orderable_joined, baseline_selected_joined = (
         _strategy_selection_diagnostics(
-            orderable=pd.read_csv(detail_read_path(baseline_orderable_path), encoding="utf-8-sig"),
+            orderable=read_detail_csv(baseline_orderable_path, encoding="utf-8-sig"),
             selected=pd.read_csv(baseline_selected_path, encoding="utf-8-sig"),
             lookup=lookup,
         )
     )
     active_diag, active_orderable_joined, active_selected_joined = (
         _strategy_selection_diagnostics(
-            orderable=pd.read_csv(detail_read_path(active_orderable_path), encoding="utf-8-sig"),
+            orderable=read_detail_csv(active_orderable_path, encoding="utf-8-sig"),
             selected=pd.read_csv(active_selected_path, encoding="utf-8-sig"),
             lookup=lookup,
         )
@@ -1842,7 +1843,7 @@ def _filled_selection_geometry_keys(
             "Strategy Compare MFE/Safety主報表缺少既有selection sidecar: "
             f"{orderable_path.name} / {selected_path.name}"
         )
-    orderable = pd.read_csv(detail_read_path(orderable_path), encoding="utf-8-sig", low_memory=False)
+    orderable = read_detail_csv(orderable_path, encoding="utf-8-sig", low_memory=False)
     selected = pd.read_csv(selected_path, encoding="utf-8-sig", low_memory=False)
     _orderable_events, selected_events = strategy_replay_score_event_frames(orderable, selected)
     if selected_events is None or selected_events.empty:

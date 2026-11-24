@@ -5,6 +5,7 @@ import io
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 from zipfile import ZipFile
@@ -80,6 +81,52 @@ class LifecycleCleanupTest(unittest.TestCase):
         self.write("outputs/another_owner/manifest.json", {"source_dir": workspace.as_posix()})
         self.menu(["2", "0"])
         self.assertTrue(all(p.exists() for p in files.values()))
+
+    def test_dot_relative_json_references_survive_path_prefilter(self):
+        retained = []
+        # These paths intentionally omit every target basename. They resolve
+        # relative to each JSON's directory, using both supported separators.
+        cases = ((".", ""), ("./", ""), (".\\", ""),
+                 ("..", "consumer"), ("../.", "consumer"),
+                 (".\\..", "consumer"), ("..\\..", "consumer/deep"))
+        if os.name == "nt":
+            # Same-drive bare prefixes preserve the old Windows Path joining
+            # semantics: the consumer's own directory is the reference target.
+            cases += ((self.root.drive, ""), (self.root.drive + ".", ""),
+                      (self.root.drive + "..", "consumer"),
+                      (self.root.drive + "child/..", ""))
+        for index, (reference, directory) in enumerate(cases):
+            workspace, files, _, _ = self.storage(f"relative-target-{index}")
+            self.write(workspace / directory / "consumer.json", {"source_dir": reference})
+            retained.extend(files.values())
+        _, unused, _, _ = self.storage("unreferenced-control")
+        self.write("config/labels.json", {"labels": ["ordinary label", "not.a.path", "outputs"]})
+        self.menu(["2", "0"])
+        self.assertTrue(all(path.exists() for path in retained))
+        self.assertFalse(unused["scratch.csv"].exists())
+
+    def test_owner_field_exclusion_does_not_hide_another_consumer_reference(self):
+        for case in ("owner_only", "other_field", "stale_value", "other_file"):
+            with self.subTest(case=case):
+                workspace, files, _, _ = self.storage("owner-field-" + case)
+                value = workspace.as_posix()
+                payload = {"metadata": {"output_dir": value}}
+                if case == "other_field":
+                    payload["consumer_source"] = value
+                owner = self.write(f"outputs/other/{case}.json", payload)
+                if case == "other_file":
+                    self.write(f"state/consumer/{case}.json", {"source": value})
+                worker = previous.service.Cleaner(
+                    self.root, SimpleNamespace(row=lambda *args, **kwargs: None), True,
+                )
+                worker.lifecycle.ownership_references[owner.relative_to(self.root)] = {
+                    ("metadata", "output_dir"): "outdated-value" if case == "stale_value" else value,
+                }
+                with contextlib.redirect_stdout(io.StringIO()):
+                    worker.scan()
+                    worker.clear_unused()
+                self.assertEqual(files["scratch.csv"].exists(), case != "owner_only")
+                self.assertEqual(json.loads(owner.read_text()), payload)
 
     def test_running_and_resumable_work_never_becomes_garbage_by_age(self):
         for state in ("RUNNING", "RESUMABLE"):

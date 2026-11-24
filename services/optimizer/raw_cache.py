@@ -4,8 +4,9 @@ import json
 import os
 import pickle
 import time
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
+from uuid import uuid4
 
 import pandas as pd
 
@@ -205,36 +206,80 @@ def _raw_cache_lock_stale_seconds():
 
 
 class _RawCacheBuildLock:
-    def __init__(self, paths):
+    def __init__(self, paths, *, blocking=True):
         self.cache_dir = Path(paths["cache_dir"])
         self.lock_dir = Path(paths["lock_dir"])
         self.owner_path = self.lock_dir / "owner.json"
+        self.guard_path = self.lock_dir.with_name("." + self.lock_dir.name + ".guard")
         self.acquired = False
+        self.blocking = blocking
+        self.owner_token = None
+
+    @contextmanager
+    def _state_guard(self, *, blocking=True):
+        """Serialize owner transitions on an OS lock whose inode is never removed."""
+        from core.compare_csv_storage import clean_path, plain
+        from core.file_integrity import exclusive_file_lock
+        while True:
+            if (not clean_path(self.guard_path) or (self.guard_path.exists()
+                    and (not plain(self.guard_path.lstat()) or self.guard_path.stat().st_nlink != 1))):
+                raise ValueError("optimizer raw cache guard path is unsafe")
+            guard = exclusive_file_lock(
+                self.guard_path, conflict_message="optimizer raw cache lock transition is active",
+            )
+            try:
+                guard.__enter__()
+            except RuntimeError:
+                if not blocking:
+                    raise
+                time.sleep(RAW_CACHE_LOCK_POLL_SEC)
+            else:
+                break
+        try:
+            yield
+        finally:
+            guard.__exit__(None, None, None)
 
     def __enter__(self):
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         stale_sec = _raw_cache_lock_stale_seconds()
         while True:
             try:
-                os.mkdir(self.lock_dir)
-                owner = {
-                    "pid": os.getpid(),
-                    "created_at": time.time(),
-                    "lock_dir": str(self.lock_dir),
-                }
-                try:
-                    self.owner_path.write_text(json.dumps(owner, ensure_ascii=False, indent=2), encoding="utf-8")
-                except OSError as exc:
-                    print(f"⚠️ raw cache lock owner 寫入失敗，將繼續持有 lock: {format_exception_summary(exc, include_traceback=False)}")
-                self.acquired = True
-                return self
-            except FileExistsError:
-                self._remove_stale_lock_if_needed(stale_sec)
-                time.sleep(RAW_CACHE_LOCK_POLL_SEC)
+                if not self.blocking and self.lock_dir.exists():
+                    raise RuntimeError("optimizer raw cache 正在使用或鎖狀態無法確認")
+                with self._state_guard(blocking=self.blocking):
+                    try:
+                        os.mkdir(self.lock_dir)
+                    except FileExistsError:
+                        if not self.blocking:
+                            raise RuntimeError("optimizer raw cache 正在使用或鎖狀態無法確認")
+                        self._remove_stale_lock_under_guard(stale_sec)
+                    else:
+                        token = uuid4().hex
+                        owner = {
+                            "pid": os.getpid(), "created_at": time.time(),
+                            "lock_dir": str(self.lock_dir), "token": token,
+                        }
+                        try:
+                            self.owner_path.write_text(json.dumps(owner, ensure_ascii=False, indent=2), encoding="utf-8")
+                        except OSError:
+                            _safe_unlink(self.owner_path)
+                            os.rmdir(self.lock_dir)
+                            raise
+                        self.owner_token = token
+                        self.acquired = True
+                        return self
             except OSError as exc:
                 raise RuntimeError(f"optimizer raw cache lock 建立失敗: {self.lock_dir} | {format_exception_summary(exc)}") from exc
+            time.sleep(RAW_CACHE_LOCK_POLL_SEC)
 
     def _remove_stale_lock_if_needed(self, stale_sec):
+        with self._state_guard():
+            self._remove_stale_lock_under_guard(stale_sec)
+
+    def _remove_stale_lock_under_guard(self, stale_sec):
+        # AI: Every mkdir, reap and release uses this same permanent guard, so
+        # an old observation can never unlink a newly published live owner.
         try:
             mtime = self.lock_dir.stat().st_mtime
         except FileNotFoundError:
@@ -242,6 +287,22 @@ class _RawCacheBuildLock:
         except OSError:
             return
         if time.time() - float(mtime) < float(stale_sec):
+            return
+        # Age alone never proves a long-running writer has exited. The cleaner
+        # also uses this lease, so a live or inaccessible owner must retain it.
+        from core.artifact_lifecycle import process_is_absent
+        from core.compare_csv_storage import clean_path, plain
+        from core.file_integrity import file_change_signature
+        try:
+            if (not clean_path(self.owner_path) or not plain(self.owner_path.lstat())
+                    or self.owner_path.stat().st_nlink != 1):
+                return
+            before = file_change_signature(self.owner_path)
+            owner = json.loads(self.owner_path.read_text(encoding="utf-8"))
+            if (not isinstance(owner, dict) or not process_is_absent(owner.get("pid"))
+                    or file_change_signature(self.owner_path) != before):
+                return
+        except (OSError, ValueError, TypeError):
             return
         _safe_unlink(self.owner_path)
         try:
@@ -252,10 +313,18 @@ class _RawCacheBuildLock:
     def __exit__(self, exc_type, exc, tb):
         if not self.acquired:
             return False
-        _safe_unlink(self.owner_path)
         try:
-            os.rmdir(self.lock_dir)
-        except OSError as exc:
+            with self._state_guard():
+                from core.compare_csv_storage import clean_path, plain
+                if (not clean_path(self.owner_path) or not plain(self.owner_path.lstat())
+                        or self.owner_path.stat().st_nlink != 1):
+                    raise ValueError("raw cache lock owner is unsafe")
+                owner = json.loads(self.owner_path.read_text(encoding="utf-8"))
+                if not isinstance(owner, dict) or owner.get("token") != self.owner_token:
+                    raise ValueError("raw cache lock owner changed before release")
+                self.owner_path.unlink()
+                os.rmdir(self.lock_dir)
+        except (OSError, ValueError, TypeError) as exc:
             print(f"⚠️ raw cache lock 釋放失敗: {format_exception_summary(exc, include_traceback=False)}")
         self.acquired = False
         return False
