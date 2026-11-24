@@ -347,7 +347,13 @@ class OracleBuildAttestationTests(unittest.TestCase):
         with patch.object(package_zip, "PROJECT_ROOT", self.root):
             package_zip.finalize_frozen_package(snapshot, attestation=attestation,
                                                evidence_files=candidate["evidence_files"])
+        owner.publish_oracle_build_attestation(self.root, attestation, evidence_files=candidate["evidence_files"])
         with zipfile.ZipFile(package) as archive:
+            published_bytes = (self.root / owner.ATTESTATION_RELATIVE_PATH).read_bytes()
+            self.assertEqual(archive.read(owner.ATTESTATION_RELATIVE_PATH), published_bytes)
+            if os.linesep == "\r\n":
+                self.assertGreater(published_bytes.count(b"\r\n"), 0)
+                self.assertEqual(published_bytes.count(b"\n"), published_bytes.count(b"\r\n"))
             names = archive.namelist()
             self.assertFalse(any(owner.oracle_evidence_role(name) == "external_baseline" for name in names))
             self.assertEqual(sum(owner.oracle_evidence_role(name) == "formal_run" for name in names), 1)

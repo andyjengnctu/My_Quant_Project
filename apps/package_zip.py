@@ -9,14 +9,13 @@ import zipfile
 from pathlib import Path, PurePosixPath
 from dataclasses import dataclass
 from hashlib import sha256
-import json
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from core.console_report import project_relative_display_path
-from core.file_integrity import atomic_replace_with_retry
+from core.file_integrity import atomic_replace_with_retry, json_publication_bytes
 from core.runtime_utils import has_help_flag, get_taipei_now, resolve_cli_program_name, run_cli_entrypoint, validate_cli_args
 
 HELP_DESCRIPTION = "清除 Python 快取、封存舊 package ZIP，並把目前 working tree 的 tracked / untracked 非忽略檔打成乾淨 ZIP。新 package 會包含 reduced dataset；舊 package 移入 arch/ 時會自動移除 reduced dataset 以節省空間。可選擇先 commit，再於打包後執行 test suite。"
@@ -71,7 +70,7 @@ def finalize_frozen_package(snapshot: FrozenPackageSnapshot, *, attestation: dic
         raise RuntimeError("Full baseline snapshots remain external audit evidence")
     if roles.count("formal_run") > 1:
         raise RuntimeError("Oracle delivery may contain only the current formal run")
-    certificate = (json.dumps(attestation, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    certificate = json_publication_bytes(attestation)
     additions = {ATTESTATION_RELATIVE_PATH: certificate}
     for name, record in records.items():
         expected = dict(attestation.get("evidence_artifacts") or {}).get(name)
