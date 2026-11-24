@@ -8,6 +8,11 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest import TestCase
 from unittest.mock import patch
+import json
+from hashlib import sha256
+
+from core.file_integrity import canonical_json_sha256
+from services.research.oracle_build_attestation import OracleBuildBlockedError
 
 from services.audit import target_oracle_romd as oracle
 from services.audit.oracle_replay_artifacts import OracleReplayStore, replay_identity
@@ -30,6 +35,22 @@ _CANDIDATE_IMPLEMENTATION_4539330D = (
 
 
 class OracleCompletedReuseTests(TestCase):
+    def setUp(self):
+        from services.audit import oracle_observation
+        self.observation_owner = Path(oracle_observation.__file__).resolve()
+        self.observation_bytes = self.observation_owner.read_bytes()
+        self.verified_build = {"legacy_origins": {}, "fixture": "validated_baseline_transition"}
+
+        def require_fixture(_root):
+            if self.observation_owner.read_bytes() != self.observation_bytes:
+                raise OracleBuildBlockedError("Oracle numerical build is unverified")
+            return self.verified_build
+
+        gate = patch("services.research.oracle_build_attestation.require_oracle_build_attestation",
+                     side_effect=require_fixture)
+        gate.start()
+        self.addCleanup(gate.stop)
+
     def _fixture(self, root, *, replay_implementation=_HISTORICAL_REPLAY_IMPLEMENTATION,
                  scope="Breakout", selected_target="T40", candidate_implementation=None,
                  source_implementation=None):
@@ -117,6 +138,9 @@ class OracleCompletedReuseTests(TestCase):
             physical_policy = oracle._arm_replay_policy(definition, plan=plan,
                 target=target, replay_policy=policy, project_root=root,
                 effective_context=context, **score_args)
+            # Reproduce an original receipt, not a current producer claiming
+            # to have executed the deliberately historical implementation.
+            physical_policy.pop("effective_result_contract_sha256", None)
             if candidate_implementation is not None:
                 physical_policy["daily_candidate_implementation_sha256"] = candidate_implementation
             identity = replay_identity(dataset=settings.dataset, dataset_sha256=price,
@@ -136,7 +160,19 @@ class OracleCompletedReuseTests(TestCase):
                            for year in range(int(start[:4]), int(end[:4]) + 1)],
                 **({f"delta_romd_vs_{baseline.lower()}": 0.0} if target != baseline else {})}
             store.write(identity, observation, origin="historical_source_consumer_fixture")
-            index.publish(context, identity, observation)
+            payload = {"schema": 1, "context": context, "origin_identity": identity,
+                       "observation_sha256": canonical_json_sha256(observation)}
+            reference = index._legacy_path(context)
+            reference.parent.mkdir(parents=True, exist_ok=True)
+            reference.write_text(json.dumps({**payload, "reference_sha256": canonical_json_sha256(payload)}),
+                                 encoding="utf-8")
+            for original in (reference, store._path(identity)):
+                self.verified_build["legacy_origins"][original.relative_to(root).as_posix()] = {
+                    "sha256": sha256(original.read_bytes()).hexdigest(),
+                    "identity_sha256": canonical_json_sha256(identity),
+                    "context_sha256": canonical_json_sha256(context),
+                    "result_contract_sha256": contracts.oracle_result_contract(context).sha256,
+                }
             completed[target] = (context, identity, observation)
         return definition, seed, price, params, store, index, completed
 
@@ -202,6 +238,7 @@ class OracleCompletedReuseTests(TestCase):
             root = Path(folder)
             fixture = self._fixture(root)
             index, (context, identity, observation) = fixture[5], fixture[6]["T40"]
+            context = self._current_context(context)
             self.assertEqual(index.read(context), (identity, observation))
             before = self._files(root)
             mutations = (
@@ -230,7 +267,7 @@ class OracleCompletedReuseTests(TestCase):
             root = Path(folder)
             fixture = self._fixture(root)
             for context, _identity, _observation in fixture[6].values():
-                fixture[5]._path(context).unlink()
+                fixture[5]._legacy_path(context).unlink()
             before = self._files(root)
             with self._environment(root, fixture):
                 preview = oracle.preview_oracle_replay_plan(fixture[0], project_root=root)
@@ -248,7 +285,7 @@ class OracleCompletedReuseTests(TestCase):
                 fixture = self._fixture(root, replay_implementation=_REPLAY_IMPLEMENTATION_4539330D)
                 if not indexed:
                     for context, _identity, _observation in fixture[6].values():
-                        fixture[5]._path(context).unlink()
+                        fixture[5]._legacy_path(context).unlink()
                 before = self._files(root)
                 with self._environment(root, fixture):
                     preview = oracle.preview_oracle_replay_plan(fixture[0], project_root=root)
@@ -278,7 +315,7 @@ class OracleCompletedReuseTests(TestCase):
                     index = fixture[5]
                     if not indexed:
                         for context, _identity, _observation in fixture[6].values():
-                            index._path(context).unlink()
+                            index._legacy_path(context).unlink()
                     before = self._files(root)
                     with self._environment(root, fixture):
                         for recorded, identity, observation in fixture[6].values():
@@ -298,20 +335,20 @@ class OracleCompletedReuseTests(TestCase):
             recorded, identity, observation = fixture[6]["T40_Direct"]
             self.assertEqual(index.read(self._current_context(recorded)), (identity, observation))
             before = self._files(root)
-            consumer = Path(oracle.__file__).resolve()
-            read_text = Path.read_text
-            old = '"romd": float(summary["return_over_max_drawdown"]),'
-            new = '"romd": float(summary["return_over_max_drawdown"]) + 1.0,'
-            self.assertEqual(read_text(consumer, encoding="utf-8-sig").count(old), 1)
+            consumer = self.observation_owner
+            read_bytes = Path.read_bytes
+            old = b'"romd": float(summary["return_over_max_drawdown"]),'
+            new = b'"romd": float(summary["return_over_max_drawdown"]) + 1.0,'
+            self.assertEqual(read_bytes(consumer).count(old), 1)
 
             def changed_source(path, *args, **kwargs):
-                content = read_text(path, *args, **kwargs)
+                content = read_bytes(path, *args, **kwargs)
                 return content.replace(old, new) if path.resolve() == consumer else content
 
             try:
                 contracts.replay_implementation_sha256.cache_clear()
                 contracts.portfolio_candidate_execution_sha256.cache_clear()
-                with patch.object(Path, "read_text", changed_source):
+                with patch.object(Path, "read_bytes", changed_source):
                     current = self._current_context(recorded)
                     self.assertFalse(contracts.oracle_observation_equivalence_proven(
                         ranking_policy=recorded["ranking_policy"]))
@@ -320,8 +357,10 @@ class OracleCompletedReuseTests(TestCase):
                                      _REPLAY_IMPLEMENTATION_4539330D)
                     self.assertEqual(retained["replay_policy"]["daily_candidate_implementation_sha256"],
                                      _CANDIDATE_IMPLEMENTATION_4539330D)
-                    self.assertIsNone(index.read(current))
-                    self.assertIsNone(index.native_completed(current))
+                    with self.assertRaises(OracleBuildBlockedError):
+                        index.read(current)
+                    with self.assertRaises(OracleBuildBlockedError):
+                        index.native_completed(current)
             finally:
                 contracts.replay_implementation_sha256.cache_clear()
                 contracts.portfolio_candidate_execution_sha256.cache_clear()
@@ -333,6 +372,7 @@ class OracleCompletedReuseTests(TestCase):
             fixture = self._fixture(root)
             store, index = fixture[4:6]
             context, identity, observation = fixture[6]["T40"]
+            context = self._current_context(context)
             conflict = deepcopy(identity)
             conflict["replay_policy"]["perfect_score_sha256"] = "e" * 64
             store.write(conflict, observation, origin="contradictory_same_source_score_fixture")
@@ -340,3 +380,94 @@ class OracleCompletedReuseTests(TestCase):
             with self.assertRaisesRegex(ValueError, "conflict"):
                 index.read(context)
             self.assertEqual(before, self._files(root))
+
+    def test_adopted_result_survives_verified_refactor_without_historical_source_proof(self):
+        with TemporaryDirectory() as folder:
+            root = Path(folder)
+            fixture = self._fixture(root)
+            index = fixture[5]
+            recorded, identity, observation = fixture[6]["T40"]
+            current = self._current_context(recorded)
+            original = fixture[4]._path(identity).read_bytes()
+            index.publish(current, identity, observation)
+            reference = json.loads(index._path(current).read_text(encoding="utf-8"))
+            self.assertEqual(reference["schema"], 2)
+            self.assertEqual(original, fixture[4]._path(identity).read_bytes())
+            self.verified_build["legacy_origins"] = {}
+            # This fixture represents an independently certified equivalent
+            # build. Its new source witness is deliberately unrelated to old
+            # AST aliases; the immutable adoption is now the receipt owner.
+            with patch.object(contracts, "replay_implementation_sha256", return_value="7" * 64):
+                refactored = self._current_context(recorded)
+                self.assertEqual(index._path(current), index._path(refactored))
+                with patch.object(contracts, "legacy_execution_context_matches", return_value=False):
+                    self.assertEqual(index.read(refactored), (identity, observation))
+
+    def test_adopted_origin_byte_change_is_rejected_even_when_original_json_signature_matches(self):
+        with TemporaryDirectory() as folder:
+            fixture = self._fixture(Path(folder))
+            index = fixture[5]
+            recorded, identity, observation = fixture[6]["T40"]
+            current = self._current_context(recorded)
+            index.publish(current, identity, observation)
+            path = fixture[4]._path(identity)
+            path.write_bytes(path.read_bytes() + b"\n")
+            self.assertEqual(fixture[4].read(identity), observation)
+            with self.assertRaisesRegex(ValueError, "adoption provenance differs"):
+                index.read(current)
+
+    def test_raw_legacy_file_pin_without_result_binding_cannot_adopt_unknown_source(self):
+        with TemporaryDirectory() as folder:
+            fixture = self._fixture(Path(folder), replay_implementation="9" * 64)
+            for proof in self.verified_build["legacy_origins"].values():
+                proof.pop("result_contract_sha256")
+            recorded, _identity, _observation = fixture[6]["T40"]
+            current = self._current_context(recorded)
+            self.assertIsNone(fixture[5].read(current))
+            self.assertIsNone(fixture[5].native_completed(current))
+
+    def test_unknown_build_blocks_and_unknown_context_cannot_be_published(self):
+        with TemporaryDirectory() as folder:
+            fixture = self._fixture(Path(folder))
+            index = fixture[5]
+            recorded, identity, observation = fixture[6]["T40"]
+            current = self._current_context(recorded)
+            unknown = {**current, "replay_implementation_sha256": "8" * 64}
+            with self.assertRaisesRegex(ValueError, "unknown current implementation"):
+                index.publish(unknown, identity, observation)
+            with patch("services.research.oracle_build_attestation.require_oracle_build_attestation",
+                       side_effect=OracleBuildBlockedError("IMPLEMENTATION_UNVERIFIED")):
+                for operation in (lambda: index.read(current), lambda: index.native_completed(current),
+                                  lambda: index.publish(current, identity, observation)):
+                    with self.assertRaises(OracleBuildBlockedError):
+                        operation()
+
+    def test_inspection_marks_old_index_for_adoption_and_pins_before_atomic_publish(self):
+        with TemporaryDirectory() as folder:
+            fixture = self._fixture(Path(folder))
+            index = fixture[5]
+            recorded, identity, observation = fixture[6]["T40"]
+            current = self._current_context(recorded)
+            inspection = index.inspect(current)
+            self.assertEqual(inspection.decision, "REUSE")
+            self.assertTrue(inspection.adoption_required)
+            self.assertTrue(inspection.origin_pins)
+            origin = fixture[4]._path(identity)
+            unchanged = origin.read_bytes()
+            origin.write_bytes(unchanged + b"\n")
+            with self.assertRaisesRegex(ValueError, "changed after inspection"):
+                index.publish(current, identity, observation, inspection=inspection)
+            origin.write_bytes(unchanged)
+            original_write = Path.write_text
+
+            def change_origin_after_staging(path, *args, **kwargs):
+                result = original_write(path, *args, **kwargs)
+                if path.suffix == ".tmp" and path.parent == index._path(current).parent:
+                    origin.write_bytes(origin.read_bytes() + b"\n")
+                return result
+
+            with patch.object(Path, "write_text", change_origin_after_staging):
+                with self.assertRaisesRegex(ValueError, "changed during adoption"):
+                    index.publish(current, identity, observation, inspection=inspection)
+            self.assertFalse(index._path(current).exists())
+            self.assertFalse(tuple(index._path(current).parent.glob("*.tmp")))

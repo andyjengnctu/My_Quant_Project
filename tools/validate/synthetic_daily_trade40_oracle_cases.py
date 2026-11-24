@@ -5,7 +5,8 @@ from datetime import date
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
-from unittest import TestCase, main
+from unittest import main
+from tools.validate.oracle_fixture_build import OracleFixtureTestCase as TestCase
 from unittest.mock import patch
 from tempfile import TemporaryDirectory
 

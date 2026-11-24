@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest import TestCase
+from tools.validate.oracle_fixture_build import OracleFixtureTestCase as TestCase
 from unittest.mock import patch
 
 import numpy as np

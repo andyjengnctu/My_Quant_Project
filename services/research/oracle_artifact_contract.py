@@ -18,6 +18,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Mapping
 from uuid import uuid4
+from dataclasses import dataclass
 
 from core.execution_source_dependencies import execution_source_inventory, project_ranking_policy_source
 from core.research_execution_equivalence import (
@@ -31,38 +32,27 @@ from core.file_integrity import (
 from core.research_execution_equivalence import reviewed_calculation_sha256, project_reviewed_source_inventory
 
 from core.daily_trade_path_capabilities import DAILY_TRUTH_CAPABILITIES, daily_truth_capability
+from services.research.oracle_result_contract import (
+    PRICE_CALCULATION_REVISIONS, DAILY_CALCULATION_REVISIONS,
+    FEATURE_UNIVERSE_CALCULATION_REVISION, REPLAY_CALCULATION_REVISION,
+    OracleResultContract, oracle_source_result_contract, oracle_result_policy,
+    oracle_score_contract, oracle_ranking_options, _REFERENCE_FIELDS, _SCORE_REFERENCE_FIELDS,
+    _ORACLE_PERFECT_POSITIVE_INTERFACE, _LEGACY_POSITIVE_INTERFACE,
+    _SINGLE_RANKER_POSITIVE_INTERFACE, _POSITIVE_OUTPUT_COLUMN, _POSITIVE_OUTPUT_ID,
+)
+from services.research.oracle_legacy_admission import verified_legacy_origin_pin
 
 # Engineering calculation revisions, not scientific Target/model identities.
 # Change only the affected capability after a result-affecting fix. Existing
 # recipes are stable when a new recipe is registered alongside them.
-PRICE_CALCULATION_REVISIONS = {
-    "equal_rank_mfe_safety": 1, "mfe": 1, "terminal_r": 1,
-    "terminal_mae_gate": 1, "mfe_mae_gate": 1,
-}
-DAILY_CALCULATION_REVISIONS = {
-    "daily_trade_path_net_r": 1,
-    "daily_trade_path_net_pnl": 1,
-    "daily_trade_path_true_net_pnl": 2,
-    "daily_trade_path_full_net_pnl": 1,
-}
-DAILY_CALCULATION_REVISIONS.update({recipe: spec["calculation_revision"]
-                                    for recipe, spec in DAILY_TRUTH_CAPABILITIES.items()})
-FEATURE_UNIVERSE_CALCULATION_REVISION = 1
-REPLAY_CALCULATION_REVISION = 1
 _SCHEMA = 1
-_REFERENCE_FIELDS = {"reference_arm_id", "reference_score_source_id", "reference_profile_id"}
-_SCORE_REFERENCE_FIELDS = _REFERENCE_FIELDS | {"positive_score_source_id", "positive_profile_id"}
+_RESULT_INDEX_SCHEMA = 2
 _SCORE_WITNESS_FIELDS = {"canonical_feature_eligible_keys_sha256", "oracle_scored_rows", "source_evidence"}
 
 # The perfect-Positive intervention supplies the *same* signed, continuous
 # Target-percentile rank and exact Positive 0/1 column before and after a
 # predictor-topology change. These are approved Oracle output interfaces,
 # NOT an equivalence of the historical fitted models or their PIT scores.
-_ORACLE_PERFECT_POSITIVE_INTERFACE = "oracle_perfect_netpnl_rank_and_positive_v1"
-_LEGACY_POSITIVE_INTERFACE = "positive_netpnl_dual_output_v1"
-_SINGLE_RANKER_POSITIVE_INTERFACE = "single_ranker_calibrated_positive_v2"
-_POSITIVE_OUTPUT_COLUMN = "positive_p_positive"
-_POSITIVE_OUTPUT_ID = "netpnl_positive_probability_v1"
 _LEGACY_POSITIVE_SOURCE_SHA256 = "56fdce12e331011e7423c7fa0f1c8b27563b43bbd731fcff938c6a0c602edd05"
 # Reviewed executable AST of requires_positive_score, positive_score_admitted,
 # and admit_positive_score_rows, *not* training/label-calibration code. An
@@ -103,45 +93,8 @@ def _approved_perfect_positive_admission(value: Any) -> bool:
                  _LEGACY_POSITIVE_SOURCE_SHA256, _PREVIOUS_SINGLE_RANKER_SOURCE_SHA256, current_sha})))
 
 
-def oracle_score_contract(contract: Mapping[str, Any]) -> dict[str, Any]:
-    """Only predictor topology is erased from the signed perfect-score interface."""
-    result = {key: value for key, value in contract.items() if key not in _SCORE_REFERENCE_FIELDS}
-    if (result.get("perfect_positive_output") == _POSITIVE_OUTPUT_ID
-            and result.get("positive_score_column") == _POSITIVE_OUTPUT_COLUMN
-            and result.get("positive_score_contract_revision") in {
-                _LEGACY_POSITIVE_INTERFACE, _SINGLE_RANKER_POSITIVE_INTERFACE}):
-        result["positive_score_contract_revision"] = _ORACLE_PERFECT_POSITIVE_INTERFACE
-    return result
 
 
-def oracle_ranking_options(options: Mapping[str, Any]) -> dict[str, Any]:
-    """Canonicalize *only* two certified perfect-Positive score-consumers.
-
-    Ordinary strategy FIT/Score/Replay identities are not affected; they still
-    distinguish independent binary predictors from calibrated rankers. Unknown
-    or malformed Positive options are retained as distinct economic inputs.
-    """
-    result = dict(options)
-    positive_keys = {str(key) for key in result if str(key).startswith("positive_")}
-    if not positive_keys:
-        return result
-    allowed = {"positive_dl_id", "positive_prediction_contract", "positive_probability_threshold",
-               "positive_score_column"}
-    old = result.get("positive_dl_id")
-    current = result.get("positive_prediction_contract")
-    threshold = result.get("positive_probability_threshold")
-    valid_threshold = (isinstance(threshold, (int, float)) and not isinstance(threshold, bool)
-                       and 0.0 < float(threshold) < 1.0)
-    if (positive_keys <= allowed and valid_threshold
-            and result.get("positive_score_column") == _POSITIVE_OUTPUT_COLUMN
-            and (("positive_dl_id" in result and "positive_prediction_contract" not in result
-                  and isinstance(old, str) and bool(old.strip()))
-                 or ("positive_dl_id" not in result and "positive_prediction_contract" in result
-                     and current == _SINGLE_RANKER_POSITIVE_INTERFACE))):
-        result.pop("positive_dl_id", None)
-        result.pop("positive_prediction_contract", None)
-        result["oracle_positive_output_interface"] = _ORACLE_PERFECT_POSITIVE_INTERFACE
-    return result
 
 
 def oracle_replay_policy(policy: Mapping[str, Any]) -> dict[str, Any]:
@@ -185,6 +138,11 @@ def oracle_execution_contract(context: Mapping[str, Any]) -> dict[str, Any]:
     if context.get("source_contract") is not None:
         result["source_contract"] = oracle_source_contract(context["source_contract"])
     return result
+
+
+def oracle_result_contract(context: Mapping[str, Any]) -> OracleResultContract:
+    """Normalize established Oracle interfaces before projecting provenance."""
+    return OracleResultContract.from_execution(oracle_execution_contract(context))
 
 
 class _CalculationSyntax(ast.NodeTransformer):
@@ -624,6 +582,27 @@ def oracle_source_contract(source: Mapping[str, Any]) -> dict[str, Any]:
     return result
 
 
+def legacy_source_contract_matches(recorded: Mapping[str, Any], current: Mapping[str, Any]) -> bool:
+    """Bounded pre-migration proof; a matching semantic key alone is insufficient.
+
+    An attested migration may instead pin a previously validated original
+    reference. This fallback admits only source encodings independently proven
+    from the executing owners, never an unknown historical source SHA.
+    """
+    if oracle_source_result_contract(recorded) != oracle_source_result_contract(current):
+        return False
+    recipe = str(recorded.get("recipe") or "")
+    profile = str((recorded.get("feature_provider") or {}).get("profile_id") or "")
+    encodings = _source_implementation_encodings(recipe, profile)
+    return (recorded.get("implementation_sha256") in encodings
+            and current.get("implementation_sha256", source_implementation_sha256(recipe, profile)) in encodings)
+
+
+def legacy_execution_context_matches(recorded: Mapping[str, Any], current: Mapping[str, Any]) -> bool:
+    """Keep the former exact proof only at the read-only migration boundary."""
+    return oracle_execution_contract(recorded) == oracle_execution_contract(current)
+
+
 # Frozen *format migration* boundary, not a producer-SHA alias list. Legacy
 # receipt format 1 did not record these capability projections. Import is
 # allowed only into the reviewed initial calculation, never into a later fix.
@@ -803,6 +782,17 @@ def legacy_import_permitted(context: Mapping[str, Any]) -> bool:
                                 _LEGACY_V1_SOURCE_IMPLEMENTATIONS.get(source.get("recipe")))))
 
 
+@dataclass(frozen=True)
+class OracleReuseInspection:
+    decision: str
+    reason: str
+    identity: dict[str, Any] | None = None
+    observation: dict[str, Any] | None = None
+    origin_pins: tuple[tuple[str, str], ...] = ()
+    adoption_required: bool = False
+    differences: tuple[str, ...] = ()
+
+
 class OracleExecutionIndex:
     """Immutable effective-contract -> original signed completed Replay.
 
@@ -818,13 +808,119 @@ class OracleExecutionIndex:
         target = str(context["target"])
         if not target.replace("_", "").replace("-", "").isalnum():
             raise ValueError("Oracle invalid execution-index target")
-        return self.root / str(int(context["seed"])) / f"{target}_{canonical_json_sha256(context)}.json"
+        return self.root / str(int(context["seed"])) / f"{target}_{oracle_result_contract(context).sha256}.json"
+
+    def _legacy_path(self, context: Mapping[str, Any]) -> Path:
+        return self.root / str(int(context["seed"])) / f"{context['target']}_{canonical_json_sha256(context)}.json"
+
+    @staticmethod
+    def _build_admission():
+        from services.research.oracle_build_attestation import require_oracle_build_attestation
+        return require_oracle_build_attestation(Path(__file__).resolve().parents[2])
+
+    @staticmethod
+    def _current_provenance(context) -> bool:
+        """Do not let a caller relabel unknown code as today's semantic key."""
+        ranking = context.get("ranking_policy")
+        if context.get("replay_implementation_sha256") != replay_implementation_sha256(
+                ranking_policy=ranking, observation_scope=ORACLE_STRATEGY_OBSERVATION_SCOPE):
+            return False
+        source = context.get("source_contract")
+        if source is not None:
+            recipe = str(source.get("recipe") or "")
+            profile = str((source.get("feature_provider") or {}).get("profile_id") or "")
+            if source.get("implementation_sha256") != source_implementation_sha256(recipe, profile):
+                return False
+        policy = context.get("replay_policy") or {}
+        if "daily_candidate_implementation_sha256" in policy:
+            expected = portfolio_candidate_execution_sha256(
+                daily_execution_contract=policy.get("daily_execution_contract"), ranking_policy=ranking,
+                observation_scope=ORACLE_STRATEGY_OBSERVATION_SCOPE)
+            if policy["daily_candidate_implementation_sha256"] != expected:
+                return False
+        return True
+
+    def _relative(self, path: Path) -> str:
+        return path.resolve().relative_to(self.store.project_root.resolve()).as_posix()
+
+    def _migration_admitted(self, path, context, identity, build) -> bool:
+        """A baseline-validated transition binds bytes AND the semantic result."""
+        signed_context = (identity.get("replay_policy") or {}).get("effective_execution_contract_sha256")
+        return verified_legacy_origin_pin(
+            self.store.project_root, path, build,
+            result_contract_sha256=oracle_result_contract(context).sha256,
+            identity_sha256=canonical_json_sha256(identity),
+            context_sha256=(canonical_json_sha256(context) if path.parent.parent == self.root
+                            else signed_context),
+        ) is not None
+
+    def _origin_pins(self, identity) -> dict[str, str]:
+        pins = {}
+        pending = [identity]
+        while pending:
+            current = pending.pop()
+            path = self.store._path(current)
+            relative = self._relative(path)
+            if relative in pins:
+                raise ValueError("Oracle completed origin has a provenance cycle")
+            raw_bytes = path.read_bytes()
+            pins[relative] = sha256(raw_bytes).hexdigest()
+            raw = json.loads(raw_bytes)
+            supplement = self.store._win_rate_path(current)
+            if supplement.is_file():
+                pins[self._relative(supplement)] = sha256(supplement.read_bytes()).hexdigest()
+            prior = (raw.get("reuse_certificate") or {}).get("origin_identity")
+            if prior is not None:
+                pending.append(prior)
+        return pins
+
+    def _verify_adoption(self, admission, context, identity, observation) -> None:
+        if (not isinstance(admission, Mapping)
+                or admission.get("kind") not in {
+                    "current_signed_producer", "verified_build_transition", "reviewed_legacy_source"}
+                or not is_sha256_hex(admission.get("build_attestation_sha256"))
+                or admission.get("context_sha256") != canonical_json_sha256(context)
+                or admission.get("result_contract_sha256") != oracle_result_contract(context).sha256
+                or admission.get("origin_identity_sha256") != canonical_json_sha256(identity)
+                or admission.get("observation_sha256") != canonical_json_sha256(observation)
+                or admission.get("origin_pins") != self._origin_pins(identity)):
+            raise ValueError("Oracle immutable result adoption provenance differs")
 
     def has_history(self, context: Mapping[str, Any]) -> bool:
         path = self._path(context)
         prefix = str(context["target"]) + "_"
         return any(is_sha256_hex(candidate.stem[len(prefix):])
                    for candidate in path.parent.glob(prefix + "*.json"))
+
+    def inspect(self, context: Mapping[str, Any]) -> OracleReuseInspection:
+        """One read-only decision for planning and authorized later adoption."""
+        from services.research.oracle_build_attestation import OracleBuildBlockedError
+        try:
+            self._build_admission()
+            if not self._current_provenance(context):
+                return OracleReuseInspection("BLOCKED", "Unknown current implementation context",
+                                             differences=("implementation_provenance",))
+            completed = self.read(context)
+            if completed is None:
+                completed = self.native_completed(context)
+            if completed is None:
+                return OracleReuseInspection("RUN", "No compatible completed Oracle result",
+                    differences=(("result_contract",) if self.has_history(context) else ()))
+            identity, observation = completed
+            pins = self._origin_pins(identity)
+            checked = self.store.read(identity)
+            if (checked is None or self.store.with_win_rate(identity, checked) != observation
+                    or self._origin_pins(identity) != pins):
+                raise ValueError("Oracle completed origin changed during inspection")
+            stable_path = self._path(context)
+            adopted = (stable_path.is_file()
+                       and json.loads(stable_path.read_text(encoding="utf-8")).get("schema") == _RESULT_INDEX_SCHEMA)
+            return OracleReuseInspection(
+                "REUSE", "Verified completed Oracle result", dict(identity), dict(observation),
+                tuple(sorted(pins.items())), not adopted,
+            )
+        except (ValueError, OSError, OracleBuildBlockedError) as exc:
+            return OracleReuseInspection("BLOCKED", str(exc), differences=("artifact_or_build_provenance",))
 
     @staticmethod
     def keys(identity: Mapping[str, Any]) -> tuple[str, int, str, str] | None:
@@ -842,9 +938,12 @@ class OracleExecutionIndex:
         return digest, rows, first, last
 
     def read(self, context: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any]] | None:
-        wanted = oracle_execution_contract(context)
-        path = self._path(wanted)
-        prefix = str(wanted["target"]) + "_"
+        build = self._build_admission()
+        if not self._current_provenance(context):
+            return None
+        wanted = oracle_result_contract(context)
+        path = self._path(context)
+        prefix = str(context["target"]) + "_"
         matches = []
         # Old indexes may contain predictor routing names. Validate their
         # original SHA and receipt before comparing the effective contracts.
@@ -852,22 +951,27 @@ class OracleExecutionIndex:
         for candidate in sorted(path.parent.glob(prefix + "*.json")):
             if not is_sha256_hex(candidate.stem[len(prefix):]):
                 continue
-            completed = self._read_reference(candidate, wanted)
+            completed = self._read_reference(candidate, context, wanted, build)
             if completed is not None:
                 matches.append(completed)
         if matches and any(item[1] != matches[0][1] for item in matches[1:]):
             raise ValueError("Oracle equivalent execution references have conflicting completed results")
         return matches[0] if matches else None
 
-    def _read_reference(self, path, wanted):
+    def _read_reference(self, path, context, wanted, build):
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
-            payload = {k: raw[k] for k in ("schema", "context", "origin_identity", "observation_sha256")}
+            schema = raw.get("schema")
+            fields = ("schema", "context", "origin_identity", "observation_sha256")
+            if schema == _RESULT_INDEX_SCHEMA:
+                fields += ("result_contract", "admission")
+            payload = {k: raw[k] for k in fields}
             recorded = payload["context"]
-            if (payload["schema"] != _SCHEMA or self._path(recorded) != path
+            expected_path = self._legacy_path(recorded) if schema == _SCHEMA else self._path(recorded)
+            if (schema not in {_SCHEMA, _RESULT_INDEX_SCHEMA} or expected_path != path
                     or raw.get("reference_sha256") != canonical_json_sha256(payload)):
                 raise ValueError("execution reference identity/SHA mismatch")
-            if oracle_execution_contract(recorded) != wanted:
+            if oracle_result_contract(recorded) != wanted:
                 return None
             identity = payload["origin_identity"]
             observation = self.store.read(identity)
@@ -876,12 +980,22 @@ class OracleExecutionIndex:
             complete = self.store.with_win_rate(identity, observation)
             if complete is None or canonical_json_sha256(complete) != payload["observation_sha256"]:
                 raise ValueError("execution reference completed metrics differ")
-            self._validate_binding(recorded, identity, complete)
+            if schema == _RESULT_INDEX_SCHEMA:
+                if payload["result_contract"] != wanted.as_payload():
+                    raise ValueError("execution reference result contract mismatch")
+                self._verify_adoption(payload["admission"], recorded, identity, complete)
+            elif not (self._migration_admitted(path, recorded, identity, build)
+                      or self._migration_admitted(self.store._path(identity), context, identity, build)
+                      or legacy_execution_context_matches(recorded, context)):
+                return None
+            self._validate_binding(recorded, identity, complete, semantic=True)
             return dict(identity), complete
         except (OSError, ValueError, KeyError, TypeError) as exc:
             raise ValueError(f"Oracle completed execution reference corrupt: {path.name}: {exc}") from exc
 
-    def _validate_binding(self, context, identity, observation):
+    def _validate_binding(self, context, identity, observation, *, semantic=False):
+        if not self._source_lineage_present(context, identity):
+            raise ValueError("execution reference missing signed Target source lineage")
         for key in ("target", "seed", "start_date", "end_date", "max_positions", "evaluation_mode",
                     "ranking_policy", "rotation", "dataset"):
             if identity.get(key) != context.get(key):
@@ -892,7 +1006,7 @@ class OracleExecutionIndex:
         if oracle_ranking_options(identity["ranking_options"]) != oracle_ranking_options(context["ranking_options"]):
             raise ValueError("execution reference selector options differ")
         policy = oracle_replay_policy(identity.get("replay_policy") or {})
-        differences = self._economic_policy_differences(context, identity)
+        differences = self._economic_policy_differences(context, identity, semantic=semantic)
         if differences:
             raise ValueError(f"execution reference economic policy differs: {differences[0]}")
         if context["score_contract"] is not None:
@@ -901,8 +1015,8 @@ class OracleExecutionIndex:
                 producer = (identity.get("replay_policy") or {}).get("formal_positive_score_output")
                 if (not isinstance(producer, Mapping)
                         or producer.get("contract") != _POSITIVE_OUTPUT_ID
-                        or not _approved_perfect_positive_admission(
-                            producer.get("shared_admission_code_sha256"))):
+                        or (not semantic and not _approved_perfect_positive_admission(
+                            producer.get("shared_admission_code_sha256")))):
                     raise ValueError("execution reference Positive admission producer not certified")
             if self.keys(identity) is None:
                 raise ValueError("execution reference missing certified stock-day membership")
@@ -913,7 +1027,7 @@ class OracleExecutionIndex:
         self.store.validate_completed_origin(identity, observation)
 
     @staticmethod
-    def _economic_policy_differences(context, identity) -> tuple[str, ...]:
+    def _economic_policy_differences(context, identity, *, semantic=False) -> tuple[str, ...]:
         """Verify signed economics independently of the claimed context SHA.
 
         Oracle parity describes the perfect-score intervention, not the
@@ -927,6 +1041,8 @@ class OracleExecutionIndex:
         required = oracle_observation_policy(
             context["replay_policy"], ranking_policy=context.get("ranking_policy"),
         )
+        if semantic:
+            signed, required = oracle_result_policy(signed), oracle_result_policy(required)
         unscored_control = (
             context.get("score_contract") is None
             and context.get("source_contract") is None
@@ -943,6 +1059,8 @@ class OracleExecutionIndex:
         # while its actual signed economic implementation is different.
         # It is not a current REUSE candidate. Preserve the historical signed
         # receipt and let the authorized canonical Replay create a new one.
+        if not OracleExecutionIndex._source_lineage_present(context, identity):
+            return False
         if OracleExecutionIndex._economic_policy_differences(context, identity):
             return False
         digest = (identity.get("replay_policy") or {}).get("effective_execution_contract_sha256")
@@ -983,47 +1101,116 @@ class OracleExecutionIndex:
                    and oracle_execution_contract(candidate) == oracle_execution_contract(context)
                    for candidate in candidates)
 
+    @staticmethod
+    def _source_lineage_present(context, identity):
+        if context.get("source_contract") is None:
+            return True
+        policy = identity.get("replay_policy") or {}
+        return (is_sha256_hex(policy.get("perfect_score_sha256"))
+                and isinstance(policy.get("hindsight_target_contract"), Mapping)
+                and bool(policy["hindsight_target_contract"]))
+
+    def matches_signed_context(self, context, identity, *, allow_input_drift=False) -> bool:
+        """Read-only provenance admission, independent of WinRate completeness.
+
+        The caller can inspect a historical data/P16 contract to classify an
+        input change. This does not authorize reuse under the requested data,
+        and all other inputs and the original signed digest must still match.
+        """
+        build = self._build_admission()
+        if not self._current_provenance(context) or not self._source_lineage_present(context, identity):
+            return False
+        recorded = dict(context)
+        if allow_input_drift:
+            recorded.update(dataset=identity.get("dataset"), price_sha256=identity.get("dataset_sha256"),
+                            param_sha256=identity.get("param_sha256"))
+        migrated = self._migration_admitted(self.store._path(identity), recorded, identity, build)
+        if not migrated and not self._native_context_matches(recorded, identity):
+            return False
+        observation = self.store.read(identity)
+        if observation is None:
+            return False
+        self._validate_binding(recorded, identity, observation, semantic=migrated)
+        return True
+
     def native_completed(self, context):
         """Recover an index from a native effective-contract signed receipt.
 
         Reconstruct the original signed context, including proven encoding
         variants, without publishing aliases or opening numerical artifacts.
         """
+        build = self._build_admission()
+        if not self._current_provenance(context):
+            return None
         matches = []
         for identity in self.store.existing_completed_identities(seed=context["seed"], target=context["target"]):
-            if not self._native_context_matches(context, identity):
+            migrated = self._migration_admitted(self.store._path(identity), context, identity, build)
+            if not migrated and not self._native_context_matches(context, identity):
                 continue
             complete = self.store.with_win_rate(identity, self.store.read(identity))
             if complete is not None:
-                self._validate_binding(context, identity, complete)
+                self._validate_binding(context, identity, complete, semantic=migrated)
                 matches.append((identity, complete))
         if matches and any(item[1] != matches[0][1] for item in matches[1:]):
             raise ValueError("Oracle same effective contract has conflicting native Replay receipts")
         return matches[0] if matches else None
 
     def publish(self, context: Mapping[str, Any], identity: Mapping[str, Any],
-                observation: Mapping[str, Any]) -> None:
+                observation: Mapping[str, Any], *, inspection: OracleReuseInspection | None = None) -> None:
+        build = self._build_admission()
+        if inspection is not None and (
+                inspection.decision != "REUSE" or inspection.identity != dict(identity)
+                or inspection.observation != dict(observation)
+                or dict(inspection.origin_pins) != self._origin_pins(identity)):
+            raise ValueError("Oracle completed origin changed after inspection")
+        if not self._current_provenance(context):
+            raise ValueError("Oracle cannot publish an unknown current implementation context")
         # Never turn a caller's metric dictionary into evidence. Resolve the
         # actual signed origin, including any immutable metric supplement.
         origin = self.store.read(identity)
         if origin is None or self.store.with_win_rate(identity, origin) != dict(observation):
             raise ValueError("Oracle cannot index an unverified completed Replay")
-        self._validate_binding(context, identity, observation)
+        result_contract = oracle_result_contract(context)
+        migrated = self._migration_admitted(self.store._path(identity), context, identity, build)
+        current_signed = (
+            (identity.get("replay_policy") or {}).get("effective_result_contract_sha256") == result_contract.sha256
+            and self._native_context_matches(context, identity)
+        )
+        reviewed = self._native_context_matches(context, identity)
+        if not (migrated or current_signed or reviewed):
+            raise ValueError("Oracle origin lacks a verified result-contract adoption proof")
+        self._validate_binding(context, identity, observation, semantic=migrated or current_signed)
         path = self._path(context)
-        payload = {"schema": _SCHEMA, "context": dict(context),
+        admission = {
+            "kind": ("verified_build_transition" if migrated else
+                     "current_signed_producer" if current_signed else "reviewed_legacy_source"),
+            "build_attestation_sha256": canonical_json_sha256(build),
+            "context_sha256": canonical_json_sha256(context),
+            "result_contract_sha256": result_contract.sha256,
+            "origin_identity_sha256": canonical_json_sha256(identity),
+            "observation_sha256": canonical_json_sha256(observation),
+            "origin_pins": self._origin_pins(identity),
+        }
+        payload = {"schema": _RESULT_INDEX_SCHEMA, "context": dict(context),
+                   "result_contract": result_contract.as_payload(), "admission": admission,
                    "origin_identity": dict(identity),
                    "observation_sha256": canonical_json_sha256(observation)}
         path.parent.mkdir(parents=True, exist_ok=True)
         with exclusive_file_lock(path.with_name("." + path.name + ".lock")):
+            if self._origin_pins(identity) != admission["origin_pins"]:
+                raise ValueError("Oracle completed origin changed before adoption")
             current = self.read(context)
             if current is not None:
                 if current[1] != dict(observation):
                     raise ValueError("Oracle same effective contract has conflicting completed results")
-                return
+                if path.is_file():
+                    return
             temporary = path.with_name("." + path.name + "." + uuid4().hex + ".tmp")
             try:
                 temporary.write_text(json.dumps({**payload, "reference_sha256": canonical_json_sha256(payload)},
                     ensure_ascii=False, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+                if self._origin_pins(identity) != admission["origin_pins"]:
+                    raise ValueError("Oracle completed origin changed during adoption")
                 atomic_replace_with_retry(temporary, path)
             finally:
                 temporary.unlink(missing_ok=True)

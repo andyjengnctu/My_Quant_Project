@@ -7,12 +7,16 @@ import sys
 import time
 import zipfile
 from pathlib import Path, PurePosixPath
+from dataclasses import dataclass
+from hashlib import sha256
+import json
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from core.console_report import project_relative_display_path
+from core.file_integrity import atomic_replace_with_retry
 from core.runtime_utils import has_help_flag, get_taipei_now, resolve_cli_program_name, run_cli_entrypoint, validate_cli_args
 
 HELP_DESCRIPTION = "清除 Python 快取、封存舊 package ZIP，並把目前 working tree 的 tracked / untracked 非忽略檔打成乾淨 ZIP。新 package 會包含 reduced dataset；舊 package 移入 arch/ 時會自動移除 reduced dataset 以節省空間。可選擇先 commit，再於打包後執行 test suite。"
@@ -26,6 +30,75 @@ COMMIT_MESSAGE_OPTION = "--commit-message"
 RUN_TEST_SUITE_OPTION = "--run-test-suite"
 CACHE_CLEANUP_MAX_ATTEMPTS = 4
 CACHE_CLEANUP_RETRY_SECONDS = 0.05
+
+
+@dataclass(frozen=True)
+class FrozenPackageSnapshot:
+    path: Path
+    members: dict[str, str]
+    zip_sha256: str
+
+
+def freeze_package_snapshot(zip_path: Path) -> FrozenPackageSnapshot:
+    """Capture the already written package; never recollect the working tree."""
+    with zipfile.ZipFile(zip_path) as archive:
+        names = archive.namelist()
+        if len(set(names)) != len(names):
+            raise RuntimeError("package contains duplicate members")
+        members = {name: sha256(archive.read(name)).hexdigest() for name in names}
+    return FrozenPackageSnapshot(zip_path, members, sha256(zip_path.read_bytes()).hexdigest())
+
+
+def verify_frozen_package(snapshot: FrozenPackageSnapshot) -> None:
+    if sha256(snapshot.path.read_bytes()).hexdigest() != snapshot.zip_sha256:
+        raise RuntimeError("frozen package changed during formal verification")
+    for name, expected in snapshot.members.items():
+        path = PROJECT_ROOT / name
+        if not path.is_file() or sha256(path.read_bytes()).hexdigest() != expected:
+            raise RuntimeError(f"packaged source changed during formal verification: {name}")
+
+
+def finalize_frozen_package(snapshot: FrozenPackageSnapshot, *, attestation: dict,
+                            evidence_files: dict[str, dict] | None = None) -> Path:
+    """Add only the verified certificate to the original immutable member set."""
+    from services.research.oracle_build_attestation import ATTESTATION_RELATIVE_PATH
+    verify_frozen_package(snapshot)
+    certificate = (json.dumps(attestation, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    additions = {ATTESTATION_RELATIVE_PATH: certificate}
+    for name, record in (evidence_files or {}).items():
+        expected = dict(attestation.get("evidence_artifacts") or {}).get(name)
+        if (not name.startswith("outputs/local_regression/oracle_contract/evidence/")
+                or ".." in PurePosixPath(name).parts or "\\" in name or expected != record.get("sha256")):
+            raise RuntimeError("invalid Oracle package evidence reference")
+        content = Path(record["path"]).read_bytes()
+        if sha256(content).hexdigest() != expected:
+            raise RuntimeError("Oracle package evidence changed during verification")
+        additions[name] = content
+    pending = snapshot.path.with_suffix(".zip.certifying")
+    try:
+        with zipfile.ZipFile(snapshot.path) as original, zipfile.ZipFile(
+            pending, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9,
+        ) as finalized:
+            for member in original.infolist():
+                if member.filename == ATTESTATION_RELATIVE_PATH:
+                    raise RuntimeError("source package already contains an Oracle certificate")
+                finalized.writestr(member, original.read(member.filename))
+            for name, content in additions.items():
+                finalized.writestr(name, content)
+        with zipfile.ZipFile(pending) as archive:
+            if set(archive.namelist()) != set(snapshot.members) | set(additions):
+                raise RuntimeError("finalized package member set changed")
+            for name, expected in snapshot.members.items():
+                if sha256(archive.read(name)).hexdigest() != expected:
+                    raise RuntimeError(f"finalized package changed frozen source: {name}")
+            for name, content in additions.items():
+                if archive.read(name) != content:
+                    raise RuntimeError("finalized package certificate/evidence mismatch")
+        verify_frozen_package(snapshot)
+        atomic_replace_with_retry(pending, snapshot.path)
+    finally:
+        pending.unlink(missing_ok=True)
+    return snapshot.path
 
 
 def _run_git(*args: str) -> subprocess.CompletedProcess[str]:
@@ -293,6 +366,24 @@ def _run_test_suite() -> None:
         raise RuntimeError(f"test_suite 執行失敗，exit code={completed.returncode}")
 
 
+def create_package_snapshot() -> FrozenPackageSnapshot:
+    """Write and freeze the sole pre-test source snapshot."""
+    branch_name = _get_current_branch_name()
+    branch_label = _sanitize_filename_component(branch_name)
+    head_sha = _get_head_short_sha()
+    removed_cache_dirs, removed_pyc_files = _remove_python_caches()
+    moved_count, stripped_member_count = _archive_existing_root_package_zips()
+    package_paths = _collect_package_paths()
+    zip_path = _build_zip(branch_label, head_sha, package_paths)
+
+    print(f"[package_zip] branch={branch_name} sha={head_sha}")
+    print(f"[package_zip] removed __pycache__={removed_cache_dirs} *.pyc={removed_pyc_files}")
+    print(f"[package_zip] archived old root zips={moved_count} stripped_reduced_members={stripped_member_count}")
+    print(f"[package_zip] packaged files={len(package_paths)}")
+    print(f"[package_zip] output={project_relative_display_path(zip_path, project_root=PROJECT_ROOT)}")
+    return freeze_package_snapshot(zip_path)
+
+
 def main(argv=None) -> int:
     parsed = _parse_cli_args(argv)
     if parsed["help"]:
@@ -308,19 +399,7 @@ def main(argv=None) -> int:
         elif not committed:
             print("[package_zip] commit=skip (working tree clean)")
 
-    branch_name = _get_current_branch_name()
-    branch_label = _sanitize_filename_component(branch_name)
-    head_sha = _get_head_short_sha()
-    removed_cache_dirs, removed_pyc_files = _remove_python_caches()
-    moved_count, stripped_member_count = _archive_existing_root_package_zips()
-    package_paths = _collect_package_paths()
-    zip_path = _build_zip(branch_label, head_sha, package_paths)
-
-    print(f"[package_zip] branch={branch_name} sha={head_sha}")
-    print(f"[package_zip] removed __pycache__={removed_cache_dirs} *.pyc={removed_pyc_files}")
-    print(f"[package_zip] archived old root zips={moved_count} stripped_reduced_members={stripped_member_count}")
-    print(f"[package_zip] packaged files={len(package_paths)}")
-    print(f"[package_zip] output={project_relative_display_path(zip_path, project_root=PROJECT_ROOT)}")
+    create_package_snapshot()
 
     test_suite_summary = "not_run"
     if parsed.get("run_test_suite"):

@@ -429,25 +429,15 @@ def validate_package_zip_commit_test_suite_orchestration_case(_base_params):
             ),
         )
 
-    run_bundle_source = (Path(__file__).resolve().parents[2] / "apps" / "run_bundle.py").read_text(encoding="utf-8")
-    commit_marker = 'print(f"[3/5] Commit current snapshot: {message}")'
-    package_marker = 'print("[4/5] Run package_zip.py before formal tests")'
-    test_marker = 'print("[5/5] Run test_suite.py after package")'
-    delivery_first_order = (
-        commit_marker in run_bundle_source
-        and package_marker in run_bundle_source
-        and test_marker in run_bundle_source
-        and run_bundle_source.index(commit_marker)
-        < run_bundle_source.index(package_marker)
-        < run_bundle_source.index(test_marker)
+    # AI: exercise ordering, failure preservation and final publication through
+    # the entry point. Import spelling / progress wording are not its contract.
+    from .check_result_utils import run_unittest_capability_cases
+    from .test_run_bundle import RunBundleTests
+    bundle_rows, bundle_summary = run_unittest_capability_cases(
+        case_id, "run_bundle_delivery", [RunBundleTests],
     )
-    run_bound_checks(
-        check_true,
-        (
-            ('run_bundle_commits_and_packages_before_formal_test', delivery_first_order,),
-            ('run_bundle_formal_failure_keeps_prebuilt_delivery_snapshot', 'run_cmd(["git", "commit", "-m", message]' in run_bundle_source and 'run_cmd([sys.executable, "apps/package_zip.py"]' in run_bundle_source and ('run_cmd([sys.executable, "apps/test_suite.py"]' in run_bundle_source) and (run_bundle_source.index('run_cmd(["git", "commit", "-m", message]') < run_bundle_source.index('run_cmd([sys.executable, "apps/package_zip.py"]') < run_bundle_source.index('run_cmd([sys.executable, "apps/test_suite.py"]')),),
-        ),
-    )
+    results.extend(bundle_rows)
+    summary["run_bundle_delivery"] = bundle_summary
 
     summary["checks"] = len(results)
     return results, summary

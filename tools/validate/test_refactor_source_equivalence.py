@@ -138,26 +138,74 @@ class SourceInventoryProofTests(unittest.TestCase):
         legacy_parts = {name: replay._source_owner_payload(ROOT / name)
                         for name in execution_source_inventory("replay")
                         if name not in removed and name != benchmark}
+        legacy_digest = canonical_json_sha256(legacy_parts)
+        replay.replay_implementation_sha256.cache_clear()
+        replay.portfolio_candidate_execution_sha256.cache_clear()
         scoped = replay.replay_implementation_sha256(observation_scope=ORACLE_STRATEGY_OBSERVATION_SCOPE)
-        self.assertEqual(canonical_json_sha256(legacy_parts), scoped)
+        # The extracted current observer is admitted by the new build proof.
+        # It must NOT inherit the older whole-consumer AST certificate.
+        self.assertNotEqual(legacy_digest, scoped)
         self.assertNotEqual(replay.replay_implementation_sha256(), scoped)
+        self.assertFalse(replay.oracle_observation_equivalence_proven())
+        current_consumer_records = {
+            name: replay._source_owner_attestation(ROOT / name)[1]
+            for name in _ORACLE_OBSERVATION_CONSUMERS
+        }
+        self.assertNotEqual(_ORACLE_OBSERVATION_CONSUMERS, current_consumer_records)
+
+        # Isolate the digest-only historical approval records to exercise the
+        # original mapping. This fixture does not certify today's consumers;
+        # their actual records above must continue to fail the old proof.
+        original_attestation = replay._source_owner_attestation
+        def approved_consumer_fixture(path, **kwargs):
+            payload, digest = original_attestation(path, **kwargs)
+            relative = Path(path).relative_to(ROOT).as_posix()
+            return payload, _ORACLE_OBSERVATION_CONSUMERS.get(relative, digest)
+
         proof = _REVIEWED_SOURCE_INVENTORIES["portfolio_candidates"]
-        for mode in ("daily_atr_limit_v2", "daily_atr_limit_common_filters_v2"):
-            parts = {"daily_execution_contract": mode, **proof["baseline"], benchmark: _ORACLE_BENCHMARK_SOURCE[1]}
-            if mode == "daily_atr_limit_common_filters_v2":
-                optional = "core/daily_common_entry_filters.py"
-                parts[optional] = _REVIEWED_SOURCE_INVENTORIES["portfolio_full_filters"]["baseline"][optional]
-            current = replay.portfolio_candidate_execution_sha256(
-                daily_execution_contract=mode, observation_scope=ORACLE_STRATEGY_OBSERVATION_SCOPE)
-            self.assertEqual(canonical_json_sha256(parts), current)
-            self.assertNotEqual(replay.portfolio_candidate_execution_sha256(daily_execution_contract=mode), current)
+        try:
+            replay.replay_implementation_sha256.cache_clear()
+            replay.portfolio_candidate_execution_sha256.cache_clear()
+            with patch.object(replay, "_source_owner_attestation", approved_consumer_fixture):
+                historical = replay.replay_implementation_sha256(
+                    observation_scope=ORACLE_STRATEGY_OBSERVATION_SCOPE)
+                self.assertEqual(legacy_digest, historical)
+                self.assertNotEqual(replay.replay_implementation_sha256(), historical)
+                for mode in ("daily_atr_limit_v2", "daily_atr_limit_common_filters_v2"):
+                    parts = {"daily_execution_contract": mode, **proof["baseline"],
+                             benchmark: _ORACLE_BENCHMARK_SOURCE[1]}
+                    if mode == "daily_atr_limit_common_filters_v2":
+                        optional = "core/daily_common_entry_filters.py"
+                        parts[optional] = _REVIEWED_SOURCE_INVENTORIES["portfolio_full_filters"]["baseline"][optional]
+                    historical = replay.portfolio_candidate_execution_sha256(
+                        daily_execution_contract=mode, observation_scope=ORACLE_STRATEGY_OBSERVATION_SCOPE)
+                    self.assertEqual(canonical_json_sha256(parts), historical)
+                    self.assertNotEqual(replay.portfolio_candidate_execution_sha256(daily_execution_contract=mode), historical)
+        finally:
+            replay.replay_implementation_sha256.cache_clear()
+            replay.portfolio_candidate_execution_sha256.cache_clear()
+
         evidence = {name: value if isinstance(value, str) else value[0]
                     for name, value in proof["current"].items()}
         evidence.update(_ORACLE_OBSERVATION_CONSUMERS)
         evidence[benchmark] = _ORACLE_BENCHMARK_SOURCE[0]
-        with TemporaryDirectory() as external:
-            self.assertEqual(evidence, project_oracle_observation_sources(
-                evidence, scope="portfolio_candidates", project_root=external))
+        for scope in ("replay_numerics", "portfolio_candidates"):
+            with self.subTest(scope=scope):
+                approved = {**evidence, "@execution_sources":
+                            _REVIEWED_SOURCE_INVENTORIES[scope]["current"]["@execution_sources"]}
+                self.assertNotEqual(approved, project_oracle_observation_sources(
+                    approved, scope=scope, project_root=ROOT))
+                current = {**approved, **current_consumer_records}
+                self.assertEqual(current, project_oracle_observation_sources(
+                    current, scope=scope, project_root=ROOT))
+                for owner in (*_ORACLE_OBSERVATION_CONSUMERS, benchmark, "@execution_sources"):
+                    with self.subTest(changed=owner):
+                        changed = {**approved, owner: "0" * 64}
+                        self.assertEqual(changed, project_oracle_observation_sources(
+                            changed, scope=scope, project_root=ROOT))
+                with TemporaryDirectory() as external:
+                    self.assertEqual(approved, project_oracle_observation_sources(
+                        approved, scope=scope, project_root=external))
 
     def test_full_oracle_teacher_matches_original_inventory_and_tracks_contract_helper(self):
         proof = _REVIEWED_SOURCE_INVENTORIES["full_oracle_teacher"]

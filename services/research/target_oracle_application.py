@@ -11,7 +11,9 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from core.audit_policy import get_reusable_audit_definitions
-from services.audit.target_oracle_romd import inspect_oracle_parameter_prerequisites
+from services.audit.target_oracle_romd import (
+    inspect_oracle_parameter_prerequisites, require_oracle_execution_build,
+)
 
 
 def get_formal_oracle_definition(module_id: str):
@@ -56,6 +58,7 @@ def ensure_authorized_oracle_parameters(
     )
 
     root = Path(project_root).resolve()
+    require_oracle_execution_build(root)
     planned = approved_plan.get("parameter_plans")
     if not isinstance(planned, Mapping):
         raise RuntimeError("Oracle 缺少正式參數家族檢查計畫")

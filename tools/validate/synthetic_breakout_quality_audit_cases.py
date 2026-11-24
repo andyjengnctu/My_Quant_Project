@@ -1561,9 +1561,15 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     from .test_oracle_benchmark_scope import OracleBenchmarkScopeTests
     from .test_oracle_completed_reuse import OracleCompletedReuseTests
     from .test_mintrade_encoding_projection import MinTradeEncodingProjectionTests
+    from .test_oracle_result_contract import OracleResultContractTests
+    from .test_oracle_build_attestation import OracleBuildAttestationTests
+    from .test_oracle_numerical_sources import OracleNumericalSourceTests
+    from .test_oracle_truth_adoption import OracleTruthAdoptionTests, OracleRuntimeBuildGateTests
     oracle_rows, oracle_summary = run_unittest_capability_cases(
         case_id, "oracle_reuse_scope", [OracleBenchmarkScopeTests, OracleCompletedReuseTests,
-                                      MinTradeEncodingProjectionTests],
+                                      MinTradeEncodingProjectionTests, OracleResultContractTests,
+                                      OracleBuildAttestationTests, OracleTruthAdoptionTests,
+                                      OracleRuntimeBuildGateTests, OracleNumericalSourceTests],
     )
     results.extend(oracle_rows)
     summary["oracle_reuse_scope_tests"] = oracle_summary

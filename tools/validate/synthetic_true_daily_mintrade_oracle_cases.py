@@ -13,7 +13,8 @@ import copy
 import json
 import shutil
 from tempfile import TemporaryDirectory
-from unittest import TestCase, main
+from unittest import main
+from tools.validate.oracle_fixture_build import OracleFixtureTestCase as TestCase
 from unittest.mock import patch
 
 import numpy as np
@@ -260,9 +261,14 @@ class TrueDailyUniversalOracleCases(HistoricalMinReceiptFixture):
                 self.assertEqual(scores, score2)
                 self.assertEqual(proof2["source_reuse_status"], "REUSE")
 
+                from services.research.oracle_artifact_contract import source_calculation_contract
+                from services.research.target_oracle_application import get_formal_oracle_definition
+                source = source_calculation_contract(
+                    recipe="daily_trade_path_true_net_pnl", profile_id=PROFILE, horizon=None,
+                    model_architecture=get_formal_oracle_definition("breakout_quality").source["model_architecture"],
+                )
                 execution = {
-                    "source_contract": {"recipe": "daily_trade_path_true_net_pnl",
-                        "feature_provider": {"profile_id": PROFILE}, "horizon_sessions": None},
+                    "source_contract": source,
                     "dataset": "full", "price_sha256": "b" * 64,
                     "param_sha256": "a" * 64, "seed": 693545351,
                     "start_date": "2021-01-01", "end_date": "2021-01-05",

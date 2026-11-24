@@ -17,7 +17,8 @@ import numpy as np
 import sys
 import tempfile
 import pandas as pd
-from unittest import TestCase, main
+from unittest import main
+from tools.validate.oracle_fixture_build import OracleFixtureTestCase as TestCase
 from unittest.mock import patch
 
 
@@ -3887,7 +3888,7 @@ class OracleReplayRunReasonEvidenceCases(TestCase):
 class OracleOnePlanRealCacheCases(TestCase):
     """Actual signed replay receipts, a single pre-execution table and NO truth on reuse."""
 
-    def _fixture(self, root):
+    def _fixture(self, root, *, seed=693545351):
         from services.audit.oracle_replay_artifacts import OracleReplayStore, replay_identity
         original = _ACTIVE_ORACLE_DEFINITION
         definition = replace(original, dimensions={**original.dimensions,
@@ -3901,7 +3902,7 @@ class OracleOnePlanRealCacheCases(TestCase):
         plan = oracle._oracle_comparison_plan(definition)
         contracts = oracle._resolve_oracle_target_score_contracts(definition, settings, plan)
         bench = SimpleNamespace(benchmark_id="end_to_end_v1")
-        seed, price_sha, param_sha = 693545351, "a" * 64, "b" * 64
+        price_sha, param_sha = "a" * 64, "b" * 64
         start, end = str(settings.start_date), str(definition.dimensions["oracle_evaluation_end_date"])
         source_proof = ("c" * 64, 20, start, end)
         cohort = {
@@ -3925,6 +3926,27 @@ class OracleOnePlanRealCacheCases(TestCase):
             **({} if diff is None else {"delta_romd_vs_c96": diff}),
         }
         for target, romd in (("C96", 8.0), ("R40", 18.0)):
+            from services.research.oracle_artifact_contract import (
+                execution_context, source_calculation_contract, dataset_input_contract,
+            )
+            source_spec = None
+            if target != "C96":
+                recipe, provider = plan["recipes"][target]
+                source_spec = source_calculation_contract(
+                    recipe=recipe, profile_id=str(definition.source[provider]),
+                    model_architecture=str(definition.source["model_architecture"]))
+            context = execution_context(
+                dataset=settings.dataset, price_sha256=price_sha, param_sha256=param_sha,
+                seed=seed, target=target, start=start, end=end, cutoff=str(settings.end_date),
+                max_positions=settings.max_positions,
+                evaluation_mode=str(definition.dimensions["evaluation_mode"]),
+                ranking_policy=str(exact.dl_runtime_mode), ranking_options=dict(exact.dl_runtime_options),
+                replay_policy={**common, "oracle_parity_implementation": oracle.ORACLE_PARITY_IMPLEMENTATION,
+                               "period_stats_implementation": oracle.PERIOD_STATS_IMPLEMENTATION},
+                score_contract=contracts.get(target), source_contract=source_spec,
+                dataset_inputs=dataset_input_contract(root, str(definition.source["filter_id"])),
+                execution_gate=None,
+            )
             args = {} if target == "C96" else dict(
                 score_sha256="d" * 64,
                 score_contract={**contracts[target],
@@ -3934,7 +3956,7 @@ class OracleOnePlanRealCacheCases(TestCase):
             )
             arm_policy = oracle._arm_replay_policy(
                 definition, plan=plan, target=target, replay_policy=common,
-                project_root=root, **args,
+                project_root=root, effective_context=context, **args,
             )
             identity = replay_identity(
                 dataset=settings.dataset, dataset_sha256=price_sha,
@@ -5394,7 +5416,7 @@ class OracleSingleOwnerExecutionCases(TestCase):
             with self._context(root, fixture):
                 for approval in (None, lambda _view: self.fail("BLOCKED cannot ask for approval")):
                     with self.subTest(interactive=approval is not None), self.assertRaisesRegex(
-                            oracle.OracleBlockedError, "multiple same-window scored replays"):
+                            oracle.OracleBlockedError, "conflict|multiple same-window scored replays"):
                         oracle.build_report(fixture[0], project_root=root, quiet=True,
                                             preflight_approval=approval)
             self.assertEqual({path: path.read_bytes() for path in root.rglob("*.json")}, original)
@@ -6204,14 +6226,10 @@ class OracleEightSeedParameterDependencyRegressionCases(TestCase):
                 OracleOnePlanRealCacheCases()._fixture(root))
             seeds = get_robustness_benchmark_policy_snapshot("end_to_end_v2")["resolved_seeds"]
             store = OracleReplayStore(root, definition.output_subdir)
-            # Isolated synthetic receipts from the same source contract; the
-            # production system never copies one seed's real P16 or Replay.
-            for target in ("C96", "R40"):
-                identity, = store.existing_completed_identities(seed=old_seed, target=target)
-                original = store.read(identity)
-                for seed in seeds[1:4]:
-                    store.write({**identity, "seed": seed}, {**original, "seed": seed},
-                                origin="synthetic_8seed_upgrade_reuse")
+            # Each isolated seed has its own signed effective execution key.
+            # Copying a seed field would retain the wrong seed's provenance.
+            for seed in seeds[1:4]:
+                OracleOnePlanRealCacheCases()._fixture(root, seed=seed)
             fixture = self._fixture(ready_seeds=set(seeds[:4]), benchmark_id="end_to_end_v2")
             fixture["robustness"] = SimpleNamespace(benchmark_id="end_to_end_v2")
             def prepare(_definition, *, root, parameter_paths, **_kwargs):

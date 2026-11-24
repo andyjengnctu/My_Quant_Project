@@ -8,7 +8,7 @@ from __future__ import annotations
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
-from unittest import TestCase
+from tools.validate.oracle_fixture_build import OracleFixtureTestCase as TestCase
 from unittest.mock import patch
 
 from core.audit_policy import get_reusable_audit_definitions
