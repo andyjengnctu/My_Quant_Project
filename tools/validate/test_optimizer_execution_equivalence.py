@@ -108,6 +108,17 @@ class OptimizerExecutionEquivalenceTests(unittest.TestCase):
                 self.assertIsInstance(expected, str)
                 self.assertNotEqual(calculate(changed), expected)
                 self.assertEqual(parse.call_count, 2)
+                # Exercise the real group reader as well: bypassing this cache
+                # at the call site must not reintroduce repeated AST work.
+                scope = 'portfolio_candidates'
+                snapshot = proof._reviewed_source_group(scope)
+                admitted = sum(relative in snapshot['current']
+                               and proof._independent_queue_resource_certificate(relative) is not None
+                               for relative in proof._INDEPENDENT_QUEUE_RESOURCE_PREDECESSORS)
+                self.assertGreater(admitted, 0)
+                for _ in range(5):
+                    self.assertEqual(proof._reviewed_source_group(scope), snapshot)
+                self.assertEqual(parse.call_count, 2 + admitted)
         finally:
             calculate.cache_clear()
 
