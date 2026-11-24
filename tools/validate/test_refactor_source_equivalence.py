@@ -107,14 +107,25 @@ class SourceInventoryProofTests(unittest.TestCase):
                 self.assertEqual(actual, executing)
                 self.assertNotIn(original, variants)
 
-    def test_both_candidate_scopes_equal_original_ast_witnesses(self):
-        expected = {
+    def test_candidate_scopes_preserve_reviewed_sources_but_invalidate_corrected_benchmark(self):
+        previous = {
             "daily_atr_limit_v2": "48139e7e98220b53659fc42060761c063c3914942dacd8b038f3c5f591c4d302",
             "daily_atr_limit_common_filters_v2": "1d3791e5965caff6548b6eeada3d571ab0472bf49eedf4fc9c26ab3989ed7803",
         }
         replay.portfolio_candidate_execution_sha256.cache_clear()
-        for mode, prior in expected.items():
-            self.assertEqual(prior, replay.portfolio_candidate_execution_sha256(daily_execution_contract=mode))
+        proof = _REVIEWED_SOURCE_INVENTORIES["portfolio_candidates"]
+        benchmark = "core/portfolio_benchmark.py"
+        self.assertNotIn(benchmark, proof["current"])
+        self.assertNotIn(benchmark, proof["baseline"])
+        for mode, old_digest in previous.items():
+            parts = {"daily_execution_contract": mode, **proof["baseline"],
+                     benchmark: canonical_json_sha256(replay._source_owner_payload(ROOT / benchmark))}
+            if mode == "daily_atr_limit_common_filters_v2":
+                optional = "core/daily_common_entry_filters.py"
+                parts[optional] = _REVIEWED_SOURCE_INVENTORIES["portfolio_full_filters"]["baseline"][optional]
+            current = replay.portfolio_candidate_execution_sha256(daily_execution_contract=mode)
+            self.assertEqual(canonical_json_sha256(parts), current)
+            self.assertNotEqual(old_digest, current)
 
     def test_full_oracle_teacher_matches_original_inventory_and_tracks_contract_helper(self):
         proof = _REVIEWED_SOURCE_INVENTORIES["full_oracle_teacher"]
@@ -153,6 +164,36 @@ class SourceInventoryProofTests(unittest.TestCase):
                     for mode in modes:
                         self.assertNotEqual(original[mode], replay.portfolio_candidate_execution_sha256(daily_execution_contract=mode))
                 replay.portfolio_candidate_execution_sha256.cache_clear()
+
+    def test_min_truth_proof_tracks_added_dependencies_and_all_reviewed_encodings(self):
+        from services.audit import daily_trade40_oracle as truth, mintrade_truth_source_attestation as attestation
+        proof = _REVIEWED_SOURCE_INVENTORIES["mintrade_source_graph"]
+        original = truth._truth_source_sha(ROOT)
+        attestation._mintrade_source_fingerprint_proof.cache_clear()
+        executing, variants = attestation._mintrade_source_fingerprint_proof()
+        self.assertEqual(original, executing)
+        self.assertIn(original, variants)
+        source_values = {name: value if isinstance(value, str) else value[0]
+                         for name, value in proof["current"].items()}
+        for index, encoding in enumerate((None, b"\n", b"\r\n")):
+            projected = project_reviewed_source_inventory(
+                source_values, scope="mintrade_source_graph", source_encoding=encoding,
+            )
+            self.assertEqual(list(projected), list(proof["baseline_order"]))
+            self.assertEqual(projected, {name: value[index] for name, value in proof["baseline"].items()})
+        read_bytes, read_sha = Path.read_bytes, attestation.compute_file_sha256
+        for relative in set(proof["current"]) - set(proof["baseline"]) - {"@execution_sources"}:
+            with self.subTest(helper=relative):
+                target = ROOT / relative
+                changed = read_bytes(target) + b"\n_MIN_SOURCE_MUTATION = True\n"
+                with patch.object(Path, "read_bytes", lambda path: changed if path == target else read_bytes(path)), \
+                     patch.object(attestation, "compute_file_sha256", lambda path: sha256(changed).hexdigest() if Path(path) == target else read_sha(path)):
+                    self.assertNotEqual(original, truth._truth_source_sha(ROOT))
+                    attestation._mintrade_source_fingerprint_proof.cache_clear()
+                    current, altered_variants = attestation._mintrade_source_fingerprint_proof()
+                    self.assertEqual(current, truth._truth_source_sha(ROOT))
+                    self.assertNotIn(original, altered_variants)
+        attestation._mintrade_source_fingerprint_proof.cache_clear()
 
 
 if __name__ == "__main__":

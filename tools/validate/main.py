@@ -162,6 +162,8 @@ def _run_synthetic_suite_with_optional_coverage(
     run_info_file = os.path.join(coverage_dir, "coverage_run_info.json")
     # A retry may share the staging directory, but never an earlier PASS report.
     Path(json_file).unlink(missing_ok=True)
+    completed_receipts_file = Path(coverage_dir) / "synthetic_completed_receipts.json"
+    completed_receipts_file.unlink(missing_ok=True)
 
     from tools.local_regression.common import load_manifest
     from tools.validate.validator_execution import describe_entries, run_parallel, worker_count, merge_coverage
@@ -228,10 +230,22 @@ def _run_synthetic_suite_with_optional_coverage(
             },
             ensure_ascii=False,
         )
-    except recoverable_exceptions as exc:
+    except BaseException as exc:
         raised_exc = exc
         run_info["stderr"] = f"{type(exc).__name__}: {exc}"
         run_info["timed_out"] = isinstance(exc, TimeoutError)
+        completed_results = list(getattr(exc, "completed_results", ()))
+        completed_summaries = list(getattr(exc, "completed_summaries", ()))
+        run_info["synthetic_case_count"] = len(completed_summaries)
+        run_info["synthetic_fail_count"] = sum(row.get("status") == "FAIL" for row in completed_results)
+        run_info["completed_validator_names"] = [item["validator_name"] for item in completed_summaries]
+        # Diagnostics do not satisfy suite_completed or authorize coverage PASS.
+        try:
+            write_json(completed_receipts_file, json.loads(json.dumps({
+                "suite_completed": False, "results": completed_results, "summaries": completed_summaries,
+            }, ensure_ascii=False, default=str)))
+        except Exception as diagnostic_error:
+            run_info["stderr"] += f"\ncompleted_receipts: {type(diagnostic_error).__name__}: {diagnostic_error}"
     finally:
         try:
             cov.stop()

@@ -141,7 +141,7 @@ def build_walk_forward_policy_effective_snapshot(policy: Mapping[str, object]) -
 def build_optimizer_effective_policy_snapshot(policy: Mapping[str, object]) -> dict:
     snapshot = {
         "walk_forward_policy": build_walk_forward_policy_effective_snapshot(policy),
-        "training_score_policy": build_training_score_policy_snapshot(),
+        "training_score_policy": build_training_score_policy_snapshot(model_mode=policy.get("model_mode", "oos")),
         "display_policy": build_display_policy_snapshot(),
         "policy_schema_version": 2,
     }

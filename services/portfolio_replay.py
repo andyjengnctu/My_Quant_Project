@@ -39,7 +39,7 @@ from filters.breakout_quality import runtime as _breakout_quality_runtime_adapte
 
 from core.portfolio_engine import run_portfolio_timeline
 from core.portfolio_entry_policy import (
-    current_daily_execution_contract, daily_execution_uses_common_filters,
+    resolve_portfolio_execution_contract, daily_execution_uses_common_filters,
 )
 from core.portfolio_run_result import append_portfolio_replay_profile
 from core.portfolio_fast_data import (
@@ -76,7 +76,9 @@ def _replay_preparation_key(
     data_dir, records, *, ensemble: bool, raw_universe_required_min_rows,
     keep_trade_logs: bool, use_prepared_cache, write_prepared_cache,
     raw_data_loader=None,
+    execution_contract=None,
 ):
+    execution_contract = resolve_portfolio_execution_contract(execution_contract)
     use_cache, write_cache = _prepared_cache_requested(use_prepared_cache, write_prepared_cache)
     schedule = []
     for record in records:
@@ -98,7 +100,7 @@ def _replay_preparation_key(
         bool(keep_trade_logs), bool(use_cache), bool(write_cache),
         None if raw_data_loader is None else id(raw_data_loader),
     )
-    mode = current_daily_execution_contract()
+    mode = execution_contract.daily_execution_contract
     return key if mode == "legacy_daily_close_v1" else (*key, mode)
 
 
@@ -232,7 +234,9 @@ def _load_contexts_for_active_schedule(
     use_prepared_cache=None,
     write_prepared_cache=None,
     raw_universe_required_min_rows=None,
+    execution_contract=None,
 ):
+    execution_contract = resolve_portfolio_execution_contract(execution_contract)
     use_cache, write_cache = _prepared_cache_requested(use_prepared_cache, write_prepared_cache)
     raw_context_source = None
     if not (use_cache or write_cache):
@@ -258,6 +262,7 @@ def _load_contexts_for_active_schedule(
                     record["params_obj"],
                     verbose=verbose,
                     include_trade_logs=False,
+                    execution_contract=execution_contract,
                 )
             else:
                 context = load_portfolio_market_context(
@@ -267,6 +272,7 @@ def _load_contexts_for_active_schedule(
                     use_prepared_cache=use_cache,
                     write_prepared_cache=write_cache,
                     raw_universe_required_min_rows=raw_universe_required_min_rows,
+                    execution_contract=execution_contract,
                 )
             context = dict(context)
             if not context.get("all_pit_stats_index"):
@@ -303,7 +309,9 @@ def _load_contexts_for_active_ensemble_schedule(
     write_prepared_cache=None,
     raw_universe_required_min_rows=None,
     raw_data_loader=None,
+    execution_contract=None,
 ):
+    execution_contract = resolve_portfolio_execution_contract(execution_contract)
     use_cache, write_cache = _prepared_cache_requested(use_prepared_cache, write_prepared_cache)
     all_members = [member for record in schedule_records for member in (record.get("members") or [])]
     raw_context_source = None
@@ -336,6 +344,7 @@ def _load_contexts_for_active_ensemble_schedule(
                         member["params_obj"],
                         verbose=verbose,
                         include_trade_logs=bool(keep_trade_logs),
+                        execution_contract=execution_contract,
                     )
                 else:
                     context = load_portfolio_market_context(
@@ -347,6 +356,7 @@ def _load_contexts_for_active_ensemble_schedule(
                         include_trade_logs=bool(keep_trade_logs),
                         raw_universe_required_min_rows=raw_universe_required_min_rows,
                         raw_data_loader=raw_data_loader,
+                        execution_contract=execution_contract,
                     )
                 contexts_by_signature[signature] = _prepare_context_for_ensemble_replay(
                     context,
@@ -455,7 +465,8 @@ def _build_portfolio_data_signature(csv_inputs):
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def _build_portfolio_prepared_cache_paths(data_dir, csv_inputs, params, *, include_trade_logs: bool = False, raw_universe_required_min_rows=None):
+def _build_portfolio_prepared_cache_paths(data_dir, csv_inputs, params, *, include_trade_logs: bool = False, raw_universe_required_min_rows=None, execution_contract=None):
+    execution_contract = resolve_portfolio_execution_contract(execution_contract)
     profile_key = infer_dataset_profile_key_from_data_dir(data_dir)
     data_sig = _build_portfolio_data_signature(csv_inputs)
     params_sig = build_portfolio_params_signature(params)
@@ -473,7 +484,7 @@ def _build_portfolio_prepared_cache_paths(data_dir, csv_inputs, params, *, inclu
         "include_trade_logs": bool(include_trade_logs),
         "raw_universe_required_min_rows": coerce_raw_universe_required_min_rows(raw_universe_required_min_rows, allow_none=True),
     }
-    mode = current_daily_execution_contract()
+    mode = execution_contract.daily_execution_contract
     if mode != "legacy_daily_close_v1":
         combined_payload["daily_execution_contract"] = mode
     combined = json.dumps(combined_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -589,7 +600,8 @@ def _resolve_portfolio_prep_workers(raw_data_count: int) -> int:
     return resolve_optimizer_portfolio_prep_workers(raw_data_count)
 
 
-def _load_portfolio_market_context_sequential(data_dir, params, *, verbose=True, raw_universe_required_min_rows=None):
+def _load_portfolio_market_context_sequential(data_dir, params, *, verbose=True, raw_universe_required_min_rows=None, execution_contract=None):
+    execution_contract = resolve_portfolio_execution_contract(execution_contract)
     def vprint(*args, **kwargs):
         if verbose:
             print(*args, **kwargs)
@@ -638,13 +650,14 @@ def _load_portfolio_market_context_sequential(data_dir, params, *, verbose=True,
                     f"(異常OHLCV={invalid_row_count}, 重複日期={duplicate_date_count})"
                 )
 
-            if daily_execution_uses_common_filters(current_daily_execution_contract()):
+            if daily_execution_uses_common_filters(execution_contract.daily_execution_contract):
                 # Daily Full's is_setup is a daily eligibility mask, not a
                 # Breakout entry. Reuse the canonical dynamic-signal producer
                 # instead of inventing standalone Breakout trade history.
                 dynamic, logs, _ = prep_optimizer_stock_data_bundle(
                     df, params, ticker=ticker, include_trade_logs=True,
                     include_pit_stats_index=False,
+                    execution_contract=execution_contract,
                 )
                 all_dfs_fast[ticker] = merge_static_market_with_dynamic(
                     pack_static_market_data(df), dynamic,
@@ -700,7 +713,8 @@ def _load_portfolio_market_context_sequential(data_dir, params, *, verbose=True,
 
 
 
-def _prepare_portfolio_context_from_raw_sequential(raw_data_cache, params, *, verbose=True):
+def _prepare_portfolio_context_from_raw_sequential(raw_data_cache, params, *, verbose=True, execution_contract=None):
+    execution_contract = resolve_portfolio_execution_contract(execution_contract)
     def vprint(*args, **kwargs):
         if verbose:
             print(*args, **kwargs)
@@ -718,6 +732,7 @@ def _prepare_portfolio_context_from_raw_sequential(raw_data_cache, params, *, ve
                 ticker=ticker,
                 include_trade_logs=True,
                 include_pit_stats_index=True,
+                execution_contract=execution_contract,
             )
             all_dfs_fast[ticker] = merge_static_market_with_dynamic(pack_static_market_data(df), dynamic_data)
             all_trade_logs[ticker] = logs
@@ -786,7 +801,8 @@ def _build_in_memory_raw_context_source(data_dir, params_list, *, verbose=True, 
     }
 
 
-def _prepare_portfolio_context_from_in_memory_source(source, params, *, verbose=True, include_trade_logs=False):
+def _prepare_portfolio_context_from_in_memory_source(source, params, *, verbose=True, include_trade_logs=False, execution_contract=None):
+    execution_contract = resolve_portfolio_execution_contract(execution_contract)
     if not source:
         return None
     prep_result = prepare_trial_inputs(
@@ -798,6 +814,7 @@ def _prepare_portfolio_context_from_in_memory_source(source, params, *, verbose=
         include_trade_logs=bool(include_trade_logs),
         include_pit_stats_index=True,
         profile_enabled=False,
+        execution_contract=execution_contract,
     )
     all_dfs_fast = prep_result.get("all_dfs_fast") or {}
     if not all_dfs_fast:
@@ -826,7 +843,9 @@ def load_portfolio_market_context(
     include_trade_logs=None,
     raw_universe_required_min_rows=None,
     raw_data_loader=None,
+    execution_contract=None,
 ):
+    execution_contract = resolve_portfolio_execution_contract(execution_contract)
     ensure_runtime_dirs()
     if not data_dir:
         profile_key = infer_dataset_profile_key_from_data_dir(data_dir)
@@ -843,6 +862,7 @@ def load_portfolio_market_context(
             params,
             verbose=verbose,
             raw_universe_required_min_rows=raw_universe_required_min_rows,
+            execution_contract=execution_contract,
         )
 
     include_trade_logs = _resolve_optional_bool(include_trade_logs, _portfolio_prepared_cache_include_trade_logs())
@@ -855,6 +875,7 @@ def load_portfolio_market_context(
             params,
             include_trade_logs=include_trade_logs,
             raw_universe_required_min_rows=raw_universe_required_min_rows,
+            execution_contract=execution_contract,
         )
     if use_prepared_cache and cache_paths is not None:
         cached_context = _load_portfolio_prepared_cache(cache_paths)
@@ -883,7 +904,7 @@ def load_portfolio_market_context(
 
     if max_workers <= 1:
         # # (AI註: reduced/small dataset 走單執行緒，但直接吃 raw cache，避免 process pool 冷啟動與重讀 CSV)
-        context = _prepare_portfolio_context_from_raw_sequential(raw_data_cache, params, verbose=verbose)
+        context = _prepare_portfolio_context_from_raw_sequential(raw_data_cache, params, verbose=verbose, execution_contract=execution_contract)
         if write_prepared_cache and cache_paths is not None:
             _save_portfolio_prepared_cache(cache_paths, context)
         return context
@@ -894,6 +915,7 @@ def load_portfolio_market_context(
         default_max_workers=max_workers,
         include_trade_logs=bool(include_trade_logs),
         include_pit_stats_index=True,
+        execution_contract=execution_contract,
     )
     prep_failures = prep_result.get("prep_failures") or []
     load_log_path = write_issue_log(
@@ -932,7 +954,8 @@ def load_portfolio_market_context(
     return context
 
 
-def run_portfolio_simulation_prepared(all_dfs_fast, all_trade_logs, sorted_dates, params, max_positions=5, enable_rotation=False, start_year=None, end_year=None, start_date=None, end_date=None, benchmark_ticker=PORTFOLIO_DEFAULT_BENCHMARK_TICKER, verbose=True, pit_stats_index=None, replay_counts=None, replay_execution_rows=None, replay_selector_trace_rows=None):
+def run_portfolio_simulation_prepared(all_dfs_fast, all_trade_logs, sorted_dates, params, max_positions=5, enable_rotation=False, start_year=None, end_year=None, start_date=None, end_date=None, benchmark_ticker=PORTFOLIO_DEFAULT_BENCHMARK_TICKER, verbose=True, pit_stats_index=None, replay_counts=None, replay_execution_rows=None, replay_selector_trace_rows=None, execution_contract=None):
+    execution_contract = resolve_portfolio_execution_contract(execution_contract)
     resolved_start_year = resolve_default_portfolio_start_year() if start_year is None else int(start_year)
     if start_date is not None or end_date is not None:
         resolved_sorted_dates = _filter_market_dates_by_date_range(sorted_dates, start_date=start_date, end_date=end_date)
@@ -960,6 +983,7 @@ def run_portfolio_simulation_prepared(all_dfs_fast, all_trade_logs, sorted_dates
         replay_counts=replay_counts,
         replay_execution_rows=replay_execution_rows,
         replay_selector_trace_rows=replay_selector_trace_rows,
+        execution_contract=execution_contract,
     )
     return append_portfolio_replay_profile(result, pf_profile)
 
@@ -984,7 +1008,9 @@ def run_portfolio_simulation_with_param_schedule(
     replay_execution_rows=None,
     replay_selector_trace_rows=None,
     replay_preparation_cache=None,
+    execution_contract=None,
 ):
+    execution_contract = resolve_portfolio_execution_contract(execution_contract)
     schedule_records = build_active_param_objects_from_payload(rolling_payload, fixed_risk=fixed_risk)
     raw_universe_required_min_rows = resolve_raw_universe_required_min_rows(rolling_payload)
     if not schedule_records:
@@ -1011,6 +1037,7 @@ def run_portfolio_simulation_with_param_schedule(
         raw_universe_required_min_rows=raw_universe_required_min_rows,
         keep_trade_logs=False, use_prepared_cache=use_prepared_cache,
         write_prepared_cache=write_prepared_cache,
+        execution_contract=execution_contract,
     )
     contexts_by_effective_date = _load_session_replay_preparation(
         replay_preparation_cache, preparation_key,
@@ -1019,6 +1046,7 @@ def run_portfolio_simulation_with_param_schedule(
             use_prepared_cache=use_prepared_cache,
             write_prepared_cache=write_prepared_cache,
             raw_universe_required_min_rows=raw_universe_required_min_rows,
+            execution_contract=execution_contract,
         ),
     )
     merged_dates = _merge_context_market_dates(contexts_by_effective_date)
@@ -1091,6 +1119,7 @@ def run_portfolio_simulation_with_param_schedule(
         replay_counts=replay_counts,
         replay_execution_rows=replay_execution_rows,
         replay_selector_trace_rows=replay_selector_trace_rows,
+        execution_contract=execution_contract,
     )
     prep_wall_sec = sum(float(ctx.get("prep_wall_sec", 0.0)) for ctx in contexts_by_effective_date.values())
     pf_profile.update({
@@ -1134,7 +1163,9 @@ def run_portfolio_simulation_with_param_ensemble(
     replay_selector_trace_rows=None,
     raw_data_loader=None,
     replay_preparation_cache=None,
+    execution_contract=None,
 ):
+    execution_contract = resolve_portfolio_execution_contract(execution_contract)
     schedule_records = build_active_param_ensemble_objects_from_payload(ensemble_payload, fixed_risk=fixed_risk)
     raw_universe_required_min_rows = resolve_raw_universe_required_min_rows(ensemble_payload)
     if not schedule_records:
@@ -1178,6 +1209,7 @@ def run_portfolio_simulation_with_param_ensemble(
         keep_trade_logs=return_context, use_prepared_cache=use_prepared_cache,
         write_prepared_cache=write_prepared_cache,
         raw_data_loader=raw_data_loader,
+        execution_contract=execution_contract,
     )
     contexts_by_effective_date = _load_session_replay_preparation(
         replay_preparation_cache, preparation_key,
@@ -1188,6 +1220,7 @@ def run_portfolio_simulation_with_param_ensemble(
             write_prepared_cache=write_prepared_cache,
             raw_universe_required_min_rows=raw_universe_required_min_rows,
             raw_data_loader=raw_data_loader,
+            execution_contract=execution_contract,
         ),
     )
     merged_dates = _merge_context_market_dates_from_ensemble(contexts_by_effective_date)
@@ -1272,6 +1305,7 @@ def run_portfolio_simulation_with_param_ensemble(
         replay_counts=replay_counts,
         replay_execution_rows=replay_execution_rows,
         replay_selector_trace_rows=replay_selector_trace_rows,
+        execution_contract=execution_contract,
     )
     prep_wall_sec = sum(float(ctx.get("prep_wall_sec", 0.0)) for contexts in contexts_by_effective_date.values() for ctx in contexts)
     pf_profile.update({
@@ -1303,13 +1337,16 @@ def run_portfolio_simulation(
     verbose=True,
     use_prepared_cache=None,
     write_prepared_cache=None,
+    execution_contract=None,
 ):
+    execution_contract = resolve_portfolio_execution_contract(execution_contract)
     context = load_portfolio_market_context(
         data_dir,
         params,
         verbose=verbose,
         use_prepared_cache=use_prepared_cache,
         write_prepared_cache=write_prepared_cache,
+        execution_contract=execution_contract,
     )
     result = run_portfolio_simulation_prepared(
         context["all_dfs_fast"],
@@ -1325,6 +1362,7 @@ def run_portfolio_simulation(
         benchmark_ticker=benchmark_ticker,
         verbose=verbose,
         pit_stats_index=context.get("all_pit_stats_index"),
+        execution_contract=execution_contract,
     )
     if not result or not isinstance(result[-1], dict):
         raise RuntimeError("portfolio simulation result missing mutable profile payload")

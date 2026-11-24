@@ -7495,7 +7495,7 @@ def validate_market_data_v2_trading_direct_consumer_cutover_contract_case(_base_
     with TemporaryDirectory(prefix="round8_v2_consumer_") as temp_dir:
         root = Path(temp_dir)
         first = publish_trading_v2_consumer_state(
-            root,
+            root, expected_state_fingerprint=None,
             market_date="2026-09-09",
             required_position_tickers=("9999",),
             retained_training_tickers=("2454",),
@@ -7514,7 +7514,7 @@ def validate_market_data_v2_trading_direct_consumer_cutover_contract_case(_base_
         check("consumer_state_training_membership_preserves_positions_and_history", ["0050", "2330", "2454", "9999"], first["training_tickers"])
         check("consumer_state_has_zero_provider_calls", 0, first["provider_calls"])
         second = publish_trading_v2_consumer_state(
-            root,
+            root, expected_state_fingerprint=first["state_fingerprint"],
             market_date="2026-09-09",
             required_position_tickers=(),
             retained_training_tickers=(),
@@ -7568,6 +7568,7 @@ def validate_market_data_v2_trading_direct_consumer_cutover_contract_case(_base_
             return self._relevant_batches
 
     prior_same_target = {
+        "state_fingerprint": "c" * 64,
         "market_date": "2026-09-30",
         "provider_snapshot_fingerprint": "provider-snapshot-fp",
         "required_v2_datasets": ["TaiwanStockPriceAdj", "TaiwanStockPrice"],

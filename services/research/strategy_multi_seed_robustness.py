@@ -4372,6 +4372,7 @@ def _train_one_unit(job: dict[str, Any]) -> dict[str, Any]:
             continue
         try:
             artifacts = validate_strategy_compare_training_artifacts(
+                dataset=str(settings.dataset),
                 project_root=PROJECT_ROOT, source=dl, workflow=workflow, seed=seed,
                 model_dir=candidate_model, research_dir=candidate_research,
                 comparison_start=str(job["comparison_start"]),
@@ -4425,6 +4426,7 @@ def _train_one_unit(job: dict[str, Any]) -> dict[str, Any]:
         if local_version == "CURRENT":
             try:
                 artifacts = validate_strategy_compare_training_artifacts(
+                    dataset=str(settings.dataset),
                     project_root=PROJECT_ROOT, source=dl, workflow=workflow, seed=seed,
                     model_dir=local_model_dir, research_dir=local_research_dir,
                     comparison_start=str(job["comparison_start"]),
@@ -4460,6 +4462,7 @@ def _train_one_unit(job: dict[str, Any]) -> dict[str, Any]:
         model_dir.mkdir(parents=True, exist_ok=True)
         research_dir.mkdir(parents=True, exist_ok=True)
         return run_strategy_compare_training_unit(
+            dataset=str(settings.dataset),
             project_root=PROJECT_ROOT,
             source=dl,
             workflow=workflow,

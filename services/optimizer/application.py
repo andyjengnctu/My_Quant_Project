@@ -77,6 +77,7 @@ from config.training_policy import (
 from core.training_policy import (
     is_optimizer_local_min_review_enabled,
     set_optimizer_runtime_model_mode,
+    optimizer_runtime_model_mode_scope,
     resolve_optimizer_runtime_model_mode,
 )
 from config.execution_policy import DEFAULT_PORTFOLIO_MAX_POSITIONS, DEFAULT_PORTFOLIO_ROTATION
@@ -278,12 +279,12 @@ def _load_params_summary_or_legacy_sidecar(params_path: str, legacy_summary_path
     return _load_json_file_or_none(legacy_summary_path)
 
 
-def _visible_policy_paramset_paths(policy_paramset_paths: dict) -> dict[str, str]:
+def _visible_policy_paramset_paths(policy_paramset_paths: dict, *, model_mode="oos") -> dict[str, str]:
     from services.optimizer.outer_rolling_policy import get_optimizer_policy_output_label
 
     from services.optimizer.outer_rolling_policy import get_optimizer_paramset_policy_names
 
-    visible_names = tuple(get_optimizer_paramset_policy_names())
+    visible_names = get_optimizer_paramset_policy_names(model_mode=model_mode)
     return {
         get_optimizer_policy_output_label(name): str(policy_paramset_paths[name])
         for name in visible_names
@@ -349,9 +350,9 @@ def _build_best_summary_payload(*, winner_trial, finalist_entry, objective_mode:
         "action": str(action_label),
         "selection_rule": str(selection_rule),
         "compare_only": bool(compare_only),
-        "local_min_review_enabled": bool(is_optimizer_local_min_review_enabled()),
+        "local_min_review_enabled": bool(is_optimizer_local_min_review_enabled(model_mode=walk_forward_policy.get("model_mode"))),
         "local_min_review_mode": str(finalist_entry.get("local_min_review_mode", "exact")),
-        "local_min_exact": bool(finalist_entry.get("local_min_exact", bool(is_optimizer_local_min_review_enabled()))),
+        "local_min_exact": bool(finalist_entry.get("local_min_exact", bool(is_optimizer_local_min_review_enabled(model_mode=walk_forward_policy.get("model_mode"))))),
         "inner_validate_anti_overfit_enabled": bool(OPTIMIZER_INNER_VALIDATE_ANTI_OVERFIT_ENABLED),
         "inner_validate_min_score": float(OPTIMIZER_INNER_VALIDATE_MIN_SCORE),
         "inner_validate_max_rank_percentile": float(OPTIMIZER_INNER_VALIDATE_MAX_RANK_PERCENTILE),
@@ -836,7 +837,7 @@ def _resolve_nonrolling_policy_seed_ensemble_policy(
 
 
 
-def _build_seed_ensemble_member(*, member_index: int, seed: int, best_trial, finalist_entry: dict, params_payload: dict) -> dict:
+def _build_seed_ensemble_member(*, member_index: int, seed: int, best_trial, finalist_entry: dict, params_payload: dict, model_mode=None) -> dict:
     member = {
         "member_index": int(member_index),
         "seed": int(seed),
@@ -849,9 +850,9 @@ def _build_seed_ensemble_member(*, member_index: int, seed: int, best_trial, fin
         member["local_min_score"] = float(finalist_entry.get("local_min_score", 0.0))
         member["retention"] = float(finalist_entry.get("local_retention", 0.0))
         member["local_gate"] = bool(finalist_entry.get("gate_pass", False))
-        member["local_min_review_enabled"] = bool(finalist_entry.get("local_min_review_enabled", is_optimizer_local_min_review_enabled()))
+        member["local_min_review_enabled"] = bool(finalist_entry.get("local_min_review_enabled", is_optimizer_local_min_review_enabled(model_mode=model_mode)))
         member["local_min_review_mode"] = str(finalist_entry.get("local_min_review_mode", "exact"))
-        member["local_min_exact"] = bool(finalist_entry.get("local_min_exact", bool(is_optimizer_local_min_review_enabled())))
+        member["local_min_exact"] = bool(finalist_entry.get("local_min_exact", bool(is_optimizer_local_min_review_enabled(model_mode=model_mode))))
     return member
 
 
@@ -1239,6 +1240,7 @@ from services.optimizer.callable_ref import (
     resolve_importable_callable_path as _resolve_importable_callable_path,
 )
 
+@optimizer_runtime_model_mode_scope()
 def _run_nonrolling_seed_ensemble_member_process_task(task: dict) -> dict | None:
     log_path = str((task or {}).get("log_path") or "")
 
@@ -1392,6 +1394,7 @@ def _run_nonrolling_seed_ensemble_member_process_task(task: dict) -> dict | None
                 best_trial=best_trial,
                 finalist_entry=finalist_entry,
                 params_payload=params_payload,
+                model_mode=walk_forward_policy.get("model_mode"),
             )
             from services.optimizer.outer_rolling_policy import build_optimizer_policy_members_from_finalists
             policy_members = build_optimizer_policy_members_from_finalists(
@@ -1399,6 +1402,7 @@ def _run_nonrolling_seed_ensemble_member_process_task(task: dict) -> dict | None
                 objective_mode=str(task.get("objective_mode") or "split_train_romd"),
                 member_index=int(member_index),
                 seed=int(seed),
+                session=member_session,
             )
             _emit_nonrolling_seed_process_progress_event(
                 task,
@@ -1466,7 +1470,7 @@ def _build_static_seed_ensemble_summary(*, members: list[dict], seeds: list[int]
         "local_min_score": min(local_scores) if local_scores else 0.0,
         "retention": min(retentions) if retentions else 0.0,
         "local_gate": all(bool(item.get("local_gate", False)) for item in members),
-        "local_min_review_enabled": bool(is_optimizer_local_min_review_enabled()),
+        "local_min_review_enabled": bool(is_optimizer_local_min_review_enabled(model_mode=walk_forward_policy.get("model_mode"))),
         "member_metrics": [
             {
                 "member_index": int(item.get("member_index", idx + 1)),
@@ -1476,7 +1480,7 @@ def _build_static_seed_ensemble_summary(*, members: list[dict], seeds: list[int]
                 "local_min_score": float(item.get("local_min_score", 0.0)),
                 "retention": float(item.get("retention", 0.0)),
                 "local_gate": bool(item.get("local_gate", False)),
-                "local_min_review_enabled": bool(item.get("local_min_review_enabled", is_optimizer_local_min_review_enabled())),
+                "local_min_review_enabled": bool(item.get("local_min_review_enabled", is_optimizer_local_min_review_enabled(model_mode=walk_forward_policy.get("model_mode")))),
                 "local_min_review_mode": str(item.get("local_min_review_mode", "exact")),
             }
             for idx, item in enumerate(members)
@@ -1498,7 +1502,7 @@ def _build_static_seed_ensemble_meta(*, seeds: list[int], objective_mode: str, w
         "trials_per_seed": int(trials_per_seed),
         "seeds": [int(seed) for seed in seeds],
         "walk_forward_policy": dict(walk_forward_policy),
-        "local_min_review_enabled": bool(is_optimizer_local_min_review_enabled()),
+        "local_min_review_enabled": bool(is_optimizer_local_min_review_enabled(model_mode=walk_forward_policy.get("model_mode"))),
     }
     if policy_name:
         meta["policy"] = str(policy_name)
@@ -1548,7 +1552,7 @@ def _build_static_seed_ensemble_policy_paramset_payload(*, policy_name: str, mem
         "member_count": int(len(normalized_members)),
         "requested_seed_count": int(len(seeds)),
         "trials_per_seed": int(trials_per_seed),
-        "local_min_review_enabled": bool(is_optimizer_local_min_review_enabled()),
+        "local_min_review_enabled": bool(is_optimizer_local_min_review_enabled(model_mode=walk_forward_policy.get("model_mode"))),
     }
     return payload
 
@@ -1608,7 +1612,7 @@ def _write_static_seed_ensemble_policy_paramsets(
     )
     from services.optimizer.outer_rolling_artifacts import _remove_stale_policy_paramset_files
 
-    first_class_policy_names = tuple(get_optimizer_paramset_policy_names())
+    first_class_policy_names = get_optimizer_paramset_policy_names(model_mode=selected_model_mode)
     replay_policy_names = first_class_policy_names
     _remove_stale_policy_paramset_files(str(models_dir or MODELS_DIR))
     paths: dict[str, str] = {}
@@ -1797,10 +1801,10 @@ def _resolve_trial_base_score(trial) -> float:
 def _remove_study_full_non_base_policy_outputs() -> None:
     from services.optimizer.outer_rolling_policy import (
         get_optimizer_nonrolling_policy_paramset_filename,
-        get_optimizer_paramset_policy_names,
+        ALL_REPORT_POLICY_NAMES,
     )
 
-    for policy_name in get_optimizer_paramset_policy_names():
+    for policy_name in ALL_REPORT_POLICY_NAMES:
         if str(policy_name) == "base":
             continue
         path = str(resolve_strategy_param_artifact_path(
@@ -1942,11 +1946,13 @@ def _finalize_single_seed_study_outputs(
         best_trial=best_trial,
         finalist_entry=finalist_entry,
         params_payload=params_payload,
+        model_mode=walk_forward_policy.get("model_mode"),
     )
     policy_members = build_optimizer_policy_members_from_finalists(
         list(finalists or []),
         objective_mode=objective_mode,
         member_index=1,
+        session=session,
         seed=seed_value,
     )
     policy_members_by_policy: dict[str, list[dict]] = {}
@@ -1973,7 +1979,7 @@ def _finalize_single_seed_study_outputs(
         elapsed_sec=elapsed_sec,
         policy_paramsets=dict(policy_paramset_payloads or {}),
     )
-    visible_policy_paths = _visible_policy_paramset_paths(dict((ensemble_summary or {}).get("policy_paramsets") or {}))
+    visible_policy_paths = _visible_policy_paramset_paths(dict((ensemble_summary or {}).get("policy_paramsets") or {}), model_mode=selected_model_mode)
     _print_optimizer_output_files("💾 輸出檔案", list(visible_policy_paths.items()))
     return 0
 
@@ -2293,6 +2299,7 @@ def _run_nonrolling_random_seed_ensemble_training(
                 best_trial=best_trial,
                 finalist_entry=finalist_entry,
                 params_payload=params_payload,
+                model_mode=walk_forward_policy.get("model_mode"),
             )
             from services.optimizer.outer_rolling_policy import build_optimizer_policy_members_from_finalists
             policy_members = build_optimizer_policy_members_from_finalists(
@@ -2300,6 +2307,7 @@ def _run_nonrolling_random_seed_ensemble_training(
                 objective_mode=objective_mode,
                 member_index=int(member_index),
                 seed=int(seed),
+                session=member_session,
             )
             if compact_display:
                 _emit_seed_progress_for_member(member_index, int(seed),
@@ -2593,7 +2601,7 @@ def _run_nonrolling_random_seed_ensemble_training(
             output_entries.append(("run_best", RUN_BEST_PARAMS_PATH))
         _print_optimizer_output_files("💾 輸出檔案", output_entries)
         return 0
-    visible_policy_paths = _visible_policy_paramset_paths(dict((_ensemble_summary or {}).get("policy_paramsets") or {}))
+    visible_policy_paths = _visible_policy_paramset_paths(dict((_ensemble_summary or {}).get("policy_paramsets") or {}), model_mode=selected_model_mode)
     _print_optimizer_output_files("💾 輸出檔案", list(visible_policy_paths.items()))
     return 0
 
@@ -3046,6 +3054,7 @@ def resolve_optimizer_model_mode(argv, environ, *, default_model: str = DEFAULT_
 
 
 @isolate_optimizer_process_environment
+@optimizer_runtime_model_mode_scope()
 def main(argv=None, environ=None):
     enable_line_buffered_stdout()
     argv = sys.argv if argv is None else argv

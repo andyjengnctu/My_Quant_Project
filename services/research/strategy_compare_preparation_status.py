@@ -1367,6 +1367,21 @@ def collect_preparation_status(
         runtime_required_dl_sources,
     ) = _resolve_required_artifact_sources(settings)
 
+    from services.breakout_quality.forward_model_source import load_forward_model_source
+    forward_sources = {}
+    for dl_id in required_dl_sources:
+        source = settings.dl_sources[dl_id]
+        if str(source.score_source) != SCORE_SOURCE_CONTINUOUS_RANKER_OOS:
+            continue
+        workflow = get_breakout_quality_workflow_settings(
+            experiment_profile=str(source.experiment_profile))
+        forward_sources[dl_id] = load_forward_model_source(
+            project_root=root, filter_id=str(source.filter_id),
+            model_architecture=str(source.model_architecture),
+            experiment_profile=str(source.experiment_profile), expected_seed=int(workflow.seed),
+            dataset=str(settings.dataset), max_tickers=0, require_scores=True,
+        )
+
     (
         dl_rows,
         artifact_identities,
@@ -1374,6 +1389,7 @@ def collect_preparation_status(
         dl_model_ready,
         runtime_periods,
     ) = _collect_dl_artifact_status(
+        forward_sources=forward_sources,
         root=root,
         settings=settings,
         required_dl_sources=required_dl_sources,

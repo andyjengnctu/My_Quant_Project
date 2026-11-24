@@ -86,42 +86,8 @@ class DailyTrade40TruthBuildRequired(RuntimeError):
 # Missing old truth artifacts must be computed once; a Replay observation alone
 # cannot reconstruct or independently certify the underlying perfect scores.
 _TRUTH_CACHE_SCHEMA = 1
-_TRUTH_SOURCE_MODULES = (
-    "services/audit/daily_trade40_oracle.py",
-    "filters/breakout_quality/daily_trade40_target.py",
-    "filters/breakout_quality/trade_path_label.py",
-    "filters/breakout_quality/runtime.py",
-    "core/backtest_finalize.py",
-    "core/position_step.py",
-    "core/position_management.py",
-    "core/exit_priority.py",
-    "core/entry_plans.py",
-    "core/extended_signals.py",
-    "core/order_lot_policy.py",
-    "core/exact_accounting.py",
-    "core/fee_rebate.py",
-    "core/price_utils.py",
-    "core/strategy_params.py",
-    "strategies/breakout/schema.py",
-    "core/selection_policy.py",
-    "core/signal_utils.py",
-    "core/breakout_false_filter.py",
-    "core/feature_bank.py",
-    "core/native_optimizer_hotpath.py",
-    "core/native_optimizer_hotpath.c",
-    "core/training_performance.py",
-    "core/portfolio_param_runtime.py",
-    "core/params_io.py",
-    "core/active_param_ensemble.py",
-    "core/rolling_oos_params.py",
-    "core/seed_ensemble_policy.py",
-    "core/capital_policy.py",
-    "config/broker_accounting.py",
-    "config/breakout_policy.py",
-    "config/execution_policy.py",
-    "config/training_performance_policy.py",
-    "config/trading.py",
-)
+from core.execution_source_dependencies import execution_source_inventory
+_TRUTH_SOURCE_MODULES = execution_source_inventory("mintrade_truth")
 
 
 def _truth_source_sha(root: Path, *, outcome_metric: str = "net_r") -> str:
@@ -136,12 +102,18 @@ def _truth_source_sha(root: Path, *, outcome_metric: str = "net_r") -> str:
     # Min execution semantics, including their delegated Python/native code.
     digest.update(b"canonical_daily_source\0")
     digest.update(oracle_daily_source_fingerprint(root).encode("ascii") + b"\n")
+    sources = {"@execution_sources": canonical_json_sha256(list(_TRUTH_SOURCE_MODULES))}
     for relative in _TRUTH_SOURCE_MODULES:
         path = root / relative
         if not path.is_file():
             raise DailyTrade40OracleBlockedError(f"Oracle truth source lineage missing: {relative}")
+        sources[relative] = attested_mintrade_source_sha256(relative, path)
+    from core.research_execution_equivalence import project_reviewed_source_inventory
+    for relative, source_sha in project_reviewed_source_inventory(
+        sources, scope="mintrade_source_graph", project_root=root,
+    ).items():
         digest.update(relative.encode("utf-8") + b"\0")
-        digest.update(attested_mintrade_source_sha256(relative, path).encode("ascii") + b"\n")
+        digest.update(source_sha.encode("ascii") + b"\n")
     return digest.hexdigest()
 
 

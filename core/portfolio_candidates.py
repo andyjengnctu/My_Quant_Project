@@ -64,7 +64,7 @@ _NATIVE_EXTENDED_CANDIDATE_BATCH_SIZED_ENABLED = bool(
 )
 from core.portfolio_fast_access import get_fast_value
 from core.portfolio_entry_policy import (
-    current_daily_execution_contract,
+    resolve_portfolio_execution_contract,
     daily_execution_uses_common_filters, daily_execution_uses_atr_limit,
 )
 from core.portfolio_fast_data import (
@@ -450,6 +450,7 @@ def _resolve_qualified_normal_setup(
     *, ticker, y_pos, portfolio, sold_today, all_dfs_fast,
     active_extended_signals, pit_stats_index, pit_stats_cursor,
     today, params, profile_stats, entry_policy="breakout",
+    execution_contract=None,
 ):
     """One PIT/old-continuation gate for both orderable and full-capacity paths.
 
@@ -469,7 +470,7 @@ def _resolve_qualified_normal_setup(
     )
     security_profile = get_fast_security_profile(fast_df)
     if entry_policy == "daily":
-        execution = current_daily_execution_contract()
+        execution = resolve_portfolio_execution_contract(execution_contract).daily_execution_contract
         if daily_execution_uses_common_filters(execution) and not get_fast_value(
             fast_df, "is_setup", pos=y_pos, date=signal_date
         ):
@@ -561,6 +562,7 @@ def _collect_normal_candidates(
     compact_training_rows=False,
     profile_stats=None,
     entry_policy="breakout",
+    execution_contract=None,
 ):
     profile_enabled = profile_stats is not None
     total_started = time.perf_counter() if profile_enabled else None
@@ -578,6 +580,7 @@ def _collect_normal_candidates(
             pit_stats_index=pit_stats_index, pit_stats_cursor=pit_stats_cursor,
             today=today, params=params, profile_stats=profile_stats,
             entry_policy=entry_policy,
+            execution_contract=execution_contract,
         )
         if qualified_setup is None:
             continue
@@ -684,6 +687,7 @@ def track_normal_setup_signals_for_day(
     params,
     profile_stats=None,
     entry_policy="breakout",
+    execution_contract=None,
 ):
     profile_enabled = profile_stats is not None
     total_started = time.perf_counter() if profile_enabled else None
@@ -698,6 +702,7 @@ def track_normal_setup_signals_for_day(
             pit_stats_index=pit_stats_index, pit_stats_cursor=pit_stats_cursor,
             today=today, params=params, profile_stats=profile_stats,
             entry_policy=entry_policy,
+            execution_contract=execution_contract,
         )
         if qualified_setup is None:
             continue
@@ -1233,6 +1238,7 @@ def build_daily_candidates(
     persistent_sizing_fee_context_cache=None,
     persistent_sizing_qty_cache=None,
     profile_stats=None,
+    execution_contract=None,
 ):
     buy_sort_method = get_buy_sort_method()
     ranking_enabled = bool(getattr(params, "use_breakout_quality_ranking", False))
@@ -1274,6 +1280,7 @@ def build_daily_candidates(
         compact_training_rows=compact_training_rows,
         profile_stats=profile_stats,
         entry_policy=entry_policy,
+        execution_contract=execution_contract,
     )
     extended_candidates, extended_orderable = _collect_extended_candidates(
         active_extended_signals=active_extended_signals,

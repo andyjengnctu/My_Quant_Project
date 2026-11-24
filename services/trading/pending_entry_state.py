@@ -19,7 +19,7 @@ from core.runtime_domains import RUNTIME_DOMAIN_TRADING
 from core.runtime_utils import get_taipei_now
 from core.trading_identity import normalize_trading_date, normalize_trading_ticker
 from core.trading_state_paths import resolve_trading_pending_entry_state_path
-from services.trading.state_lock import serialized_trading_state_mutation
+from services.trading.state_lock import serialized_trading_state_mutation, assert_trading_state_writable
 from services.trading.strategy_param_runtime import (
     validate_trading_position_management_lineage,
     validate_trading_position_strategy_lineage,
@@ -221,6 +221,7 @@ def project_trading_pending_entry_state(
 
 @serialized_trading_state_mutation
 def create_trading_pending_entry(project_root, *, entry: dict[str, Any]) -> dict[str, Any]:
+    assert_trading_state_writable(project_root)
     path = resolve_trading_pending_entry_state_path(project_root)
     state = load_trading_pending_entry_state(project_root, required=False) or _empty_state()
     payload = deepcopy(dict(entry or {}))
@@ -241,6 +242,7 @@ def create_trading_pending_entry(project_root, *, entry: dict[str, Any]) -> dict
     updated["entries"][entry_id] = payload
     updated = _append_event(updated, mutation_type="create_pending_entry", details={"pending_entry_id": entry_id, "entry": payload})
     validate_trading_pending_entry_state(updated)
+    assert_trading_state_writable(project_root)
     atomic_write_json(path, updated)
     return deepcopy(updated["entries"][entry_id])
 
@@ -253,6 +255,7 @@ def update_trading_pending_entry(
     replacement: dict[str, Any],
 ) -> dict[str, Any]:
     """Atomically replace one ACTIVE pre-market intent without double-reserving resources."""
+    assert_trading_state_writable(project_root)
     path = resolve_trading_pending_entry_state_path(project_root)
     state = load_trading_pending_entry_state(project_root, required=True)
     entry_id = str(pending_entry_id or "").strip()
@@ -293,12 +296,14 @@ def update_trading_pending_entry(
         },
     )
     validate_trading_pending_entry_state(updated)
+    assert_trading_state_writable(project_root)
     atomic_write_json(path, updated)
     return deepcopy(updated["entries"][entry_id])
 
 
 @serialized_trading_state_mutation
 def cancel_trading_pending_entry(project_root, *, pending_entry_id: str, note: str | None = None) -> dict[str, Any]:
+    assert_trading_state_writable(project_root)
     path = resolve_trading_pending_entry_state_path(project_root)
     state = load_trading_pending_entry_state(project_root, required=True)
     entry_id = str(pending_entry_id or "").strip()
@@ -319,6 +324,7 @@ def cancel_trading_pending_entry(project_root, *, pending_entry_id: str, note: s
         details={"pending_entry_id": entry_id, "ticker": updated_entry["ticker"], "note": updated_entry.get("cancel_note")},
     )
     validate_trading_pending_entry_state(updated)
+    assert_trading_state_writable(project_root)
     atomic_write_json(path, updated)
     return deepcopy(updated_entry)
 
@@ -330,6 +336,7 @@ def delete_trading_pending_entry(project_root, *, pending_entry_id: str, note: s
     The close reason remains auditable, but resource semantics are intentionally
     identical to no-fill/cancel: only ACTIVE pending entries reserve cash/slots.
     """
+    assert_trading_state_writable(project_root)
     path = resolve_trading_pending_entry_state_path(project_root)
     state = load_trading_pending_entry_state(project_root, required=True)
     entry_id = str(pending_entry_id or "").strip()
@@ -350,6 +357,7 @@ def delete_trading_pending_entry(project_root, *, pending_entry_id: str, note: s
         details={"pending_entry_id": entry_id, "ticker": updated_entry["ticker"], "note": updated_entry.get("cancel_note")},
     )
     validate_trading_pending_entry_state(updated)
+    assert_trading_state_writable(project_root)
     atomic_write_json(path, updated)
     return deepcopy(updated_entry)
 
@@ -361,6 +369,7 @@ def mark_trading_pending_entry_filled(
     pending_entry_id: str,
     fill: dict[str, Any],
 ) -> dict[str, Any]:
+    assert_trading_state_writable(project_root)
     path = resolve_trading_pending_entry_state_path(project_root)
     state = load_trading_pending_entry_state(project_root, required=True)
     entry_id = str(pending_entry_id or "").strip()
@@ -380,6 +389,7 @@ def mark_trading_pending_entry_filled(
         details={"pending_entry_id": entry_id, "ticker": updated_entry["ticker"], "fill": updated_entry["fill"]},
     )
     validate_trading_pending_entry_state(updated)
+    assert_trading_state_writable(project_root)
     atomic_write_json(path, updated)
     return deepcopy(updated_entry)
 

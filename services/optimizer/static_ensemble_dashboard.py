@@ -240,7 +240,7 @@ def build_optimizer_static_ensemble_single_fold_oos_row(session, *, ensemble_pay
     range_end = str(oos_end_date or "")[:10] if model_mode == "oos" and oos_end_date else ""
     from services.optimizer.outer_rolling_policy import (
         BASE_RETENTION_COMPARISON_POLICY_NAMES,
-        REPORT_POLICY_NAMES,
+        get_optimizer_paramset_policy_names,
     )
     from services.optimizer.outer_rolling_fold_context import (
         build_optimizer_seed_ensemble_fold_context,
@@ -271,7 +271,7 @@ def build_optimizer_static_ensemble_single_fold_oos_row(session, *, ensemble_pay
         "rank_1_oos": 0.0,
         "unavailable_reason": "nonrolling_policy_paramset_not_available",
     }
-    for policy_name in tuple(REPORT_POLICY_NAMES) + tuple(BASE_RETENTION_COMPARISON_POLICY_NAMES):
+    for policy_name in get_optimizer_paramset_policy_names(session=session) + tuple(BASE_RETENTION_COMPARISON_POLICY_NAMES):
         if policy_name in policy_rows:
             row[str(policy_name)] = dict(policy_rows[policy_name])
         else:
@@ -280,7 +280,7 @@ def build_optimizer_static_ensemble_single_fold_oos_row(session, *, ensemble_pay
 
 def print_optimizer_static_ensemble_rolling_oos_table(session, *, ensemble_payload: dict, elapsed_sec: float | None = None, policy_paramsets: dict | None = None, progress_callback=None) -> dict | None:
     """Print non-rolling ensemble summary through the exact rolling-OOS table renderer."""
-    from services.optimizer.outer_rolling_policy import optimizer_seed_ensemble_table_titles
+    from services.optimizer.outer_rolling_policy import optimizer_seed_ensemble_table_titles, get_optimizer_paramset_policy_names
     from services.optimizer.outer_rolling_results import render_optimizer_results_tables
 
     row = build_optimizer_static_ensemble_single_fold_oos_row(
@@ -298,6 +298,7 @@ def print_optimizer_static_ensemble_rolling_oos_table(session, *, ensemble_paylo
         include_oos_avg=False,
         main_table_title=main_title,
         retention_table_title=retention_title,
+        policy_names=get_optimizer_paramset_policy_names(session=session),
     )
     if table_text:
         print("\n" + table_text)

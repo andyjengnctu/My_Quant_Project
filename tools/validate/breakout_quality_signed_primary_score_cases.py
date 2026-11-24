@@ -202,11 +202,21 @@ def case() -> None:
         forward_frame.to_csv(forward, index=False, encoding="utf-8-sig")
         fwd = load_continuous_ranker_oos_score_table_from_path(str(forward), SINGLE_HEAD_PROFILE)
         assert len(fwd) == len(scores)
-        found = lookup_continuous_ranker_oos_candidate_score(
-            project_root=str(root), filter_id="breakout_quality_v1",
-            model_architecture="inception_time_v1", experiment_profile=SINGLE_HEAD_PROFILE,
-            ticker="T0004", signal_date="2021-01-04", score_path_override=str(forward),
-        )
+        from .test_forward_publication import write_forward_fixture, independent_upstream_evidence
+        from services.breakout_quality.forward_model_source import load_forward_score_binding
+        with independent_upstream_evidence():
+            identity, _, _, _, bound_score = write_forward_fixture(
+                root / "bound_model", root / "bound_output", profile_name=SINGLE_HEAD_PROFILE,
+                scores=scores,
+            )
+            binding = load_forward_score_binding(dataset="full",
+                project_root=root, **identity, expected_seed=101,
+                model_dir=root / "bound_model", research_output_dir=root / "bound_output",
+            )
+            found = lookup_continuous_ranker_oos_candidate_score(
+                project_root=str(root), **identity, ticker="T0004", signal_date="2021-01-04",
+                score_path_override=str(bound_score), score_binding=binding,
+            )
         assert found["available"] and found["score"] == scores[4]
         # Multi-head probability profiles have required score sidecars.  Test
         # missing-column rejection separately from the score-domain domain:

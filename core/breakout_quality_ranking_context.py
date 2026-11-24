@@ -49,6 +49,7 @@ class BreakoutQualityRankingSourceContext:
     ranking_options: Mapping[str, Any] | None = None
     score_path_override: str | None = None
     score_manifest_path_override: str | None = None
+    score_bindings: Mapping[str, Any] | None = None
 
 
 _RANKING_SOURCE_CONTEXT: ContextVar[BreakoutQualityRankingSourceContext | None] = ContextVar(
@@ -117,6 +118,7 @@ def breakout_quality_ranking_source_context(
     ranking_options: Mapping[str, Any] | None = None,
     score_path_override: str | None = None,
     score_manifest_path_override: str | None = None,
+    score_bindings: Mapping[str, Any] | None = None,
 ) -> Iterator[BreakoutQualityRankingSourceContext]:
     source = str(score_source).strip()
     if source not in SUPPORTED_RANKING_SCORE_SOURCES:
@@ -129,6 +131,7 @@ def breakout_quality_ranking_source_context(
         raise ValueError(f"不支援的breakout-quality ranking policy: {resolved_policy!r}")
     context = BreakoutQualityRankingSourceContext(
         score_source=source,
+        score_bindings=None if score_bindings is None else dict(score_bindings),
         model_architecture=None if model_architecture is None else str(model_architecture),
         experiment_profile=None if experiment_profile is None else str(experiment_profile),
         ranking_policy=resolved_policy,

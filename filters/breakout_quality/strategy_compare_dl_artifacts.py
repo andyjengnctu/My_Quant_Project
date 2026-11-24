@@ -499,6 +499,7 @@ def _collect_continuous_ranker_source_status(
     artifact_identities: dict[str, Any],
     actions: list[ResearchArtifactAction],
     runtime_periods: dict[str, tuple[str, str]],
+    forward_sources: dict[str, Any],
 ) -> tuple[dict[str, Any], bool]:
     model_ready = False
     runtime_ready = False
@@ -506,12 +507,10 @@ def _collect_continuous_ranker_source_status(
     runtime_status = "MISSING"
     continuous_contract = None
     try:
-        continuous_contract = load_continuous_ranker_oos_contract(
-            root,
-            source.filter_id,
-            source.model_architecture,
-            source.experiment_profile,
-        )
+        continuous_contract, reason = forward_sources.get(
+            dl_id, (None, "Forward READY admission was not provided by the service"))
+        if continuous_contract is None:
+            raise ValueError(reason)
         model_ready = True
         runtime_ready = True
         model_status = "READY"
@@ -781,6 +780,7 @@ def collect_dl_artifact_status(
     settings: StrategyComparisonSettings,
     required_dl_sources: set[str],
     runtime_required_dl_sources: set[str],
+    forward_sources: dict[str, Any] | None = None,
 ) -> tuple[
     dict[str, Any],
     dict[str, Any],
@@ -830,6 +830,7 @@ def collect_dl_artifact_status(
             row, model_ready = _collect_selection_pit_source_status(**common)
         elif source.score_source == SCORE_SOURCE_CONTINUOUS_RANKER_OOS:
             row, model_ready = _collect_continuous_ranker_source_status(
+                forward_sources=dict(forward_sources or {}),
                 artifacts=artifacts,
                 **common,
             )

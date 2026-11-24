@@ -73,9 +73,9 @@ ALL_REPORT_POLICY_NAMES = (
 )
 
 
-def _resolve_report_policy_names(policy_names: tuple[str, ...]) -> tuple[str, ...]:
-    enabled = set(resolve_optimizer_enabled_policy_indicators(policy_names))
-    local_enabled = bool(is_optimizer_local_min_review_enabled())
+def _resolve_report_policy_names(policy_names: tuple[str, ...], *, model_mode="oos") -> tuple[str, ...]:
+    enabled = set(resolve_optimizer_enabled_policy_indicators(policy_names, model_mode=model_mode))
+    local_enabled = bool(is_optimizer_local_min_review_enabled(model_mode=model_mode))
     return tuple(
         name
         for name in policy_names
@@ -730,13 +730,15 @@ def _session_report_policy_names(session=None) -> tuple[str, ...]:
     In particular, single-member Daily fitting must not run an unrelated
     finalists-agree ensemble diagnostic (which is a different replay contract).
     """
+    model_mode = dict(getattr(session, "walk_forward_policy", {}) or {}).get("model_mode", "oos")
+    available = _resolve_report_policy_names(ALL_REPORT_POLICY_NAMES, model_mode=model_mode)
     strategy = get_session_scientific_section(session, "strategy") if session is not None else None
     if strategy is None:
-        return REPORT_POLICY_NAMES
+        return available
     selected = str(strategy.get("parameter_policy") or "").strip().lower().replace("-", "_")
     if selected not in ALL_REPORT_POLICY_NAMES:
         raise ValueError(f"Strategy Parameter scientific contract 指定未知參數政策: {selected!r}")
-    if selected not in REPORT_POLICY_NAMES:
+    if selected not in available:
         raise ValueError(f"Strategy Parameter scientific contract 指定的參數政策已停用: {selected!r}")
     return (selected,)
 
@@ -762,9 +764,11 @@ def _build_policy_items(finalists: list[dict], *, objective_mode: str, session=N
     return items
 
 
-def get_optimizer_paramset_policy_names() -> tuple[str, ...]:
+def get_optimizer_paramset_policy_names(*, model_mode="oos", session=None) -> tuple[str, ...]:
     """Return the policy set that writes first-class optimizer param JSON files."""
-    return tuple(REPORT_POLICY_NAMES)
+    if session is not None:
+        return _session_report_policy_names(session)
+    return _resolve_report_policy_names(ALL_REPORT_POLICY_NAMES, model_mode=model_mode)
 
 
 def get_optimizer_policy_paramset_filename(policy_name: str) -> str:
@@ -816,7 +820,7 @@ def build_optimizer_policy_members_from_finalists(
     local_rank_map = _build_local_rank_map(finalists)
     retention_rank_map = _build_retention_rank_map(finalists)
     members: dict[str, dict | list[dict]] = {}
-    for policy_name in CHAIN_POLICY_NAMES:
+    for policy_name in policy_items:
         item = policy_items.get(policy_name)
         if item is None:
             continue

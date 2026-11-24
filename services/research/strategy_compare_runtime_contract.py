@@ -75,6 +75,7 @@ class StrategyCompareRuntimeContract:
     manifest_profile: str
     start_date: str
     end_date: str
+    score_bindings: dict[str, Any]
 
 
 def _resolve_continuous_score_override_period(
@@ -109,6 +110,8 @@ def resolve_strategy_compare_runtime_contract(
     experiment_profile: str,
     threshold: float | None,
     hard_filter_source: dict[str, Any] | None,
+    dataset="full",
+    continuous_score_bindings=None,
     continuous_score_path_override=None,
     continuous_score_execution_start_override=None,
     selection_pit_score_path_override=None,
@@ -117,6 +120,7 @@ def resolve_strategy_compare_runtime_contract(
     comparison_start_date=None,
     comparison_end_date=None,
 ) -> StrategyCompareRuntimeContract:
+    score_bindings = dict(continuous_score_bindings or {})
     comparison_mode = str(comparison_mode)
     ranking_policy = str(ranking_policy).strip()
     ranking_options = dict(ranking_options or {})
@@ -201,6 +205,16 @@ def resolve_strategy_compare_runtime_contract(
             raise ValueError("Continuous ranker OOS source只允許resource-aware-continuous系列policy")
         if has_continuous_override:
             override_path = Path(str(continuous_score_path_override)).resolve()
+            from filters.breakout_quality.ranking_score_store import VerifiedForwardScoreBinding
+            binding = score_bindings.get(str(override_path))
+            if not isinstance(binding, VerifiedForwardScoreBinding):
+                raise ValueError("Forward isolated replay requires a verified READY binding")
+            continuous_contract = binding.verify(
+                score_path=override_path, filter_id=filter_id,
+                model_architecture=model_architecture, experiment_profile=experiment_profile,
+            )
+            if str(continuous_score_execution_start_override) != continuous_contract.execution_start:
+                raise ValueError("Forward isolated execution_start differs from verified contract")
             override_table = load_continuous_ranker_oos_score_table_from_path(str(override_path), experiment_profile)
             manifest_architecture, manifest_profile = model_architecture, experiment_profile
             execution_start, available_from, available_through = _resolve_continuous_score_override_period(
@@ -215,7 +229,14 @@ def resolve_strategy_compare_runtime_contract(
                 "available_through": available_through,
             }
         else:
-            continuous_contract = load_continuous_ranker_oos_contract(str(root), filter_id, model_architecture, experiment_profile)
+            from services.breakout_quality.forward_model_source import load_forward_score_binding
+            workflow = get_breakout_quality_workflow_settings(experiment_profile=experiment_profile)
+            binding = load_forward_score_binding(
+                project_root=root, filter_id=filter_id, model_architecture=model_architecture,
+                experiment_profile=experiment_profile, expected_seed=int(workflow.seed), dataset=str(dataset),
+            )
+            continuous_contract = binding.contract
+            score_bindings[str(continuous_contract.score_path.resolve())] = binding
             manifest_architecture = continuous_contract.model_architecture
             manifest_profile = continuous_contract.experiment_profile
             start_date, end_date = continuous_contract.execution_start, continuous_contract.available_through
@@ -298,6 +319,31 @@ def resolve_strategy_compare_runtime_contract(
                 "ranking_options": ranking_options,
             }
 
+    # Secondary canonical sources need the same full admission as the primary.
+    # Keep bindings out of ranking_options/report payloads; carry them separately.
+    for prefix in ("safety", "positive"):
+        if str(ranking_options.get(f"{prefix}_score_source") or "") != SCORE_SOURCE_CONTINUOUS_RANKER_OOS:
+            continue
+        identity = dict(
+            filter_id=str(ranking_options.get(f"{prefix}_filter_id") or ""),
+            model_architecture=str(ranking_options.get(f"{prefix}_model_architecture") or ""),
+            experiment_profile=str(ranking_options.get(f"{prefix}_experiment_profile") or ""),
+        )
+        override = ranking_options.get(f"{prefix}_score_path_override")
+        if override:
+            path = Path(override).resolve()
+            binding = score_bindings.get(str(path))
+            from filters.breakout_quality.ranking_score_store import VerifiedForwardScoreBinding
+            if not isinstance(binding, VerifiedForwardScoreBinding):
+                raise ValueError(f"Forward {prefix} override requires a verified READY binding")
+            binding.verify(score_path=path, **identity)
+        else:
+            from services.breakout_quality.forward_model_source import load_forward_score_binding
+            workflow = get_breakout_quality_workflow_settings(experiment_profile=identity["experiment_profile"])
+            binding = load_forward_score_binding(
+                project_root=root, **identity, expected_seed=int(workflow.seed), dataset=str(dataset))
+            score_bindings[str(binding.contract.score_path.resolve())] = binding
+
     if (comparison_start_date is None) != (comparison_end_date is None):
         raise ValueError("comparison_start_date與comparison_end_date必須同時提供")
     if comparison_start_date is not None:
@@ -338,4 +384,5 @@ def resolve_strategy_compare_runtime_contract(
         manifest_profile=manifest_profile,
         start_date=str(start_date),
         end_date=str(end_date),
+        score_bindings=score_bindings,
     )

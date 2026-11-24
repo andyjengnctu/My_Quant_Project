@@ -212,7 +212,10 @@ def _restore(sources: list[dict]) -> None:
         existing_backup.rename(source)
 
 
-def _recover_incomplete_fit_repair_unlocked(*, journal_path: Path, project_root: Path | None = None) -> str:
+def _recover_incomplete_fit_repair_unlocked(
+    *, journal_path: Path, project_root: Path | None = None,
+    before_restore: Callable[[], None] | None = None,
+) -> str:
     """Restore only a verified, uncommitted journal; do not infer FIT identity."""
     journal_path = Path(journal_path).resolve(strict=True)
     if journal_path.stat().st_size == 0:
@@ -254,6 +257,8 @@ def _recover_incomplete_fit_repair_unlocked(*, journal_path: Path, project_root:
             raise RuntimeError("Committed FIT repair has incomplete historical archives")
         journal_path.unlink()
         return "COMMITTED_CLEANED"
+    if before_restore is not None:
+        before_restore()
     _restore(list(payload["sources"]))
     journal_path.unlink()
     return "ROLLED_BACK"
@@ -262,6 +267,7 @@ def _recover_incomplete_fit_repair_unlocked(*, journal_path: Path, project_root:
 def recover_incomplete_fit_repair(
     *, journal_path: Path, project_root: Path | None = None,
     point_in_time_dir: Path | None = None, shared_cache_root: Path | None = None,
+    forward_publication_roots: tuple[Path, Path] | None = None,
 ) -> str:
     """Auto-safe restart: recovery cannot overlap a PIT writer or FIT cache writer."""
     journal_path = Path(journal_path).absolute()
@@ -269,6 +275,9 @@ def recover_incomplete_fit_repair(
         if not journal_path.is_file():
             return "NO_JOURNAL"
         with ExitStack() as locks:
+            if forward_publication_roots is not None:
+                from services.breakout_quality.forward_publication import forward_publication_leases
+                locks.enter_context(forward_publication_leases(*forward_publication_roots))
             if point_in_time_dir is not None:
                 locks.enter_context(exclusive_file_lock(
                     selection_pit_build_lock_path(point_in_time_dir),
@@ -293,8 +302,12 @@ def recover_incomplete_fit_repair(
                         sibling_publication_lock_path(entries[0]),
                         conflict_message="Another shared FIT checkpoint publication is active",
                     ))
+            def before_restore():
+                if forward_publication_roots is not None:
+                    from services.breakout_quality.forward_publication import discard_repair_forward_publication
+                    discard_repair_forward_publication(*forward_publication_roots)
             return _recover_incomplete_fit_repair_unlocked(
-                journal_path=journal_path, project_root=project_root,
+                journal_path=journal_path, project_root=project_root, before_restore=before_restore,
             )
 
 
@@ -305,10 +318,14 @@ def preserved_fit_publications(
     point_in_time_dir: Path | None = None,
     shared_cache_entry: Path | None = None,
     locked_preflight: Callable[[], None] | None = None,
+    forward_publication_roots: tuple[Path, Path] | None = None,
 ) -> Iterator[tuple[Path, ...]]:
     """Guard the repair and overlapping PIT/FitKey mutations with stable OS locks."""
     with _fit_repair_lock(Path(journal_path).absolute()):
         with ExitStack() as locks:
+            if forward_publication_roots is not None:
+                from services.breakout_quality.forward_publication import forward_publication_leases
+                locks.enter_context(forward_publication_leases(*forward_publication_roots))
             if point_in_time_dir is not None:
                 locks.enter_context(exclusive_file_lock(
                     selection_pit_build_lock_path(point_in_time_dir),
@@ -319,13 +336,22 @@ def preserved_fit_publications(
                     sibling_publication_lock_path(shared_cache_entry),
                     conflict_message="Another shared FIT checkpoint publication is active",
                 ))
+            if forward_publication_roots is not None:
+                from services.breakout_quality.forward_publication import recover_forward_publication
+                recover_forward_publication(*forward_publication_roots)
             if locked_preflight is not None:
                 locked_preflight()
             with _preserved_fit_publications_unlocked(
                 project_root=project_root, publication_roots=publication_roots,
                 journal_path=journal_path, repair_identity=repair_identity,
             ) as paths:
-                yield paths
+                try:
+                    yield paths
+                except BaseException:
+                    if forward_publication_roots is not None:
+                        from services.breakout_quality.forward_publication import discard_repair_forward_publication
+                        discard_repair_forward_publication(*forward_publication_roots)
+                    raise
 
 
 @contextmanager

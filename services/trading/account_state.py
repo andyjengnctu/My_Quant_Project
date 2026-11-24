@@ -9,11 +9,13 @@ from typing import Any, Callable
 from uuid import uuid4
 
 from core.file_integrity import atomic_write_json, load_json_strict
-from services.trading.state_lock import serialized_trading_state_mutation
+from services.trading.state_lock import (
+    serialized_trading_state_mutation, assert_trading_state_writable,
+    assert_no_trading_fill_transaction,
+)
 from core.runtime_utils import get_taipei_now
 from core.trading_state_paths import (
     resolve_trading_account_state_path as _resolve_trading_account_state_path,
-    resolve_trading_fill_transaction_path,
     resolve_trading_order_state_path,
 )
 from core.trading_order_state import (
@@ -78,9 +80,6 @@ def _read_state_with_sha(path: Path) -> tuple[dict[str, Any], str]:
 
 
 def _read_order_guard_sha(project_root, *, allow_active_protection_orders: bool = False) -> str | None:
-    fill_tx_path = resolve_trading_fill_transaction_path(project_root)
-    if fill_tx_path.is_file():
-        raise RuntimeError("Trading 尚有未完成 fill transaction；請先由 Workbench 重新整理以完成 recovery")
     order_path = resolve_trading_order_state_path(project_root)
     if not order_path.is_file():
         return None
@@ -113,9 +112,7 @@ def load_trading_account_state(project_root, *, required: bool = True) -> dict[s
     captured, value = snapshot_state_value(project_root, "account", required=required)
     if captured:
         return value
-    fill_tx_path = resolve_trading_fill_transaction_path(project_root)
-    if fill_tx_path.is_file():
-        raise RuntimeError("Trading 尚有未完成 fill transaction；必須先完成 recovery 才能讀取 account state")
+    assert_no_trading_fill_transaction(project_root)
     path = resolve_trading_account_state_path(project_root)
     if not path.is_file():
         if required:
@@ -128,6 +125,7 @@ def load_trading_account_state(project_root, *, required: bool = True) -> dict[s
 
 @serialized_trading_state_mutation
 def initialize_trading_account_state(project_root, *, cash=None) -> dict[str, Any]:
+    assert_trading_state_writable(project_root)
     path = resolve_trading_account_state_path(project_root)
     if path.exists():
         raise FileExistsError(f"Trading account state 已存在: {path}")
@@ -151,6 +149,7 @@ def _mutate_account(
     guard_orders: bool = True,
     accounting_params=None,
 ) -> dict[str, Any]:
+    assert_trading_state_writable(project_root)
     order_guard_sha = (
         _read_order_guard_sha(project_root, allow_active_protection_orders=allow_active_protection_orders)
         if guard_orders else None
@@ -183,6 +182,7 @@ def _mutate_account(
         raise TradingAccountRevisionConflict("Trading account state 在寫入前已被其他流程修改")
     if guard_orders:
         _assert_order_guard_unchanged(project_root, order_guard_sha)
+    assert_trading_state_writable(project_root)
     atomic_write_json(path, updated)
     return load_trading_account_state(project_root)
 

@@ -573,6 +573,7 @@ def run_comparison(
     hard_filter_source=None,
     baseline_reuse_dir=None,
     replay_active_only=False,
+    continuous_score_bindings=None,
     continuous_score_path_override=None,
     continuous_score_execution_start_override=None,
     selection_pit_score_path_override=None,
@@ -600,6 +601,8 @@ def run_comparison(
         experiment_profile=experiment_profile,
         threshold=threshold,
         hard_filter_source=hard_filter_source,
+        dataset=dataset,
+        continuous_score_bindings=continuous_score_bindings,
         continuous_score_path_override=continuous_score_path_override,
         continuous_score_execution_start_override=continuous_score_execution_start_override,
         selection_pit_score_path_override=selection_pit_score_path_override,
@@ -623,6 +626,9 @@ def run_comparison(
     continuous_contract = runtime.continuous_contract
     continuous_score_override = runtime.continuous_score_override
     ranking_source = runtime.ranking_source
+    runtime_score_bindings = getattr(runtime, "score_bindings", {})
+    if ranking_source is not None and runtime_score_bindings:
+        ranking_source = {**ranking_source, "score_bindings": runtime_score_bindings}
     filter_source = runtime.filter_source
     binary_filter_manifest = runtime.binary_filter_manifest
     binary_filter_manifest_path = runtime.binary_filter_manifest_path

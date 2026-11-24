@@ -669,6 +669,13 @@ def validate_critical_helper_single_source_contract_case(_base_params):
     summary["tracked_helper_count"] = len(contract["canonical_definitions"])
     summary["missing_definitions"] = contract["missing_definitions"]
     summary["duplicate_definitions"] = contract["duplicate_definitions"]
+    from .check_result_utils import run_unittest_capability_cases
+    from .test_execution_source_dependencies import ExecutionSourceDependencyTests
+    dependency_rows, dependency_summary = run_unittest_capability_cases(
+        case_id, "execution_sources", [ExecutionSourceDependencyTests],
+    )
+    results.extend(dependency_rows)
+    summary["execution_source_dependencies"] = dependency_summary
     return results, summary
 
 
@@ -2069,6 +2076,14 @@ def validate_portfolio_daily_phase_owner_contract_case(_base_params):
 
     case_id = "META_PORTFOLIO_DAILY_PHASE_OWNER"
     results, summary = _new_synthetic_case(case_id)
+    from .check_result_utils import run_unittest_capability_cases
+    from .test_portfolio_execution_contract import PortfolioExecutionContractTests
+    from .test_benchmark_cache import BenchmarkCacheTests
+    execution_rows, execution_summary = run_unittest_capability_cases(
+        case_id, "portfolio_execution", [PortfolioExecutionContractTests, BenchmarkCacheTests],
+    )
+    results.extend(execution_rows)
+    summary["execution_contract"] = execution_summary
     today = Timestamp("2025-01-15")
     fallback_data, fallback_pit, fallback_setup = {"base": object()}, {"base": []}, {}
     cursors = {}

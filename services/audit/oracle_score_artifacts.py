@@ -28,38 +28,8 @@ from filters.breakout_quality.paths import resolve_filter_output_dir
 _PRICE_SCORE_CACHE_SCHEMA = 1
 # Includes pure-price and official daily-DL eligibility capabilities, but not
 # portfolio execution, menu, rendering or experiment report source code.
-_DAILY_SCORE_SOURCE_MODULES = (
-    "filters/breakout_quality/daily_ranker_data.py",
-    "filters/breakout_quality/daily_model_input_context.py",
-    "filters/breakout_quality/daily_sample_accumulator.py",
-    "filters/breakout_quality/continuous_ranker_data.py",
-    "filters/breakout_quality/continuous_target.py",
-    "filters/breakout_quality/mfe_safety_geometry.py",
-    "filters/breakout_quality/profile_ranker_data.py",
-    "filters/breakout_quality/workflow_io.py",
-    "filters/breakout_quality/csv_io.py",
-    "filters/breakout_quality/splits.py",
-    "filters/breakout_quality/dataset_store.py",
-    "filters/breakout_quality/dataset_readiness.py",
-    "filters/breakout_quality/contract.py",
-    "filters/breakout_quality/features.py",
-    "filters/breakout_quality/models/architectures.py",
-    "filters/breakout_quality/models/spec.py",
-    "filters/breakout_quality/models/spec_contract.py",
-    "filters/breakout_quality/models/spec_registry.py",
-    "filters/breakout_quality/models/spec_builders.py",
-    "core/data_utils.py",
-    "core/breakout_quality_registry.py",
-    "core/breakout_quality_policy.py",
-    "core/breakout_quality_runtime.py",
-    "core/breakout_quality_runtime_resolver.py",
-    "core/dataset_profiles.py",
-    "core/walk_forward_policy.py",
-    "config/breakout_quality.py",
-    "config/research.py",
-    "config/training_policy.py",
-    "config/market_data.py",
-)
+from core.execution_source_dependencies import execution_source_inventory
+_DAILY_SCORE_SOURCE_MODULES = execution_source_inventory("daily_prices")
 
 
 # Price-score lineage is a dependency graph, not a hash of all research
@@ -329,6 +299,7 @@ def _oracle_daily_source_fingerprints(
             inventory[relative] = physical_sha
     # Whole-group proof precedes existing per-file/encoding attestations. The
     # extracted owners cannot disappear unless every reviewed source matches.
+    physical_inventory = inventory
     inventory = project_reviewed_source_inventory(
         inventory, scope="oracle_daily_provider", project_root=root,
     )
@@ -344,6 +315,14 @@ def _oracle_daily_source_fingerprints(
     executing = fingerprint(current)
     equivalents = {executing}
     if prove_encodings:
+        # An older grouped attestation may retain its physical predecessor
+        # within a uniform LF/CRLF checkout. Keep those independently captured
+        # source inventories too; no bare historical result digest is accepted.
+        for newline in (b"\n", b"\r\n"):
+            raw_values = {name: options[newline] for name, options in physical_inventory.items()}
+            equivalents.add(fingerprint(project_reviewed_source_inventory(
+                raw_values, scope="oracle_daily_provider", project_root=root, source_encoding=newline,
+            )))
         for newline in (None, b"\n", b"\r\n"):
             values = {name: options[newline] for name, options in inventory.items()}
             equivalents.add(fingerprint(values))

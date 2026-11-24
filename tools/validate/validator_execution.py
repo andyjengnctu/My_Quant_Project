@@ -17,6 +17,15 @@ import time
 import traceback
 
 
+class SyntheticExecutionError(RuntimeError):
+    """Failure with completed diagnostics; never a successful partial suite."""
+
+    def __init__(self, message, *, results=(), summaries=()):
+        super().__init__(message)
+        self.completed_results = list(results)
+        self.completed_summaries = list(summaries)
+
+
 def worker_count(limit: int, case_count: int, *, cpu_count: int | None = None, threads: int = 1) -> int:
     if type(limit) is not int or limit < 1:
         raise ValueError("synthetic_workers must be a positive integer")
@@ -96,10 +105,16 @@ def run_entries(base_params, entries):
             # shared diagnostics. Serial and spawn use the same report values.
             rows = _snapshot_report_value(rows)
             summary = _snapshot_report_value(dict(summary))
-        except Exception as exc:
-            raise RuntimeError(
-                f"synthetic validator crashed: {entry.name}: {type(exc).__name__}: {exc}"
-            ) from exc
+        except BaseException as exc:
+            if isinstance(exc, Exception):
+                raise SyntheticExecutionError(
+                    f"synthetic validator crashed: {entry.name}: {type(exc).__name__}: {exc}",
+                    results=results, summaries=summaries,
+                ) from exc
+            # Preserve cancellation/exit semantics while retaining earlier cases.
+            exc.completed_results = list(results)
+            exc.completed_summaries = list(summaries)
+            raise
         duration_sec = round(time.perf_counter() - started, 6)
         results.extend(rows)
         summaries.append({**dict(summary), "validator_name": entry.name,
@@ -132,7 +147,7 @@ def _worker_thread_budget(count):
                 os.environ[name] = value
 
 
-def _run_batch(base_params, batch, coverage_options, data_file, threads):
+def _run_batch(base_params, batch, coverage_options, data_file, threads, on_receipt=None):
     from types import SimpleNamespace
 
     with _worker_thread_budget(threads):
@@ -149,7 +164,10 @@ def _run_batch(base_params, batch, coverage_options, data_file, threads):
             receipts = []
             for (index, _spec), entry in zip(batch, entries):
                 rows, summaries = run_entries(base_params, [entry])
-                receipts.append((index, rows, summaries[0]))
+                receipt = (index, rows, summaries[0])
+                receipts.append(receipt)
+                if on_receipt is not None:
+                    on_receipt(receipt)
             return receipts
         finally:
             if cov is not None:
@@ -159,8 +177,9 @@ def _run_batch(base_params, batch, coverage_options, data_file, threads):
 
 def _worker(send, base_params, batch, coverage_options, data_file, threads):
     try:
-        receipts = _run_batch(base_params, batch, coverage_options, data_file, threads)
-        send.send({"receipts": receipts})
+        _run_batch(base_params, batch, coverage_options, data_file, threads,
+                   on_receipt=lambda receipt: send.send({"receipt": receipt}))
+        send.send({"completed": True})
     except BaseException as exc:
         # SystemExit/KeyboardInterrupt in a validator must not look like an
         # empty successful batch. The parent retains the original traceback.
@@ -169,7 +188,7 @@ def _worker(send, base_params, batch, coverage_options, data_file, threads):
         send.close()
 
 
-def assemble_results(specs, receipts):
+def assemble_results(specs, receipts, *, require_complete=True):
     by_index = {}
     for index, rows, summary in receipts:
         if type(index) is not int or not 0 <= index < len(specs) or index in by_index:
@@ -177,10 +196,10 @@ def assemble_results(specs, receipts):
         if summary.get("validator_name") != specs[index]["name"]:
             raise RuntimeError(f"synthetic receipt identity mismatch: {index}")
         by_index[index] = (rows, summary)
-    if len(by_index) != len(specs):
+    if require_complete and len(by_index) != len(specs):
         raise RuntimeError("incomplete synthetic receipts")
     results, summaries = [], []
-    for index in range(len(specs)):
+    for index in sorted(by_index):
         rows, summary = by_index[index]
         results.extend(rows)
         summaries.append(summary)
@@ -245,12 +264,18 @@ def run_parallel(base_params, specs, *, workers, timeout, threads,
                 try:
                     message = receive.recv()
                 except EOFError as exc:
-                    raise RuntimeError("synthetic worker exited without a receipt") from exc
+                    raise RuntimeError("synthetic worker exited before batch completion") from exc
+                if "receipt" in message:
+                    candidate = [*receipts, message["receipt"]]
+                    assemble_results(specs, candidate, require_complete=False)
+                    receipts = candidate
+                    continue
                 receive.close()
                 del readers[receive]
                 if "error" in message:
                     raise RuntimeError(f"synthetic worker failed: {message['error']}\n{message['traceback']}")
-                receipts.extend(message["receipts"])
+                if message.get("completed") is not True:
+                    raise RuntimeError("invalid synthetic worker completion")
         for process in processes:
             process.join(timeout=max(0, deadline - time.monotonic()))
             if process.is_alive():
@@ -261,6 +286,13 @@ def run_parallel(base_params, specs, *, workers, timeout, threads,
             raise RuntimeError("synthetic worker coverage is missing")
         results, summaries = assemble_results(specs, receipts)
         return results, summaries, data_files
+    except BaseException as exc:
+        # Preserve the original failure type (including timeout/cancellation).
+        # Only already validated, streamed receipts are diagnostic evidence.
+        exc.completed_results, exc.completed_summaries = assemble_results(
+            specs, receipts, require_complete=False,
+        )
+        raise
     finally:
         # Bound cleanup too: a stuck child must not outlive a failed formal step.
         for process in processes:

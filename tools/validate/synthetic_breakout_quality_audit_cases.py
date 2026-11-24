@@ -1125,8 +1125,11 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     )
 
     audit_root = Path(__file__).resolve().parents[2] / "services" / "audit"
+    from tools.validate.source_index import (
+        contains_source_expression, imports_symbol_from, read_source_top_level_function_names,
+    )
     reusable_period_sources = [
-        (audit_root / name).read_text(encoding="utf-8")
+        audit_root / name
         for name in (
             "opportunity_selection.py",
             "trade_outcome_path.py",
@@ -1136,18 +1139,18 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     check_true(
         "reusable_audit_period_consumers_do_not_reimplement_identical_private_period_helpers",
         all(
-            "resolve_strategy_compare_period(source)" in source_text
-            and "def _period(source)" not in source_text
-            for source_text in reusable_period_sources
+            contains_source_expression(source_path, "resolve_strategy_compare_period(source)")
+            and "_period" not in read_source_top_level_function_names(source_path)
+            for source_path in reusable_period_sources
         ),
     )
-    trade_path_source = (audit_root / "trade_outcome_path.py").read_text(encoding="utf-8")
-    membership_source = (audit_root / "selection_membership.py").read_text(encoding="utf-8")
+    trade_path_source = audit_root / "trade_outcome_path.py"
+    membership_source = audit_root / "selection_membership.py"
     check_true(
         "trade_path_consumes_membership_event_identity_without_duplicate_event_key_builder",
-        "event_key_series(table)" in trade_path_source
-        and "def _event_key(" not in trade_path_source
-        and membership_source.count("def event_key_series(") == 1,
+        contains_source_expression(trade_path_source, "event_key_series(table)")
+        and "_event_key" not in read_source_top_level_function_names(trade_path_source)
+        and read_source_top_level_function_names(membership_source).count("event_key_series") == 1,
     )
 
     opportunity_source = (
@@ -1155,12 +1158,13 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         / "services"
         / "audit"
         / "opportunity_selection.py"
-    ).read_text(encoding="utf-8")
+    )
     check_true(
         "reusable_opportunity_preflight_uses_selector_agnostic_planned_sidecars",
-        "load_strategy_arm_planned_sidecars(project_root, source=source, arm_id=str(arm_id))"
-        in opportunity_source
-        and "load_strategy_arm_pipeline_sidecars" not in opportunity_source,
+        contains_source_expression(opportunity_source,
+            "load_strategy_arm_planned_sidecars(project_root, source=source, arm_id=str(arm_id))")
+        and not imports_symbol_from(opportunity_source, "services.audit.strategy_compare_source",
+                                    "load_strategy_arm_pipeline_sidecars"),
     )
 
     from core.strategy_compare_policy import get_strategy_comparison_settings

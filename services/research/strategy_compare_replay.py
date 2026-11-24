@@ -120,7 +120,7 @@ def _run_scenario(
                   else "建立市場與訊號快取")
         print(f"\n[{name}] {action}")
     with ExitStack() as stack:
-        stack.enter_context(portfolio_entry_policy_context(
+        execution_contract = stack.enter_context(portfolio_entry_policy_context(
             entry_strategy, score_keys=entry_score_keys,
             unscored=(entry_strategy == "Daily" and entry_score_keys is None),
             daily_execution_contract=(
@@ -139,6 +139,7 @@ def _run_scenario(
             replay_counts=replay_counts, replay_execution_rows=replay_execution_rows,
             replay_selector_trace_rows=replay_selector_trace_rows,
             replay_preparation_cache=replay_preparation_cache,
+            execution_contract=execution_contract,
         )
 
 def _run_scenario_inside_source_context(
@@ -146,9 +147,12 @@ def _run_scenario_inside_source_context(
     max_positions, enable_rotation, quiet, replay_counts=None,
     replay_execution_rows=None, replay_selector_trace_rows=None,
     replay_preparation_cache=None,
+    execution_contract=None,
 ):
     if param_source_kind == "single_param":
-        context = load_portfolio_market_context(str(data_dir), params, verbose=not quiet)
+        context = load_portfolio_market_context(
+            str(data_dir), params, verbose=not quiet, execution_contract=execution_contract,
+        )
         if not quiet:
             print(f"[{name}] 執行 {start_date} ～ {end_date}")
         result = run_portfolio_simulation_prepared(
@@ -157,6 +161,7 @@ def _run_scenario_inside_source_context(
             start_year=pd.Timestamp(start_date).year, start_date=start_date, end_date=end_date,
             benchmark_ticker=PORTFOLIO_DEFAULT_BENCHMARK_TICKER, verbose=not quiet,
             pit_stats_index=context.get("all_pit_stats_index"),
+            execution_contract=execution_contract,
             replay_counts=replay_counts,
             replay_execution_rows=replay_execution_rows,
             replay_selector_trace_rows=replay_selector_trace_rows,
@@ -166,6 +171,7 @@ def _run_scenario_inside_source_context(
             print(f"[{name}] 執行 active-param ensemble replay {start_date} ～ {end_date}")
         result = run_portfolio_simulation_with_param_ensemble(
             str(data_dir), params,
+            execution_contract=execution_contract,
             max_positions=max_positions, enable_rotation=enable_rotation,
             start_year=pd.Timestamp(start_date).year, start_date=start_date, end_date=end_date,
             benchmark_ticker=PORTFOLIO_DEFAULT_BENCHMARK_TICKER,
@@ -179,6 +185,7 @@ def _run_scenario_inside_source_context(
             print(f"[{name}] 執行 rolling active-param replay {start_date} ～ {end_date}")
         result = run_portfolio_simulation_with_param_schedule(
             str(data_dir), params,
+            execution_contract=execution_contract,
             max_positions=max_positions, enable_rotation=enable_rotation,
             start_year=pd.Timestamp(start_date).year, start_date=start_date, end_date=end_date,
             benchmark_ticker=PORTFOLIO_DEFAULT_BENCHMARK_TICKER,

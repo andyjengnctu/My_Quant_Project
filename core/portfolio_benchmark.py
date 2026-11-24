@@ -1,5 +1,6 @@
 import threading
 from collections import OrderedDict
+from copy import deepcopy
 
 from core.portfolio_fast_data import get_fast_close, get_fast_close_on_or_before, has_fast_date
 from core.portfolio_stats import calc_annual_return_pct, calc_curve_stats, calc_sim_years
@@ -13,9 +14,14 @@ _BENCHMARK_PERIOD_STATS_CACHE_LOCK = threading.RLock()
 def _make_benchmark_period_cache_key(*, benchmark_data, sorted_dates, start_idx):
     if benchmark_data is None or not sorted_dates or start_idx >= len(sorted_dates):
         return None
-    first_date = sorted_dates[start_idx]
-    last_date = sorted_dates[-1]
-    return (id(benchmark_data), len(sorted_dates), int(start_idx), first_date, last_date)
+    # Own the effective numerical inputs, not a recyclable Python object ID.
+    # Include interior calendar dates and the pre-period anchor: both affect
+    # drawdown/period returns even when endpoints and row counts are unchanged.
+    dates = tuple(sorted_dates[start_idx:])
+    anchor_price, anchor_date = get_fast_close_on_or_before(benchmark_data, dates[0])
+    closes = tuple((date, get_fast_close(benchmark_data, date=date))
+                   for date in dates if has_fast_date(benchmark_data, date))
+    return dates, anchor_date, anchor_price, closes
 
 
 def _build_benchmark_period_stats(*, benchmark_data, sorted_dates, start_idx):
@@ -177,18 +183,22 @@ def _get_benchmark_period_stats(*, benchmark_data, sorted_dates, start_idx):
         cached = _BENCHMARK_PERIOD_STATS_CACHE.get(cache_key)
         if cached is not None:
             _BENCHMARK_PERIOD_STATS_CACHE.move_to_end(cache_key)
-            return cached
+            return deepcopy(cached)
+    dates, anchor_date, anchor_price, closes = cache_key
+    snapshot = {date: {'Close': price} for date, price in closes}
+    if anchor_date is not None:
+        snapshot[anchor_date] = {'Close': anchor_price}
     stats = _build_benchmark_period_stats(
-        benchmark_data=benchmark_data,
-        sorted_dates=sorted_dates,
-        start_idx=start_idx,
+        benchmark_data=snapshot,
+        sorted_dates=dates,
+        start_idx=0,
     )
     with _BENCHMARK_PERIOD_STATS_CACHE_LOCK:
         cached = _BENCHMARK_PERIOD_STATS_CACHE.get(cache_key)
         if cached is not None:
             _BENCHMARK_PERIOD_STATS_CACHE.move_to_end(cache_key)
-            return cached
-        _BENCHMARK_PERIOD_STATS_CACHE[cache_key] = stats
+            return deepcopy(cached)
+        _BENCHMARK_PERIOD_STATS_CACHE[cache_key] = deepcopy(stats)
         _BENCHMARK_PERIOD_STATS_CACHE.move_to_end(cache_key)
         while len(_BENCHMARK_PERIOD_STATS_CACHE) > BENCHMARK_PERIOD_STATS_CACHE_MAX_ITEMS:
             _BENCHMARK_PERIOD_STATS_CACHE.popitem(last=False)

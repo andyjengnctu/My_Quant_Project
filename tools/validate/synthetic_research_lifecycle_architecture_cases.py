@@ -144,8 +144,11 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
         case_id, "meta_architecture_contract",
     )
     from .check_result_utils import run_unittest_capability_cases
+    from .test_forward_publication import ForwardAdmissionTests, ForwardPublicationTests
     fit_checks, fit_details = run_unittest_capability_cases(
-        case_id, "meta_architecture_contract", (RealizedTargetFitIdentityCases,),
+        case_id, "meta_architecture_contract", (
+            RealizedTargetFitIdentityCases, ForwardAdmissionTests, ForwardPublicationTests,
+        ),
     )
     results.extend(fit_checks)
     summary["realized_target_fit"] = fit_details
@@ -2549,6 +2552,7 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
         test_settings = SimpleNamespace(filter_id="test_filter")
         with patch.object(app, "PROJECT_ROOT", root), \
              patch.object(app, "get_breakout_quality_workflow_settings", return_value=test_settings), \
+             patch.object(app, "_forward_publication_paths", return_value=(model_root, root / "evaluation")), \
              patch.object(app, "invalidate_rolling_model_source_cache", lambda: None), \
              patch.object(app, "_clear_continuous_forward_reuse_caches", lambda: None):
             count = app._recover_pending_model_fit_repairs((("TEST", "fixture_profile"),))

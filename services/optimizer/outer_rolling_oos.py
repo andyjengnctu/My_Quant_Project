@@ -983,7 +983,7 @@ def _aggregate_seed_ensemble_fold_results(*, task: dict, seed_results: list[dict
         "install_shared_cache_sec": sum(float(row.get("install_shared_cache_sec", 0.0) or 0.0) for row in seed_rows),
         "study_create_sec": sum(float(row.get("study_create_sec", 0.0) or 0.0) for row in seed_rows),
         "random_seed_ensemble": dict(_task_seed_ensemble_policy(task)),
-        "local_min_review_enabled": bool(is_optimizer_local_min_review_enabled()),
+        "local_min_review_enabled": bool(is_optimizer_local_min_review_enabled(model_mode="oos")),
         "optimizer_seeds": [_extract_seed_from_policy_schedules(row) for row in seed_rows],
     }
 

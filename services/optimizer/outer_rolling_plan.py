@@ -341,7 +341,7 @@ def _print_plan(
     for idx, fold in enumerate(folds, start=1):
         print(f"{idx}/{len(folds):<4} | {_fold_selection_label_display(fold):<15} | {_fold_label_display(fold):<26}")
     print(f"{C_GRAY}{'-' * 100}{C_RESET}")
-    print(f"LOCAL_MIN_SCORE              : {bool(is_optimizer_local_min_review_enabled())}")
+    print(f"LOCAL_MIN_SCORE              : {bool(is_optimizer_local_min_review_enabled(model_mode="oos"))}")
     print(f"INNER_VALIDATE_RANK          : {bool(OPTIMIZER_INNER_VALIDATE_ANTI_OVERFIT_ENABLED)}")
     print(f"DOMINANT_YEAR_DEPENDENCY     : {bool(OPTIMIZER_DOMINANT_YEAR_DEPENDENCY_ANTI_OVERFIT_ENABLED)}")
     print(f"{C_CYAN}{'=' * 100}{C_RESET}")

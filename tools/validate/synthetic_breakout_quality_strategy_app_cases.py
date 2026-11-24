@@ -1595,6 +1595,27 @@ def validate_breakout_quality_daily_pit_strategy_runtime_contract_case(_base_par
             and pd.isna(forward_table.loc[("2317", "2021-01-05"), "target_raw_r"])
         )
         daily_lookup_uses_precomputed_score_period = False
+        from tools.validate.test_forward_publication import independent_upstream_evidence
+        from services.breakout_quality.forward_model_source import load_forward_score_binding
+        from services.breakout_quality.fitted_model_artifacts import (
+            write_fitted_model_contract, current_default_fitting_settings,
+        )
+        report["standard_model_sop"] = {"evaluation_mode": "forward_oos"}
+        (output_dir / "continuous_ranker_report.json").write_text(
+            json.dumps(report), encoding="utf-8"
+        )
+        write_fitted_model_contract(
+            model_dir=artifact_paths.model_dir,
+            fitting_identity={"training_settings": current_default_fitting_settings()},
+            selected_epoch=3, epoch_selection={}, final_refit_history=[],
+            trainable_parameter_count=1, total_parameter_count=1,
+        )
+        with independent_upstream_evidence():
+            forward_binding = load_forward_score_binding(dataset="full",
+                project_root=root, filter_id=filter_id, model_architecture=architecture,
+                experiment_profile=profile_name, expected_seed=42,
+                model_dir=artifact_paths.model_dir, research_output_dir=output_dir,
+            )
         try:
             with patch.object(
                 pd.MultiIndex,
@@ -1609,6 +1630,7 @@ def validate_breakout_quality_daily_pit_strategy_runtime_contract_case(_base_par
                     model_architecture=architecture,
                     experiment_profile=profile_name,
                     score_path_override=str(score_path),
+                    score_binding=forward_binding,
                 )
             daily_lookup_uses_precomputed_score_period = (
                 lookup_payload["available"]

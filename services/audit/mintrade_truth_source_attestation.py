@@ -148,25 +148,9 @@ def attested_mintrade_source_sha256(relative: str, path: Path) -> str:
 
 @lru_cache(maxsize=1)
 def _truth_source_inventory() -> tuple[str, ...]:
-    """Read the producer's one declarative inventory without importing it.
-
-    Attestation must not depend back on the producer it certifies. Reading
-    this literal declaration preserves its single ownership and all original
-    producer bytes; no source alias or numerical implementation is changed.
-    """
-    path = Path(__file__).resolve().parents[2] / _SOURCE_OWNER
-    tree = ast.parse(path.read_text(encoding="utf-8-sig"), filename=str(path))
-    declarations = [node.value for node in tree.body if isinstance(node, ast.Assign)
-                    and any(isinstance(target, ast.Name) and target.id == "_TRUTH_SOURCE_MODULES"
-                            for target in node.targets)]
-    if len(declarations) != 1:
-        raise ValueError("Oracle truth source inventory missing or duplicated")
-    inventory = ast.literal_eval(declarations[0])
-    if not isinstance(inventory, tuple) or not inventory or any(
-            not isinstance(name, str) or Path(name).is_absolute() or ".." in Path(name).parts
-            for name in inventory):
-        raise ValueError("Oracle truth source inventory must be relative source paths")
-    return inventory
+    """Use the shared dependency leaf without importing the certified producer."""
+    from core.execution_source_dependencies import execution_source_inventory
+    return execution_source_inventory("mintrade_truth")
 
 
 @lru_cache(maxsize=1)
@@ -197,6 +181,8 @@ def _mintrade_source_fingerprint_proof() -> tuple[str, frozenset[str]]:
     for newline in (None, b"\n", b"\r\n"):
         for raw_owner in (False, True):
             hashes = {}
+            from core.file_integrity import canonical_json_sha256
+            hashes["@execution_sources"] = canonical_json_sha256(list(source_modules))
             for name, data in contents.items():
                 if name == _DL_OFF_ADAPTER:
                     hashes[name] = _DL_OFF_ADAPTER_PROVENANCE[0]
@@ -227,11 +213,16 @@ def _mintrade_source_fingerprint_proof() -> tuple[str, frozenset[str]]:
                     if value != hashes[name]:
                         variants.append({**hashes, name: value})
             for values in variants:
+                from core.research_execution_equivalence import project_reviewed_source_inventory
+                projected = project_reviewed_source_inventory(
+                    values, scope="mintrade_source_graph", project_root=root,
+                    source_encoding=newline,
+                )
                 for daily_sha in daily_sources:
                     digest = sha256(b"canonical_daily_source\0" + daily_sha.encode("ascii") + b"\n")
-                    for name in source_modules:
+                    for name, source_sha in projected.items():
                         digest.update(name.encode("utf-8") + b"\0")
-                        digest.update(values[name].encode("ascii") + b"\n")
+                        digest.update(source_sha.encode("ascii") + b"\n")
                     result.add(digest.hexdigest())
                     if values is hashes and newline is None and not raw_owner and daily_sha == daily:
                         executing = digest.hexdigest()

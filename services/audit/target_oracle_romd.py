@@ -2032,7 +2032,17 @@ def _arm_replay_policy(definition, *, plan: Mapping[str, Any], target: str,
     # Canonical witness must be part of the physical signed Replay identity,
     # not only its effective-context SHA. Preserve legacy policy bytes.
     from services.research.oracle_artifact_contract import attest_daily_candidate_execution
-    policy = attest_daily_candidate_execution(replay_policy)
+    if effective_context is not None:
+        selected_ranking_policy = str(effective_context["ranking_policy"])
+    else:
+        source_settings, source_base, source_exact = _contract(definition)
+        source_exact = source_exact or source_settings.arms[str(definition.source["exact_arm_id"])]
+        source_direct = (_direct_arm(definition, source_settings, source_base, source_exact)
+                         if plan["selectors"].get(target) == "direct" else None)
+        source_arm = (source_exact if target == _baseline_target(definition) else
+                      _target_reference_arm(definition, source_settings, plan, target, source_exact, source_direct))
+        selected_ranking_policy = str(source_arm.dl_runtime_mode)
+    policy = attest_daily_candidate_execution(replay_policy, ranking_policy=selected_ranking_policy)
     if _oracle_target_strategy(definition, target) == "Daily":
         policy["entry_policy"] = DAILY_ENTRY_CONTRACT
     if effective_context is not None:

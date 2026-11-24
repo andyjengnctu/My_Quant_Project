@@ -1564,7 +1564,31 @@ def forward_fitted_source_provenance_issues(
         elif not _file_record_matches(sidecar.get("model"), Path(model_dir) / "model.pt"):
             issues.append("fitted-model sidecar checkpoint hash mismatch")
         else:
-            fitted_source = dict(dict(sidecar.get("fitting_identity") or {}).get("source") or {})
+            fitting_identity = dict(sidecar.get("fitting_identity") or {})
+            # The sidecar binds checkpoint bytes to the FIT identity. A valid
+            # report seed/objective cannot override contradictory FIT evidence.
+            # Legacy sidecars may omit fields; never synthesize new identity.
+            for field in (
+                "filter_id", "model_architecture", "experiment_profile",
+                "experiment_settings", "model_spec", "training_objective",
+                "training_label_scope", "training_sample_scope",
+                "training_semantics", "continuous_target_id",
+            ):
+                if field in fitting_identity and field in model_manifest and (
+                    fitting_identity[field] != model_manifest[field]
+                ):
+                    issues.append(f"fitted-model {field} differs from model manifest")
+            report_training = dict(report.get("training") or {})
+            if "seed" in fitting_identity and fitting_identity["seed"] != report_training.get("seed"):
+                issues.append("fitted-model seed differs from training report")
+            fit_result = dict(sidecar.get("fitting_result") or {})
+            fit_epoch = int(fit_result.get("selected_epoch", 0) or 0)
+            if fit_epoch < 1:
+                issues.append("fitted-model selected_epoch missing or invalid")
+            for payload in (model_manifest, report_training):
+                if "selected_epoch" in payload and int(payload["selected_epoch"] or 0) != fit_epoch:
+                    issues.append("fitted-model selected_epoch differs from model/report")
+            fitted_source = dict(fitting_identity.get("source") or {})
             # Older sidecars did not persist these keys; their original manifest
             # AND report above must still prove current source bytes. Present
             # keys cannot be ignored when inconsistent.
@@ -1869,9 +1893,8 @@ def write_fitted_model_contract(
         "model": build_file_manifest(model_path),
     }
     path = model_dir / FITTED_MODEL_MANIFEST_FILENAME
-    temp = path.with_name(f".{path.name}.tmp")
-    temp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    temp.replace(path)
+    from core.file_integrity import atomic_write_text
+    atomic_write_text(path, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
     return path
 
 

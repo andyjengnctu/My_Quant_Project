@@ -718,17 +718,17 @@ def append_strategy_compare_preparation_contract_checks(
     )
 
     append_optimizer_rolling_seed_provenance_checks(results=results, case_id=case_id)
-    from unittest import defaultTestLoader, TextTestRunner
+    from .check_result_utils import run_unittest_capability_cases
     from .test_optimizer_boundaries import OptimizerBoundaryTests
-    boundary_output = io.StringIO()
-    boundary_result = TextTestRunner(stream=boundary_output).run(
-        defaultTestLoader.loadTestsFromTestCase(OptimizerBoundaryTests)
+    boundary_rows, boundary_summary = run_unittest_capability_cases(
+        case_id, "synthetic_breakout_quality", [OptimizerBoundaryTests],
     )
+    results.extend(boundary_rows)
     add_check(
         results, "synthetic_breakout_quality", case_id,
         "optimizer_contract_inspection_and_environment_boundaries",
-        True, boundary_result.wasSuccessful(),
-        note=boundary_output.getvalue() if not boundary_result.wasSuccessful() else "",
+        True, not boundary_summary["failures"],
+        note=str(boundary_summary["failures"]) if boundary_summary["failures"] else "",
     )
 
 

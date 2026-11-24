@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections import defaultdict
 from contextlib import contextmanager
 from contextvars import ContextVar
+from dataclasses import dataclass
 from typing import Mapping, Iterator
 
 import pandas as pd
@@ -58,6 +59,70 @@ def daily_execution_contract_from_params(params) -> str:
     if not isinstance(adaptation, Mapping):
         raise ValueError("Invalid strategy param adaptation contract")
     return resolve_daily_execution_contract(adaptation.get("daily_execution_contract"))
+
+
+@dataclass(frozen=True)
+class PortfolioExecutionContract:
+    """Serializable execution semantics; mutable entry/calendar state stays local.
+
+    Preparation depends on the execution mode, not the scored/unscored membership.
+    The latter is deliberately retained for engine boundary validation.
+    """
+    strategy: str = "Breakout"
+    daily_execution_contract: str = DAILY_EXECUTION_LEGACY
+    candidate_universe: str = "breakout_setup"
+
+    def __post_init__(self):
+        mode = resolve_daily_execution_contract(self.daily_execution_contract)
+        object.__setattr__(self, "daily_execution_contract", mode)
+        if self.strategy == "Breakout":
+            if mode != DAILY_EXECUTION_LEGACY or self.candidate_universe != "breakout_setup":
+                raise ValueError("Breakout execution cannot consume Daily candidate semantics")
+        elif self.strategy != "Daily" or self.candidate_universe not in {"daily_unscored", "daily_scored"}:
+            raise ValueError("Daily execution requires an explicit candidate universe")
+
+
+_DEFAULT_EXECUTION = PortfolioExecutionContract()
+_ACTIVE_EXECUTION: ContextVar[PortfolioExecutionContract | None] = ContextVar(
+    "portfolio_execution_contract", default=None,
+)
+
+
+def resolve_portfolio_execution_contract(contract=None, *, daily_execution_contract=None):
+    """Resolve once at public boundaries; explicit values never inherit ambient mode."""
+    if contract is not None and not isinstance(contract, PortfolioExecutionContract):
+        raise TypeError("Portfolio execution requires PortfolioExecutionContract")
+    if daily_execution_contract is not None:
+        mode = resolve_daily_execution_contract(daily_execution_contract)
+        if contract is not None and contract.daily_execution_contract != mode:
+            raise ValueError("Conflicting Portfolio execution contracts")
+        if contract is None:
+            active = _ACTIVE_EXECUTION.get()
+            contract = (active if active is not None and active.daily_execution_contract == mode else
+                        _DEFAULT_EXECUTION if mode == DAILY_EXECUTION_LEGACY else
+                        PortfolioExecutionContract("Daily", mode, "daily_unscored"))
+    return contract if contract is not None else (_ACTIVE_EXECUTION.get() or _DEFAULT_EXECUTION)
+
+
+def resolve_portfolio_entry_source(contract, entry_source=None):
+    contract = resolve_portfolio_execution_contract(contract)
+    if contract.strategy == "Breakout":
+        if entry_source is not None:
+            raise ValueError("Breakout execution cannot receive Daily entry source")
+        return None
+    source = entry_source
+    if source is None and _ACTIVE_EXECUTION.get() == contract:
+        source = _ACTIVE_ENTRY.get()
+    if source is None and contract.candidate_universe == "daily_unscored":
+        source = UnscoredDailyEntrySource()
+        source.daily_execution_contract = contract.daily_execution_contract
+    if source is None:
+        raise ValueError("Scored Daily execution requires its verified entry source")
+    if (isinstance(source, UnscoredDailyEntrySource)) != (contract.candidate_universe == "daily_unscored"):
+        raise ValueError("Daily entry source and execution universe disagree")
+    if getattr(source, "daily_execution_contract", None) != contract.daily_execution_contract:
+        raise ValueError("Daily entry source and execution mode disagree")
+    return source
 
 
 class DailyEntrySource:
@@ -149,20 +214,18 @@ class UnscoredDailyEntrySource(DailyEntrySource):
 _ACTIVE_ENTRY: ContextVar[DailyEntrySource | None] = ContextVar(
     "portfolio_scored_daily_entry_source", default=None,
 )
-# Signal preparation can run on a separate thread or spawned process. Workers
-# receive the contract explicitly rather than relying on context inheritance.
-_SIGNAL_DAILY_EXECUTION: ContextVar[str | None] = ContextVar(
-    "portfolio_daily_signal_execution_contract", default=None,
-)
 
 
 @contextmanager
 def daily_signal_execution_context(execution_contract: str) -> Iterator[None]:
-    token = _SIGNAL_DAILY_EXECUTION.set(resolve_daily_execution_contract(execution_contract))
+    contract = resolve_portfolio_execution_contract(daily_execution_contract=execution_contract)
+    if _ACTIVE_ENTRY.get() is not None and contract != _ACTIVE_EXECUTION.get():
+        raise ValueError("Signal preparation disagrees with the active Portfolio execution")
+    token = _ACTIVE_EXECUTION.set(contract)
     try:
         yield
     finally:
-        _SIGNAL_DAILY_EXECUTION.reset(token)
+        _ACTIVE_EXECUTION.reset(token)
 
 
 def current_daily_entry_source() -> DailyEntrySource | None:
@@ -170,13 +233,7 @@ def current_daily_entry_source() -> DailyEntrySource | None:
 
 
 def current_daily_execution_contract() -> str:
-    explicit_worker_contract = _SIGNAL_DAILY_EXECUTION.get()
-    if explicit_worker_contract is not None:
-        return explicit_worker_contract
-    source = _ACTIVE_ENTRY.get()
-    return resolve_daily_execution_contract(
-        getattr(source, "daily_execution_contract", None) if source is not None else None
-    )
+    return resolve_portfolio_execution_contract().daily_execution_contract
 
 
 @contextmanager
@@ -192,7 +249,13 @@ def portfolio_entry_policy_context(
     if strategy == "Breakout":
         if score_keys is not None or unscored:
             raise ValueError("Breakout Entry cannot receive Daily candidate inputs")
-        yield
+        execution_token = _ACTIVE_EXECUTION.set(_DEFAULT_EXECUTION)
+        entry_token = _ACTIVE_ENTRY.set(None)
+        try:
+            yield _DEFAULT_EXECUTION
+        finally:
+            _ACTIVE_ENTRY.reset(entry_token)
+            _ACTIVE_EXECUTION.reset(execution_token)
         return
     if strategy != "Daily" or (score_keys is None) == (not unscored):
         raise ValueError("Daily Entry requires exactly one verified score universe or unscored mode")
@@ -200,11 +263,17 @@ def portfolio_entry_policy_context(
         raise RuntimeError("Nested Daily Entry source is prohibited")
     source = UnscoredDailyEntrySource() if unscored else DailyEntrySource(score_keys)
     source.daily_execution_contract = resolve_daily_execution_contract(daily_execution_contract)
+    contract = PortfolioExecutionContract(
+        "Daily", source.daily_execution_contract,
+        "daily_unscored" if unscored else "daily_scored",
+    )
+    execution_token = _ACTIVE_EXECUTION.set(contract)
     token = _ACTIVE_ENTRY.set(source)
     try:
-        yield
+        yield contract
     finally:
         _ACTIVE_ENTRY.reset(token)
+        _ACTIVE_EXECUTION.reset(execution_token)
 
 
 @contextmanager

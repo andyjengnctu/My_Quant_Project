@@ -8,7 +8,7 @@ from typing import Any
 from uuid import uuid4
 
 from core.file_integrity import atomic_write_json, canonical_json_sha256, load_json_strict
-from services.trading.state_lock import serialized_trading_state_mutation
+from services.trading.state_lock import serialized_trading_state_mutation, assert_trading_state_writable
 from services.trading.accounting_policy import overlay_trading_accounting_params
 from services.trading.entry_lifecycle_context import resolve_trading_confirmed_entry_seed
 from services.trading.strategy_param_runtime import build_trading_order_strategy_lineage, resolve_trading_position_management_binding
@@ -154,6 +154,7 @@ def confirm_trading_buy_order_fill(
     """Apply one broker-confirmed BUY fill to account and order state as one recoverable transaction."""
     root = Path(project_root).resolve()
     recover_trading_fill_transaction(root)
+    assert_trading_state_writable(root)
     account_path = resolve_trading_account_state_path(root)
     order_path = resolve_trading_order_state_path(root)
     if not account_path.is_file():
@@ -328,6 +329,7 @@ def _confirm_trading_sell_order_fill(
 ) -> dict[str, Any]:
     root = Path(project_root).resolve()
     recover_trading_fill_transaction(root)
+    assert_trading_state_writable(root)
     account_path = resolve_trading_account_state_path(root)
     order_path = resolve_trading_order_state_path(root)
     if not account_path.is_file() or not order_path.is_file():

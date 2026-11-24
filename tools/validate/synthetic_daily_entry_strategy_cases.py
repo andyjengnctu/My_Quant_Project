@@ -1678,13 +1678,15 @@ class DailyEntryStrategyCases(TestCase):
         from services.research.oracle_artifact_contract import (
             _LEGACY_V1_REPLAY_IMPLEMENTATION,
             replay_implementation_sha256, portfolio_candidate_execution_sha256,
-            execution_context,
+            execution_context, legacy_import_permitted,
         )
         from core.portfolio_entry_policy import (
             DAILY_EXECUTION_ATR_LIMIT, DAILY_EXECUTION_FULL_FILTERS,
         )
         legacy = replay_implementation_sha256()
-        self.assertEqual(legacy, _LEGACY_V1_REPLAY_IMPLEMENTATION)
+        # The benchmark cache correctness fix changes the executed calculation
+        # witness; an old producer must not certify this new implementation.
+        self.assertNotEqual(legacy, _LEGACY_V1_REPLAY_IMPLEMENTATION)
         p19 = portfolio_candidate_execution_sha256(
             daily_execution_contract=DAILY_EXECUTION_ATR_LIMIT)
         p20 = portfolio_candidate_execution_sha256(
@@ -1721,6 +1723,10 @@ class DailyEntryStrategyCases(TestCase):
         old = digest({"entry_policy": "daily_stockday_close_limit_next_exchange_session_v1"})
         self.assertNotIn("daily_candidate_implementation_sha256", old["replay_policy"])
         self.assertEqual(old["replay_implementation_sha256"], legacy)
+        self.assertFalse(legacy_import_permitted(old))
+        self.assertTrue(legacy_import_permitted({
+            **old, "replay_implementation_sha256": _LEGACY_V1_REPLAY_IMPLEMENTATION,
+        }))
         for mode, expected in ((DAILY_EXECUTION_ATR_LIMIT, p19),
                                (DAILY_EXECUTION_FULL_FILTERS, p20)):
             actual = digest({"daily_execution_contract": mode})

@@ -48,13 +48,8 @@ def truth_producer_fingerprint() -> str:
     digest = sha256(b"formal_full_p17_netpnl_truth_v1\0")
     digest.update(min_truth_producer_fingerprint("net_pnl").encode("ascii") + b"\n")
     sources = {}
-    for relative in (
-        "services/audit/fulltrade_oracle_truth.py",
-        "services/breakout_quality/formal_fulltrade_training_source.py",
-        "services/optimizer/strategy_param_service.py",
-        "services/optimizer/strategy_param_training.py",
-        "services/optimizer/strategy_param_contracts.py",
-    ):
+    from core.execution_source_dependencies import execution_source_inventory
+    for relative in execution_source_inventory("fulltrade_truth"):
         code = root / relative
         if not code.is_file():
             raise DailyTrade40OracleBlockedError(f"FullTrade Oracle source missing: {relative}")

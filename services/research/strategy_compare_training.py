@@ -374,6 +374,7 @@ def validate_strategy_compare_training_artifacts(
     research_dir: str | Path | None,
     comparison_start: str | None,
     comparison_end: str | None,
+    dataset: str | None = None,
     point_in_time_dir_override: str | Path | None = None,
 ) -> dict[str, Any]:
     """Validate one completed Strategy Compare model unit in any output namespace.
@@ -460,28 +461,23 @@ def validate_strategy_compare_training_artifacts(
     for label, path in paths.items():
         if not path.is_file():
             raise FileNotFoundError(f"Strategy Compare {label}工件不存在: {path.name}")
-    manifest = _read_json(paths["manifest"])
-    report = _read_json(paths["report"])
-    for payload, label in ((manifest, "manifest"), (report, "report")):
-        for field, expected in (
-            ("filter_id", source.filter_id),
-            ("experiment_profile", source.experiment_profile),
-            ("model_architecture", source.model_architecture),
-        ):
-            if str(payload.get(field) or "") != str(expected):
-                raise ValueError(f"Strategy Compare {label} {field}不一致")
-    training = dict(report.get("training") or {})
-    if int(training.get("seed", -1)) != int(seed):
-        raise ValueError("Strategy Compare continuous report seed不一致")
-    outer_policy = dict(manifest.get("outer_oos_policy") or {})
-    execution_start = _normalize_date(outer_policy.get("oos_start_date"))
-    score_table = load_continuous_ranker_oos_score_table_from_path(
-        str(paths["score"]), str(source.experiment_profile)
+    resolved_dataset = dataset if dataset is not None else getattr(workflow, "strategy_dataset", None)
+    if str(resolved_dataset) not in {"reduced", "full"}:
+        raise ValueError("Forward training validation requires its prepared Dataset scope")
+    from services.breakout_quality.forward_model_source import load_forward_score_binding
+    binding = load_forward_score_binding(
+        dataset=str(resolved_dataset),
+        project_root=root, filter_id=str(source.filter_id),
+        model_architecture=str(source.model_architecture),
+        experiment_profile=str(source.experiment_profile), expected_seed=int(seed),
+        model_dir=model_root, research_output_dir=research_root,
     )
-    score_available_from = _normalize_date(score_table.attrs.get("available_from"))
-    score_available_through = _normalize_date(score_table.attrs.get("available_through"))
-    if execution_start > score_available_from:
-        raise ValueError("Strategy Compare continuous score時間契約不一致")
+    contract = binding.contract
+    report = dict(contract.report)
+    training = dict(report.get("training") or {})
+    execution_start = str(contract.execution_start)
+    score_available_from = str(contract.available_from)
+    score_available_through = str(contract.available_through)
     if required_start is not None and score_available_from > required_start:
         raise ValueError("Strategy Compare continuous score起始覆蓋不足")
     if required_end is not None and score_available_through < required_end:
@@ -510,6 +506,7 @@ def run_strategy_compare_training_unit(
     log_path: str | Path,
     comparison_start: str | None,
     comparison_end: str | None,
+    dataset: str | None = None,
     point_in_time_dir_override: str | Path | None = None,
     checkpoint_cache_root: str | Path | None = None,
     fit_source_pit_dirs: tuple[str | Path, ...] = (),
@@ -649,6 +646,7 @@ def run_strategy_compare_training_unit(
         else metadata.get("score_end_date")
     )
     artifacts = validate_strategy_compare_training_artifacts(
+        dataset=dataset,
         project_root=root,
         source=source,
         workflow=workflow,

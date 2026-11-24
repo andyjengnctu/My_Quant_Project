@@ -20,6 +20,7 @@ from filters.breakout_quality.artifact_dependency_registry import (
 from filters.breakout_quality.paths import (
     build_filter_artifact_paths_from_dir,
     resolve_filter_artifact_paths,
+    resolve_filter_model_output_dir,
 )
 from filters.breakout_quality.ranking_score_store import (
     load_continuous_ranker_oos_contract,
@@ -107,6 +108,7 @@ def load_forward_model_source(
     research_output_dir_override: Path | None = None,
     settings=None, canonical_loader=None, canonical_path_resolver=None,
     fitting_validator=None, source_validator=None,
+    require_scores: bool = False,
 ):
     """Return (verified canonical source, reason); isolate both paths together.
 
@@ -129,6 +131,7 @@ def load_forward_model_source(
                 str(experiment_profile),
                 model_dir=Path(model_dir_override),
                 research_output_dir=Path(research_output_dir_override),
+                require_scores=bool(require_scores),
             )
             model_paths = build_filter_artifact_paths_from_dir(
                 filter_id=str(filter_id), model_architecture=str(model_architecture),
@@ -141,12 +144,12 @@ def load_forward_model_source(
             if canonical_loader is None:
                 contract = load_continuous_ranker_oos_contract(
                     str(root), str(filter_id), str(model_architecture),
-                    str(experiment_profile), require_scores=False,
+                    str(experiment_profile), require_scores=bool(require_scores),
                 )
             else:
                 contract = canonical_loader(
                     str(root), str(filter_id), str(model_architecture),
-                    str(experiment_profile), require_scores=False,
+                    str(experiment_profile), require_scores=bool(require_scores),
                 )
             if canonical_path_resolver is None:
                 model_paths = resolve_filter_artifact_paths(
@@ -163,6 +166,14 @@ def load_forward_model_source(
             "training seed不一致: "
             f"artifact={int(contract.seed)}, configured={int(expected_seed)}"
         )
+    if require_scores:
+        from core.breakout_quality_fit_contract_version import published_fit_contract_version_state
+        version = published_fit_contract_version_state(
+            experiment_profile=str(experiment_profile),
+            publication_dir=model_paths.model_dir, rolling=False,
+        )
+        if version[0] != "CURRENT":
+            return None, f"Forward FIT contract version is not CURRENT: {version}"
     fitted_args = dict(
         model_dir=model_paths.model_dir,
         report_path=Path(contract.report_path),
@@ -197,3 +208,64 @@ def load_forward_model_source(
             + "; ".join(completeness_issues[:8])
         )
     return contract, None
+
+
+def load_forward_score_binding(
+    *, project_root: str | Path, filter_id: str, model_architecture: str,
+    experiment_profile: str, expected_seed: int, dataset: str,
+    max_tickers: int = 0, model_dir: Path | None = None,
+    research_output_dir: Path | None = None,
+):
+    """Admit an isolated replay only after the complete Forward READY gate.
+
+    The binding is runtime-only. It carries neither new scientific identity nor
+    report fields, and detects a publisher replacing any admitted file.
+    """
+    from core.file_integrity import file_change_signature
+    from filters.breakout_quality.ranking_score_store import (
+        CONTINUOUS_RANKER_REPORT_FILENAME, VerifiedForwardScoreBinding,
+        resolve_continuous_ranker_oos_score_path,
+    )
+    from services.breakout_quality.fitted_model_artifacts import FITTED_MODEL_MANIFEST_FILENAME
+
+    if (model_dir is None) != (research_output_dir is None):
+        raise ValueError("Forward isolated model/report directory pair incomplete")
+    if model_dir is None:
+        model_dir = resolve_filter_artifact_paths(
+            project_root, filter_id, model_architecture, experiment_profile,
+        ).model_dir
+        research_output_dir = resolve_filter_model_output_dir(
+            project_root, filter_id, model_architecture, experiment_profile,
+        )
+    paths = build_filter_artifact_paths_from_dir(
+        filter_id=filter_id, model_architecture=model_architecture,
+        experiment_profile=experiment_profile, model_dir=Path(model_dir),
+    )
+    # Pin only contract dependencies, including an absent legacy FIT sidecar.
+    # Unrelated diagnostic/log writes must not invalidate an admitted source.
+    score_name = resolve_continuous_ranker_oos_score_path(
+        project_root, filter_id, model_architecture, experiment_profile,
+    ).name
+    candidates = (
+        paths.model_path, paths.manifest_path,
+        Path(research_output_dir) / CONTINUOUS_RANKER_REPORT_FILENAME,
+        Path(research_output_dir) / score_name,
+        Path(model_dir) / FITTED_MODEL_MANIFEST_FILENAME,
+    )
+    pins = tuple((str(path.resolve()), file_change_signature(path))
+                 for path in candidates if not path.is_dir())
+    contract, reason = load_forward_model_source(
+        project_root=project_root, filter_id=filter_id,
+        model_architecture=model_architecture, experiment_profile=experiment_profile,
+        expected_seed=int(expected_seed), dataset=dataset, max_tickers=int(max_tickers),
+        model_dir_override=Path(model_dir), research_output_dir_override=Path(research_output_dir),
+        require_scores=True,
+    )
+    if contract is None:
+        raise ValueError(f"Forward score source is not READY: {reason}")
+    binding = VerifiedForwardScoreBinding(contract=contract, file_pins=pins)
+    binding.verify(
+        score_path=str(contract.score_path), filter_id=filter_id,
+        model_architecture=model_architecture, experiment_profile=experiment_profile,
+    )
+    return binding

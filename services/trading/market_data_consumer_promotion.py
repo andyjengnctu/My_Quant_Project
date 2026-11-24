@@ -11,6 +11,7 @@ from services.trading.account_state import load_trading_account_state
 from services.trading.data_readiness import build_trading_data_readiness_from_evidence
 from services.trading.live_reentry import resolve_trading_live_reentry_required_tickers
 from services.trading.market_data_consumer import (
+    TradingConsumerPublicationConflict,
     load_trading_v2_consumer_state,
     publish_trading_v2_consumer_state,
 )
@@ -54,6 +55,17 @@ def promote_trading_v2_consumer_state_if_ready(
     target_date: str,
 ) -> dict[str, Any]:
     """Finalize a newer execution target once active dependencies are READY."""
+    # Re-capture both current state and immutable source view after a concurrent
+    # publication. Never retry a stale prepared state with a newer CAS token.
+    for attempt in range(3):
+        try:
+            return _promote_consumer_once(project_root, target_date=target_date)
+        except TradingConsumerPublicationConflict:
+            if attempt == 2:
+                raise
+
+
+def _promote_consumer_once(project_root, *, target_date):
 
     root = Path(project_root).resolve()
     candidate = str(target_date or "").strip()
@@ -118,6 +130,7 @@ def promote_trading_v2_consumer_state_if_ready(
     state = publish_trading_v2_consumer_state(
         root,
         market_date=candidate,
+        expected_state_fingerprint=None if prior is None else str(prior["state_fingerprint"]),
         required_position_tickers=required_position_tickers,
         required_reentry_tickers=required_reentry_tickers,
         view=publication_view,

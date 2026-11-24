@@ -19,6 +19,8 @@ from pathlib import Path
 from typing import Any, Mapping
 from uuid import uuid4
 
+from core.execution_source_dependencies import execution_source_inventory, project_ranking_policy_source
+from core.research_execution_equivalence import reviewed_ranking_source_sha256
 from core.file_integrity import (
     canonical_json_sha256, is_sha256_hex, exclusive_file_lock, atomic_replace_with_retry,
 )
@@ -315,23 +317,64 @@ def calculation_source(relative: str, name: str, *, bound_literals=None) -> str:
     )
 
 
-@lru_cache(maxsize=1)
-def replay_implementation_sha256() -> str:
-    """Numerical trade owners only; models, loaders and report code excluded."""
-    code_root = Path(__file__).resolve().parents[2]
-    owners = (
-        "core/position_step.py", "core/position_management.py", "core/exit_priority.py",
-        "core/entry_plans.py", "core/extended_signals.py", "core/order_lot_policy.py",
-        "core/exact_accounting.py", "core/fee_rebate.py", "core/price_utils.py",
-        "core/selection_policy.py", "core/signal_utils.py", "core/breakout_false_filter.py",
-        "core/capital_policy.py",
+@lru_cache(maxsize=512)
+def _source_content_attestation(content: str | bytes, *, is_python: bool,
+                                is_ranking: bool = False, ranking_policy=None):
+    """Cache pure parsing by complete source content and selected semantics.
+
+    Callers still read every actual file. No path/stat/PASS cache can hide a
+    same-size edit, restored timestamp, test mutation or changed descriptor.
+    """
+    if is_python:
+        parsed = ast.parse(content)
+        if is_ranking:
+            parsed = project_ranking_policy_source(parsed, ranking_policy)
+        payload = _syntax_payload(_CalculationSyntax().visit(parsed))
+    else:
+        payload = {"native_source_sha256": sha256(content).hexdigest()}
+    return payload, canonical_json_sha256(payload)
+
+
+def _source_owner_attestation(path: Path, *, ranking_policy=None):
+    is_python = path.suffix == ".py"
+    is_ranking = path.name == "ranking_policy.py"
+    content = path.read_text(encoding="utf-8-sig") if is_python else path.read_bytes()
+    return _source_content_attestation(
+        content, is_python=is_python, is_ranking=is_ranking,
+        ranking_policy=ranking_policy if is_ranking else None,
     )
-    return canonical_json_sha256({relative: _syntax_payload(_CalculationSyntax().visit(
-        ast.parse((code_root / relative).read_text(encoding="utf-8-sig")))) for relative in owners})
 
 
-@lru_cache(maxsize=4)
-def portfolio_candidate_execution_sha256(*, daily_execution_contract: str | None = None) -> str:
+def _source_owner_payload(path: Path, *, ranking_policy=None):
+    return _source_owner_attestation(path, ranking_policy=ranking_policy)[0]
+
+
+@lru_cache(maxsize=128)
+def replay_implementation_sha256(*, ranking_policy: str | None = None) -> str:
+    """Attest the selected Portfolio capability and its delegated numerical owners."""
+    code_root = Path(__file__).resolve().parents[2]
+    owners = execution_source_inventory("replay")
+    records = {relative: _source_owner_attestation(code_root / relative, ranking_policy=ranking_policy)
+               for relative in owners}
+    parts = {relative: record[0] for relative, record in records.items()}
+    # A removed dependency must not recreate the old shorter inventory by
+    # accident. The expanded graph is itself an attested input.
+    parts["@execution_sources"] = list(owners)
+    # The old witness hashes syntax payloads directly. Certified newly covered
+    # dependencies can be omitted only as one unchanged group; original payloads
+    # are always read live, so this is not an alias for a historical result hash.
+    hashes = {relative: record[1] for relative, record in records.items()}
+    hashes["@execution_sources"] = canonical_json_sha256(parts["@execution_sources"])
+    ranking_owner = "core/ranking_policy.py"
+    hashes[ranking_owner] = reviewed_ranking_source_sha256(hashes[ranking_owner], project_root=code_root)
+    projected = project_reviewed_source_inventory(
+        hashes, scope="replay_numerics", project_root=code_root,
+    )
+    return canonical_json_sha256({relative: parts[relative] for relative in projected})
+
+
+@lru_cache(maxsize=128)
+def portfolio_candidate_execution_sha256(*, daily_execution_contract: str | None = None, ranking_policy: str | None = None) -> str:
     """Attest executable portfolio capabilities for a registered execution scope.
 
     This extends the shared replay witness without revising the frozen
@@ -342,28 +385,7 @@ def portfolio_candidate_execution_sha256(*, daily_execution_contract: str | None
     changes, including daily candidate capacity and selector decisions.
     """
     code_root = Path(__file__).resolve().parents[2]
-    owners = (
-        "core/portfolio_engine.py", "core/portfolio_day_candidates.py",
-        "core/portfolio_candidate_admission.py", "core/portfolio_candidates.py",
-        "core/portfolio_day_context.py", "core/portfolio_day_events.py",
-        "core/portfolio_replay_support.py", "core/portfolio_benchmark.py",
-        "core/portfolio_day_equity.py", "core/portfolio_day_signal_lifecycle.py",
-        "core/portfolio_capacity_rows.py", "core/portfolio_terminal_equity.py",
-        "core/portfolio_terminal_statistics.py",
-        "core/portfolio_terminal_reporting.py", "core/portfolio_run_result.py",
-        "core/portfolio_entries.py",
-        "core/portfolio_exits.py", "core/portfolio_entry_selection.py",
-        "core/portfolio_entry_selection_common.py",
-        "core/portfolio_entry_selection_max_dl.py",
-        "core/portfolio_ensemble.py", "core/portfolio_entry_plans.py",
-        "core/portfolio_entry_policy.py", "core/portfolio_param_runtime.py",
-        "core/portfolio_fast_data.py", "core/portfolio_stats.py",
-        "core/portfolio_fast_access.py",
-        "core/ranking_policy.py", "core/portfolio_run_state.py",
-        "core/buy_sort.py", "core/backtest_core.py", "core/backtest_finalize.py",
-        "core/seed_ensemble_policy.py", "core/history_filters.py",
-        "services/portfolio_replay.py", "services/portfolio_replay_runtime.py",
-    )
+    owners = execution_source_inventory("portfolio_candidates")
     # Optional capabilities belong only to the arms that execute them.  A
     # revision to Daily Full candidate admission must never invalidate a
     # Min ATR-limit or any legacy Breakout/Daily replay.  The shared portfolio
@@ -375,16 +397,24 @@ def portfolio_candidate_execution_sha256(*, daily_execution_contract: str | None
     mode = resolve_daily_execution_contract(daily_execution_contract)
     if mode not in {DAILY_EXECUTION_ATR_LIMIT, DAILY_EXECUTION_FULL_FILTERS}:
         raise ValueError("Scoped portfolio source requires registered new Daily execution")
-    optional = (("core/daily_common_entry_filters.py",)
+    optional = (execution_source_inventory("daily_common_filters")
                 if mode == DAILY_EXECUTION_FULL_FILTERS else ())
     parts = {"daily_execution_contract": mode}
-    for relative in dict.fromkeys((*owners, *optional)):
+    inventory = tuple(dict.fromkeys((*owners, *optional)))
+    # Optional mode owners remain ordinary entries outside the common migration
+    # group. Their presence/absence changes the hash independently.
+    parts["@execution_sources"] = canonical_json_sha256(list(owners))
+    for relative in inventory:
         path = code_root / relative
         if not path.is_file():
             raise ValueError(f"Oracle replay numerical owner missing: {relative}")
-        parsed = ast.parse(path.read_text(encoding="utf-8-sig"))
-        parts[relative] = canonical_json_sha256(
-            _syntax_payload(_CalculationSyntax().visit(parsed)))
+        _, digest = _source_owner_attestation(path, ranking_policy=ranking_policy)
+        if relative == "core/ranking_policy.py":
+            parts[relative] = reviewed_ranking_source_sha256(digest, project_root=code_root)
+        else:
+            parts[relative] = digest
+    if mode == DAILY_EXECUTION_FULL_FILTERS:
+        parts = project_reviewed_source_inventory(parts, scope="portfolio_full_filters", project_root=code_root)
     return canonical_json_sha256(project_reviewed_source_inventory(
         parts, scope="portfolio_candidates", project_root=code_root,
     ))
@@ -589,7 +619,7 @@ def source_calculation_contract(*, recipe: str, profile_id: str,
     }
 
 
-def attest_daily_candidate_execution(policy: Mapping[str, Any]) -> dict[str, Any]:
+def attest_daily_candidate_execution(policy: Mapping[str, Any], *, ranking_policy: str | None = None) -> dict[str, Any]:
     """One canonical P19/P20 numerical witness for planning AND signed replay.
 
     Legacy policies are byte-for-byte unchanged: new Daily-only capabilities
@@ -604,7 +634,7 @@ def attest_daily_candidate_execution(policy: Mapping[str, Any]) -> dict[str, Any
     daily_mode = resolve_daily_execution_contract(result.get("daily_execution_contract"))
     if daily_mode in {DAILY_EXECUTION_ATR_LIMIT, DAILY_EXECUTION_FULL_FILTERS}:
         required_sha = portfolio_candidate_execution_sha256(
-            daily_execution_contract=daily_mode,
+            daily_execution_contract=daily_mode, ranking_policy=ranking_policy,
         )
         if ("daily_candidate_implementation_sha256" in result and
                 result["daily_candidate_implementation_sha256"] != required_sha):
@@ -630,11 +660,11 @@ def execution_context(*, dataset: str, price_sha256: str, param_sha256: str,
     # The same witness must be present in the physical signed Replay policy
     # and the derived effective context (see _arm_replay_policy). A read-only
     # context witness alone is insufficient to authorize native receipt reuse.
-    policy = attest_daily_candidate_execution(oracle_replay_policy(replay_policy))
+    policy = attest_daily_candidate_execution(oracle_replay_policy(replay_policy), ranking_policy=ranking_policy)
     payload = {
         "schema": _SCHEMA, "purpose": "hindsight_oracle_completed_replay",
         "replay_calculation_revision": REPLAY_CALCULATION_REVISION,
-        "replay_implementation_sha256": replay_implementation_sha256(),
+        "replay_implementation_sha256": replay_implementation_sha256(ranking_policy=ranking_policy),
         "dataset": str(dataset), "price_sha256": price_sha256,
         "param_sha256": param_sha256, "seed": int(seed), "target": target,
         "start_date": start, "end_date": end, "research_cutoff": cutoff,

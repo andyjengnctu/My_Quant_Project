@@ -32,6 +32,7 @@ from filters.breakout_quality.ranking_score_store import (
     SCORE_SOURCE_CONTINUOUS_RANKER_OOS,
     SUPPORTED_RANKING_SCORE_SOURCES,
     lookup_continuous_ranker_oos_candidate_score,
+    resolve_continuous_ranker_oos_score_path,
     lookup_selection_point_in_time_candidate_score,
 )
 from filters.breakout_quality.binary_pit_score_store import (
@@ -45,6 +46,12 @@ from filters.breakout_quality.score_store import (
 from filters.breakout_quality.workflow_runtime_score_store import (
     lookup_workflow_runtime_candidate_score,
 )
+
+
+def _forward_binding(context, *, root, filter_id, architecture, profile, override=None):
+    path = (Path(override) if override else resolve_continuous_ranker_oos_score_path(
+        root, filter_id, architecture, profile))
+    return (context.score_bindings or {}).get(str(path.resolve()))
 
 
 @dataclass(frozen=True)
@@ -413,6 +420,10 @@ def resolve_breakout_quality_candidate_rank(
                 model_architecture=str(context.model_architecture),
                 experiment_profile=str(context.experiment_profile),
                 score_path_override=context.score_path_override,
+                score_binding=_forward_binding(
+                    context, root=root, filter_id=str(filter_id),
+                    architecture=str(context.model_architecture), profile=str(context.experiment_profile),
+                    override=context.score_path_override),
                 score_column=primary_score_column,
             )
         safety_dl_id = str(options.get("safety_dl_id") or "").strip()
@@ -443,6 +454,10 @@ def resolve_breakout_quality_candidate_rank(
                     score_path_override=(
                         None if not safety_score_path_override else safety_score_path_override
                     ),
+                    score_binding=_forward_binding(
+                        context, root=root, filter_id=safety_filter_id,
+                        architecture=safety_architecture, profile=safety_profile,
+                        override=safety_score_path_override),
                     score_column=safety_score_column,
                 )
             elif safety_source == SCORE_SOURCE_SELECTION_POINT_IN_TIME:
@@ -501,7 +516,11 @@ def resolve_breakout_quality_candidate_rank(
                     manifest_path_override=options.get("positive_score_manifest_path_override") or None,
                 )
             elif positive_source == SCORE_SOURCE_CONTINUOUS_RANKER_OOS:
-                positive_payload = lookup_continuous_ranker_oos_candidate_score(**arguments)
+                positive_payload = lookup_continuous_ranker_oos_candidate_score(
+                    **arguments, score_binding=_forward_binding(
+                        context, root=root, filter_id=positive_filter, architecture=positive_arch,
+                        profile=positive_profile, override=options.get("positive_score_path_override")),
+                )
             else:
                 raise ValueError("Positive classifier source must be PIT or OOS, not a future outcome")
             payload = dict(payload)

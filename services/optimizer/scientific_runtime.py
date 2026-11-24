@@ -68,6 +68,8 @@ def build_optimizer_progress_display_contract(
 
 
 def resolve_session_local_min_review_enabled(session, *, model_mode=None) -> bool:
+    if model_mode is None:
+        model_mode = dict(getattr(session, "walk_forward_policy", {}) or {}).get("model_mode")
     selection = get_session_scientific_section(session, "selection_and_anti_overfit")
     if isinstance(selection, dict):
         local = selection.get("local_min_review")

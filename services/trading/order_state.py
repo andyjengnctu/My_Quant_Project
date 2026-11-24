@@ -9,10 +9,12 @@ from typing import Any
 from uuid import uuid4
 
 from core.file_integrity import atomic_write_json, load_json_strict
-from services.trading.state_lock import serialized_trading_state_mutation
+from services.trading.state_lock import (
+    serialized_trading_state_mutation, assert_trading_state_writable,
+    assert_no_trading_fill_transaction,
+)
 from core.runtime_utils import get_taipei_now
 from core.trading_state_paths import (
-    resolve_trading_fill_transaction_path,
     resolve_trading_order_state_path as _resolve_trading_order_state_path,
 )
 from core.trading_order_state import (
@@ -33,9 +35,7 @@ def resolve_trading_order_state_path(project_root) -> Path:
 
 
 def _assert_no_fill_transaction(project_root) -> None:
-    tx_path = resolve_trading_fill_transaction_path(project_root)
-    if tx_path.is_file():
-        raise RuntimeError("Trading 尚有未完成 fill transaction；請先由 Workbench 重新整理以完成 recovery")
+    assert_no_trading_fill_transaction(project_root)
 
 
 def _timestamp() -> str:
@@ -70,7 +70,7 @@ def load_trading_order_state(project_root, *, required: bool = False) -> dict[st
 
 
 def _load_or_initialize_for_mutation(project_root, *, expected_revision: int | None):
-    _assert_no_fill_transaction(project_root)
+    assert_trading_state_writable(project_root)
     path = resolve_trading_order_state_path(project_root)
     if path.is_file():
         state, source_sha = _read_state_with_sha(path)
@@ -108,6 +108,7 @@ def _persist_mutation(
         latest_sha = hashlib.sha256(path.read_bytes()).hexdigest()
         if latest_sha != original_sha:
             raise TradingOrderRevisionConflict("Trading order state 在寫入前已被其他流程修改")
+    assert_trading_state_writable(project_root)
     atomic_write_json(path, updated)
     return load_trading_order_state(project_root, required=True)
 

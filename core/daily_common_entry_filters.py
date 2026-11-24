@@ -15,7 +15,7 @@ import numpy as np
 from core.breakout_false_filter import build_breakout_false_filter_pass_condition
 from core.feature_bank import coerce_feature_bank
 from core.portfolio_entry_policy import (
-    current_daily_execution_contract, daily_execution_uses_atr_limit,
+    resolve_portfolio_execution_contract, daily_execution_uses_atr_limit,
 )
 from core.price_utils import adjust_long_buy_limit_array
 from core.signal_utils import _rolling_mean_shift1, _rolling_mean_std0, tv_ema
@@ -24,6 +24,7 @@ from core.signal_utils import _rolling_mean_shift1, _rolling_mean_std0, tv_ema
 def daily_common_filter_signals(
     df, params, *, atr_main, ticker=None, feature_bank=None,
     use_native_hotpath=False,
+    execution_contract=None,
 ):
     """Return filtered Daily eligibility and the declared next-session buy limit.
 
@@ -89,7 +90,9 @@ def daily_common_filter_signals(
     # Same admission primitive for ATR-limit and prior-close-limit Daily paths.
     # Price is a separate execution contract; do not silently add atr_buy_tol
     # to an otherwise Min/close-limit experiment.
-    use_atr_limit = daily_execution_uses_atr_limit(current_daily_execution_contract())
+    use_atr_limit = daily_execution_uses_atr_limit(
+        resolve_portfolio_execution_contract(execution_contract).daily_execution_contract
+    )
     raw_limits = close + atr * float(params.atr_buy_tol) if use_atr_limit else close
     limits = np.full_like(close, np.nan)
     valid = eligible & ~np.isnan(raw_limits)

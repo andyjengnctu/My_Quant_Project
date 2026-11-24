@@ -273,6 +273,36 @@ def run_strategy_compare_active_arm(
         for key, value in dict(score_overrides or {}).items()
     }
     primary_override = dict(overrides.get(str(arm.dl_id)) or {})
+    if expected_seed_override is not None:
+        from filters.breakout_quality.strategy_compare_dl_artifacts import resolve_arm_runtime_dl_source_ids
+        for source_id in resolve_arm_runtime_dl_source_ids(settings, arm):
+            source = settings.dl_sources[source_id]
+            if str(source.score_source) == SCORE_SOURCE_CONTINUOUS_RANKER_OOS and not overrides.get(source_id):
+                raise ValueError("Forward robustness requires isolated primary and secondary sources")
+    forward_bindings = {}
+    for source_id, override in overrides.items():
+        source = settings.dl_sources[source_id]
+        if str(source.score_source) != SCORE_SOURCE_CONTINUOUS_RANKER_OOS:
+            continue
+        if not override.get("score_path") or not override.get("manifest_path"):
+            raise ValueError("Forward isolated replay requires model manifest and score paths")
+        from services.breakout_quality.forward_model_source import load_forward_score_binding
+        seed = (int(expected_seed_override) if expected_seed_override is not None else
+                int(get_breakout_quality_workflow_settings(
+                    experiment_profile=str(source.experiment_profile)).seed))
+        binding = load_forward_score_binding(
+            project_root=root, filter_id=str(source.filter_id),
+            model_architecture=str(source.model_architecture),
+            experiment_profile=str(source.experiment_profile), expected_seed=seed,
+            dataset=str(settings.dataset),
+            model_dir=Path(str(override["manifest_path"])).parent,
+            research_output_dir=Path(str(override["score_path"])).parent,
+        )
+        binding.verify(score_path=str(override["score_path"]),
+                       filter_id=str(source.filter_id), model_architecture=str(source.model_architecture),
+                       experiment_profile=str(source.experiment_profile))
+        forward_bindings[str(Path(str(override["score_path"])).resolve())] = binding
+
 
     selection_paths = None
     selection_expected_seed = None
@@ -373,6 +403,7 @@ def run_strategy_compare_active_arm(
         baseline_reuse_dir=baseline_reuse_dir,
         replay_active_only=bool(replay_active_only),
         param_evaluation_mode=str(param_evaluation_mode),
+        continuous_score_bindings=forward_bindings,
         continuous_score_path_override=(
             str(primary_override["score_path"])
             if (

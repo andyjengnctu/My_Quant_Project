@@ -49,7 +49,7 @@ from core.portfolio_fast_data import (
 )
 from core.portfolio_stats import calc_curve_stats, find_sim_start_idx
 from core.portfolio_candidates import build_daily_candidates, track_normal_setup_signals_for_day
-from core.portfolio_entry_policy import current_daily_entry_source
+from core.portfolio_entry_policy import resolve_portfolio_execution_contract, resolve_portfolio_entry_source
 from functools import partial
 from core.portfolio_entries import cleanup_extended_signals_for_day
 from core.portfolio_entry_selection import (
@@ -102,6 +102,7 @@ def run_portfolio_timeline(
     active_context_ensemble_resolver=None,
     ensemble_min_agree=None,
     replay_selector_trace_rows=None,
+    execution_contract=None, daily_entry_source=None,
 ):
     profile_timing_enabled = bool(profile_stats.get("_timing_enabled", True)) if profile_stats is not None else False
     capture_equity_curve = bool(profile_stats.get("capture_equity_curve", False)) if profile_stats is not None else False
@@ -141,7 +142,8 @@ def run_portfolio_timeline(
     if profile_timing_enabled:
         ticker_dates_sec = time.perf_counter() - t0
 
-    daily_source = current_daily_entry_source()
+    execution_contract = resolve_portfolio_execution_contract(execution_contract)
+    daily_source = resolve_portfolio_entry_source(execution_contract, daily_entry_source)
     if daily_source is not None:
         daily_source.configure_calendar(sorted_dates)
     t0 = time.perf_counter() if profile_timing_enabled else None
@@ -393,8 +395,11 @@ def run_portfolio_timeline(
                     active_extended_signals_by_member=state.active_extended_signals_by_member,
                     candidate_subprofile=candidate_subprofile,
                     replay_phase=_run_portfolio_replay_phase,
-                    single_track_callback=(track_normal_setup_signals_for_day if daily_source is None
-                                           else partial(track_normal_setup_signals_for_day, entry_policy="daily")),
+                    single_track_callback=partial(
+                        track_normal_setup_signals_for_day,
+                        entry_policy="breakout" if daily_source is None else "daily",
+                        execution_contract=execution_contract,
+                    ),
                     ensemble_track_callback=_track_ensemble_normal_setup_signals_for_day,
                 )
                 if profile_timing_enabled and did_track:
@@ -423,8 +428,11 @@ def run_portfolio_timeline(
                     persistent_sizing_qty_cache=candidate_sizing_qty_cache,
                     candidate_subprofile=candidate_subprofile,
                     replay_phase=_run_portfolio_replay_phase,
-                    single_candidate_builder=(build_daily_candidates if daily_source is None
-                                              else partial(build_daily_candidates, entry_policy="daily")),
+                    single_candidate_builder=partial(
+                        build_daily_candidates,
+                        entry_policy="breakout" if daily_source is None else "daily",
+                        execution_contract=execution_contract,
+                    ),
                     ensemble_candidate_builder=_build_daily_ensemble_candidates,
                 )
                 if profile_timing_enabled:

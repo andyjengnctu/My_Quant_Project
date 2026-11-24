@@ -215,6 +215,14 @@ def imports_symbol_from(path: Path | str, module: str, symbol: str) -> bool:
     )
 
 
+def contains_source_expression(path: Path | str, expression: str) -> bool:
+    """Match an expression's syntax tree, excluding comments and formatting."""
+    expected_node = ast.parse(expression, mode="eval").body
+    expected = ast.dump(expected_node, include_attributes=False)
+    return any(isinstance(node, type(expected_node)) and ast.dump(node, include_attributes=False) == expected
+               for node in ast.walk(read_source_ast(path)))
+
+
 def read_source_top_level_function_names(path: Path | str, *, encoding: str = "utf-8") -> Tuple[str, ...]:
     """Return cached top-level function names for an unchanged Python file."""
 

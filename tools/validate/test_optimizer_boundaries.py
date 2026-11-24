@@ -20,7 +20,167 @@ from services.optimizer.strategy_param_contracts import build_min_roos_schedule_
 from strategies.daily.search_space import DAILY_SEARCH_PROFILES
 
 
+def _fingerprint_in_fresh_worker(resolved):
+    from core.training_policy import optimizer_runtime_model_mode_scope
+    from core.walk_forward_policy import build_optimizer_effective_policy_fingerprint
+    with optimizer_runtime_model_mode_scope("study"):
+        return build_optimizer_effective_policy_fingerprint(resolved)
+
+
+def _policy_member_fixture(mode):
+    from services.optimizer import outer_rolling_policy as policies
+    selected = "local" if mode == "full" else "base"
+    session = SimpleNamespace(
+        walk_forward_policy={"model_mode": mode, "train_start_year": 2020,
+                             "train_start_date": "2020-01-01", "search_train_end_date": "2021-12-31"},
+        strategy_param_scientific_contract={"schema_version": 1, "strategy": {"parameter_policy": selected}},
+        train_start_year=2020,
+    )
+    trial = SimpleNamespace(number=0, params={}, user_attrs={})
+    finalist = dict(trial=trial, base_score=2.0, base_rank=1, local_min_score=1.0,
+                    local_retention=.5, gate_pass=True)
+    members = policies.build_optimizer_policy_members_from_finalists(
+        [finalist], objective_mode="full", member_index=1, seed=7, session=session,
+    )
+    return session, members
+
+
+def _policy_member_in_fresh_worker(mode):
+    import config.training_policy as settings
+    from core.training_policy import optimizer_runtime_model_mode_scope
+    with (patch.object(settings, "OPTIMIZER_LOCAL_MIN_REVIEW_ENABLED", False),
+          patch.object(settings, "OPTIMIZER_FULL_MODE_LOCAL_MIN_REVIEW_ENABLED", True),
+          optimizer_runtime_model_mode_scope("oos" if mode == "full" else "full")):
+        return _policy_member_fixture(mode)[1]
+
+
 class OptimizerBoundaryTests(unittest.TestCase):
+    def test_policy_members_follow_explicit_mode_across_threads_and_spawn(self):
+        import multiprocessing
+        from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
+        import config.training_policy as settings
+        from core.training_policy import optimizer_runtime_model_mode_scope
+        from services.optimizer import outer_rolling_policy as policies
+        modes = ("full", "oos", "full", "oos")
+        with (patch.object(settings, "OPTIMIZER_LOCAL_MIN_REVIEW_ENABLED", False),
+              patch.object(settings, "OPTIMIZER_FULL_MODE_LOCAL_MIN_REVIEW_ENABLED", True),
+              optimizer_runtime_model_mode_scope("study")):
+            expected = [_policy_member_fixture(mode)[1] for mode in modes]
+            self.assertEqual([list(value) for value in expected], [["local"], ["base"], ["local"], ["base"]])
+            self.assertIn("local", policies.get_optimizer_paramset_policy_names(model_mode="full"))
+            self.assertNotIn("local", policies.get_optimizer_paramset_policy_names(model_mode="oos"))
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                self.assertEqual([result[1] for result in pool.map(_policy_member_fixture, modes)], expected)
+            with ProcessPoolExecutor(max_workers=1, mp_context=multiprocessing.get_context("spawn")) as pool:
+                self.assertEqual(list(pool.map(_policy_member_in_fresh_worker, modes)), expected)
+            session, _ = _policy_member_fixture("full")
+            session.walk_forward_policy["model_mode"] = "oos"
+            with self.assertRaisesRegex(ValueError, "停用"):
+                policies.get_optimizer_paramset_policy_names(session=session)
+
+    def test_full_policy_export_paths_and_dashboard_consume_session_policy(self):
+        from contextlib import redirect_stdout
+        import io
+        import config.training_policy as settings
+        from services.optimizer import application, static_ensemble_dashboard as dashboard
+        from services.optimizer import strategy_param_repository as repository
+        with (patch.object(settings, "OPTIMIZER_LOCAL_MIN_REVIEW_ENABLED", False),
+              patch.object(settings, "OPTIMIZER_FULL_MODE_LOCAL_MIN_REVIEW_ENABLED", True),
+              patch.object(application, "PROJECT_ROOT", self.root),
+              patch.object(repository, "refresh_strategy_parameter_manifest")):
+            session, members = _policy_member_fixture("full")
+            first = members["local"]
+            ensemble = [first, {**first, "member_index": 2, "seed": 11, "optimizer_seed": 11}]
+            paths, payloads = application._write_static_seed_ensemble_policy_paramsets(
+                policy_members_by_policy={"local": ensemble}, seeds=[7, 11], objective_mode="full",
+                walk_forward_policy=session.walk_forward_policy, dataset_label="fixture",
+                selected_model_mode="full", trials_per_seed=1, models_dir=self.root / "models",
+                strategy_params_root=self.root / "strategy_params",
+            )
+            self.assertEqual(list(paths), ["local"])
+            self.assertEqual(list(payloads), ["local"])
+            path = Path(paths["local"])
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8")), payloads["local"])
+            self.assertIn(str(path), application._visible_policy_paramset_paths(paths, model_mode="full").values())
+            self.assertEqual(application._visible_policy_paramset_paths(paths, model_mode="oos"), {})
+            before = path.read_bytes()
+            skipped, skipped_payloads = application._write_static_seed_ensemble_policy_paramsets(
+                policy_members_by_policy={"local": ensemble}, seeds=[7, 11], objective_mode="full",
+                walk_forward_policy={**session.walk_forward_policy, "model_mode": "oos"},
+                dataset_label="fixture", selected_model_mode="oos", trials_per_seed=1,
+                models_dir=self.root / "models", strategy_params_root=self.root / "strategy_params",
+            )
+            self.assertEqual((skipped, skipped_payloads), ({}, {}))
+            self.assertEqual(path.read_bytes(), before)
+            metrics = {"local": {"available": True, "rank_1_oos": 1.25, "rank_1_plain_romd": 1.25}}
+            with (patch.object(dashboard, "_build_search_train_dates_for_session", return_value=[]),
+                  patch.object(dashboard, "_build_static_policy_rows_from_paramsets", return_value=(metrics, {}))):
+                row = dashboard.build_optimizer_static_ensemble_single_fold_oos_row(
+                    session, ensemble_payload=payloads["local"], policy_paramsets=payloads,
+                )
+                self.assertEqual(row["local"], metrics["local"])
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    dashboard.print_optimizer_static_ensemble_rolling_oos_table(
+                        session, ensemble_payload=payloads["local"], policy_paramsets=payloads,
+                    )
+                self.assertIn("local ensemble", output.getvalue())
+                self.assertIn("1.25", output.getvalue())
+                self.assertNotIn("base ensemble", output.getvalue())
+
+    def test_resolved_policy_fingerprint_survives_spawn(self):
+        import multiprocessing
+        from concurrent.futures import ProcessPoolExecutor
+        from core.walk_forward_policy import build_optimizer_effective_policy_fingerprint, build_optimizer_runtime_policy
+        from services.optimizer import application
+        resolved = build_optimizer_runtime_policy(
+            application.load_walk_forward_policy(application.PROJECT_ROOT), "full", latest_data_date="2026-11-24",
+        )
+        expected = build_optimizer_effective_policy_fingerprint(resolved)
+        with ProcessPoolExecutor(max_workers=1, mp_context=multiprocessing.get_context("spawn")) as pool:
+            self.assertEqual(pool.submit(_fingerprint_in_fresh_worker, resolved).result(10), expected)
+
+    def test_effective_policy_and_session_ignore_previous_and_concurrent_modes(self):
+        from concurrent.futures import ThreadPoolExecutor
+        from core import training_policy as policy
+        from core.walk_forward_policy import build_optimizer_effective_policy_fingerprint, build_optimizer_runtime_policy
+        from services.optimizer import application
+        from services.optimizer.scientific_runtime import resolve_session_local_min_review_enabled
+
+        resolved = build_optimizer_runtime_policy(
+            application.load_walk_forward_policy(application.PROJECT_ROOT), "full", latest_data_date="2026-11-24",
+        )
+        session = SimpleNamespace(walk_forward_policy=resolved)
+        with (patch.object(policy._settings, "OPTIMIZER_LOCAL_MIN_REVIEW_ENABLED", False),
+              patch.object(policy._settings, "OPTIMIZER_FULL_MODE_LOCAL_MIN_REVIEW_ENABLED", True)):
+            with policy.optimizer_runtime_model_mode_scope("full"):
+                expected = build_optimizer_effective_policy_fingerprint(resolved)
+            with policy.optimizer_runtime_model_mode_scope("oos"):
+                self.assertEqual(build_optimizer_effective_policy_fingerprint(resolved), expected)
+                self.assertTrue(resolve_session_local_min_review_enabled(session))
+                with ThreadPoolExecutor(max_workers=1) as pool:
+                    self.assertEqual(pool.submit(build_optimizer_effective_policy_fingerprint, resolved).result(3), expected)
+                    self.assertTrue(pool.submit(resolve_session_local_min_review_enabled, session).result(3))
+                with self.assertRaisesRegex(RuntimeError, "cancel"):
+                    with policy.optimizer_runtime_model_mode_scope("full"):
+                        policy.set_optimizer_runtime_model_mode("study")
+                        raise RuntimeError("cancel")
+                self.assertEqual(policy.resolve_optimizer_runtime_model_mode(), "oos")
+
+    def test_application_early_return_and_worker_failure_restore_runtime_mode(self):
+        from core import training_policy as policy
+        from services.optimizer import application
+
+        with policy.optimizer_runtime_model_mode_scope("oos"):
+            with (patch.object(application, "load_walk_forward_policy", return_value={}),
+                  patch.object(application, "resolve_dataset_profile_from_cli_env", side_effect=ValueError("invalid dataset"))):
+                self.assertEqual(application.main(["optimizer", "--model", "full"], environ={}), 1)
+            self.assertEqual(policy.resolve_optimizer_runtime_model_mode(), "oos")
+            with (patch.object(application, "configure_optuna_logging", side_effect=KeyboardInterrupt),
+                  self.assertRaises(KeyboardInterrupt)):
+                application._run_nonrolling_seed_ensemble_member_process_task({"walk_forward_policy": {"model_mode": "full"}})
+            self.assertEqual(policy.resolve_optimizer_runtime_model_mode(), "oos")
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)

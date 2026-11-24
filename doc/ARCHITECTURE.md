@@ -177,8 +177,15 @@ project/
 - `apps/run_bundle.py` 是日常唯一建議使用的本機 double check 與交付打包入口；`apps/test_suite.py` 是其內部 formal runner。
 - Optimizer schedule／adaptation 由 `services/optimizer/strategy_param_contracts.py` 統一建構；參數驗證只回傳正規化候選，寫入與 metadata migration 由 producer 明確發布。Research／teacher／Cleaner 透過公開 inspection 取得工件事實；`core/artifact_inspection.py` 的狀態與原因只用於工程診斷，不進入科學身分。
 - `services/optimizer/execution_settings.py` 持有不可變執行設定與有界環境變數 adapter；session 消費同一快照，Windows spawn 與既有環境變數 worker 的相容轉接須在取消或例外後復原，不改 seed／Trial／科學設定。
+- Optimizer model mode 由已解析的 run/session policy 明確傳給 fingerprint、policy selection 與結果投影；`core/training_policy.py` 的 ContextVar 只保留有界相容介面，早退、取消、巢狀操作均復原，不能決定另一個 session 的有效契約。
+- `core/portfolio_entry_policy.py` 的不可變 `PortfolioExecutionContract` 由入口解析，經 preparation、cache、thread/spawn worker 傳至 Portfolio engine；Daily teacher source 屬 run-local 依賴，Breakout 不繼承外層 Daily mode。
+- `core/portfolio_benchmark.py` 的有界 cache 使用完整有效 calendar、起始日前錨點及實際收盤價作 key，計算消費同一輸入快照，回傳結果與 cache 分離；Python 物件 ID 重用、來源修改或 caller 修改回傳 rows 不得改變下一次數值。
+- `core/execution_source_dependencies.py` 持有 Replay／Truth 的能力來源依賴圖，包含實際執行的 Python、native C 與設定 owner。排序來源只投影所選規格與相依 primitive；未使用的新規格不改既有計算身分。來源等價證據必須驗證完整依賴閉包，不能以固定舊 hash 代替現碼核對。
 - Daily 資料 loader 委派 `filters/breakout_quality/daily_sample_accumulator.py` 保留 target-valid 在前、inference-only 在後的 ticker/date 順序；teacher 以明確 reference 傳遞，context metadata 由單一投影產生。資料排除原因屬執行診斷，不改樣本及 FIT manifest。
 - `services/trading/workbench_snapshot.py` 統一 Trading 頁面與帳務中心的快照服務：先執行既有 reconcile／recovery，再以短鎖擷取 account/order/pending，鎖外投影同一 revisions；衍生報表發布不得覆寫較新 revision。`state_snapshot.py` 隔離 worker 讀取且禁止 projection 寫入；UI 使用 `services/workbench_ui/background_tasks.py` 的背景工作與過期結果防護，不持有交易規則。
+- `services/trading/state_lock.py` 集中未完成交易 journal 的寫入閘門；所有 public account/order/pending mutation 必須在寫入前檢查，與 active-order 業務政策分離。內部 pending transfer/recovery 僅在已持有相同 lock 且 journal hash 相符的 scope 中提交。
+- `services/trading/market_data_consumer.py` 在短 thread/process lock 內核對 expected consumer fingerprint 後發布；日期及同日 overlay lineage 不得倒退。promotion 發生衝突時重新擷取來源與規劃，不能用舊 read model 盲目重試。
+- Forward READY 由 `services/breakout_quality/forward_model_source.py` 統一驗證；canonical 與 isolated Strategy Compare／Robustness 以可重驗的 binding 消費相同工件契約。`services/breakout_quality/forward_publication.py` 持有 producer lease、唯一 staging 與可恢復提交，FIT 與 evaluation 分別發布，report 失敗不撤銷已驗證的 FIT。
 
 ## 正式入口
 
@@ -251,6 +258,7 @@ project/
 ```
 
 - `run_meta_quality.py`：meta quality 工具；負責 formal contract、coverage、摘要與結構一致性檢查。
+- Synthetic worker 逐案例傳回完成回執；後續崩潰、硬退出或取消時，`coverage_artifacts/synthetic_completed_receipts.json` 僅保存本輪已完成的診斷。整套仍為 incomplete／FAIL，部分 coverage 不具有發布資格；重試先清除先前診斷。架構呼叫／import guard 以 AST 驗證實際依賴，獨立 fixture 保留違反契約的 mutation 覆蓋。
 - Formal suite 的 `tools/local_regression/manifest.json:test_cpu_threads` 統一限制測試子程序的 native CPU pools（預設 1）；synthetic runner 同時限制已載入的 PyTorch，結束／失敗均恢復原執行緒數。只影響隔離測試，不改 Research／Trading 訓練設定。Quick Gate、Consistency、Chain Checks、ML Smoke 依 CPU 數有界並行，Meta Quality 等待全部 producer 完成後消費本輪 coverage；不重用前輪 PASS、不減少 validator、coverage targets 或門檻。
 - Consistency 的 synthetic execution 由 `tools/validate/validator_execution.py` 負責；`manifest.json:synthetic_workers` 是子程序數上限（預設 4，1 為原循序路徑），依 CPU／native threads 與其他 formal producers 保留容量。以 registry 的實作 module 分組，保留同 owner 的快取共用與組內順序，再依原 registry 順序彙整全部結果。每個 validator 完成原始斷言後，立即將診斷結果快照為可傳輸資料：保留純資料、數值與 PASS／FAIL／SKIP，函式／module 等 process-local 物件只保留人讀文字，不重算斷言；循序與並行共用此邊界，後續模組重載或可變診斷更新不得破壞先前 receipt。每次使用全新的 worker coverage 目錄，各程序獨立收集 branch coverage，父程序逐份驗證後合併，只產生一次 JSON；Meta Quality 沿用同輪成果。缺少／重複／錯誤身分的 receipt、程序異常、硬逾時或 coverage 缺損皆不得 PASS。此分工讓大型靜態 AST 快取留在個別 worker，避免拖累父程序的 coverage 報告輸出；不改 Research／Trading／FIT／Replay 身分。
 - `source_index.py` 依當前檔案簽章共用單一 process-local 結構索引，包含 imports／exception handlers／top-level bindings、宣告位置與必要時的 branch literal facts。僅需要宣告的 registry／maintenance consumer 不保留函式本文；維護掃描的 imports、宣告、source-shape 與執行分支共用一次解析所得資料，完整 AST 在提取後釋放。循環垃圾回收僅在單檔解析／索引建構期間暫緩，成功或例外退出皆恢復呼叫端設定；明確要求完整 AST 的 consumer 仍可使用原有 AST cache。分支掃描的文字預篩僅排除不可能含目標 literal 的檔案，跳脫字元、隱式字串串接與其前綴／註解一律保留完整 AST 檢查。檔案變更或刪除仍重新驗證，不快取 PASS／FAIL；索引失效測試使用隔離 cache，不清空所在 worker 已建立的正式索引。維護掃描維持 advisory，檢查集合、候選判定、coverage targets 與門檻不因加速改變。

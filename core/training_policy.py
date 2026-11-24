@@ -14,7 +14,13 @@ import config.training_policy as _settings
 import config.robustness_benchmark as _benchmark_config
 from core.seed_ensemble_policy import build_seed_ensemble_policy_snapshot
 
-_OPTIMIZER_RUNTIME_MODEL_MODE = None
+from contextlib import contextmanager
+from contextvars import ContextVar
+
+
+_OPTIMIZER_RUNTIME_MODEL_MODE: ContextVar[str | None] = ContextVar(
+    "optimizer_runtime_model_mode", default=None,
+)
 
 
 def _generate_robustness_benchmark_seeds(*, seed_count: int, generator_seed: int) -> tuple[int, ...]:
@@ -165,12 +171,22 @@ def benchmark_seed_execution_equivalent(
 
 
 def set_optimizer_runtime_model_mode(model_mode) -> None:
-    global _OPTIMIZER_RUNTIME_MODEL_MODE
     normalized = str(model_mode or "").strip().lower()
-    _OPTIMIZER_RUNTIME_MODEL_MODE = normalized or None
+    _OPTIMIZER_RUNTIME_MODEL_MODE.set(normalized or None)
 
 def resolve_optimizer_runtime_model_mode() -> str:
-    return str(_OPTIMIZER_RUNTIME_MODEL_MODE or "").strip().lower()
+    return str(_OPTIMIZER_RUNTIME_MODEL_MODE.get() or "").strip().lower()
+
+
+@contextmanager
+def optimizer_runtime_model_mode_scope(model_mode=None):
+    """Compatibility scope; resolved policies remain the explicit runtime owner."""
+    selected = resolve_optimizer_runtime_model_mode() if model_mode is None else str(model_mode).strip().lower()
+    token = _OPTIMIZER_RUNTIME_MODEL_MODE.set(selected or None)
+    try:
+        yield
+    finally:
+        _OPTIMIZER_RUNTIME_MODEL_MODE.reset(token)
 
 def is_optimizer_local_min_review_enabled(model_mode=None) -> bool:
     normalized = str(model_mode if model_mode is not None else resolve_optimizer_runtime_model_mode()).strip().lower()
@@ -184,7 +200,7 @@ def resolve_optimizer_policy_indicator_enabled_map() -> dict[str, bool]:
         for name, enabled in dict(_settings.OPTIMIZER_POLICY_INDICATOR_ENABLED or {}).items()
     }
 
-def is_optimizer_policy_indicator_enabled(policy_name: str) -> bool:
+def is_optimizer_policy_indicator_enabled(policy_name: str, *, model_mode=None) -> bool:
     # 未列入 map 的新指標預設開啟，避免外部擴充 policy 被意外關閉。
     name = str(policy_name)
     if name in {
@@ -194,13 +210,13 @@ def is_optimizer_policy_indicator_enabled(policy_name: str) -> bool:
         "retention_finalists_agree",
         "local",
         "retention",
-    } and not bool(is_optimizer_local_min_review_enabled()):
+    } and not bool(is_optimizer_local_min_review_enabled(model_mode=model_mode)):
         return False
     return bool(resolve_optimizer_policy_indicator_enabled_map().get(name, True))
 
-def resolve_optimizer_enabled_policy_indicators(policy_names=None) -> tuple[str, ...]:
+def resolve_optimizer_enabled_policy_indicators(policy_names=None, *, model_mode=None) -> tuple[str, ...]:
     names = tuple(str(name) for name in list(policy_names or []) if str(name))
-    return tuple(name for name in names if is_optimizer_policy_indicator_enabled(name))
+    return tuple(name for name in names if is_optimizer_policy_indicator_enabled(name, model_mode=model_mode))
 
 def _resolve_optimizer_finalists_agree_min_agree(finalist_count, raw_value) -> int:
     n = max(1, int(finalist_count or 1))
@@ -431,9 +447,8 @@ def build_optimizer_scientific_score_policy_snapshot() -> dict:
 def build_optimizer_scientific_selection_policy_snapshot() -> dict:
     """Return result-changing candidate/finalist/anti-overfit semantics.
 
-    Raw defaults are preserved rather than resolving against a mutable runtime
-    model-mode singleton; the later runtime-injection round will resolve the
-    applicable branch once at the producer boundary.
+    Raw defaults are preserved in the scientific declaration. The producer's
+    resolved run/session policy chooses the applicable model-mode branch.
     """
 
     return {
@@ -476,7 +491,7 @@ def build_training_threshold_snapshot():
         "MIN_EQUITY_CURVE_R_SQUARED": _settings.MIN_EQUITY_CURVE_R_SQUARED,
     }
 
-def build_training_score_policy_snapshot():
+def build_training_score_policy_snapshot(*, model_mode=None):
     return {
         "EV_CALC_METHOD": _settings.EV_CALC_METHOD,
         "BUY_SORT_METHOD": _settings.BUY_SORT_METHOD,
@@ -500,10 +515,11 @@ def build_training_score_policy_snapshot():
         "SCORE_MEDIAN_R_FLOOR": resolve_score_median_r_floor(),
         "SCORE_MEDIAN_R_TARGET": resolve_score_median_r_target(),
         "OPTIMIZER_FIXED_TP_PERCENT": _settings.OPTIMIZER_FIXED_TP_PERCENT,
-        "OPTIMIZER_LOCAL_MIN_REVIEW_ENABLED": is_optimizer_local_min_review_enabled(),
+        "OPTIMIZER_LOCAL_MIN_REVIEW_ENABLED": is_optimizer_local_min_review_enabled(model_mode=model_mode),
         "OPTIMIZER_LOCAL_MIN_REVIEW_DEFAULT_ENABLED": bool(_settings.OPTIMIZER_LOCAL_MIN_REVIEW_ENABLED),
         "OPTIMIZER_FULL_MODE_LOCAL_MIN_REVIEW_ENABLED": bool(_settings.OPTIMIZER_FULL_MODE_LOCAL_MIN_REVIEW_ENABLED),
-        "OPTIMIZER_RUNTIME_MODEL_MODE": resolve_optimizer_runtime_model_mode(),
+        "OPTIMIZER_RUNTIME_MODEL_MODE": (resolve_optimizer_runtime_model_mode()
+                                         if model_mode is None else str(model_mode).strip().lower()),
         "OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_RATE": _settings.OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_RATE,
         "OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_MIN": _settings.OPTIMIZER_LOCAL_MIN_SCORE_FINALIST_TOP_K_MIN,
         "OPTIMIZER_POLICY_INDICATOR_ENABLED": resolve_optimizer_policy_indicator_enabled_map(),

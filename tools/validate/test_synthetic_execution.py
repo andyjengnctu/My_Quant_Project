@@ -55,6 +55,14 @@ def _raise(_params):
     raise ValueError("injected validator fault")
 
 
+def _cancel(_params):
+    raise KeyboardInterrupt("injected cancel")
+
+
+def _system_exit(_params):
+    raise SystemExit(7)
+
+
 def _exit(_params):
     os._exit(7)
 
@@ -64,6 +72,20 @@ def _hang(_params):
 
 
 class SyntheticExecutionContractTests(unittest.TestCase):
+    def test_expression_guard_accepts_formatting_and_rejects_dependency_mutations(self):
+        from tools.validate.source_index import contains_source_expression
+        expression = "load_strategy_arm_planned_sidecars(project_root, source=source, arm_id=str(arm_id))"
+        equivalent = "load_strategy_arm_planned_sidecars(\n project_root,\n source=source,\n arm_id=str(arm_id),\n)"
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "source.py"
+            for source in (expression, equivalent):
+                path.write_text(source)
+                self.assertTrue(contains_source_expression(path, expression))
+            for source in ("# " + expression, expression.replace("planned", "pipeline"),
+                           expression.replace("arm_id=str(arm_id)", "arm_id='wrong'")):
+                path.write_text(source)
+                self.assertFalse(contains_source_expression(path, expression))
+
     def test_source_index_keeps_small_facts_and_invalidates_changes(self):
         from tools.validate import source_index as index
         source = ("import os.path\nfrom math import sqrt as root\nVALUE = 1\n"
@@ -147,6 +169,14 @@ class SyntheticExecutionContractTests(unittest.TestCase):
         self.assertTrue(all(s["duration_sec"] >= 0 for s in summaries))
         with self.assertRaisesRegex(RuntimeError, "_raise: ValueError: injected"):
             execution.run_entries(None, [_entry(_raise)])
+        with self.assertRaises(execution.SyntheticExecutionError) as raised:
+            execution.run_entries(None, [_entry(_pass), _entry(_fail), _entry(_raise)])
+        self.assertEqual([s["validator_name"] for s in raised.exception.completed_summaries], ["_pass", "_fail"])
+        self.assertEqual([r["status"] for r in raised.exception.completed_results], ["PASS", "FAIL"])
+        for fn, error in ((_cancel, KeyboardInterrupt), (_system_exit, SystemExit)):
+            with self.subTest(fn=fn.__name__), self.assertRaises(error) as cancelled:
+                execution.run_entries(None, [_entry(_pass), _entry(fn)])
+            self.assertEqual([s["validator_name"] for s in cancelled.exception.completed_summaries], ["_pass"])
 
     def test_registry_descriptors_reject_duplicate_names(self):
         with self.assertRaises(ValueError):
@@ -287,7 +317,7 @@ class SyntheticExecutionContractTests(unittest.TestCase):
             self.assertEqual(info["synthetic_case_count"], 2)
             report = Path(temp)/"coverage_artifacts/coverage_synthetic.json"
             report.write_text('{"old_pass":true}')
-            runner.side_effect = RuntimeError("worker failed")
+            runner.side_effect = execution.SyntheticExecutionError("worker failed", results=expected[0], summaries=expected[1])
             with self.assertRaisesRegex(RuntimeError, "worker failed"):
                 launcher._run_synthetic_suite_with_optional_coverage(
                     temp, None, lambda _: self.fail("unexpected serial retry"),
@@ -296,12 +326,26 @@ class SyntheticExecutionContractTests(unittest.TestCase):
             info = json.loads((report.parent/"coverage_run_info.json").read_text())
             self.assertFalse(info["suite_completed"])
             self.assertEqual(info["returncode"], 1)
+            self.assertEqual(info["completed_validator_names"], ["_pass", "_fail"])
+            diagnostic = report.parent / "synthetic_completed_receipts.json"
+            self.assertEqual(json.loads(diagnostic.read_text())["results"], expected[0])
             manifest["synthetic_workers"] = 1
             runner.side_effect = AssertionError("serial setting must not spawn")
             self.assertEqual(launcher._run_synthetic_suite_with_optional_coverage(
                 temp, None, lambda _: expected, (RuntimeError,), validator_entries=entries), expected)
             info = json.loads((report.parent/"coverage_run_info.json").read_text())
             self.assertEqual(info["synthetic_workers"], 1)
+            self.assertFalse(diagnostic.exists())
+            for fn, error in ((_cancel, KeyboardInterrupt), (_system_exit, SystemExit)):
+                with self.subTest(fn=fn.__name__), self.assertRaises(error):
+                    launcher._run_synthetic_suite_with_optional_coverage(
+                        temp, None, lambda _: execution.run_entries(None, [_entry(_pass), _entry(fn)]),
+                        (RuntimeError,), validator_entries=entries)
+                info = json.loads((report.parent / "coverage_run_info.json").read_text())
+                self.assertFalse(info["suite_completed"])
+                self.assertEqual(info["returncode"], 1)
+                self.assertEqual(info["completed_validator_names"], ["_pass"])
+                self.assertFalse(json.loads(diagnostic.read_text())["suite_completed"])
 
     def test_serial_config_keeps_original_runner(self):
         launcher = importlib.import_module("tools.validate.main")
@@ -416,6 +460,14 @@ def rebind(_params):
                 execution.run_parallel(None, execution.describe_entries([_entry(fn)]),
                                        workers=1, timeout=timeout, threads=1)
             self.assertEqual({p.pid for p in multiprocessing.active_children()}, original)
+
+    def test_spawn_retains_completed_receipts_when_later_case_crashes_or_exits(self):
+        for fn in (_raise, _exit):
+            with self.subTest(fn=fn.__name__), self.assertRaises(RuntimeError) as raised:
+                execution.run_parallel(None, execution.describe_entries([_entry(_pass), _entry(_fail), _entry(fn)]),
+                                       workers=1, timeout=10, threads=1)
+            self.assertEqual([s["validator_name"] for s in raised.exception.completed_summaries], ["_pass", "_fail"])
+            self.assertEqual([r["status"] for r in raised.exception.completed_results], ["PASS", "FAIL"])
 
     @unittest.skipUnless(importlib.util.find_spec("coverage"), "coverage is not installed")
     def test_actual_worker_coverage_matches_serial_branch_union(self):

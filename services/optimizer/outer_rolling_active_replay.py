@@ -91,7 +91,7 @@ def _build_active_param_replay_payload_from_rows(rows: list[dict], *, policy_nam
             "params_ensemble_by_effective_date": params_ensemble_by_effective_date,
             "params_by_oos_year": params_by_oos_year,
             "params_by_effective_date": params_by_effective_date,
-            "local_min_review_enabled": bool(is_optimizer_local_min_review_enabled()),
+            "local_min_review_enabled": bool(is_optimizer_local_min_review_enabled(model_mode="oos")),
             "folds": fold_entries,
         }
     return {
@@ -103,7 +103,7 @@ def _build_active_param_replay_payload_from_rows(rows: list[dict], *, policy_nam
         "active_param_policy": "daily_active_param",
         "params_by_oos_year": params_by_oos_year,
         "params_by_effective_date": params_by_effective_date,
-        "local_min_review_enabled": bool(is_optimizer_local_min_review_enabled()),
+        "local_min_review_enabled": bool(is_optimizer_local_min_review_enabled(model_mode="oos")),
         "folds": fold_entries,
     }
 

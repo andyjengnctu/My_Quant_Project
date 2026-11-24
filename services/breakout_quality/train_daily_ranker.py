@@ -7,6 +7,10 @@ validation views so additional Daily DL experiments do not fork a new trainer.
 
 from __future__ import annotations
 
+from services.breakout_quality.forward_publication import (
+    commit_forward_fit, forward_training_publication, published_forward_path,
+)
+
 from datetime import datetime, timezone
 import json
 import shutil
@@ -1001,6 +1005,7 @@ def _write_forward_score_frame(frame, path, *, profile, score_extras) -> None:
     work.to_csv(path, index=False, encoding="utf-8-sig", compression="gzip")
 
 
+@forward_training_publication
 def run(args) -> int:
     started = time.perf_counter()
     research_spec = get_continuous_ranker_research_spec(str(args.experiment_profile))
@@ -1265,6 +1270,8 @@ def run(args) -> int:
             trainable_parameter_count=trainable_parameter_count,
             total_parameter_count=total_parameter_count,
         )
+
+    commit_forward_fit(expected_identity=expected_fitting_identity, project_root=PROJECT_ROOT)
 
     # OOS target ranks and inference are intentionally deferred until after checkpoint write.
     oos_mask = np.zeros(bundle.raw_target.shape, dtype=bool)
@@ -2203,7 +2210,7 @@ def run(args) -> int:
             f"pair={_fmt_metric(candidate_metrics.get('pairwise_concordance'))}"
         )
     print_artifact_paths(
-        (("Daily ranker model", artifact_paths.model_path), ("Markdown", report_markdown_path), ("OOS scores", score_path)),
+        (("Daily ranker model", published_forward_path(artifact_paths.model_path)), ("Markdown", published_forward_path(report_markdown_path)), ("OOS scores", published_forward_path(score_path))),
         project_root=PROJECT_ROOT,
     )
     return 0

@@ -134,7 +134,7 @@ def _publish_synthetic_trading_input_lineage(
     from core.market_data_dataset_readiness import market_data_contract_requires_target_freshness
     from core.market_data_freshness_contract import get_market_data_freshness_contract
     from core.runtime_domains import RUNTIME_DOMAIN_TRADING, resolve_runtime_domain_paths
-    from services.trading.market_data_consumer import publish_trading_v2_consumer_state
+    from services.trading.market_data_consumer import publish_trading_v2_consumer_state, load_trading_v2_consumer_state
     from services.trading.market_data_dataset_state import (
         VALIDATION_STATUS_READY,
         build_initial_market_data_dataset_state,
@@ -305,10 +305,12 @@ def _publish_synthetic_trading_input_lineage(
             row["last_exact_ready_target_date"] = str(market_date)
     publish_market_data_dataset_state(root, dataset_state)
 
+    prior_consumer = load_trading_v2_consumer_state(root, required=False)
     view = TradingMarketDataV2View.open(root)
     publish_trading_v2_consumer_state(
         root,
         market_date=str(market_date),
+        expected_state_fingerprint=None if prior_consumer is None else prior_consumer["state_fingerprint"],
         required_position_tickers=list(required_position_tickers),
         retained_training_tickers=all_tickers,
         view=view,
@@ -5642,7 +5644,7 @@ def validate_trading_workbench_account_panel_contract_case(base_params):
         def is_alive():
             return True
     accounting_refresh_panel = SimpleNamespace(
-        _refresh_thread=_AliveRefreshThread(),
+        _refresh_runner=SimpleNamespace(busy=True),
         _refresh_pending=False,
         _refresh_status_var=SimpleNamespace(set=lambda _value: None),
         _ensure_stock_name_warm=lambda: None,
@@ -8246,7 +8248,8 @@ def validate_trading_operational_safety_ssot_contract_case(base_params):
     # of UI/file layout. These contracts are also directly runnable via unittest.
     import unittest
     from .test_trading_snapshot_tasks import SnapshotTests, BackgroundTaskTests
-    for test_class in (SnapshotTests, BackgroundTaskTests):
+    from .test_trading_publication_boundaries import JournalGateTests, ConsumerPublicationTests, AccountingRefreshTests
+    for test_class in (SnapshotTests, BackgroundTaskTests, JournalGateTests, ConsumerPublicationTests, AccountingRefreshTests):
         for method in unittest.defaultTestLoader.getTestCaseNames(test_class):
             test = test_class(method)
             outcome = unittest.TestResult()

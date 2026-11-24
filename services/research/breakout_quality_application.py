@@ -3201,24 +3201,14 @@ def _ensure_continuous_forward_model_report(
             raise ValueError("FIT repair cannot separately force rebuild Forward")
         train_args.append("--require-rolling-fit-reuse")
 
-    # The transaction guards only the canonical FIT producer.  Post-build
-    # readers must not inspect a publication while its superseded backup is
-    # still present: that is deliberately BLOCKED by the shared version owner.
-    # After successful producer publication, validation/report failure must
-    # leave the new fitted weights available for an evidence-only refresh.
-    guard = (
-        _force_rebuild_publication_guard(*_forward_publication_paths(settings))
-        if force_rebuild else nullcontext()
+    # The trainer owns FIT and evaluation leases for BUILD, REFRESH and force.
+    # An evaluation failure leaves a validated committed FIT available to reuse.
+    code = _run_command(
+        "train-continuous-ranker", train_args,
+        program_name=program_name, emit_simple_report=False,
     )
-    with guard:
-        code = _run_command(
-            "train-continuous-ranker", train_args,
-            program_name=program_name, emit_simple_report=False,
-        )
-        if code != 0 and force_rebuild:
-            raise RuntimeError(
-                f"{model_id} Force Rebuild失敗: returncode={int(code)}"
-            )
+    if code != 0 and force_rebuild:
+        raise RuntimeError(f"{model_id} Force Rebuild失敗: returncode={int(code)}")
     if code != 0:
         return int(code), None, "BUILD_FAILED"
     _clear_continuous_forward_reuse_caches()
@@ -3623,6 +3613,7 @@ def repair_missing_fit_origin_using_forward(
         publication_roots=(model_dir, output_dir, pit_dir, old_cache),
         journal_path=journal, repair_identity=str(profile_name),
         point_in_time_dir=pit_dir, shared_cache_entry=old_cache,
+        forward_publication_roots=(model_dir, output_dir),
         locked_preflight=verify_locked_repair_sources,
     ):
         _clear_continuous_forward_reuse_caches()
@@ -3677,6 +3668,7 @@ def _recover_pending_model_fit_repairs(model_profiles) -> int:
             journal_path=journal, project_root=PROJECT_ROOT,
             point_in_time_dir=pit_dir,
             shared_cache_root=(PROJECT_ROOT / BREAKOUT_QUALITY_SHARED_FITTING_CHECKPOINT_CACHE_ROOT),
+            forward_publication_roots=_forward_publication_paths(settings),
         )
         if outcome != "NO_JOURNAL":
             print(f"[FIT RECOVERY] {profile} | {outcome} | previous publications preserved")
@@ -3966,6 +3958,7 @@ def _run_strategy_compare_model_build_subprocess(
     """Run one single-seed unit through the shared Strategy Compare lifecycle."""
 
     return run_strategy_compare_training_unit(
+        dataset=str(job["dataset"]),
         project_root=PROJECT_ROOT,
         source=job["source"],
         workflow=job["workflow"],
@@ -4139,6 +4132,7 @@ def _prepare_strategy_compare_model_artifacts(
                     continue
 
             job = {
+                "dataset": str(comparison.dataset),
                 "seed": int(workflow.seed),
                 "source_index": int(source_index),
                 "source_count": int(len(sources)),

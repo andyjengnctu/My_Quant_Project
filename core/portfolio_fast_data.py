@@ -153,7 +153,7 @@ def build_normal_setup_index(all_dfs_fast):
     return dict(setup_index)
 
 
-def prep_optimizer_stock_data_bundle(df, params, profile_stats=None, ticker=None, include_trade_logs=True, include_pit_stats_index=False, feature_bank=None):
+def prep_optimizer_stock_data_bundle(df, params, profile_stats=None, ticker=None, include_trade_logs=True, include_pit_stats_index=False, feature_bank=None, execution_contract=None):
     t_total_start = time.perf_counter() if profile_stats is not None else None
     resolved_ticker = ticker or df.attrs.get('ticker')
 
@@ -171,15 +171,17 @@ def prep_optimizer_stock_data_bundle(df, params, profile_stats=None, ticker=None
         use_native_hotpath=is_optimizer_native_hotpath_kernels_enabled(),
     )
     from core.portfolio_entry_policy import (
-        current_daily_execution_contract, daily_execution_uses_common_filters,
+        resolve_portfolio_execution_contract, daily_execution_uses_common_filters,
     )
-    if daily_execution_uses_common_filters(current_daily_execution_contract()):
+    execution_contract = resolve_portfolio_execution_contract(execution_contract)
+    if daily_execution_uses_common_filters(execution_contract.daily_execution_contract):
         from core.daily_common_entry_filters import daily_common_filter_signals
         atr, _old_setup, sell, _old_limits = unpack_precomputed_signals(precomputed_signals)
         setup, limits = daily_common_filter_signals(
             df, params, atr_main=atr, ticker=resolved_ticker,
             feature_bank=feature_bank,
             use_native_hotpath=is_optimizer_native_hotpath_kernels_enabled(),
+            execution_contract=execution_contract,
         )
         precomputed_signals = (atr, setup, sell, limits)
     if profile_stats is not None:
@@ -188,7 +190,7 @@ def prep_optimizer_stock_data_bundle(df, params, profile_stats=None, ticker=None
     t0 = time.perf_counter() if profile_stats is not None else None
     _atr_main, buy_condition, _sell_condition, _buy_limits = unpack_precomputed_signals(precomputed_signals)
     has_executable_setup = (
-        not daily_execution_uses_common_filters(current_daily_execution_contract())
+        not daily_execution_uses_common_filters(execution_contract.daily_execution_contract)
         and bool(np.any(np.asarray(buy_condition, dtype=bool)[:-1]))
     )
     if not include_trade_logs and not include_pit_stats_index:

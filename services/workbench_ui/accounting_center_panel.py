@@ -114,10 +114,10 @@ class AccountingCenterPanel(ttk.Frame):
     def __init__(self, master):
         super().__init__(master, padding=10, style=WORKBENCH_FRAME_STYLE)
         self._account_command_runner = BackgroundTaskRunner(self.after, self.after_cancel)
+        self._refresh_runner = BackgroundTaskRunner(self.after, self.after_cancel, poll_ms=30)
+        self._refresh_generation = 0
         self._snapshot: dict = {}
         self._dashboard: dict = {}
-        self._refresh_results: queue.Queue = queue.Queue()
-        self._refresh_thread = None
         self._refresh_pending = False
         self._startup_refresh_started = False
         self._startup_refresh_after_id = None
@@ -156,9 +156,9 @@ class AccountingCenterPanel(ttk.Frame):
                 self._startup_refresh_after_id = None
             return
         if self._deferred_refresh_result is not None:
-            account, dashboard, error = self._deferred_refresh_result
+            account, dashboard, error, generation = self._deferred_refresh_result
             self._deferred_refresh_result = None
-            self.after_idle(lambda: self._apply_refresh_result(account, dashboard, error))
+            self.after_idle(lambda: self._apply_refresh_result(account, dashboard, error, generation=generation))
             return
         if self._startup_refresh_started:
             return
@@ -576,51 +576,44 @@ class AccountingCenterPanel(ttk.Frame):
         ):
             self._refresh_pending = True
             return
-        if self._refresh_thread is not None and self._refresh_thread.is_alive():
+        if self._refresh_runner.busy:
             self._refresh_pending = True
             self._refresh_status_var.set("刷新排程中…")
             return
         self._refresh_pending = False
         self._refresh_status_var.set("刷新中…")
-        self._refresh_thread = threading.Thread(
-            target=self._load_worker,
-            daemon=True,
+        self._refresh_generation += 1
+        generation = self._refresh_generation
+        thread = self._refresh_runner.submit(
+            self._load_worker,
+            lambda outcome: self._finish_refresh(outcome, generation),
             name="workbench-accounting-center-refresh",
         )
-        self._refresh_thread.start()
-        self.after(30, self._poll_refresh)
+        if thread is None:
+            self._refresh_pending = True
 
     def _load_worker(self):
-        def _load():
-            return build_trading_accounting_snapshot(WORKBENCH_PROJECT_ROOT)
+        # Display names warm independently and do not gate the first paint.
+        return build_trading_accounting_snapshot(WORKBENCH_PROJECT_ROOT)
 
-        try:
-            # Display-only TaiwanStockInfo names warm on a separate single-flight
-            # background path and never gate account valuation/performance first paint.
-            account, dashboard = _load()
-            self._refresh_results.put((account, dashboard, None))
-        except Exception as exc:
-            self._refresh_results.put((None, None, exc))
-
-    def _poll_refresh(self):
-        try:
-            account, dashboard, error = self._refresh_results.get_nowait()
-        except queue.Empty:
-            if self._refresh_thread is not None and self._refresh_thread.is_alive():
-                self.after(30, self._poll_refresh)
+    def _finish_refresh(self, outcome, generation):
+        if generation != self._refresh_generation:
             return
-        self._refresh_thread = None
+        account, dashboard = (None, None) if outcome.error is not None else outcome.value
+        error = outcome.error
         if not self._workbench_active:
-            self._deferred_refresh_result = (account, dashboard, error)
+            self._deferred_refresh_result = (account, dashboard, error, generation)
             return
-        self._apply_refresh_result(account, dashboard, error)
+        self._apply_refresh_result(account, dashboard, error, generation=generation)
 
-    def _apply_refresh_result(self, account, dashboard, error):
+    def _apply_refresh_result(self, account, dashboard, error, *, generation=None):
+        if generation is not None and generation != self._refresh_generation:
+            return
         # The tab may have been hidden after an activation scheduled this idle
         # callback.  Re-defer instead of spending a long Tk turn rendering a
         # page the user is no longer looking at.
         if not bool(getattr(self, "_workbench_active", True)):
-            self._deferred_refresh_result = (account, dashboard, error)
+            self._deferred_refresh_result = (account, dashboard, error, self._refresh_generation)
             return
         if error is not None:
             self._snapshot = {}
@@ -1292,6 +1285,9 @@ class AccountingCenterPanel(ttk.Frame):
             callback(str(ticker), runtime_domain="trading", auto_run=True)
 
     def destroy(self):
+        self._refresh_generation += 1
+        self._refresh_runner.close()
+        self._deferred_refresh_result = None
         self._account_command_runner.close()
         if self._stock_name_warm_after_id is not None:
             try:

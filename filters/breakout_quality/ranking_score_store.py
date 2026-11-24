@@ -1379,8 +1379,8 @@ def _load_continuous_ranker_oos_contract_uncached(
     available_from = ""
     available_through = ""
     if bool(require_scores):
-        table = load_continuous_ranker_oos_score_table(
-            str(root), str(filter_id), str(model_architecture), str(experiment_profile)
+        table = load_continuous_ranker_oos_score_table_from_path(
+            str(score_path), str(experiment_profile)
         )
         if table.empty:
             raise ValueError("Continuous ranker OOS score table不可為空")
@@ -1494,6 +1494,7 @@ def load_continuous_ranker_oos_contract_at_paths(
     *,
     model_dir: Path,
     research_output_dir: Path,
+    require_scores: bool = False,
 ) -> ContinuousRankerOOSContract:
     """Revalidate seed-isolated model/report bytes without canonical cache reuse.
 
@@ -1503,7 +1504,7 @@ def load_continuous_ranker_oos_contract_at_paths(
     """
     return _load_continuous_ranker_oos_contract_uncached(
         project_root, filter_id, model_architecture, experiment_profile,
-        require_scores=False,
+        require_scores=bool(require_scores),
         model_dir_override=Path(model_dir),
         research_output_dir_override=Path(research_output_dir),
     )
@@ -1618,6 +1619,26 @@ load_continuous_ranker_oos_score_table.cache_clear = load_continuous_ranker_oos_
 load_continuous_ranker_oos_score_table.cache_info = load_continuous_ranker_oos_score_table_from_path.cache_info
 
 
+@dataclass(frozen=True)
+class VerifiedForwardScoreBinding:
+    """Runtime admission evidence, issued after the service's full READY gate."""
+
+    contract: ContinuousRankerOOSContract
+    file_pins: tuple
+
+    def verify(self, *, score_path, filter_id, model_architecture, experiment_profile):
+        from core.file_integrity import file_change_signature
+        expected = (str(filter_id), str(model_architecture), str(experiment_profile))
+        actual = (self.contract.filter_id, self.contract.model_architecture,
+                  self.contract.experiment_profile)
+        if actual != expected or Path(score_path).resolve() != self.contract.score_path.resolve():
+            raise ValueError("Forward score binding identity/path mismatch")
+        if not self.file_pins or any(file_change_signature(Path(path)) != signature
+                                     for path, signature in self.file_pins):
+            raise ValueError("Forward score binding changed after READY validation")
+        return self.contract
+
+
 def lookup_continuous_ranker_oos_candidate_score(
     *,
     project_root: str,
@@ -1628,21 +1649,24 @@ def lookup_continuous_ranker_oos_candidate_score(
     experiment_profile: str,
     score_path_override: str | None = None,
     score_column: str | None = None,
+    score_binding: VerifiedForwardScoreBinding | None = None,
 ) -> dict[str, Any]:
-    contract = None
-    if score_path_override is None:
-        contract = load_continuous_ranker_oos_contract(
-            project_root, filter_id, model_architecture, experiment_profile
-        )
-    table = (
-        load_continuous_ranker_oos_score_table_from_path(
-            str(score_path_override), str(experiment_profile)
-        )
-        if score_path_override is not None
-        else load_continuous_ranker_oos_score_table(
-            project_root, filter_id, model_architecture, experiment_profile
-        )
+    if not isinstance(score_binding, VerifiedForwardScoreBinding):
+        raise ValueError("Forward score lookup requires a verified READY binding")
+    score_path = (Path(score_path_override) if score_path_override is not None else
+                  resolve_continuous_ranker_oos_score_path(
+                      project_root, filter_id, model_architecture, experiment_profile))
+    contract = score_binding.verify(
+        score_path=score_path, filter_id=filter_id,
+        model_architecture=model_architecture, experiment_profile=experiment_profile,
     )
+    table = load_continuous_ranker_oos_score_table_from_path(
+        str(score_path), str(experiment_profile)
+    )
+    # Catch replacement while loading too, rather than reading a newly published
+    # table under the previous admission's seed/FIT contract.
+    score_binding.verify(score_path=score_path, filter_id=filter_id,
+                         model_architecture=model_architecture, experiment_profile=experiment_profile)
     ticker_text = str(ticker or "").strip()
     if not ticker_text:
         raise ValueError("Continuous ranker OOS lookup必須提供ticker")

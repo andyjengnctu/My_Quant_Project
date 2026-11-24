@@ -66,7 +66,7 @@ from services.trading.pending_entry_state import (
     update_trading_pending_entry,
 )
 from services.trading.scanner_state import load_trading_scanner_runtime
-from services.trading.state_lock import serialized_trading_state_mutation
+from services.trading.state_lock import serialized_trading_state_mutation, pending_entry_transaction_access
 from services.trading.strategy_param_runtime import (
     build_trading_candidate_strategy_lineage,
     build_trading_manual_management_lineage,
@@ -889,7 +889,8 @@ def recover_trading_pending_entry_transaction(project_root) -> dict[str, Any] | 
             raise RuntimeError("Trading pending-entry recovery 發現 frozen lineage 不一致，需人工檢查")
         if int(broker.get("initial_qty") or 0) != int(fill.get("qty") or 0):
             raise RuntimeError("Trading pending-entry recovery 發現原始成交股數不一致，需人工檢查")
-        mark_trading_pending_entry_filled(project_root, pending_entry_id=entry_id, fill=fill)
+        with pending_entry_transaction_access(project_root):
+            mark_trading_pending_entry_filled(project_root, pending_entry_id=entry_id, fill=fill)
         path.unlink(missing_ok=True)
         return {"status": "RECOVERED_FILLED", "pending_entry_id": entry_id}
     # Intent was durable but account commit never happened; safe to retry from ACTIVE.
@@ -945,58 +946,59 @@ def fill_trading_pending_entry(
         "fill": fill,
         "created_at": _timestamp(),
     })
-    try:
-        lineage = dict(entry["management_lineage"])
-        params = build_params_from_mapping(lineage["frozen_params"])
-        seed = acquisition_seed
-        if str(entry.get("origin")) == PENDING_ENTRY_ORIGIN_SCANNER:
-            account = record_strategy_trading_buy(
+    with pending_entry_transaction_access(project_root):
+        try:
+            lineage = dict(entry["management_lineage"])
+            params = build_params_from_mapping(lineage["frozen_params"])
+            seed = acquisition_seed
+            if str(entry.get("origin")) == PENDING_ENTRY_ORIGIN_SCANNER:
+                account = record_strategy_trading_buy(
+                    project_root,
+                    ticker=entry["ticker"],
+                    qty=int(qty),
+                    price=float(price),
+                    trade_date=fill_date,
+                    expected_revision=expected_account_revision,
+                    params=params,
+                    execution_plan_seed=seed,
+                    strategy_lineage=lineage,
+                )
+                route = "scanner_pending_fill"
+            elif str(entry.get("origin")) == PENDING_ENTRY_ORIGIN_MANUAL:
+                account = record_managed_manual_trading_buy(
+                    project_root,
+                    ticker=entry["ticker"],
+                    qty=int(qty),
+                    price=float(price),
+                    trade_date=fill_date,
+                    expected_revision=expected_account_revision,
+                    params=params,
+                    execution_plan_seed=seed,
+                    management_lineage=lineage,
+                    management_start_date=fill_date,
+                )
+                route = "manual_pending_fill"
+            else:
+                raise RuntimeError(f"未知 pending entry origin: {entry.get('origin')}")
+            closed = mark_trading_pending_entry_filled(
                 project_root,
-                ticker=entry["ticker"],
-                qty=int(qty),
-                price=float(price),
-                trade_date=fill_date,
-                expected_revision=expected_account_revision,
-                params=params,
-                execution_plan_seed=seed,
-                strategy_lineage=lineage,
+                pending_entry_id=entry["pending_entry_id"],
+                fill=fill,
             )
-            route = "scanner_pending_fill"
-        elif str(entry.get("origin")) == PENDING_ENTRY_ORIGIN_MANUAL:
-            account = record_managed_manual_trading_buy(
-                project_root,
-                ticker=entry["ticker"],
-                qty=int(qty),
-                price=float(price),
-                trade_date=fill_date,
-                expected_revision=expected_account_revision,
-                params=params,
-                execution_plan_seed=seed,
-                management_lineage=lineage,
-                management_start_date=fill_date,
-            )
-            route = "manual_pending_fill"
-        else:
-            raise RuntimeError(f"未知 pending entry origin: {entry.get('origin')}")
-        closed = mark_trading_pending_entry_filled(
-            project_root,
-            pending_entry_id=entry["pending_entry_id"],
-            fill=fill,
-        )
-        tx_path.unlink(missing_ok=True)
-        return {
-            "route": route,
-            "account": account,
-            "pending_entry": closed,
-            "warnings": list(preview.get("warnings") or []),
-            "market_evidence": deepcopy(dict(preview.get("market_evidence") or {})),
-        }
-    except Exception:
-        # Keep transaction evidence only if the account commit may already have happened.
-        account = load_trading_account_state(project_root, required=True)
-        if normalize_trading_ticker(entry["ticker"]) not in (account.get("positions") or {}):
             tx_path.unlink(missing_ok=True)
-        raise
+            return {
+                "route": route,
+                "account": account,
+                "pending_entry": closed,
+                "warnings": list(preview.get("warnings") or []),
+                "market_evidence": deepcopy(dict(preview.get("market_evidence") or {})),
+            }
+        except Exception:
+            # Keep transaction evidence only if the account commit may already have happened.
+            account = load_trading_account_state(project_root, required=True)
+            if normalize_trading_ticker(entry["ticker"]) not in (account.get("positions") or {}):
+                tx_path.unlink(missing_ok=True)
+            raise
 
 
 def cancel_pending_entry_no_fill(project_root, *, pending_entry_id: str, note: str | None = None) -> dict[str, Any]:

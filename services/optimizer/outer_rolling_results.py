@@ -26,14 +26,15 @@ from services.optimizer.outer_rolling_formatting import (
 from services.optimizer.outer_rolling_performance import _mark_resource_probe_fallback
 from services.optimizer.outer_rolling_policy import (
     CHAIN_POLICY_NAMES,
-    FINALISTS_AGREE_RESULT_POLICY_NAMES,
     FINALISTS_AGREE_TABLE_TITLE,
-    FINALIST_BEST_RESULT_POLICY_NAMES,
     FINALIST_BEST_TABLE_TITLE,
     REPORT_POLICY_LABELS,
     REPORT_POLICY_NAMES,
     SEED_ENSEMBLE_RESULTS_TABLE_TITLE,
-    SEED_ENSEMBLE_RESULT_POLICY_NAMES,
+    FINALIST_BEST_POLICY_NAMES,
+    FINALISTS_AGREE_POLICY_NAMES,
+    SEED_ENSEMBLE_POLICY_NAMES,
+    get_optimizer_paramset_policy_names,
     _is_rolling_random_seed_ensemble_enabled,
     _policy_is_available,
     _policy_plain_romd_score,
@@ -315,7 +316,7 @@ def _render_results_table(rows: list[dict], *, color: bool = True, include_chain
             display_rows = display_rows + [chain_row]
     if not display_rows:
         return ""
-    active_policy_names = tuple(policy_names or REPORT_POLICY_NAMES)
+    active_policy_names = get_optimizer_paramset_policy_names() if policy_names is None else tuple(policy_names)
     if not active_policy_names:
         return ""
     widths = {
@@ -373,8 +374,9 @@ def _render_results_table(rows: list[dict], *, color: bool = True, include_chain
     return "\n".join(lines)
 
 
-def _render_optimizer_results_tables(rows: list[dict], *, color: bool = True, include_chain: bool = True, include_oos_avg: bool = False, chained_override: dict | None = None, main_table_title: str = "ROLLING MONTHLY OOS RESULTS", retention_table_title: str = "") -> str:
+def _render_optimizer_results_tables(rows: list[dict], *, color: bool = True, include_chain: bool = True, include_oos_avg: bool = False, chained_override: dict | None = None, main_table_title: str = "ROLLING MONTHLY OOS RESULTS", retention_table_title: str = "", policy_names: tuple[str, ...] | None = None) -> str:
     _ = (main_table_title, retention_table_title)
+    selected = set(get_optimizer_paramset_policy_names() if policy_names is None else policy_names)
     finalist_best_table = _render_results_table(
         rows,
         color=color,
@@ -382,7 +384,7 @@ def _render_optimizer_results_tables(rows: list[dict], *, color: bool = True, in
         include_oos_avg=include_oos_avg,
         chained_override=chained_override,
         table_title=FINALIST_BEST_TABLE_TITLE,
-        policy_names=FINALIST_BEST_RESULT_POLICY_NAMES,
+        policy_names=tuple(name for name in FINALIST_BEST_POLICY_NAMES if name in selected),
     )
     finalists_agree_table = _render_results_table(
         rows,
@@ -391,7 +393,7 @@ def _render_optimizer_results_tables(rows: list[dict], *, color: bool = True, in
         include_oos_avg=include_oos_avg,
         chained_override=chained_override,
         table_title=FINALISTS_AGREE_TABLE_TITLE,
-        policy_names=FINALISTS_AGREE_RESULT_POLICY_NAMES,
+        policy_names=tuple(name for name in FINALISTS_AGREE_POLICY_NAMES if name in selected),
     )
     seed_ensemble_table = ""
     seed_ensemble_present = any(
@@ -407,12 +409,12 @@ def _render_optimizer_results_tables(rows: list[dict], *, color: bool = True, in
             include_oos_avg=include_oos_avg,
             chained_override=chained_override,
             table_title=SEED_ENSEMBLE_RESULTS_TABLE_TITLE,
-            policy_names=SEED_ENSEMBLE_RESULT_POLICY_NAMES,
+            policy_names=tuple(name for name in SEED_ENSEMBLE_POLICY_NAMES if name in selected),
         )
     return "\n\n".join(part for part in (finalist_best_table, finalists_agree_table, seed_ensemble_table) if part)
 
 
-def render_optimizer_results_tables(rows: list[dict], *, color: bool = True, include_chain: bool = True, include_oos_avg: bool = False, chained_override: dict | None = None, main_table_title: str = "", retention_table_title: str = "") -> str:
+def render_optimizer_results_tables(rows: list[dict], *, color: bool = True, include_chain: bool = True, include_oos_avg: bool = False, chained_override: dict | None = None, main_table_title: str = "", retention_table_title: str = "", policy_names: tuple[str, ...] | None = None) -> str:
     """Render optimizer OOS result tables through the rolling-OOS table source.
 
     Non-rolling summary display intentionally uses this public wrapper with a
@@ -426,6 +428,7 @@ def render_optimizer_results_tables(rows: list[dict], *, color: bool = True, inc
         chained_override=chained_override,
         main_table_title=main_table_title,
         retention_table_title=retention_table_title,
+        policy_names=policy_names,
     )
 
 

@@ -8,6 +8,7 @@ cross-domain OHLCV compatibility contract.
 from __future__ import annotations
 
 from pathlib import Path
+import threading
 from typing import Any, Iterable
 
 import pandas as pd
@@ -17,6 +18,7 @@ from core.data_utils import get_required_min_rows, sanitize_ohlcv_dataframe
 from core.runtime_utils import is_insufficient_data_error
 from core.display import C_GRAY, C_RESET
 from core.file_integrity import atomic_write_json, canonical_json_sha256, compute_file_sha256, load_json_strict
+from core.process_lock import try_process_lock
 from core.log_utils import write_issue_log
 from services.optimizer.raw_cache import load_or_build_optimizer_persisted_raw_cache
 from core.market_data_contract import FINMIND_ADJUSTED_PRICE_DATASET, FINMIND_RAW_PRICE_ARCHIVE_DATASET
@@ -37,6 +39,42 @@ TRADING_V2_CONSUMER_STATE_ROLE = "trading_v2_execution_consumer_state"
 TRADING_V2_CONSUMER_STATE_RELATIVE_PATH = Path(
     "state/trading/market_data_v2/execution_consumer_state.json"
 )
+_CONSUMER_PUBLICATION_LOCK = threading.Lock()
+
+
+class TradingConsumerPublicationConflict(RuntimeError):
+    """The finalized consumer changed after a publication plan was captured."""
+
+
+def _assert_consumer_publication_basis(prior, *, expected_state_fingerprint, market_date):
+    actual = None if prior is None else str(prior["state_fingerprint"])
+    if actual != expected_state_fingerprint:
+        raise TradingConsumerPublicationConflict("Trading V2 consumer publication generation changed; replan required")
+    if prior is not None and str(prior["market_date"]) > market_date:
+        raise TradingConsumerPublicationConflict("Trading V2 finalized market date cannot move backwards")
+
+
+def _commit_consumer_state(project_root, state, *, expected_state_fingerprint):
+    """Serialize only read/compare/replace, never market data projection."""
+    path = _state_path(project_root)
+    with _CONSUMER_PUBLICATION_LOCK:
+        with try_process_lock(path.with_suffix(".publication.sqlite3")) as acquired:
+            if not acquired:
+                raise TradingConsumerPublicationConflict("Trading V2 consumer publication is busy; replan required")
+            prior = load_trading_v2_consumer_state(project_root, required=False, verify_current_view=False)
+            _assert_consumer_publication_basis(
+                prior, expected_state_fingerprint=expected_state_fingerprint, market_date=state["market_date"],
+            )
+            if prior is not None and prior["market_date"] == state["market_date"]:
+                if str(state["provider_as_of_date"]) < str(prior["provider_as_of_date"]):
+                    raise TradingConsumerPublicationConflict("Trading V2 provider generation cannot move backwards")
+                if (prior["provider_snapshot_fingerprint"] == state["provider_snapshot_fingerprint"]
+                        and not set(prior.get("source_overlay_batch_fingerprints") or ()).issubset(
+                            state["source_overlay_batch_fingerprints"])):
+                    raise TradingConsumerPublicationConflict("Trading V2 same-date publication cannot discard finalized batches")
+            _validate_consumer_state(state)
+            atomic_write_json(path, state)
+    return state
 
 
 def _required_v2_datasets() -> tuple[str, ...]:
@@ -505,6 +543,7 @@ def publish_trading_v2_consumer_state(
     project_root: str | Path,
     *,
     market_date: str,
+    expected_state_fingerprint: str | None,
     required_position_tickers: Iterable[str] = (),
     required_reentry_tickers: Iterable[str] = (),
     retained_training_tickers: Iterable[str] = (),
@@ -514,6 +553,10 @@ def publish_trading_v2_consumer_state(
 
     root = Path(project_root).resolve()
     date_text = str(market_date)
+    prior = load_trading_v2_consumer_state(root, required=False, verify_current_view=False)
+    _assert_consumer_publication_basis(
+        prior, expected_state_fingerprint=expected_state_fingerprint, market_date=date_text,
+    )
     local_view = view or TradingMarketDataV2View.open_as_of_target(
         root, target_date=date_text
     )
@@ -534,7 +577,6 @@ def publish_trading_v2_consumer_state(
     )
     required = sorted({normalize_trading_ticker(item) for item in required_position_tickers})
     required_reentry = sorted({normalize_trading_ticker(item) for item in required_reentry_tickers})
-    prior = load_trading_v2_consumer_state(root, required=False, verify_current_view=False)
     retained = set(normalize_trading_ticker(item) for item in retained_training_tickers)
     if prior is not None:
         retained.update(normalize_trading_ticker(item) for item in prior.get("training_tickers") or [])
@@ -572,10 +614,7 @@ def publish_trading_v2_consumer_state(
         "training_ticker_count": len(training),
     }
     state["state_fingerprint"] = canonical_json_sha256(state)
-    path = _state_path(root)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_json(path, state)
-    return state
+    return _commit_consumer_state(root, state, expected_state_fingerprint=expected_state_fingerprint)
 
 
 def load_trading_v2_optimizer_raw_data(data_dir, required_min_rows, output_dir, *, verbose=True):
@@ -664,6 +703,7 @@ def load_trading_v2_optimizer_raw_data(data_dir, required_min_rows, output_dir, 
 
 
 __all__ = [
+    "TradingConsumerPublicationConflict",
     "TRADING_V2_CONSUMER_STATE_SCHEMA_VERSION",
     "TRADING_V2_CONSUMER_STATE_ROLE",
     "TRADING_V2_CONSUMER_STATE_RELATIVE_PATH",

@@ -11,7 +11,7 @@ import pandas as pd
 from filters.breakout_quality import runtime as _breakout_quality_runtime_adapter
 
 from core.data_utils import get_required_min_rows
-from core.portfolio_entry_policy import current_daily_execution_contract, daily_signal_execution_context
+from core.portfolio_entry_policy import resolve_portfolio_execution_contract
 from core.training_performance import resolve_optimizer_feature_bank_max_items_default
 from core.feature_bank import FeatureBank
 from core.log_utils import format_exception_summary
@@ -86,7 +86,7 @@ def _feature_bank_profile_delta(before, after):
     }
 
 
-def worker_prep_data(ticker, df, params, include_trade_logs=True, include_pit_stats_index=False, feature_bank=None, profile_enabled=True, daily_execution_contract=None):
+def worker_prep_data(ticker, df, params, include_trade_logs=True, include_pit_stats_index=False, feature_bank=None, profile_enabled=True, daily_execution_contract=None, execution_contract=None):
     worker_start = time.perf_counter() if profile_enabled else None
     profile_stats = {} if profile_enabled else None
     feature_bank_before = _snapshot_feature_bank(feature_bank) if profile_enabled else None
@@ -105,17 +105,19 @@ def worker_prep_data(ticker, df, params, include_trade_logs=True, include_pit_st
 
         # The caller passes this across process/thread boundaries explicitly.
         # Do not rely on ContextVar inheritance from the parent replay.
-        execution_contract = daily_execution_contract or current_daily_execution_contract()
-        with daily_signal_execution_context(execution_contract):
-            dynamic_data, logs, pit_stats_index = prep_optimizer_stock_data_bundle(
-                df,
-                params,
-                profile_stats=profile_stats,
-                ticker=ticker,
-                include_trade_logs=include_trade_logs,
-                include_pit_stats_index=include_pit_stats_index,
-                feature_bank=feature_bank,
-            )
+        execution_contract = resolve_portfolio_execution_contract(
+            execution_contract, daily_execution_contract=daily_execution_contract,
+        )
+        dynamic_data, logs, pit_stats_index = prep_optimizer_stock_data_bundle(
+            df,
+            params,
+            profile_stats=profile_stats,
+            ticker=ticker,
+            include_trade_logs=include_trade_logs,
+            include_pit_stats_index=include_pit_stats_index,
+            feature_bank=feature_bank,
+            execution_contract=execution_contract,
+        )
         if profile_stats is None:
             worker_profile = _empty_worker_profile(worker_start)
         else:
@@ -169,7 +171,7 @@ def worker_prep_data(ticker, df, params, include_trade_logs=True, include_pit_st
         ) from exc
 
 
-def worker_prep_data_from_cache(ticker, params, include_trade_logs=True, include_pit_stats_index=False, profile_enabled=True, daily_execution_contract=None):
+def worker_prep_data_from_cache(ticker, params, include_trade_logs=True, include_pit_stats_index=False, profile_enabled=True, daily_execution_contract=None, execution_contract=None):
     global _WORKER_RAW_DATA_CACHE, _WORKER_FEATURE_BANK
     if _WORKER_RAW_DATA_CACHE is None:
         raise RuntimeError("optimizer worker raw_data_cache 尚未初始化")
@@ -177,7 +179,7 @@ def worker_prep_data_from_cache(ticker, params, include_trade_logs=True, include
         df = _WORKER_RAW_DATA_CACHE[ticker]
     except KeyError as exc:
         raise RuntimeError(f"optimizer worker 找不到 ticker={ticker} 的快取資料") from exc
-    return worker_prep_data(ticker, df, params, include_trade_logs=include_trade_logs, include_pit_stats_index=include_pit_stats_index, feature_bank=_WORKER_FEATURE_BANK, profile_enabled=profile_enabled, daily_execution_contract=daily_execution_contract)
+    return worker_prep_data(ticker, df, params, include_trade_logs=include_trade_logs, include_pit_stats_index=include_pit_stats_index, feature_bank=_WORKER_FEATURE_BANK, profile_enabled=profile_enabled, daily_execution_contract=daily_execution_contract, execution_contract=execution_contract)
 
 
 def merge_prep_result(result, all_dfs_fast, all_trade_logs, all_pit_stats_index, master_dates, prep_failures, prep_profile, static_fast_cache, ok_tickers=None, update_master_dates=True):
@@ -263,6 +265,7 @@ def _run_prep_inline(
     profile_enabled=True,
     feature_bank=None,
     daily_execution_contract=None,
+    execution_contract=None,
 ):
     if feature_bank is None:
         feature_bank = _build_optimizer_feature_bank()
@@ -278,6 +281,7 @@ def _run_prep_inline(
             feature_bank=feature_bank,
             profile_enabled=profile_enabled,
             daily_execution_contract=daily_execution_contract,
+            execution_contract=execution_contract,
         )
         t_merge = time.perf_counter()
         merge_prep_result(
@@ -315,7 +319,7 @@ def _build_process_pool_executor(max_workers, raw_data_cache):
 
 
 
-def worker_prep_batch(raw_data_cache, tickers, params, include_trade_logs=True, include_pit_stats_index=False, profile_enabled=True, daily_execution_contract=None):
+def worker_prep_batch(raw_data_cache, tickers, params, include_trade_logs=True, include_pit_stats_index=False, profile_enabled=True, daily_execution_contract=None, execution_contract=None):
     feature_bank = _build_optimizer_feature_bank()
     return [
         worker_prep_data(
@@ -327,13 +331,14 @@ def worker_prep_batch(raw_data_cache, tickers, params, include_trade_logs=True, 
             feature_bank=feature_bank,
             profile_enabled=profile_enabled,
             daily_execution_contract=daily_execution_contract,
+            execution_contract=execution_contract,
         )
         for ticker in tickers
     ]
 
 
-def worker_prep_batch_from_cache(tickers, params, include_trade_logs=True, include_pit_stats_index=False, profile_enabled=True, daily_execution_contract=None):
-    return [worker_prep_data_from_cache(ticker, params, include_trade_logs=include_trade_logs, include_pit_stats_index=include_pit_stats_index, profile_enabled=profile_enabled, daily_execution_contract=daily_execution_contract) for ticker in tickers]
+def worker_prep_batch_from_cache(tickers, params, include_trade_logs=True, include_pit_stats_index=False, profile_enabled=True, daily_execution_contract=None, execution_contract=None):
+    return [worker_prep_data_from_cache(ticker, params, include_trade_logs=include_trade_logs, include_pit_stats_index=include_pit_stats_index, profile_enabled=profile_enabled, daily_execution_contract=daily_execution_contract, execution_contract=execution_contract) for ticker in tickers]
 
 
 def _build_balanced_ticker_batches(raw_data_cache, tickers, max_workers):
@@ -359,15 +364,15 @@ def _build_balanced_ticker_batches(raw_data_cache, tickers, max_workers):
     return [batch for batch in batches if batch]
 
 
-def _run_prep_with_executor(executor, tickers, params, all_dfs_fast, all_trade_logs, all_pit_stats_index, master_dates, prep_failures, prep_profile, raw_data_cache, static_fast_cache, max_workers, executor_kind, include_trade_logs, include_pit_stats_index, ok_tickers=None, update_master_dates=True, profile_enabled=True, daily_execution_contract=None):
+def _run_prep_with_executor(executor, tickers, params, all_dfs_fast, all_trade_logs, all_pit_stats_index, master_dates, prep_failures, prep_profile, raw_data_cache, static_fast_cache, max_workers, executor_kind, include_trade_logs, include_pit_stats_index, ok_tickers=None, update_master_dates=True, profile_enabled=True, daily_execution_contract=None, execution_contract=None):
     ticker_batches = _build_balanced_ticker_batches(raw_data_cache, tickers, max_workers)
     prep_profile["ticker_count"] += int(len(tickers))
     prep_profile["batch_count"] += int(len(ticker_batches))
     t_submit = time.perf_counter()
     if executor_kind == 'thread':
-        futures = [executor.submit(worker_prep_batch, raw_data_cache, batch, params, include_trade_logs, include_pit_stats_index, profile_enabled, daily_execution_contract) for batch in ticker_batches]
+        futures = [executor.submit(worker_prep_batch, raw_data_cache, batch, params, include_trade_logs, include_pit_stats_index, profile_enabled, daily_execution_contract, execution_contract) for batch in ticker_batches]
     else:
-        futures = [executor.submit(worker_prep_batch_from_cache, batch, params, include_trade_logs, include_pit_stats_index, profile_enabled, daily_execution_contract) for batch in ticker_batches]
+        futures = [executor.submit(worker_prep_batch_from_cache, batch, params, include_trade_logs, include_pit_stats_index, profile_enabled, daily_execution_contract, execution_contract) for batch in ticker_batches]
     prep_profile["executor_submit_sec"] += time.perf_counter() - t_submit
     t_collect = time.perf_counter()
     for future in as_completed(futures):
@@ -381,7 +386,7 @@ def _run_prep_with_executor(executor, tickers, params, all_dfs_fast, all_trade_l
         t_collect = time.perf_counter()
 
 
-def prepare_trial_inputs(raw_data_cache, params, default_max_workers, executor_bundle=None, static_fast_cache=None, static_master_dates=None, include_trade_logs=True, include_pit_stats_index=False, profile_enabled=True):
+def prepare_trial_inputs(raw_data_cache, params, default_max_workers, executor_bundle=None, static_fast_cache=None, static_master_dates=None, include_trade_logs=True, include_pit_stats_index=False, profile_enabled=True, execution_contract=None):
     t_static_pack = time.perf_counter()
     if static_fast_cache is None:
         resolved_static_fast_cache = {ticker: pack_static_market_data(df) for ticker, df in raw_data_cache.items()}
@@ -401,7 +406,8 @@ def prepare_trial_inputs(raw_data_cache, params, default_max_workers, executor_b
     pool_error_text = None
     tickers = list(raw_data_cache.keys())
     # Explicit signal semantics cross the ProcessPool/ThreadPool boundary.
-    daily_execution_contract = current_daily_execution_contract()
+    execution_contract = resolve_portfolio_execution_contract(execution_contract)
+    daily_execution_contract = execution_contract.daily_execution_contract
     created_executor = None
     executor_kind = 'process'
 
@@ -427,12 +433,13 @@ def prepare_trial_inputs(raw_data_cache, params, default_max_workers, executor_b
                 profile_enabled=profile_enabled,
                 feature_bank=executor_bundle.get("feature_bank"),
                 daily_execution_contract=daily_execution_contract,
+                execution_contract=execution_contract,
             )
         elif executor_bundle is not None and int(executor_bundle.get("max_workers", 0)) == max_workers:
             created_executor = executor_bundle["executor"]
             pool_start_method = executor_bundle.get("pool_start_method")
             executor_kind = executor_bundle.get("executor_kind", 'process')
-            _run_prep_with_executor(created_executor, tickers, params, all_dfs_fast, all_trade_logs, all_pit_stats_index, master_dates, prep_failures, prep_profile, raw_data_cache, resolved_static_fast_cache, max_workers, executor_kind, include_trade_logs, include_pit_stats_index, ok_tickers=ok_tickers, update_master_dates=not defer_master_date_union, profile_enabled=profile_enabled, daily_execution_contract=daily_execution_contract)
+            _run_prep_with_executor(created_executor, tickers, params, all_dfs_fast, all_trade_logs, all_pit_stats_index, master_dates, prep_failures, prep_profile, raw_data_cache, resolved_static_fast_cache, max_workers, executor_kind, include_trade_logs, include_pit_stats_index, ok_tickers=ok_tickers, update_master_dates=not defer_master_date_union, profile_enabled=profile_enabled, daily_execution_contract=daily_execution_contract, execution_contract=execution_contract)
         else:
             t_setup = time.perf_counter()
             created_executor, pool_start_method, supports_initializer = _build_process_pool_executor(max_workers, raw_data_cache)
@@ -440,11 +447,11 @@ def prepare_trial_inputs(raw_data_cache, params, default_max_workers, executor_b
             executor_kind = 'process'
             try:
                 if executor_kind == 'thread':
-                    _run_prep_with_executor(created_executor, tickers, params, all_dfs_fast, all_trade_logs, all_pit_stats_index, master_dates, prep_failures, prep_profile, raw_data_cache, resolved_static_fast_cache, max_workers, executor_kind, include_trade_logs, include_pit_stats_index, ok_tickers=ok_tickers, update_master_dates=not defer_master_date_union, profile_enabled=profile_enabled, daily_execution_contract=daily_execution_contract)
+                    _run_prep_with_executor(created_executor, tickers, params, all_dfs_fast, all_trade_logs, all_pit_stats_index, master_dates, prep_failures, prep_profile, raw_data_cache, resolved_static_fast_cache, max_workers, executor_kind, include_trade_logs, include_pit_stats_index, ok_tickers=ok_tickers, update_master_dates=not defer_master_date_union, profile_enabled=profile_enabled, daily_execution_contract=daily_execution_contract, execution_contract=execution_contract)
                 elif supports_initializer:
-                    _run_prep_with_executor(created_executor, tickers, params, all_dfs_fast, all_trade_logs, all_pit_stats_index, master_dates, prep_failures, prep_profile, raw_data_cache, resolved_static_fast_cache, max_workers, executor_kind, include_trade_logs, include_pit_stats_index, ok_tickers=ok_tickers, update_master_dates=not defer_master_date_union, profile_enabled=profile_enabled, daily_execution_contract=daily_execution_contract)
+                    _run_prep_with_executor(created_executor, tickers, params, all_dfs_fast, all_trade_logs, all_pit_stats_index, master_dates, prep_failures, prep_profile, raw_data_cache, resolved_static_fast_cache, max_workers, executor_kind, include_trade_logs, include_pit_stats_index, ok_tickers=ok_tickers, update_master_dates=not defer_master_date_union, profile_enabled=profile_enabled, daily_execution_contract=daily_execution_contract, execution_contract=execution_contract)
                 else:
-                    futures = [created_executor.submit(worker_prep_data, ticker, df, params, include_trade_logs, include_pit_stats_index, None, profile_enabled, daily_execution_contract) for ticker, df in raw_data_cache.items()]
+                    futures = [created_executor.submit(worker_prep_data, ticker, df, params, include_trade_logs, include_pit_stats_index, None, profile_enabled, daily_execution_contract, execution_contract) for ticker, df in raw_data_cache.items()]
                     for future in as_completed(futures):
                         result = future.result()
                         merge_prep_result(result, all_dfs_fast, all_trade_logs, all_pit_stats_index, master_dates, prep_failures, prep_profile, resolved_static_fast_cache, ok_tickers=ok_tickers, update_master_dates=not defer_master_date_union)
@@ -478,6 +485,7 @@ def prepare_trial_inputs(raw_data_cache, params, default_max_workers, executor_b
             update_master_dates=not defer_master_date_union,
             profile_enabled=profile_enabled,
             daily_execution_contract=daily_execution_contract,
+            execution_contract=execution_contract,
         )
 
     if defer_master_date_union:

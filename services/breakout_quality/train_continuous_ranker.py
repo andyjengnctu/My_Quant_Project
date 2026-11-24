@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from services.breakout_quality.forward_publication import (
+    commit_forward_fit, forward_training_publication, published_forward_path,
+)
+
 import argparse
 import json
 import math
@@ -5090,6 +5094,7 @@ def _render_markdown(payload: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+@forward_training_publication
 def run(args) -> int:
     validate_args(args)
     started = time.perf_counter()
@@ -5262,6 +5267,19 @@ def run(args) -> int:
             "total_parameter_count": int(total_parameter_count),
         }
     torch.save(checkpoint_payload, artifact_paths.model_path)
+    def validate_checkpoint(path):
+        saved = torch.load(path, map_location="cpu", weights_only=True)
+        for field in ("experiment_profile", "experiment_settings", "training_objective",
+                      "model_spec", "training_semantics", "sequence_length"):
+            if saved.get(field) != checkpoint_payload.get(field):
+                raise ValueError(f"Forward checkpoint publication mismatch: {field}")
+        actual = saved.get("model_state_dict") or {}
+        expected = checkpoint_payload["model_state_dict"]
+        if actual.keys() != expected.keys() or any(
+            not torch.equal(actual[key], expected[key]) for key in expected
+        ):
+            raise ValueError("Forward checkpoint publication tensor mismatch")
+    commit_forward_fit(checkpoint_validator=validate_checkpoint)
     split_assignments.to_csv(artifact_paths.split_path, index=False, encoding="utf-8-sig")
 
     # OOS target transformation and model inference occur only after the frozen
@@ -5531,7 +5549,7 @@ def run(args) -> int:
     else:
         print(f"- trade R: {trade_alignment.get('reason', 'unavailable')}")
     print_artifact_paths(
-        (("Continuous ranker model", artifact_paths.model_path), ("Markdown", report_markdown_path)),
+        (("Continuous ranker model", published_forward_path(artifact_paths.model_path)), ("Markdown", published_forward_path(report_markdown_path))),
         project_root=PROJECT_ROOT,
     )
     return 0
