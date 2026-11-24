@@ -56,11 +56,8 @@ def exact_state(value):
 
 
 class OptimizerShadowContextTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.reference_levels = staticmethod(predecessor_fill_levels())
-
     def setUp(self):
+        self.reference_levels = predecessor_fill_levels()
         self.params = V16StrategyParams(
             atr_times_init=2.0, atr_times_trail=1.5,
             use_breakout_quality_filter=False, use_breakout_quality_ranking=False,
