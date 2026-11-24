@@ -891,6 +891,34 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     check_true("summary_verify_stops_after_unsuccessful_producer",
                failed_rc == 2 and not later_step.called and not final_step.called)
 
+    from services.research import breakout_quality_application as model_application
+    from services.research import strategy_compare_application as strategy_application
+    import sys
+
+    class TerminalOutput(io.StringIO):
+        def isatty(self):
+            return True
+
+    terminal = TerminalOutput()
+    def failed_model(*args, **kwargs):
+        assert sys.stdout.isatty()
+        print("MODEL_FAILURE_DETAIL")
+        return 2
+
+    with redirect_stdout(terminal), patch.object(
+        model_application, "_run_configured_model_comparison", side_effect=failed_model,
+    ):
+        compact_rc = model_application.run_summary_model_comparison(robustness=False)
+        with strategy_application._strategy_console(True) as report_output:
+            terminal_preserved = sys.stdout.isatty()
+            print("HIDDEN_PRODUCER_CHATTER")
+            report_output("OFFICIAL_STRATEGY_REPORT")
+    check_true("summary_compact_output_preserves_terminal_and_failure_diagnostics",
+               compact_rc == 2 and terminal_preserved
+               and "MODEL_FAILURE_DETAIL" in terminal.getvalue()
+               and "OFFICIAL_STRATEGY_REPORT" in terminal.getvalue()
+               and "HIDDEN_PRODUCER_CHATTER" not in terminal.getvalue())
+
     # Cancel leaves both Optimizer and Replay untouched. The visible matrix is
     # a scientific read-only plan, not a parameter file-existence inventory.
     cancellation = io.StringIO()

@@ -263,6 +263,8 @@ def _strategy_console(compact: bool):
         return
     output = partial(print, file=sys.stdout, flush=True)
     with tempfile.TemporaryFile(mode="w+", encoding="utf-8") as details:
+        # Keep official report colors tied to the destination terminal.
+        details.isatty = sys.stdout.isatty
         try:
             with redirect_stdout(details):
                 yield output

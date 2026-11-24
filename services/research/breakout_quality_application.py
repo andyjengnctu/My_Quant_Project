@@ -5638,11 +5638,16 @@ def run_summary_model_comparison(*, robustness: bool) -> int:
     compare = _run_configured_model_robustness if robustness else _run_configured_model_comparison
     output = partial(print, file=sys.stdout, flush=True)
     with tempfile.TemporaryFile(mode="w+", encoding="utf-8") as details:
-        with _compact_console_scope(), redirect_stdout(details):
-            code = compare("apps/research.py model", rolling=True, summary_output=output)
-        if code:
-            details.seek(0)
-            output("".join(deque(details, maxlen=8)).rstrip())
+        # Report renderers still see the real terminal's color capability.
+        details.isatty = sys.stdout.isatty
+        code = 1
+        try:
+            with _compact_console_scope(), redirect_stdout(details):
+                code = compare("apps/research.py model", rolling=True, summary_output=output)
+        finally:
+            if code:
+                details.seek(0)
+                output("".join(deque(details, maxlen=8)).rstrip())
     return code
 
 
