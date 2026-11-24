@@ -76,7 +76,7 @@ def _load(profile, seed, root):
         project_root=root, seed=seed)
 
 
-def _fit(bundle, *, seed, start, end, directory):
+def _fit(bundle, *, seed, start, end, directory, include_audit=True):
     from services.breakout_quality.point_in_time_scores import build_selection_point_in_time_scores
     from filters.breakout_quality.paths import SELECTION_POINT_IN_TIME_SCORE_FILENAME, SELECTION_POINT_IN_TIME_MANIFEST_FILENAME
     from config.breakout_quality import BREAKOUT_QUALITY_SHARED_FITTING_CHECKPOINT_CACHE_ROOT
@@ -88,6 +88,13 @@ def _fit(bundle, *, seed, start, end, directory):
         checkpoint_cache_root=str(ROOT / BREAKOUT_QUALITY_SHARED_FITTING_CHECKPOINT_CACHE_ROOT))
     if code:
         raise RuntimeError(f'Canonical PIT producer failed: {code}')
+    if include_audit:
+        from services.breakout_quality.point_in_time_audit import audit_selection_point_in_time_scores
+        audit_code = audit_selection_point_in_time_scores(
+            filter_id='breakout_quality_v1', model_architecture='inception_time_v1',
+            experiment_profile=bundle.profile.name, point_in_time_dir_override=str(directory))
+        if audit_code:
+            raise RuntimeError(f'Canonical Standard Model SOP failed: {audit_code}')
     return {'score_path': directory / SELECTION_POINT_IN_TIME_SCORE_FILENAME,
             'manifest_path': directory / SELECTION_POINT_IN_TIME_MANIFEST_FILENAME}
 
@@ -210,7 +217,8 @@ def run_study(study_id='co_history'):
         report['samples'] = {'added_mature_rows': int(new.sum()),
                              'added_tickers': int(b.group_table.loc[new,'ticker'].nunique()),
                              'added_dates': int(b.group_table.loc[new,'date'].nunique()),
-                             'original_truth_unchanged': True}
+                             'original_truth_unchanged': True,
+                             'universe': 'existing_frozen_price_universe; historical_delisting_coverage_not_established'}
         from services.breakout_quality.formal_mintrade40_training_source import load_formal_mintrade40_training_source
         teacher = load_formal_mintrade40_training_source(
             project_root=ROOT,seed=seed,history_extension=study['history_extension'])
@@ -219,7 +227,7 @@ def run_study(study_id='co_history'):
         years = tuple(study['screen_years'])
         screen_paths = {}
         for label, bundle in (('a',a),('b',b)):
-            screen_paths[label] = _fit(bundle, seed=seed, start=f'{min(years)}-01-01', end=f'{max(years)}-12-31', directory=directory / 'fits' / f'seed_{seed}' / label / 'screen')
+            screen_paths[label] = _fit(bundle, seed=seed, start=f'{min(years)}-01-01', end=f'{max(years)}-12-31', directory=directory / 'fits' / f'seed_{seed}' / label / 'screen', include_audit=False)
         for year in years:
             report['screen'][str(year)] = paired_rank_metrics(
                 _evaluation(a,screen_paths['a'],year=year), _evaluation(b,screen_paths['b'],year=year))
@@ -270,6 +278,14 @@ def run_study(study_id='co_history'):
                                 'note': 'Target、Exact 與評分母體相同；新增訓練歷史沒有新 Oracle 真值。'}
         report['status'] = report['robustness_decision']['status']
         return report
+    except (KeyboardInterrupt, SystemExit) as exc:
+        report['status'] = 'INTERRUPTED'
+        report['reason'] = f'{type(exc).__name__}: {exc}; matching canonical artifacts remain resumable'
+        raise
+    except (KeyError, TypeError, AttributeError) as exc:
+        report['status'] = 'FAILED'
+        report['reason'] = f'{type(exc).__name__}: {exc}'
+        raise
     except (OSError, ValueError, RuntimeError, ImportError) as exc:
         report['status'] = 'BLOCKED'
         report['reason'] = f'{type(exc).__name__}: {exc}'
