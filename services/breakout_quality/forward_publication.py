@@ -23,6 +23,8 @@ from core.file_integrity import (
     exclusive_file_lock,
 )
 
+from services.breakout_quality.ranker_output_paths import resolve_ranker_training_output_paths
+
 _ACTIVE_PUBLICATION = ContextVar("forward_training_publication", default=None)
 _HELD_LEASES = ContextVar("forward_publication_leases", default=frozenset())
 _ACTIVE_NAMESPACES = ContextVar("forward_active_namespaces", default=frozenset())
@@ -191,26 +193,14 @@ class ForwardPublication:
             raise
         self.recover(phase)
 
-    def commit_fit(self, *, expected_identity=None, project_root=None, checkpoint_validator=None):
-        from services.breakout_quality.fitted_model_artifacts import (
-            FITTED_MODEL_MANIFEST_FILENAME, load_reusable_fitted_model_contract,
-        )
-        if expected_identity is not None:
-            contract, reason = load_reusable_fitted_model_contract(
-                model_dir=self.model_stage, expected_identity=expected_identity,
-                final_manifest_path=self.model_stage / "manifest.json",
-                report_path=self.output_stage / "continuous_ranker_report.json",
-                project_root=project_root,
-            )
-            if contract is None:
-                raise ValueError(f"Forward FIT staging validation failed: {reason}")
-        elif checkpoint_validator is not None:
-            checkpoint_validator(self.model_stage / "model.pt")
-        else:
-            raise ValueError("Forward FIT publication requires a checkpoint validator")
-        names = ["model.pt"]
-        if expected_identity is not None:
-            names.append(FITTED_MODEL_MANIFEST_FILENAME)
+    def commit_fit(self, *, checkpoint_validator):
+        """Publish checkpoint files admitted by the trainer's canonical FIT owner."""
+        admitted = checkpoint_validator(self.model_stage / "model.pt")
+        names = list(admitted or ("model.pt",))
+        if not names or names[0] != "model.pt" or any(
+            name not in {"model.pt", "fitted_model_manifest.json"} for name in names
+        ) or len(set(names)) != len(names):
+            raise ValueError("Forward FIT validator returned invalid checkpoint files")
         pairs = [(self.model_stage / name, self.model_dir / name) for name in names]
         # Preserve the existing Rolling-import historical evidence, if created.
         archive = self.model_stage / "historical_forward_fits"
@@ -275,12 +265,11 @@ def forward_training_publication(function):
     """Cover direct trainer, CLI, BUILD, REFRESH and force entry points equally."""
     @wraps(function)
     def run(args):
-        from services.breakout_quality.train_continuous_ranker import resolve_training_output_paths
         from filters.breakout_quality.ranking_score_store import (
             clear_continuous_ranker_oos_score_caches, load_continuous_ranker_oos_contract_at_paths,
         )
-        paths, output = resolve_training_output_paths(args)
         root = function.__globals__["PROJECT_ROOT"]
+        paths, output = resolve_ranker_training_output_paths(args, project_root=root)
         with ForwardPublication(paths.model_dir, output) as publication:
             staged_args = copy(args)
             staged_args.model_output_dir = str(publication.model_stage)

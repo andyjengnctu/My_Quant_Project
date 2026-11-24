@@ -1865,6 +1865,26 @@ def load_reusable_fitted_model_contract(
     ), None
 
 
+def validate_forward_fitted_publication(
+    model_path: Path, *, expected_identity: Mapping[str, Any], report_path: Path,
+    project_root: str | Path | None = None,
+) -> tuple[str, ...]:
+    """Admit FIT files for publication through the existing reuse validator.
+
+    Publication owns IO and transaction recovery; it receives this validator as
+    a port and does not import the FIT/source/repair dependency graph.
+    """
+    model_path = Path(model_path)
+    contract, reason = load_reusable_fitted_model_contract(
+        model_dir=model_path.parent, expected_identity=expected_identity,
+        final_manifest_path=model_path.parent / "manifest.json",
+        report_path=Path(report_path), project_root=project_root,
+    )
+    if contract is None:
+        raise ValueError(f"Forward FIT staging validation failed: {reason}")
+    return model_path.name, FITTED_MODEL_MANIFEST_FILENAME
+
+
 def write_fitted_model_contract(
     *,
     model_dir: Path,

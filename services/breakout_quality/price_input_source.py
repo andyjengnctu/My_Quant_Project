@@ -1,79 +1,12 @@
-"""Research-only alternate feature source. AO adjusted targets remain canonical.
-
-Provider and raw materialization ownership stays in the existing Research service;
-DL consumers receive one verified declarative source record. Non-raw models do not
-observe any changed metadata, feature windows or identity fields.
-"""
+"""Daily DL loader adapter; feature-price identity has an independent owner."""
 from __future__ import annotations
-
-from pathlib import Path
-from typing import Any
-
-from filters.breakout_quality.models.architectures import get_architecture_descriptor
 from filters.breakout_quality.daily_ranker_data import load_daily_universal_ranker_data
 from filters.breakout_quality.workflow_io import PROJECT_ROOT
 from services.breakout_quality.trade_count_source import resolve_trade_count_feature_source
-from services.research.raw_price_strategy_dataset import (
-    ensure_raw_price_strategy_dataset,
-    inspect_raw_price_strategy_dataset,
-    RAW_PRICE_QUOTE_POLICY_OBSERVED,
-    RAW_PRICE_QUOTE_POLICY_STRICT,
+from services.breakout_quality.feature_price_source import (
+    RAW_PRICE_INPUT_CAPABILITY, uses_alternate_price_input,
+    resolve_feature_price_source, verified_current_price_source_identity,
 )
-
-RAW_PRICE_INPUT_CAPABILITY = "raw_unadjusted_price_input"
-
-
-def uses_alternate_price_input(model_architecture: str) -> bool:
-    return get_architecture_descriptor(model_architecture).has_capability(RAW_PRICE_INPUT_CAPABILITY)
-
-
-def resolve_feature_price_source(
-    *, model_architecture: str, project_root: str | Path = PROJECT_ROOT,
-    create: bool = False,
-) -> dict[str, Any] | None:
-    """Verify immutable provider/control lineage and all materialized raw CSV SHA.
-
-    For REUSE reads `create=False` cannot build or rewrite research artifacts.
-    """
-    if not uses_alternate_price_input(model_architecture):
-        return None
-    root = Path(project_root).resolve()
-    desc = get_architecture_descriptor(model_architecture)
-    masked = desc.has_capability("raw_observed_quote_mask_input")
-    quote_policy = RAW_PRICE_QUOTE_POLICY_OBSERVED if masked else RAW_PRICE_QUOTE_POLICY_STRICT
-    result = (
-        ensure_raw_price_strategy_dataset(root, quote_policy=quote_policy)
-        if create else inspect_raw_price_strategy_dataset(root, deep=True, quote_policy=quote_policy)
-    )
-    if not bool(result.get("ready")):
-        raise ValueError(
-            "DL raw input source未READY；需先由canonical Research producer建立："
-            + str(result.get("status"))
-        )
-    data_identity = result.get("data_identity")
-    if not isinstance(data_identity, dict) or not data_identity.get("materialization_fingerprint"):
-        raise ValueError("DL raw input materialization identity缺失")
-    source_identity = result.get("source_identity")
-    if not isinstance(source_identity, dict):
-        raise ValueError("DL raw input provider source identity缺失")
-    identity = {
-            "price_basis": "raw_unadjusted_ohlc_canonical_volume",
-            "target_price_basis": "canonical_adjusted",
-            "source_contract_id": str(source_identity["contract_id"]),
-            "manifest_relative_path": Path(result["manifest_path"]).relative_to(root).as_posix(),
-            "source_identity_fingerprint": str(result["source_identity_fingerprint"]),
-            "materialization_fingerprint": str(data_identity["materialization_fingerprint"]),
-            "dataset_inventory_sha256": str(data_identity["dataset_inventory_sha256"]),
-    }
-    if masked:
-        identity["input_representation"] = "raw_observed_quote_mask_300x12_v1"
-        identity["quote_policy"] = quote_policy
-    return {
-        "dataset_dir": Path(result["dataset_dir"]),
-        "identity": identity,
-    }
-
-
 
 
 def load_daily_universal_ranker_data_with_price_source(**kwargs):
@@ -97,12 +30,3 @@ def load_daily_universal_ranker_data_with_price_source(**kwargs):
     return load_daily_universal_ranker_data(
         **kwargs, feature_price_source=alternate, feature_trade_count_source=activity,
     )
-
-
-def verified_current_price_source_identity(
-    *, model_architecture: str, project_root: str | Path,
-) -> dict[str, Any] | None:
-    record = resolve_feature_price_source(
-        model_architecture=model_architecture, project_root=project_root, create=False,
-    )
-    return None if record is None else dict(record["identity"])

@@ -185,7 +185,8 @@ project/
 - `services/trading/workbench_snapshot.py` 統一 Trading 頁面與帳務中心的快照服務：先執行既有 reconcile／recovery，再以短鎖擷取 account/order/pending，鎖外投影同一 revisions；衍生報表發布不得覆寫較新 revision。`state_snapshot.py` 隔離 worker 讀取且禁止 projection 寫入；UI 使用 `services/workbench_ui/background_tasks.py` 的背景工作與過期結果防護，不持有交易規則。
 - `services/trading/state_lock.py` 集中未完成交易 journal 的寫入閘門；所有 public account/order/pending mutation 必須在寫入前檢查，與 active-order 業務政策分離。內部 pending transfer/recovery 僅在已持有相同 lock 且 journal hash 相符的 scope 中提交。
 - `services/trading/market_data_consumer.py` 在短 thread/process lock 內核對 expected consumer fingerprint 後發布；日期及同日 overlay lineage 不得倒退。promotion 發生衝突時重新擷取來源與規劃，不能用舊 read model 盲目重試。
-- Forward READY 由 `services/breakout_quality/forward_model_source.py` 統一驗證；canonical 與 isolated Strategy Compare／Robustness 以可重驗的 binding 消費相同工件契約。`services/breakout_quality/forward_publication.py` 持有 producer lease、唯一 staging 與可恢復提交，FIT 與 evaluation 分別發布，report 失敗不撤銷已驗證的 FIT。
+- Forward READY 由 `services/breakout_quality/forward_model_source.py` 統一驗證；canonical 與 isolated Strategy Compare／Robustness 以可重驗的 binding 消費相同工件契約。`services/breakout_quality/forward_publication.py` 持有 producer lease、唯一 staging 與可恢復提交，接收 canonical FIT owner 的驗證 callback；FIT 與 evaluation 分別發布，report 失敗不撤銷已驗證的 FIT。
+- Ranker 路徑解析由 `services/breakout_quality/ranker_output_paths.py` 持有，feature price 身分由 `services/breakout_quality/feature_price_source.py` 持有，SOP completeness 純驗證由 `filters/breakout_quality/standard_model_sop_contract.py` 持有；既有 producer 模組保留公開轉接介面。Publication 與 inspection 不透過 trainer 取得這些共用契約，避免 FIT、repair 與研究執行服務形成循環引用。
 
 ## 正式入口
 

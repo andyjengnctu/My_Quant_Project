@@ -2721,6 +2721,7 @@ def validate_breakout_quality_daily_full_list_ndcg_pairwise_contract_case(_base_
                 "model_score": 0.9,
             }]
         )
+        fake_score_table.to_csv(score_path, index=False, encoding="utf-8-sig", compression="gzip")
         fake_score_table.attrs["available_from"] = "2021-01-04"
         fake_score_table.attrs["available_through"] = "2021-01-04"
 
@@ -2749,11 +2750,6 @@ def validate_breakout_quality_daily_full_list_ndcg_pairwise_contract_case(_base_
                     ranking_store,
                     "_validate_file_record_simple",
                     return_value=None,
-                ),
-                patch.object(
-                    ranking_store,
-                    "load_continuous_ranker_oos_score_table",
-                    return_value=fake_score_table,
                 ),
                 # Isolated report-schema fixture does not materialize real CSV
                 # inputs; current-source readiness is tested separately.
@@ -4366,7 +4362,10 @@ def validate_breakout_quality_fitted_model_lifecycle_contract_case(_base_params)
                 "source_continuous_target": source_target,
                 "model": build_file_manifest(model_path),
             }
-            old_model_report = {"source_dataset": source_dataset, "target_manifest": source_target}
+            old_model_report = {
+                "source_dataset": source_dataset, "target_manifest": source_target,
+                "training": {"seed": 42, "selected_epoch": 2},
+            }
             old_manifest_path = model_dir / "manifest.json"
             old_report_path = model_dir / "report.json"
             old_manifest_path.write_text(json.dumps(old_model_manifest), encoding="utf-8")
@@ -4491,6 +4490,7 @@ def validate_breakout_quality_fitted_model_lifecycle_contract_case(_base_params)
         original_report = {
             "source_dataset": current_summary,
             "target_manifest": base_target,
+            "training": {"seed": 42, "selected_epoch": 2},
         }
         manifest_path = model_dir / "manifest.json"
         report_path = root / "report.json"
@@ -4529,6 +4529,31 @@ def validate_breakout_quality_fitted_model_lifecycle_contract_case(_base_params)
             target_manifest=base_target,
         )
         check_true("forward_source_lineage_matches_original_evidence", not issues)
+        # Original lineage can authorize a historical FIT only together with
+        # consistent fitting evidence. Neither omission nor another seed/epoch
+        # may inherit the checkpoint merely because Dataset hashes agree.
+        for label, training, expected_issue in (
+            ("missing_seed", {"selected_epoch": 2}, "seed differs"),
+            ("different_seed", {"seed": 43, "selected_epoch": 2}, "seed differs"),
+            ("different_epoch", {"seed": 42, "selected_epoch": 3}, "selected_epoch differs"),
+        ):
+            inconsistent_report = {**original_report, "training": training}
+            evidence_issues = forward_fitted_source_provenance_issues(
+                model_dir=model_dir, model_manifest=original_manifest,
+                report=inconsistent_report, dataset_summary=current_summary,
+                target_manifest=base_target,
+            )
+            report_path.write_text(json.dumps(inconsistent_report), encoding="utf-8")
+            rejected, rejected_reason = load_reusable_fitted_model_contract(
+                model_dir=model_dir, expected_identity=migrated_identity,
+                final_manifest_path=manifest_path, report_path=report_path,
+            )
+            check_true(
+                "legacy_fitted_lineage_rejects_" + label,
+                any(expected_issue in issue for issue in evidence_issues)
+                and rejected is None and "source data/target lineage unproven" in str(rejected_reason),
+            )
+        report_path.write_text(json.dumps(original_report), encoding="utf-8")
         tampered_report = {**original_report, "source_dataset": {
             **current_summary, "source_dataset_artifacts": {"feature_bank": {"sha256": "tampered"}}
         }}

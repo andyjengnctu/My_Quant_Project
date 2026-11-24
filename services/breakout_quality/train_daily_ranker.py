@@ -109,6 +109,7 @@ from services.breakout_quality.fitted_model_artifacts import (
     load_model_from_fitted_checkpoint,
     resolve_forward_fitted_checkpoint,
     write_fitted_model_contract,
+    validate_forward_fitted_publication,
 )
 
 DAILY_SPLIT_FILENAME = "daily_split_by_date.csv"
@@ -1271,7 +1272,13 @@ def run(args) -> int:
             total_parameter_count=total_parameter_count,
         )
 
-    commit_forward_fit(expected_identity=expected_fitting_identity, project_root=PROJECT_ROOT)
+    def validate_fitted_checkpoint(path):
+        return validate_forward_fitted_publication(
+            path, expected_identity=expected_fitting_identity,
+            report_path=output_dir / ranker_api.RANKER_REPORT_JSON_FILENAME,
+            project_root=PROJECT_ROOT,
+        )
+    commit_forward_fit(checkpoint_validator=validate_fitted_checkpoint)
 
     # OOS target ranks and inference are intentionally deferred until after checkpoint write.
     oos_mask = np.zeros(bundle.raw_target.shape, dtype=bool)

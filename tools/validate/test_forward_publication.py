@@ -20,7 +20,7 @@ from services.breakout_quality import forward_model_source as source_owner
 from services.breakout_quality import forward_publication as publication_owner
 from services.breakout_quality.fitted_model_artifacts import (
     current_default_fitting_settings, write_fitted_model_contract,
-    load_reusable_fitted_model_contract,
+    load_reusable_fitted_model_contract, validate_forward_fitted_publication,
 )
 
 
@@ -85,6 +85,49 @@ def write_forward_fixture(model_dir, output_dir, *, profile_name=None, scores=(0
 
 
 class ForwardAdmissionTests(unittest.TestCase):
+    def test_feature_price_verification_owner_preserves_facade_and_read_only_io(self):
+        from services.breakout_quality import feature_price_source as owner
+        from services.breakout_quality import price_input_source as facade
+        self.assertIs(facade.resolve_feature_price_source, owner.resolve_feature_price_source)
+        self.assertIs(facade.verified_current_price_source_identity, owner.verified_current_price_source_identity)
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            payload = {
+                "ready": True, "dataset_dir": root / "raw", "manifest_path": root / "manifest.json",
+                "source_identity": {"contract_id": "fixture"}, "source_identity_fingerprint": "a" * 64,
+                "data_identity": {"materialization_fingerprint": "b" * 64, "dataset_inventory_sha256": "c" * 64},
+            }
+            desc = SimpleNamespace(has_capability=lambda name: name == owner.RAW_PRICE_INPUT_CAPABILITY)
+            with patch.object(owner, "get_architecture_descriptor", return_value=desc), \
+                 patch.object(owner, "inspect_raw_price_strategy_dataset", return_value=payload) as inspect, \
+                 patch.object(owner, "ensure_raw_price_strategy_dataset", side_effect=AssertionError("read cannot build")):
+                actual = facade.verified_current_price_source_identity(model_architecture="fixture", project_root=root)
+                self.assertEqual(actual, {
+                    "price_basis": "raw_unadjusted_ohlc_canonical_volume", "target_price_basis": "canonical_adjusted",
+                    "source_contract_id": "fixture", "manifest_relative_path": "manifest.json",
+                    "source_identity_fingerprint": "a" * 64, "materialization_fingerprint": "b" * 64,
+                    "dataset_inventory_sha256": "c" * 64,
+                })
+                inspect.assert_called_once_with(root, deep=True, quote_policy=owner.RAW_PRICE_QUOTE_POLICY_STRICT)
+
+    def test_shared_path_owner_preserves_trainer_facade(self):
+        from services.breakout_quality.ranker_output_paths import resolve_ranker_training_output_paths
+        from services.breakout_quality import train_continuous_ranker as trainer
+        settings = get_breakout_quality_model_research_settings()
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            args = SimpleNamespace(filter_id=settings.filter_id, model_architecture=settings.model_architecture,
+                                   experiment_profile=settings.experiment_profile,
+                                   model_output_dir=None, research_output_dir=None)
+            with patch.object(trainer, "PROJECT_ROOT", root):
+                self.assertEqual(trainer.resolve_training_output_paths(args),
+                                 resolve_ranker_training_output_paths(args, project_root=root))
+                args.model_output_dir, args.research_output_dir = str(root / "isolated"), str(root / "report")
+                self.assertEqual(trainer.resolve_training_output_paths(args),
+                                 resolve_ranker_training_output_paths(args, project_root=root))
+                args.research_output_dir = None
+                with self.assertRaises(ValueError): trainer.resolve_training_output_paths(args)
+
     def test_canonical_primary_and_secondary_keep_admitted_snapshot(self):
         from core.buy_sort import BREAKOUT_QUALITY_RANKING_POLICY_RESOURCE_AWARE_CONTINUOUS_SCORE_NO_K_NO_R0
         from core.breakout_quality_ranking_context import breakout_quality_ranking_source_context
@@ -322,7 +365,9 @@ class ForwardPublicationTests(unittest.TestCase):
                     with publication_owner.ForwardPublication(model, output):
                         self.fail("another producer acquired the same namespace")
                 identity = self._write_fit(pub)
-                pub.commit_fit(expected_identity=identity)
+                pub.commit_fit(checkpoint_validator=lambda path: validate_forward_fitted_publication(
+                    path, expected_identity=identity,
+                    report_path=pub.output_stage / store.CONTINUOUS_RANKER_REPORT_FILENAME))
                 with self.assertRaisesRegex(ValueError, "evaluation failed"):
                     pub.commit_evaluation(lambda *args: (_ for _ in ()).throw(ValueError("evaluation failed")))
             self.assertEqual((model / "model.pt").read_bytes(), b"new FIT")
@@ -343,7 +388,9 @@ class ForwardPublicationTests(unittest.TestCase):
             with publication_owner.forward_publication_leases(model, output):
                 with publication_owner.ForwardPublication(model, output) as child:
                     identity = self._write_fit(child)
-                    child.commit_fit(expected_identity=identity)
+                    child.commit_fit(checkpoint_validator=lambda path: validate_forward_fitted_publication(
+                    path, expected_identity=identity,
+                    report_path=child.output_stage / store.CONTINUOUS_RANKER_REPORT_FILENAME))
                 with ThreadPoolExecutor(max_workers=1) as pool:
                     with self.assertRaises(RuntimeError):
                         pool.submit(competing_producer).result(timeout=5)
@@ -357,7 +404,9 @@ class ForwardPublicationTests(unittest.TestCase):
                 with publication_owner.ForwardPublication(model, output) as pub:
                     identity = self._write_fit(pub)
                     if phase == "evaluation":
-                        pub.commit_fit(expected_identity=identity)
+                        pub.commit_fit(checkpoint_validator=lambda path: validate_forward_fitted_publication(
+                    path, expected_identity=identity,
+                    report_path=pub.output_stage / store.CONTINUOUS_RANKER_REPORT_FILENAME))
                         (pub.output_stage / "report.json").write_bytes(b"new evaluation")
                         (pub.model_stage / "manifest.json").write_bytes(b"validated manifest")
                     original = publication_owner.atomic_replace_with_retry
@@ -370,7 +419,9 @@ class ForwardPublicationTests(unittest.TestCase):
                     with patch.object(publication_owner, "atomic_replace_with_retry", side_effect=interrupted):
                         with self.assertRaises(KeyboardInterrupt):
                             if phase == "fit":
-                                pub.commit_fit(expected_identity=identity)
+                                pub.commit_fit(checkpoint_validator=lambda path: validate_forward_fitted_publication(
+                    path, expected_identity=identity,
+                    report_path=pub.output_stage / store.CONTINUOUS_RANKER_REPORT_FILENAME))
                             else:
                                 pub.commit_evaluation(lambda *args: None)
                     self.assertTrue(pub._journal(phase).exists())
@@ -407,7 +458,9 @@ class ForwardPublicationTests(unittest.TestCase):
                 identity, manifest, report, fit, _ = write_forward_fixture(pub.model_stage, pub.output_stage)
                 expected = {str(path.relative_to(stage)): path.read_bytes()
                             for stage in (pub.model_stage, pub.output_stage) for path in stage.iterdir()}
-                pub.commit_fit(expected_identity=fit)
+                pub.commit_fit(checkpoint_validator=lambda path: validate_forward_fitted_publication(
+                    path, expected_identity=fit,
+                    report_path=pub.output_stage / store.CONTINUOUS_RANKER_REPORT_FILENAME))
                 def validate(m, o):
                     source_owner.load_forward_score_binding(dataset="full", project_root=root, **identity, expected_seed=101,
                                                             model_dir=m, research_output_dir=o)
@@ -472,7 +525,9 @@ class ForwardPublicationTests(unittest.TestCase):
                     write_forward_fixture(paths.model_dir, output)
                     for name, content in fit_files.items():
                         (paths.model_dir / name).write_bytes(content)
-                publication_owner.commit_forward_fit(expected_identity=identity)
+                publication_owner.commit_forward_fit(checkpoint_validator=lambda path: validate_forward_fitted_publication(
+                    path, expected_identity=identity,
+                    report_path=output / store.CONTINUOUS_RANKER_REPORT_FILENAME))
                 if fail_evaluation[0]:
                     raise ValueError("synthetic evaluation failure")
                 return 0

@@ -186,12 +186,14 @@ def project_ranking_policy_source(module: ast.Module, policy_id: str | None) -> 
         if not isinstance(node, ast.Assign) or len(node.targets) != 1 or not isinstance(node.targets[0], ast.Name):
             continue
         name = node.targets[0].id
+        if name == "RANKING_POLICY_SPECS":
+            declaration = node
         try:
             constants[name] = ast.literal_eval(node.value)
         except (ValueError, TypeError):
-            pass
-        if name == "RANKING_POLICY_SPECS":
-            declaration = node
+            # Nonliteral bindings are not safe descriptor constants. Retain
+            # their source and let descriptor validation fail closed below.
+            continue
     if declaration is None or not isinstance(declaration.value, ast.Tuple):
         return result
     entries = []

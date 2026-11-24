@@ -31,7 +31,7 @@ from services.breakout_quality.fitted_model_artifacts import (
     fitted_model_settings_issues,
     forward_fitted_source_provenance_issues,
 )
-from services.breakout_quality.standard_model_sop import (
+from filters.breakout_quality.standard_model_sop_contract import (
     standard_model_sop_completeness_issues,
 )
 
@@ -81,7 +81,7 @@ def _forward_source_provenance_issues(
         target_manifest = load_json_object_or_none(Path(target_nodes[0].path))
         if not isinstance(target_manifest, dict):
             return ("canonical Continuous Target manifest missing or invalid",)
-    from services.breakout_quality.price_input_source import verified_current_price_source_identity
+    from services.breakout_quality.feature_price_source import verified_current_price_source_identity
     try:
         input_identity = verified_current_price_source_identity(
             model_architecture=str(model_architecture), project_root=project_root,

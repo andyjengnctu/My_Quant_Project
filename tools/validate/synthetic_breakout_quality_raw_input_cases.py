@@ -508,7 +508,7 @@ class AlternatePriceInputTests(unittest.TestCase):
                 'source_identity_fingerprint':'a'*64,
                 'data_identity':{'materialization_fingerprint':'b'*64,'dataset_inventory_sha256':'c'*64},
             }
-            with patch('services.breakout_quality.price_input_source.ensure_raw_price_strategy_dataset',return_value=payload):
+            with patch('services.breakout_quality.feature_price_source.ensure_raw_price_strategy_dataset',return_value=payload):
                 source=resolve_feature_price_source(model_architecture=self.raw_arch,project_root=root,create=True)
             self.assertEqual(source['dataset_dir'],root)
             self.assertEqual(source['identity']['materialization_fingerprint'],'b'*64)
@@ -534,7 +534,7 @@ class AlternatePriceInputTests(unittest.TestCase):
         self.assertEqual({k:v for k,v in raw.items() if k!='input_price_source'},ao)
 
     def test_source_loader_non_raw_has_no_materialization_side_effect(self):
-        with patch('services.breakout_quality.price_input_source.ensure_raw_price_strategy_dataset',
+        with patch('services.breakout_quality.feature_price_source.ensure_raw_price_strategy_dataset',
                    side_effect=AssertionError('must not run')):
             self.assertIsNone(resolve_feature_price_source(model_architecture=self.ao_arch))
 

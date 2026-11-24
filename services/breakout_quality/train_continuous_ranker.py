@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from services.breakout_quality.ranker_output_paths import resolve_ranker_training_output_paths
 from services.breakout_quality.forward_publication import (
     commit_forward_fit, forward_training_publication, published_forward_path,
 )
@@ -387,27 +388,8 @@ def parse_args(argv=None):
 
 
 def resolve_training_output_paths(args):
-    model_override = str(getattr(args, "model_output_dir", "") or "").strip()
-    research_override = str(getattr(args, "research_output_dir", "") or "").strip()
-    if bool(model_override) != bool(research_override):
-        raise ValueError("model-output-dir與research-output-dir必須同時指定")
-    if model_override:
-        artifact_paths = build_filter_artifact_paths_from_dir(
-            filter_id=str(args.filter_id),
-            model_architecture=str(args.model_architecture),
-            experiment_profile=str(args.experiment_profile),
-            model_dir=Path(model_override),
-        )
-        output_dir = Path(research_override).resolve()
-        return artifact_paths, output_dir
-    return (
-        resolve_filter_artifact_paths(
-            PROJECT_ROOT, args.filter_id, str(args.model_architecture), args.experiment_profile
-        ),
-        resolve_filter_model_output_dir(
-            PROJECT_ROOT, args.filter_id, str(args.model_architecture), args.experiment_profile
-        ),
-    )
+    """Compatibility facade over the shared output namespace owner."""
+    return resolve_ranker_training_output_paths(args, project_root=PROJECT_ROOT)
 
 
 def validate_args(args) -> None:
