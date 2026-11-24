@@ -9,6 +9,7 @@ from unittest.mock import patch
 from core.execution_source_dependencies import execution_source_inventory, project_ranking_policy_source
 from core.portfolio_entry_policy import DAILY_EXECUTION_ATR_LIMIT, DAILY_EXECUTION_FULL_FILTERS
 from core.ranking_policy import RANKING_POLICY_SPECS
+from core.research_execution_equivalence import ORACLE_STRATEGY_OBSERVATION_SCOPE
 from services.research import oracle_artifact_contract as replay
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -19,10 +20,11 @@ class ExecutionSourceDependencyTests(unittest.TestCase):
         replay.replay_implementation_sha256.cache_clear()
         replay.portfolio_candidate_execution_sha256.cache_clear()
 
-    def _digests(self, policy=None):
+    def _digests(self, policy=None, observation_scope=None):
         self.tearDown()
-        return (replay.replay_implementation_sha256(ranking_policy=policy), *(
-            replay.portfolio_candidate_execution_sha256(daily_execution_contract=mode, ranking_policy=policy)
+        return (replay.replay_implementation_sha256(ranking_policy=policy, observation_scope=observation_scope), *(
+            replay.portfolio_candidate_execution_sha256(daily_execution_contract=mode, ranking_policy=policy,
+                                                        observation_scope=observation_scope)
             for mode in (DAILY_EXECUTION_ATR_LIMIT, DAILY_EXECUTION_FULL_FILTERS)))
 
     def test_shared_numerical_dependencies_are_registered_in_replay_and_truth(self):
@@ -107,13 +109,15 @@ class ExecutionSourceDependencyTests(unittest.TestCase):
 
     def test_registry_dependency_removal_and_missing_helper_fail_closed(self):
         from core import execution_source_dependencies as registry
-        before = self._digests()
+        purposes = (None, ORACLE_STRATEGY_OBSERVATION_SCOPE)
+        before = {purpose: self._digests(observation_scope=purpose) for purpose in purposes}
         scopes = dict(registry.SOURCE_CAPABILITIES)
         runtime = scopes["numerical_runtime"]
         scopes["numerical_runtime"] = replace(runtime, owners=tuple(
             name for name in runtime.owners if name != "core/native_optimizer_hotpath.c"))
         with patch.object(registry, "SOURCE_CAPABILITIES", scopes):
-            self.assertTrue(all(a != b for a, b in zip(before, self._digests())))
+            for purpose in purposes:
+                self.assertTrue(all(a != b for a, b in zip(before[purpose], self._digests(observation_scope=purpose))))
         scopes["numerical_runtime"] = replace(runtime, dependencies=("missing-helper-capability",))
         with patch.object(registry, "SOURCE_CAPABILITIES", scopes):
             with self.assertRaisesRegex(ValueError, "Unknown execution source capability"):
@@ -134,14 +138,17 @@ class ExecutionSourceDependencyTests(unittest.TestCase):
              patch.object(Path, "is_file", lambda p: True if p == helper else is_file(p)):
             self.assertIn("core/isolated_numeric_helper.py", execution_source_inventory("mintrade_truth"))
             with patch.object(Path, "read_text", lambda p, *a, **kw: "def quantity(x): return x\n" if p == helper else read_text(p, *a, **kw)):
-                before = self._digests()
+                before = {purpose: self._digests(observation_scope=purpose)
+                          for purpose in (None, ORACLE_STRATEGY_OBSERVATION_SCOPE)}
             with patch.object(Path, "read_text", lambda p, *a, **kw: "def quantity(x): return x + 1\n" if p == helper else read_text(p, *a, **kw)):
-                self.assertTrue(all(a != b for a, b in zip(before, self._digests())))
+                for purpose, original in before.items():
+                    self.assertTrue(all(a != b for a, b in zip(original, self._digests(observation_scope=purpose))))
 
     def test_every_registered_replay_owner_remains_effective_after_migration(self):
         read_text, read_bytes = Path.read_text, Path.read_bytes
         policy = RANKING_POLICY_SPECS[0].policy_id
-        before = self._digests(policy)
+        purposes = (None, ORACLE_STRATEGY_OBSERVATION_SCOPE)
+        before = {purpose: self._digests(policy, purpose) for purpose in purposes}
         for relative in execution_source_inventory("replay"):
             target = ROOT / relative
             with self.subTest(owner=relative):
@@ -152,7 +159,48 @@ class ExecutionSourceDependencyTests(unittest.TestCase):
                     changed = read_bytes(target) + b"\n#define SOURCE_OWNER_MUTATION 1\n"
                     scope = patch.object(Path, "read_bytes", lambda p: changed if p == target else read_bytes(p))
                 with scope:
-                    self.assertTrue(all(a != b for a, b in zip(before, self._digests(policy))))
+                    for purpose in purposes:
+                        with self.subTest(observation_scope=purpose):
+                            self.assertTrue(all(a != b for a, b in zip(before[purpose], self._digests(policy, purpose))))
+
+    def test_oracle_observation_proof_requires_unchanged_consumers_and_bindings(self):
+        from core.research_execution_equivalence import oracle_observation_consumer_sources
+        before = self._digests(observation_scope=ORACLE_STRATEGY_OBSERVATION_SCOPE)
+        full_result = self._digests()
+        self.assertTrue(all(a != b for a, b in zip(before, full_result)))
+        read = Path.read_text
+        for relative in oracle_observation_consumer_sources():
+            path = ROOT / relative
+            source = read(path, encoding="utf-8-sig")
+            for suffix in ("\n_OBSERVATION_BINDING = 1\n", "\n_OBSERVATION_BINDING = 2\n"):
+                with self.subTest(owner=relative, revision=suffix):
+                    with patch.object(Path, "read_text", lambda p, *a, **kw: source + suffix if p == path else read(p, *a, **kw)):
+                        changed = self._digests(observation_scope=ORACLE_STRATEGY_OBSERVATION_SCOPE)
+                        self.assertTrue(all(a != b for a, b in zip(before, changed)))
+                        self.assertEqual(full_result, self._digests())
+                    if suffix.endswith("2\n"):
+                        self.assertTrue(all(a != b for a, b in zip(first_changed, changed)))
+                    first_changed = changed
+        for function, kwargs in (
+            (replay.replay_implementation_sha256, {}),
+            (replay.portfolio_candidate_execution_sha256, {"daily_execution_contract": DAILY_EXECUTION_FULL_FILTERS}),
+        ):
+            with self.assertRaisesRegex(ValueError, "Unknown Portfolio observation scope"):
+                function(observation_scope="all_reports_are_equal", **kwargs)
+
+    def test_named_daily_filter_projection_tracks_delegated_execution_contract(self):
+        relative = "core/daily_common_entry_filters.py"
+        before = replay.calculation_source(relative, "daily_common_filter_signals")
+        read = Path.read_text
+        for name in (relative, "core/portfolio_entry_policy.py"):
+            path = ROOT / name
+            source = read(path, encoding="utf-8-sig")
+            altered = []
+            for value in (1, 2):
+                changed = source + f"\n_DAILY_EXECUTION_MUTATION = {value}\n"
+                with patch.object(Path, "read_text", lambda p, *a, **kw: changed if p == path else read(p, *a, **kw)):
+                    altered.append(replay.calculation_source(relative, "daily_common_filter_signals"))
+            self.assertEqual(3, len({before, *altered}), name)
 
     def test_new_policy_can_reuse_different_registered_selector_without_source_list_edit(self):
         from dataclasses import asdict

@@ -20,7 +20,11 @@ from typing import Any, Mapping
 from uuid import uuid4
 
 from core.execution_source_dependencies import execution_source_inventory, project_ranking_policy_source
-from core.research_execution_equivalence import reviewed_ranking_source_sha256
+from core.research_execution_equivalence import (
+    reviewed_ranking_source_sha256, ORACLE_STRATEGY_OBSERVATION_SCOPE,
+    oracle_observation_consumer_sources, project_oracle_observation_sources,
+    project_daily_filter_calculation,
+)
 from core.file_integrity import (
     canonical_json_sha256, is_sha256_hex, exclusive_file_lock, atomic_replace_with_retry,
 )
@@ -161,8 +165,21 @@ def oracle_replay_policy(policy: Mapping[str, Any]) -> dict[str, Any]:
 def oracle_execution_contract(context: Mapping[str, Any]) -> dict[str, Any]:
     """The same effective projection serves planning, recovery and publication."""
     result = dict(context)
+    ranking_policy = context.get("ranking_policy")
     result["ranking_options"] = oracle_ranking_options(context["ranking_options"])
-    result["replay_policy"] = oracle_replay_policy(context["replay_policy"])
+    result["replay_policy"] = oracle_observation_policy(
+        context["replay_policy"], ranking_policy=ranking_policy,
+    )
+    # A completed Oracle may have been published under the full Portfolio
+    # witness. Accept it only while both exact producer and consumer closures
+    # prove that its persisted observation has the same narrower semantics.
+    if (context.get("purpose") == "hindsight_oracle_completed_replay"
+            and context.get("replay_implementation_sha256") ==
+                replay_implementation_sha256(ranking_policy=ranking_policy)
+            and oracle_observation_equivalence_proven(ranking_policy=ranking_policy)):
+        result["replay_implementation_sha256"] = replay_implementation_sha256(
+            ranking_policy=ranking_policy, observation_scope=ORACLE_STRATEGY_OBSERVATION_SCOPE,
+        )
     if context.get("score_contract") is not None:
         result["score_contract"] = oracle_score_contract(context["score_contract"])
     if context.get("source_contract") is not None:
@@ -300,7 +317,7 @@ def _syntax_payload(value):
     return value
 
 
-def calculation_source(relative: str, name: str, *, bound_literals=None) -> str:
+def calculation_source(relative: str, name: str, *, bound_literals=None, project_refactor=True) -> str:
     """Read a named numerical owner, independent of runtime provider mocks."""
     code_root = Path(__file__).resolve().parents[2]
     module = importlib.import_module(relative[:-3].replace("/", "."))
@@ -311,10 +328,19 @@ def calculation_source(relative: str, name: str, *, bound_literals=None) -> str:
                 if key.isupper() and isinstance(value, (str, int, float, bool, type(None)))}
     literals.update(bound_literals or {})
     projected = _CalculationSyntax(literals).visit(ast.Module(body=[selected], type_ignores=[]))
-    return reviewed_calculation_sha256(
+    digest = reviewed_calculation_sha256(
         relative, sha256((code_root / relative).read_bytes()).hexdigest(),
         canonical_json_sha256(_syntax_payload(projected)),
     )
+    if project_refactor and relative == "core/daily_common_entry_filters.py" and name == "daily_common_filter_signals":
+        evidence = {"calculation": digest, **{
+            owner: _source_owner_attestation(code_root / owner)[1]
+            for owner in (relative, "core/portfolio_entry_policy.py")
+        }}
+        evidence = project_daily_filter_calculation(evidence, project_root=code_root)
+        return (evidence["calculation"] if set(evidence) == {"calculation"}
+                else canonical_json_sha256(evidence))
+    return digest
 
 
 @lru_cache(maxsize=512)
@@ -350,9 +376,12 @@ def _source_owner_payload(path: Path, *, ranking_policy=None):
 
 
 @lru_cache(maxsize=128)
-def replay_implementation_sha256(*, ranking_policy: str | None = None) -> str:
+def replay_implementation_sha256(*, ranking_policy: str | None = None,
+                                 observation_scope: str | None = None) -> str:
     """Attest the selected Portfolio capability and its delegated numerical owners."""
     code_root = Path(__file__).resolve().parents[2]
+    if observation_scope not in (None, ORACLE_STRATEGY_OBSERVATION_SCOPE):
+        raise ValueError("Unknown Portfolio observation scope")
     owners = execution_source_inventory("replay")
     records = {relative: _source_owner_attestation(code_root / relative, ranking_policy=ranking_policy)
                for relative in owners}
@@ -367,6 +396,13 @@ def replay_implementation_sha256(*, ranking_policy: str | None = None) -> str:
     hashes["@execution_sources"] = canonical_json_sha256(parts["@execution_sources"])
     ranking_owner = "core/ranking_policy.py"
     hashes[ranking_owner] = reviewed_ranking_source_sha256(hashes[ranking_owner], project_root=code_root)
+    if observation_scope == ORACLE_STRATEGY_OBSERVATION_SCOPE:
+        for relative in oracle_observation_consumer_sources():
+            payload, digest = _source_owner_attestation(code_root / relative)
+            parts[relative], hashes[relative] = payload, digest
+        hashes = project_oracle_observation_sources(
+            hashes, scope="replay_numerics", project_root=code_root,
+        )
     projected = project_reviewed_source_inventory(
         hashes, scope="replay_numerics", project_root=code_root,
     )
@@ -374,7 +410,8 @@ def replay_implementation_sha256(*, ranking_policy: str | None = None) -> str:
 
 
 @lru_cache(maxsize=128)
-def portfolio_candidate_execution_sha256(*, daily_execution_contract: str | None = None, ranking_policy: str | None = None) -> str:
+def portfolio_candidate_execution_sha256(*, daily_execution_contract: str | None = None, ranking_policy: str | None = None,
+                                         observation_scope: str | None = None) -> str:
     """Attest executable portfolio capabilities for a registered execution scope.
 
     This extends the shared replay witness without revising the frozen
@@ -385,6 +422,8 @@ def portfolio_candidate_execution_sha256(*, daily_execution_contract: str | None
     changes, including daily candidate capacity and selector decisions.
     """
     code_root = Path(__file__).resolve().parents[2]
+    if observation_scope not in (None, ORACLE_STRATEGY_OBSERVATION_SCOPE):
+        raise ValueError("Unknown Portfolio observation scope")
     owners = execution_source_inventory("portfolio_candidates")
     # Optional capabilities belong only to the arms that execute them.  A
     # revision to Daily Full candidate admission must never invalidate a
@@ -413,11 +452,55 @@ def portfolio_candidate_execution_sha256(*, daily_execution_contract: str | None
             parts[relative] = reviewed_ranking_source_sha256(digest, project_root=code_root)
         else:
             parts[relative] = digest
+    if observation_scope == ORACLE_STRATEGY_OBSERVATION_SCOPE:
+        parts.update({relative: _source_owner_attestation(code_root / relative)[1]
+                      for relative in oracle_observation_consumer_sources()})
+        parts = project_oracle_observation_sources(
+            parts, scope="portfolio_candidates", project_root=code_root,
+        )
     if mode == DAILY_EXECUTION_FULL_FILTERS:
         parts = project_reviewed_source_inventory(parts, scope="portfolio_full_filters", project_root=code_root)
     return canonical_json_sha256(project_reviewed_source_inventory(
         parts, scope="portfolio_candidates", project_root=code_root,
     ))
+
+
+def oracle_observation_equivalence_proven(*, ranking_policy: str | None = None,
+                                         daily_execution_contract: str | None = None) -> bool:
+    """Re-read the complete reviewed producer/consumer closure before migration."""
+    root = Path(__file__).resolve().parents[2]
+    from core.portfolio_entry_policy import DAILY_EXECUTION_FULL_FILTERS
+    scope = "portfolio_candidates" if daily_execution_contract is not None else "replay_numerics"
+    owners = execution_source_inventory("portfolio_candidates" if daily_execution_contract is not None else "replay")
+    hashes = {relative: _source_owner_attestation(root / relative, ranking_policy=ranking_policy)[1]
+              for relative in owners}
+    hashes["@execution_sources"] = canonical_json_sha256(list(owners))
+    ranking_owner = "core/ranking_policy.py"
+    hashes[ranking_owner] = reviewed_ranking_source_sha256(hashes[ranking_owner], project_root=root)
+    if daily_execution_contract == DAILY_EXECUTION_FULL_FILTERS:
+        relative = "core/daily_common_entry_filters.py"
+        hashes[relative] = _source_owner_attestation(root / relative)[1]
+    consumers = oracle_observation_consumer_sources()
+    hashes.update({relative: _source_owner_attestation(root / relative)[1] for relative in consumers})
+    projected = project_oracle_observation_sources(hashes, scope=scope, project_root=root)
+    return bool(consumers) and all(relative not in projected for relative in consumers)
+
+
+def oracle_observation_policy(policy: Mapping[str, Any], *, ranking_policy: str | None = None) -> dict[str, Any]:
+    """Recognize an already-signed full-result witness only through the exact proof."""
+    from core.portfolio_entry_policy import DAILY_EXECUTION_ATR_LIMIT, DAILY_EXECUTION_FULL_FILTERS
+    result = oracle_replay_policy(policy)
+    mode = result.get("daily_execution_contract")
+    recorded = result.get("daily_candidate_implementation_sha256")
+    if recorded is not None and mode in (DAILY_EXECUTION_ATR_LIMIT, DAILY_EXECUTION_FULL_FILTERS):
+        complete = portfolio_candidate_execution_sha256(daily_execution_contract=mode, ranking_policy=ranking_policy)
+        if recorded == complete and oracle_observation_equivalence_proven(
+                ranking_policy=ranking_policy, daily_execution_contract=mode):
+            result["daily_candidate_implementation_sha256"] = portfolio_candidate_execution_sha256(
+                daily_execution_contract=mode, ranking_policy=ranking_policy,
+                observation_scope=ORACLE_STRATEGY_OBSERVATION_SCOPE,
+            )
+    return result
 
 
 def _source_implementation_parts(recipe: str, profile_id: str) -> dict[str, str]:
@@ -496,28 +579,42 @@ def source_implementation_sha256(recipe: str, profile_id: str) -> str:
 
 @lru_cache(maxsize=32)
 def _source_implementation_encodings(recipe: str, profile_id: str) -> frozenset[str]:
-    """Rebuild only the declared closure's encoding-equivalent digests.
+    """Rebuild declared encoding variants and exact reviewed filter-extraction parts.
 
     Every calculation owner is evaluated from the executing implementation;
     a changed formula, admission or delegated source cannot inherit an old
     digest. No archived result hash or model/strategy ID is an authority.
     """
     capability = daily_truth_capability(recipe)
-    closure = capability.get("calculation_closure") if capability else None
-    if not closure or tuple(closure[:2]) != (
-            "services.audit.daily_trade40_oracle", "truth_producer_fingerprint"):
-        return frozenset()
-    from services.audit.mintrade_truth_source_attestation import _mintrade_source_fingerprint_proof
-    executing, encodings = _mintrade_source_fingerprint_proof()
     parts = _source_implementation_parts(recipe, profile_id)
-    if parts.get("delegated_execution") != executing:
-        return frozenset()
-    return frozenset(canonical_json_sha256({**parts, "delegated_execution": value})
-                     for value in encodings)
+    variants = [parts]
+    if capability:
+        for key, relative, name in capability["calculation_owners"]:
+            if relative != "core/daily_common_entry_filters.py" or name != "daily_common_filter_signals":
+                continue
+            raw = calculation_source(relative, name, project_refactor=False)
+            root = Path(__file__).resolve().parents[2]
+            evidence = {"calculation": raw, **{
+                owner: _source_owner_attestation(root / owner)[1]
+                for owner in (relative, "core/portfolio_entry_policy.py")
+            }}
+            projected = project_daily_filter_calculation(evidence, project_root=root)
+            if set(projected) == {"calculation"} and projected["calculation"] == parts[key]:
+                variants.extend({**item, key: raw} for item in tuple(variants))
+    closure = capability.get("calculation_closure") if capability else None
+    if closure and tuple(closure[:2]) == (
+            "services.audit.daily_trade40_oracle", "truth_producer_fingerprint"):
+        from services.audit.mintrade_truth_source_attestation import _mintrade_source_fingerprint_proof
+        executing, encodings = _mintrade_source_fingerprint_proof()
+        if parts.get("delegated_execution") != executing:
+            return frozenset()
+        variants = [{**item, "delegated_execution": value}
+                    for item in variants for value in encodings]
+    return frozenset(canonical_json_sha256(item) for item in variants)
 
 
 def oracle_source_contract(source: Mapping[str, Any]) -> dict[str, Any]:
-    """Project proven encoding variants; retain all other source inputs."""
+    """Project proven encoding/extraction variants; retain every other source input."""
     result = dict(source)
     recipe = str(source.get("recipe") or "")
     provider = source.get("feature_provider") or {}
@@ -627,6 +724,10 @@ def attest_daily_candidate_execution(policy: Mapping[str, Any], *, ranking_polic
     cannot supply a foreign witness to obtain a fake REUSE authorization.
     """
     result = dict(policy)
+    if "daily_candidate_implementation_sha256" in result:
+        result["daily_candidate_implementation_sha256"] = oracle_observation_policy(
+            result, ranking_policy=ranking_policy,
+        )["daily_candidate_implementation_sha256"]
     from core.portfolio_entry_policy import (
         DAILY_EXECUTION_ATR_LIMIT, DAILY_EXECUTION_FULL_FILTERS,
         resolve_daily_execution_contract,
@@ -635,6 +736,7 @@ def attest_daily_candidate_execution(policy: Mapping[str, Any], *, ranking_polic
     if daily_mode in {DAILY_EXECUTION_ATR_LIMIT, DAILY_EXECUTION_FULL_FILTERS}:
         required_sha = portfolio_candidate_execution_sha256(
             daily_execution_contract=daily_mode, ranking_policy=ranking_policy,
+            observation_scope=ORACLE_STRATEGY_OBSERVATION_SCOPE,
         )
         if ("daily_candidate_implementation_sha256" in result and
                 result["daily_candidate_implementation_sha256"] != required_sha):
@@ -664,7 +766,8 @@ def execution_context(*, dataset: str, price_sha256: str, param_sha256: str,
     payload = {
         "schema": _SCHEMA, "purpose": "hindsight_oracle_completed_replay",
         "replay_calculation_revision": REPLAY_CALCULATION_REVISION,
-        "replay_implementation_sha256": replay_implementation_sha256(ranking_policy=ranking_policy),
+        "replay_implementation_sha256": replay_implementation_sha256(
+            ranking_policy=ranking_policy, observation_scope=ORACLE_STRATEGY_OBSERVATION_SCOPE),
         "dataset": str(dataset), "price_sha256": price_sha256,
         "param_sha256": param_sha256, "seed": int(seed), "target": target,
         "start_date": start, "end_date": end, "research_cutoff": cutoff,
@@ -818,8 +921,12 @@ class OracleExecutionIndex:
         from their signed Replay policy; their remaining economic inputs and
         effective execution context must still match in full.
         """
-        signed = oracle_replay_policy(identity.get("replay_policy") or {})
-        required = oracle_replay_policy(context["replay_policy"])
+        signed = oracle_observation_policy(
+            identity.get("replay_policy") or {}, ranking_policy=context.get("ranking_policy"),
+        )
+        required = oracle_observation_policy(
+            context["replay_policy"], ranking_policy=context.get("ranking_policy"),
+        )
         unscored_control = (
             context.get("score_contract") is None
             and context.get("source_contract") is None
@@ -850,14 +957,28 @@ class OracleExecutionIndex:
             recorded["score_contract"] = {key: value for key, value in original.items()
                                           if key not in _REFERENCE_FIELDS | _SCORE_WITNESS_FIELDS}
         candidates = [recorded]
+        if oracle_observation_equivalence_proven(ranking_policy=context.get("ranking_policy")):
+            policies = [recorded["replay_policy"]]
+            signed_candidate = (identity.get("replay_policy") or {}).get("daily_candidate_implementation_sha256")
+            if signed_candidate is not None:
+                policies.append({**recorded["replay_policy"],
+                                 "daily_candidate_implementation_sha256": signed_candidate})
+            implementations = {
+                recorded["replay_implementation_sha256"],
+                replay_implementation_sha256(ranking_policy=context.get("ranking_policy")),
+            }
+            candidates = [{**recorded, "replay_policy": policy,
+                           "replay_implementation_sha256": implementation}
+                          for policy in policies for implementation in sorted(implementations)]
         source = recorded.get("source_contract")
         if source is not None:
             encodings = _source_implementation_encodings(
                 str(source.get("recipe") or ""),
                 str((source.get("feature_provider") or {}).get("profile_id") or ""))
             if source.get("implementation_sha256") in encodings:
-                candidates.extend({**recorded, "source_contract": {
-                    **source, "implementation_sha256": value}} for value in sorted(encodings))
+                candidates = [{**candidate, "source_contract": {
+                    **source, "implementation_sha256": value}}
+                    for candidate in candidates for value in sorted(encodings)]
         return any(canonical_json_sha256(candidate) == digest
                    and oracle_execution_contract(candidate) == oracle_execution_contract(context)
                    for candidate in candidates)

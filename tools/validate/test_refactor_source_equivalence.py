@@ -127,6 +127,38 @@ class SourceInventoryProofTests(unittest.TestCase):
             self.assertEqual(canonical_json_sha256(parts), current)
             self.assertNotEqual(old_digest, current)
 
+    def test_oracle_observation_reconstructs_prior_sources_without_certifying_benchmark_outputs(self):
+        from core.execution_source_dependencies import execution_source_inventory
+        from core.research_execution_equivalence import (
+            ORACLE_STRATEGY_OBSERVATION_SCOPE, _ORACLE_BENCHMARK_SOURCE,
+            _ORACLE_OBSERVATION_CONSUMERS, project_oracle_observation_sources,
+        )
+        benchmark = "core/portfolio_benchmark.py"
+        removed = _REVIEWED_SOURCE_INVENTORIES["replay_numerics"]["current"]
+        legacy_parts = {name: replay._source_owner_payload(ROOT / name)
+                        for name in execution_source_inventory("replay")
+                        if name not in removed and name != benchmark}
+        scoped = replay.replay_implementation_sha256(observation_scope=ORACLE_STRATEGY_OBSERVATION_SCOPE)
+        self.assertEqual(canonical_json_sha256(legacy_parts), scoped)
+        self.assertNotEqual(replay.replay_implementation_sha256(), scoped)
+        proof = _REVIEWED_SOURCE_INVENTORIES["portfolio_candidates"]
+        for mode in ("daily_atr_limit_v2", "daily_atr_limit_common_filters_v2"):
+            parts = {"daily_execution_contract": mode, **proof["baseline"], benchmark: _ORACLE_BENCHMARK_SOURCE[1]}
+            if mode == "daily_atr_limit_common_filters_v2":
+                optional = "core/daily_common_entry_filters.py"
+                parts[optional] = _REVIEWED_SOURCE_INVENTORIES["portfolio_full_filters"]["baseline"][optional]
+            current = replay.portfolio_candidate_execution_sha256(
+                daily_execution_contract=mode, observation_scope=ORACLE_STRATEGY_OBSERVATION_SCOPE)
+            self.assertEqual(canonical_json_sha256(parts), current)
+            self.assertNotEqual(replay.portfolio_candidate_execution_sha256(daily_execution_contract=mode), current)
+        evidence = {name: value if isinstance(value, str) else value[0]
+                    for name, value in proof["current"].items()}
+        evidence.update(_ORACLE_OBSERVATION_CONSUMERS)
+        evidence[benchmark] = _ORACLE_BENCHMARK_SOURCE[0]
+        with TemporaryDirectory() as external:
+            self.assertEqual(evidence, project_oracle_observation_sources(
+                evidence, scope="portfolio_candidates", project_root=external))
+
     def test_full_oracle_teacher_matches_original_inventory_and_tracks_contract_helper(self):
         proof = _REVIEWED_SOURCE_INVENTORIES["full_oracle_teacher"]
         prior = sha256(b"formal_full_p17_netpnl_truth_v1\0")

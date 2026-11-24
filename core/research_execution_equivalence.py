@@ -791,6 +791,79 @@ def reviewed_ranking_source_sha256(projected_sha256: str, *, project_root=None) 
     return _REVIEWED_RANKING_PROJECTIONS.get(projected_sha256, projected_sha256)
 
 
+# Oracle persists strategy observations, not benchmark comparison columns. The
+# cache correction remains live for full Portfolio outputs. This certificate
+# is limited to the exact reviewed producer AND observation-consumer closure;
+# the four real-engine scope probes deliberately corrupt benchmark statistics
+# and prove identical Oracle observations/trades, while benchmark reports differ.
+ORACLE_STRATEGY_OBSERVATION_SCOPE = "oracle_strategy_metrics"
+_ORACLE_OBSERVATION_CONSUMERS = {
+    "services/research/strategy_compare_replay.py": "c2ab29ec33adeb6a884e05532ab1afe26ca8a0c8eda4a16c3e750688382a51b5",
+    "filters/breakout_quality/strategy_compare_reporting.py": "daab5855348031da4560fd746c05933d85f39ab330050663ae209b5bc51f6e4f",
+    "services/audit/target_oracle_romd.py": "873b0e3fcd1c2f688e3cd4150269ddf434d3d682c118325058bdc9d3438fa8a1",
+}
+_ORACLE_BENCHMARK_SOURCE = (
+    "51e5d2a687fe926c0ff487bd634e75989abebbdce6e2643c26f5f9ba8422ac35",
+    "95facbde65f014ef3d7da37510643e90e2b8596c11d82ef873effb903da38266",
+)
+_DAILY_FILTER_CALCULATION = (
+    "c0a8506ab72233c1f2ee74c83ac9c2fb12aa76b9a280496acf47b9cebcca6869",
+    "26a376714ef8672f830fd9988e63f915bbda60d7dbe23b4506df125908b71e53",
+)
+
+
+def oracle_observation_consumer_sources() -> tuple[str, ...]:
+    return tuple(_ORACLE_OBSERVATION_CONSUMERS)
+
+
+def project_oracle_observation_sources(parts, *, scope: str, project_root):
+    """Prove only the persisted Oracle strategy observation, never full results.
+
+    The caller supplies actual consumer sources too. An unknown producer,
+    dependency graph, benchmark or consumer keeps all those sources in its
+    ordinary fingerprint, including later edits that start consuming benchmark
+    columns. No current or historical result digest is an authority here.
+    """
+    from pathlib import Path
+    result = dict(parts)
+    if Path(project_root).resolve() != Path(__file__).resolve().parents[1]:
+        return result
+    if scope not in ("replay_numerics", "portfolio_candidates"):
+        return result
+    expected = dict(_REVIEWED_SOURCE_INVENTORIES["portfolio_candidates"]["current"])
+    expected["@execution_sources"] = _REVIEWED_SOURCE_INVENTORIES[scope]["current"]["@execution_sources"]
+    expected["core/portfolio_benchmark.py"] = _ORACLE_BENCHMARK_SOURCE[0]
+    expected.update(_ORACLE_OBSERVATION_CONSUMERS)
+    optional = "core/daily_common_entry_filters.py"
+    if optional in result:
+        expected[optional] = _REVIEWED_SOURCE_INVENTORIES["portfolio_full_filters"]["current"][optional]
+    for name, value in expected.items():
+        if result.get(name) not in ((value,) if isinstance(value, str) else value):
+            return result
+    for name in _ORACLE_OBSERVATION_CONSUMERS:
+        result.pop(name)
+    if scope == "replay_numerics":
+        # The original Replay syntax inventory did not include benchmark stats.
+        result.pop("core/portfolio_benchmark.py")
+    else:
+        result["core/portfolio_benchmark.py"] = _ORACLE_BENCHMARK_SOURCE[1]
+    return result
+
+
+def project_daily_filter_calculation(parts, *, project_root):
+    """Attest explicit execution-context extraction with its delegated helper."""
+    from pathlib import Path
+    result = dict(parts)
+    if Path(project_root).resolve() != Path(__file__).resolve().parents[1]:
+        return result
+    expected = _REVIEWED_SOURCE_INVENTORIES["portfolio_full_filters"]["current"]
+    if (result.get("calculation") == _DAILY_FILTER_CALCULATION[0]
+            and all(result.get(name) == value for name, value in expected.items())
+            and set(result) == {"calculation", *expected}):
+        return {"calculation": _DAILY_FILTER_CALCULATION[1]}
+    return result
+
+
 def project_reviewed_source_inventory(parts, *, scope: str, project_root=None, source_encoding=None):
     """Project one fully pinned refactor subgraph; preserve all other sources.
 

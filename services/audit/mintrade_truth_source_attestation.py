@@ -214,10 +214,18 @@ def _mintrade_source_fingerprint_proof() -> tuple[str, frozenset[str]]:
                         variants.append({**hashes, name: value})
             for values in variants:
                 from core.research_execution_equivalence import project_reviewed_source_inventory
+                # The DL-off adapter has two already-certified provenance
+                # encodings. Verify the complete executing graph before
+                # applying that single-slot encoding variant; otherwise its
+                # alternate SHA would make the extraction proof miss and
+                # discard a valid predecessor closure.
+                adapter_provenance = values[_DL_OFF_ADAPTER]
+                executing_values = {**values, _DL_OFF_ADAPTER: hashes[_DL_OFF_ADAPTER]}
                 projected = project_reviewed_source_inventory(
-                    values, scope="mintrade_source_graph", project_root=root,
+                    executing_values, scope="mintrade_source_graph", project_root=root,
                     source_encoding=newline,
                 )
+                projected[_DL_OFF_ADAPTER] = adapter_provenance
                 for daily_sha in daily_sources:
                     digest = sha256(b"canonical_daily_source\0" + daily_sha.encode("ascii") + b"\n")
                     for name, source_sha in projected.items():

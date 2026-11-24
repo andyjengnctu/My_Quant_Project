@@ -1678,7 +1678,7 @@ class DailyEntryStrategyCases(TestCase):
         from services.research.oracle_artifact_contract import (
             _LEGACY_V1_REPLAY_IMPLEMENTATION,
             replay_implementation_sha256, portfolio_candidate_execution_sha256,
-            execution_context, legacy_import_permitted,
+            execution_context, legacy_import_permitted, ORACLE_STRATEGY_OBSERVATION_SCOPE,
         )
         from core.portfolio_entry_policy import (
             DAILY_EXECUTION_ATR_LIMIT, DAILY_EXECUTION_FULL_FILTERS,
@@ -1692,6 +1692,13 @@ class DailyEntryStrategyCases(TestCase):
         p20 = portfolio_candidate_execution_sha256(
             daily_execution_contract=DAILY_EXECUTION_FULL_FILTERS)
         self.assertNotEqual(p19, p20)
+        oracle_scope = {"observation_scope": ORACLE_STRATEGY_OBSERVATION_SCOPE}
+        oracle_legacy = replay_implementation_sha256(**oracle_scope)
+        oracle_p19 = portfolio_candidate_execution_sha256(
+            daily_execution_contract=DAILY_EXECUTION_ATR_LIMIT, **oracle_scope)
+        oracle_p20 = portfolio_candidate_execution_sha256(
+            daily_execution_contract=DAILY_EXECUTION_FULL_FILTERS, **oracle_scope)
+        self.assertEqual(oracle_legacy, _LEGACY_V1_REPLAY_IMPLEMENTATION)
         original = Path.read_text
         daily_file = Path(__file__).resolve().parents[2] / "core/daily_common_entry_filters.py"
 
@@ -1708,6 +1715,10 @@ class DailyEntryStrategyCases(TestCase):
                     daily_execution_contract=DAILY_EXECUTION_ATR_LIMIT), p19)
                 self.assertNotEqual(portfolio_candidate_execution_sha256(
                     daily_execution_contract=DAILY_EXECUTION_FULL_FILTERS), p20)
+                self.assertEqual(portfolio_candidate_execution_sha256(
+                    daily_execution_contract=DAILY_EXECUTION_ATR_LIMIT, **oracle_scope), oracle_p19)
+                self.assertNotEqual(portfolio_candidate_execution_sha256(
+                    daily_execution_contract=DAILY_EXECUTION_FULL_FILTERS, **oracle_scope), oracle_p20)
         finally:
             portfolio_candidate_execution_sha256.cache_clear()
 
@@ -1722,13 +1733,13 @@ class DailyEntryStrategyCases(TestCase):
             )
         old = digest({"entry_policy": "daily_stockday_close_limit_next_exchange_session_v1"})
         self.assertNotIn("daily_candidate_implementation_sha256", old["replay_policy"])
-        self.assertEqual(old["replay_implementation_sha256"], legacy)
-        self.assertFalse(legacy_import_permitted(old))
-        self.assertTrue(legacy_import_permitted({
-            **old, "replay_implementation_sha256": _LEGACY_V1_REPLAY_IMPLEMENTATION,
+        self.assertEqual(old["replay_implementation_sha256"], oracle_legacy)
+        self.assertTrue(legacy_import_permitted(old))
+        self.assertFalse(legacy_import_permitted({
+            **old, "replay_implementation_sha256": legacy,
         }))
-        for mode, expected in ((DAILY_EXECUTION_ATR_LIMIT, p19),
-                               (DAILY_EXECUTION_FULL_FILTERS, p20)):
+        for mode, expected in ((DAILY_EXECUTION_ATR_LIMIT, oracle_p19),
+                               (DAILY_EXECUTION_FULL_FILTERS, oracle_p20)):
             actual = digest({"daily_execution_contract": mode})
             self.assertEqual(actual["replay_policy"]["daily_candidate_implementation_sha256"], expected)
             self.assertNotEqual(actual, old)
@@ -1749,6 +1760,7 @@ class DailyEntryStrategyCases(TestCase):
         try:
             with patch.object(Path, "read_text", edited_shared_file):
                 self.assertNotEqual(replay_implementation_sha256(), legacy)
+                self.assertNotEqual(replay_implementation_sha256(**oracle_scope), oracle_legacy)
         finally:
             replay_implementation_sha256.cache_clear()
 

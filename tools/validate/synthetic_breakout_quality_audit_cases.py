@@ -1557,6 +1557,16 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     # so the dedicated implementation/registration synthetic is intentionally retired.
 
     _append_retained_strategy_source_checks(check_true)
+    from .check_result_utils import run_unittest_capability_cases
+    from .test_oracle_benchmark_scope import OracleBenchmarkScopeTests
+    from .test_oracle_completed_reuse import OracleCompletedReuseTests
+    from .test_mintrade_encoding_projection import MinTradeEncodingProjectionTests
+    oracle_rows, oracle_summary = run_unittest_capability_cases(
+        case_id, "oracle_reuse_scope", [OracleBenchmarkScopeTests, OracleCompletedReuseTests,
+                                      MinTradeEncodingProjectionTests],
+    )
+    results.extend(oracle_rows)
+    summary["oracle_reuse_scope_tests"] = oracle_summary
     summary["workflow"] = "config_driven_formal_audit_topology"
     return results, summary
 
