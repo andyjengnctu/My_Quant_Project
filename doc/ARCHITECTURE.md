@@ -277,3 +277,8 @@ project/
 - `trade_decision_context.py` 持有決策時可知的 numeric input schema／PIT publication 及還原價縮放不變規則，消費 Target 所綁的 canonical same-seed teacher，不產生第二套參數、訊號或交易結果。
 - Architecture descriptor 的 `trade_decision_context` capability 委派通用 data provider；條件缺值採 mask，不改原模型的股票日／Target membership。InceptionTime 的雙線性交互基底讓同日共同政策可以調整不同個股 latent 的排序權重。
 - `FitDataDependencies` 在新 capability 出現時才增加 context contract 與 ordered FIT values 證據；原模型的 source／FIT payload 不變。Scientific identities、狀態與實驗範圍由 Experiment Registry 持有，績效只由 Experiment Log 持有。
+
+
+### Controlled learning studies
+
+`config/learning_studies.py` declares a controlled learning recipe and its progression rules. `services/research/learning_studies.py` orchestrates canonical Optimizer, PIT FIT/score and Strategy Compare producers through the Research entry. `services/breakout_quality/learning_data.py` composes early-history and unchanged original-label materializers; neither the study nor its metric report implements trading/accounting/search/loss logic. New source bounds and ordered sample truth participate in FIT identity; profile-specific output overrides keep control/treatment and seed artifacts isolated. Interrupted matching producers resume, incompatible evidence blocks, and negative research gates stop expansion. The standard seven model-research jobs and current Compare/Test/Summary inventories remain canonical and unchanged.

@@ -991,3 +991,14 @@ The canonical `config/research_summary.py` roster alone determines current Model
 - **驗收決策**：在共同合法樣本與配對 Seed 比較排序／前段淨損益及 RoMD、MDD、曝險；Train／Validation 決定 epoch 與設定。2021-01-01～2026-03-02 為迭代研究 OOS，不回饋 computational fitting。2026-11-21 的市場回報、對照與決策見 Experiment Log 同日條目。
 
 **2026-11-21 C191／C192 退役。** 使用者指定退役以上兩個策略。兩者與三項相關配對比較退出目前 Summary、Forward／Rolling Strategy Compare 與四 seed Robustness。C123／C124 繼續持有原本的 NetPnL Exact／Direct Oracle，C125／C126 保留 Positive 對照。MR-13DM 隨最後兩個策略退出現行模型比較，模型、架構、歷史 Replay 定義及既有工件保留原身分。Training Model 選用同 Target 的現行控制組 MR-13CO。兩個策略編號永久保留。
+
+
+## 2026-11-24：CO 早期真實事件歷史擴充（使用者核准）
+
+| 身分 | 定義 | 狀態 |
+|---|---|---|
+| `MR-13DN` / `PROFILE-daily_universal_formal_mintrade_fullcycle_netpnl_per_seed_full_list_ndcg_pairwise_extended_history` | 原 CO Target、300×10 InceptionTime、Adam、full-list Delta-NDCG、epoch selection 不變；僅增加 2008～2013 的合法自然成熟突破事件。 | IMPLEMENTED / FIT v1 / MARKET_VALIDATION_RUNNING / RESEARCH_ONLY / NO_TRADING |
+| `MINTRADE_P16_EARLY_LABEL_HISTORY_V1` | canonical Min Optimizer 2008～2013 年度有效參數；120M 訓練窗、12M OOS、原 trial 預算、same seed；不借用晚期參數。原 2014～2020/P16 參數與資訊列真值保留，舊列使用原始訊號生命週期。 | OPTIMIZER_SOLE_PRODUCER / BUILD_OR_RESUME |
+| `DL-CONT13DN_ROLL` / `SR-C193` | DN PIT scores × 原 C123 的 P16 Exact K/R0，保持費稅、sizing、帳務、退出；C123 控制、C106 正向參照。 | STUDY_ONLY / REPLAY v1 / NOT_CURRENT_COMPARE_SUITE / NO_PROMOTION |
+
+操作為 `apps/research.py` → `[11] 受控學習實驗`，不更動既有 Continuous 七項工作。受控研究設定單一 owner 為 `config/learning_studies.py`，FIT/Score/Optimizer/Replay 直接委派既有 canonical producers，工件與 current CO 隔離，可驗證重用/接續。2018、2019、2020 Seed42 篩選與 2021 起 Seed42 Rolling 模型、策略比較完成後，兩者均通過事前條件才進入 current benchmark 四 seed；四 seed 條件通過才執行既有 Target 驗證，最後 Summary。只有研究結論，沒有自動 Trading promotion。2014 起資料已包含於控制組，不將其計為新增歷史；2021 起是迭代研究 OOS。原始訊號數由 canonical pending-signal lifecycle 的純診斷投影取得，不能以 ticker/date 數冒充。法人研究依使用者當輪指示暫不進行，沒有新增法人模型/架構/策略身分。

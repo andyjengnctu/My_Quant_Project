@@ -230,6 +230,8 @@ def compute_counterfactual_trade40_batch(
     research_cutoff: str | pd.Timestamp | None = None,
     include_net_pnl: bool = False,
     signal_state_reset_date: str | pd.Timestamp | None = None,
+    episode_keys_out: dict[int, str] | None = None,
+    episode_keys_only: bool = False,
 ) -> CounterfactualTrade40Batch:
     """One Min path for 40/60/any H and full-cycle; cutoff is an exit deadline.
 
@@ -404,6 +406,11 @@ def compute_counterfactual_trade40_batch(
         origin_pos = int(dates.get_indexer([origin_day])[0])
         if origin_pos < 0 or origin_pos > int(position):
             raise ValueError("Min Oracle signal origin not in the sanitized ticker calendar")
+        if episode_keys_out is not None:
+            episode_keys_out[int(position)] = f"{ticker}|{origin_day.date()}"
+        if episode_keys_only:
+            reasons.append("diagnostic_signal_episode_only")
+            continue
         params = state["_params_obj"]
         active_period = active_period_for_date(dates[position + 1])
         if active_period is None:

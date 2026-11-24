@@ -164,7 +164,7 @@ def _current_p16_seed_artifact(
 
 
 def load_formal_mintrade40_training_source(
-    *, project_root: str | Path, seed: int, allow_optimizer_build: bool = False,
+    *, project_root: str | Path, seed: int, allow_optimizer_build: bool = False, history_extension=None,
 ) -> FormalMinTrade40PITSource:
     """Bind original Min label history and current P16 for one exact model seed.
 
@@ -188,6 +188,22 @@ def load_formal_mintrade40_training_source(
     else:
         path = formal_mintrade40_history_params_path(root, seed)
         history = load_formal_mintrade40_optimizer_teacher(path, expected_seed=seed)
+
+    if history_extension is not None:
+        prefix_path = formal_mintrade40_history_params_path(root, seed, history_contract=history_extension)
+        prefix = (prepare_formal_mintrade40_optimizer_teacher(
+            project_root=root, seed=seed, authorized=True, history_contract=history_extension,
+        ) if allow_optimizer_build else load_formal_mintrade40_optimizer_teacher(
+            prefix_path, expected_seed=seed, history_contract=history_extension,
+        ))
+        if (prefix.schedule[-1].end is None
+                or prefix.schedule[-1].end + pd.Timedelta(days=1) != history.schedule[0].start):
+            raise FormalMinTrade40PITBlocked('Early and original teacher history must join without overlap/gap')
+        history = FormalMinTrade40PITSource(
+            seed=seed, schedule=prefix.schedule + history.schedule,
+            publication_dates=prefix.publication_dates + history.publication_dates,
+            param_sha256=canonical_json_sha256({'early': prefix.param_sha256, 'original': history.param_sha256}),
+        )
 
     source, digest = load_strategy_param_evaluation_view(
         p16_path, evaluation_mode='rolling', start_date=start, end_date=end,
@@ -262,6 +278,7 @@ def load_formal_mintrade40_training_source(
 def resolve_formal_mintrade40_loader_kwargs(
     *, project_root: str | Path, seed: int, authorized_build: bool = False,
     horizon_sessions: int | None = 40, outcome_metric: str = "net_r",
+    history_extension=None,
 ) -> dict:
     """Return a seed-bound materializer and immutable source provenance.
 
@@ -274,6 +291,7 @@ def resolve_formal_mintrade40_loader_kwargs(
     source = load_formal_mintrade40_training_source(
         project_root=project_root, seed=int(seed),
         allow_optimizer_build=bool(authorized_build),
+        **({"history_extension": history_extension} if history_extension is not None else {}),
     )
     full_cycle = horizon_sessions is None
     lineage_extension = (

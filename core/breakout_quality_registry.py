@@ -1184,6 +1184,14 @@ _EXPERIMENT_PROFILES = {
     ),
 }
 
+# AI: Controlled study recipes preserve the original target and training settings.
+from dataclasses import replace as _replace_study
+from config.learning_studies import CO_PROFILE, HISTORY_PROFILE
+for _name, _architecture in ((HISTORY_PROFILE, "inception_time_v1"),):
+    _EXPERIMENT_PROFILES[_name] = _replace_study(
+        _EXPERIMENT_PROFILES[CO_PROFILE], name=_name, model_architecture=_architecture,
+    )
+
 SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES = tuple(_EXPERIMENT_PROFILES)
 SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES = tuple(
     name
@@ -1811,6 +1819,16 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         current_time_validation_authorized=False,
     ),
 }
+
+for _name, _id, _phase, _description in (
+    (HISTORY_PROFILE, "MR-13DN", "13DN", "CO controlled early real-event history extension"),
+):
+    _CONTINUOUS_RANKER_RESEARCH_SPECS[_name] = _replace_study(
+        _CONTINUOUS_RANKER_RESEARCH_SPECS[CO_PROFILE],
+        profile_name=_name, model_research_id=_id, phase=_phase,
+        experiment_name=_description, objective_description=_description,
+    )
+
 
 def _continuous_ranker_profile_names_from_experiment_registry() -> tuple[str, ...]:
     """Return continuous-profile membership/order from the canonical profile owner."""

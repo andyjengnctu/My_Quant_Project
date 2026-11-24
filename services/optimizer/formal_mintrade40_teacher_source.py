@@ -40,7 +40,23 @@ from filters.breakout_quality.trade_path_label import (
 HISTORICAL_MINTRADE40_TRAINING_SET = "MINTRADE40_P16_HISTORICAL_LABEL_V1"
 
 
-def formal_mintrade40_history_params_path(project_root: str | Path, seed: int) -> Path:
+def _history_spec(contract=None):
+    if contract is None:
+        return {"first_oos_date": TRADE_PATH_SELECTION_BASELINE_FIRST_OOS_DATE,
+                "last_oos_date": TRADE_PATH_SELECTION_BASELINE_LAST_OOS_DATE,
+                "namespace": "mintrade40_label_history",
+                "parameter_set": HISTORICAL_MINTRADE40_TRAINING_SET}
+    spec = dict(contract)
+    if set(spec) != {"first_oos_date", "last_oos_date", "namespace", "parameter_set"}:
+        raise FormalMinTrade40PITBlocked("Historical teacher contract fields invalid")
+    if (pd.Timestamp(spec["first_oos_date"]) > pd.Timestamp(spec["last_oos_date"])
+            or Path(spec["namespace"]).name != spec["namespace"]
+            or not spec["namespace"] or not spec["parameter_set"]):
+        raise FormalMinTrade40PITBlocked("Historical teacher bounds/namespace invalid")
+    return spec
+
+
+def formal_mintrade40_history_params_path(project_root: str | Path, seed: int, *, history_contract=None) -> Path:
     """One optimizer-owned publication path for a single historical label seed."""
     from filters.breakout_quality.strategy_compare_sources import (
         PARAM_POLICY_SPECS, PARAM_POLICY_BASE_FINALIST_BEST,
@@ -50,11 +66,11 @@ def formal_mintrade40_history_params_path(project_root: str | Path, seed: int) -
         raise FormalMinTrade40PITBlocked("Historical MinTrade40 optimizer seed invalid")
     filename = str(PARAM_POLICY_SPECS[PARAM_POLICY_BASE_FINALIST_BEST]["filename"])
     return (Path(project_root).resolve() / "outputs" / "optimizer"
-            / "mintrade40_label_history" / f"seed_{seed}" / "p2_dl_off_trained"
+            / _history_spec(history_contract)["namespace"] / f"seed_{seed}" / "p2_dl_off_trained"
             / "active_params" / filename)
 
 
-def _expected_historical_runtime_identity(project_root: Path) -> str:
+def _expected_historical_runtime_identity(project_root: Path, *, history_contract=None) -> str:
     """Canonical optimizer fingerprint with a strictly read-only source inventory.
 
     The producer uses ``build_source_data_inventory`` to persist its normal
@@ -72,8 +88,8 @@ def _expected_historical_runtime_identity(project_root: Path) -> str:
     )
     policy = _canonical_schedule_build_contract(family="min")
     reference = _build_min_roos_schedule_contract(
-        first_oos_date=TRADE_PATH_SELECTION_BASELINE_FIRST_OOS_DATE,
-        last_oos_date=TRADE_PATH_SELECTION_BASELINE_LAST_OOS_DATE,
+        first_oos_date=_history_spec(history_contract)["first_oos_date"],
+        last_oos_date=_history_spec(history_contract)["last_oos_date"],
         train_window_months=int(policy["train_window_months"]),
         oos_months=int(policy["oos_horizon_months"]),
     )
@@ -90,7 +106,7 @@ def _expected_historical_runtime_identity(project_root: Path) -> str:
         fold_overrides=build_min_roos_fold_overrides(
             baseline_contract=reference, args=args, training_dl_enabled=False,
         ),
-        model_artifact=None, arm_id=HISTORICAL_MINTRADE40_TRAINING_SET,
+        model_artifact=None, arm_id=_history_spec(history_contract)["parameter_set"],
         training_dl_enabled=False, binary_pit=None,
         dataset_inventory=_build_source_data_inventory(project_root, args.dataset),
     )
@@ -98,7 +114,7 @@ def _expected_historical_runtime_identity(project_root: Path) -> str:
 
 
 def inspect_formal_mintrade40_optimizer_teacher(
-    *, project_root: str | Path, seed: int,
+    *, project_root: str | Path, seed: int, history_contract=None,
 ) -> dict[str, object]:
     """Read-only exact-source REUSE/BUILD/RESUME/BLOCKED for historical Min.
 
@@ -108,7 +124,7 @@ def inspect_formal_mintrade40_optimizer_teacher(
     The canonical optimizer alone decides which matching folds can resume.
     """
     root = Path(project_root).resolve()
-    path = formal_mintrade40_history_params_path(root, seed)
+    path = formal_mintrade40_history_params_path(root, seed, history_contract=history_contract)
     arm_dir = path.parent.parent
     completed = path.is_file()
     preflight_path = arm_dir / "rolling_preflight.json"
@@ -117,14 +133,14 @@ def inspect_formal_mintrade40_optimizer_teacher(
         return {"path": path, "action": "BLOCKED" if other_files else "BUILD",
                 "reason": (
                     "Interrupted optimizer has files but no original preflight; preserve and inspect"
-                    if other_files else "Missing original seed-specific 2014-2020 Optimizer evidence"
+                    if other_files else "Missing original seed-specific historical Optimizer evidence"
                 )}
     try:
         prior = load_json_strict(preflight_path)
         if not isinstance(prior, dict):
             raise FormalMinTrade40PITBlocked("Optimizer preflight is not a JSON object")
         original_fingerprint = str(prior.get("runtime_identity_sha256") or "")
-        if not original_fingerprint or original_fingerprint != _expected_historical_runtime_identity(root):
+        if not original_fingerprint or original_fingerprint != _expected_historical_runtime_identity(root, history_contract=history_contract):
             raise FormalMinTrade40PITBlocked(
                 "Original optimizer source/parameter/period/runtime identity does not match"
             )
@@ -135,9 +151,9 @@ def inspect_formal_mintrade40_optimizer_teacher(
         if canonical_json_sha256(unsigned) != original_fingerprint:
             raise FormalMinTrade40PITBlocked("Optimizer preflight payload fingerprint differs")
         if completed:
-            load_formal_mintrade40_optimizer_teacher(path, expected_seed=seed)
+            load_formal_mintrade40_optimizer_teacher(path, expected_seed=seed, history_contract=history_contract)
             return {"path": path, "action": "REUSE",
-                    "reason": "Original same-seed 2014-2020 Optimizer evidence and current source identity verified"}
+                    "reason": "Original same-seed historical Optimizer evidence and current source identity verified"}
         summary_path = arm_dir / "rolling_optimizer_summary.json"
         if summary_path.exists():
             summary = load_json_strict(summary_path)
@@ -155,6 +171,7 @@ def load_formal_mintrade40_optimizer_teacher(
     *,
     expected_seed: int,
     expected_parameter_set: str = HISTORICAL_MINTRADE40_TRAINING_SET,
+    history_contract=None,
 ) -> FormalMinTrade40PITSource:
     """Verify original per-fold Optimizer evidence and derive as-of dates.
 
@@ -166,11 +183,14 @@ def load_formal_mintrade40_optimizer_teacher(
     This is source *candidate* verification only. It does not by itself verify
     every historical CSV's price coverage or authorize the downstream model FIT.
     """
+    spec = _history_spec(history_contract)
+    if history_contract is not None:
+        expected_parameter_set = spec["parameter_set"]
     path = Path(params_path).resolve()
     if (not path.is_file() or path.parent.name != "active_params"
             or path.parent.parent.name != "p2_dl_off_trained"
             or path.parent.parent.parent.name != f"seed_{expected_seed}"
-            or path.parent.parent.parent.parent.name != "mintrade40_label_history"):
+            or path.parent.parent.parent.parent.name != spec["namespace"]):
         raise FormalMinTrade40PITBlocked("Canonical historical Min Optimizer source path/seed invalid")
     candidate_dir = path.parent.parent
     try:
@@ -185,13 +205,13 @@ def load_formal_mintrade40_optimizer_teacher(
         raise FormalMinTrade40PITBlocked("Canonical Optimizer provenance must contain objects")
     if type(expected_seed) is not int or expected_seed <= 0:
         raise FormalMinTrade40PITBlocked("Invalid seed-specific Min teacher identity")
-    if expected_parameter_set != HISTORICAL_MINTRADE40_TRAINING_SET:
+    if expected_parameter_set != spec["parameter_set"]:
         raise FormalMinTrade40PITBlocked("Retired P2/P16 or unregistered historical teacher rejected")
 
     training_policy = _canonical_schedule_build_contract(family="min")
     reference = _build_min_roos_schedule_contract(
-        first_oos_date=TRADE_PATH_SELECTION_BASELINE_FIRST_OOS_DATE,
-        last_oos_date=TRADE_PATH_SELECTION_BASELINE_LAST_OOS_DATE,
+        first_oos_date=_history_spec(history_contract)["first_oos_date"],
+        last_oos_date=_history_spec(history_contract)["last_oos_date"],
         train_window_months=int(training_policy["train_window_months"]),
         oos_months=int(training_policy["oos_horizon_months"]),
     )
@@ -254,8 +274,8 @@ def load_formal_mintrade40_optimizer_teacher(
         raise FormalMinTrade40PITBlocked("Optimizer fold provenance incomplete")
     if int(dict(params.get("summary") or {}).get("folds", len(folds))) != len(folds):
         raise FormalMinTrade40PITBlocked("Optimizer fold summary does not match schedule")
-    first_period = pd.Timestamp(TRADE_PATH_SELECTION_BASELINE_FIRST_OOS_DATE).to_period("M")
-    last_period = pd.Timestamp(TRADE_PATH_SELECTION_BASELINE_LAST_OOS_DATE).to_period("M")
+    first_period = pd.Timestamp(spec["first_oos_date"]).to_period("M")
+    last_period = pd.Timestamp(spec["last_oos_date"]).to_period("M")
     horizon_months = int(training_policy["oos_horizon_months"])
     expected_starts = pd.period_range(first_period, last_period, freq="M")[::horizon_months]
     if tuple(pd.Timestamp(row["effective_date"]).to_period("M") for row in records) != tuple(expected_starts):
@@ -341,7 +361,7 @@ def load_formal_mintrade40_optimizer_fold_teacher(
 
 
 def prepare_formal_mintrade40_optimizer_teacher(
-    *, project_root: str | Path, seed: int, authorized: bool = False,
+    *, project_root: str | Path, seed: int, authorized: bool = False, history_contract=None,
 ) -> FormalMinTrade40PITSource:
     """Build/reuse historical Min labels' P16-like schedule with ONE Optimizer.
 
@@ -369,15 +389,15 @@ def prepare_formal_mintrade40_optimizer_teacher(
     policy = _canonical_schedule_build_contract(family="min")
     if str(policy["dataset"]) != str(DEFAULT_DATASET_PROFILE):
         raise FormalMinTrade40PITBlocked("Historical Optimizer dataset/profile drift")
-    expected = formal_mintrade40_history_params_path(root, seed)
+    expected = formal_mintrade40_history_params_path(root, seed, history_contract=history_contract)
     work = expected.parent.parent.parent
     # If the old source exists but is invalid, preserve it. Never silently
     # recalculate a different identity over an existing scientific artifact.
-    status = inspect_formal_mintrade40_optimizer_teacher(project_root=root, seed=seed)
+    status = inspect_formal_mintrade40_optimizer_teacher(project_root=root, seed=seed, history_contract=history_contract)
     if status["action"] == "BLOCKED":
         raise FormalMinTrade40PITBlocked(str(status["reason"]))
     if status["action"] == "REUSE":
-        return load_formal_mintrade40_optimizer_teacher(expected, expected_seed=seed)
+        return load_formal_mintrade40_optimizer_teacher(expected, expected_seed=seed, history_contract=history_contract)
     result = prepare_selection_historical_p2_params(
         project_root=root,
         dataset=str(policy["dataset"]),
@@ -390,20 +410,20 @@ def prepare_formal_mintrade40_optimizer_teacher(
         optimizer_seed=seed,
         resume_parameter_training=True,
         quiet=False,
-        first_oos_date=TRADE_PATH_SELECTION_BASELINE_FIRST_OOS_DATE,
-        last_oos_date=TRADE_PATH_SELECTION_BASELINE_LAST_OOS_DATE,
+        first_oos_date=_history_spec(history_contract)["first_oos_date"],
+        last_oos_date=_history_spec(history_contract)["last_oos_date"],
         train_window_months=int(policy["train_window_months"]),
         oos_months=int(policy["oos_horizon_months"]),
         output_relative_dir=work,
         build_context_label="Historical MinTrade40 PIT label source",
         optimizer_output_title="Historical MinTrade40 Optimizer evidence",
         recover_completed_strategy_compare=False,
-        parameter_set_identity=HISTORICAL_MINTRADE40_TRAINING_SET,
+        parameter_set_identity=_history_spec(history_contract)["parameter_set"],
     )
     produced = Path(result["params_path"]).resolve()
     if produced != expected.resolve():
         raise FormalMinTrade40PITBlocked("Canonical Optimizer published unexpected teacher path")
-    return load_formal_mintrade40_optimizer_teacher(produced, expected_seed=seed)
+    return load_formal_mintrade40_optimizer_teacher(produced, expected_seed=seed, history_contract=history_contract)
 
 
 __all__ = [

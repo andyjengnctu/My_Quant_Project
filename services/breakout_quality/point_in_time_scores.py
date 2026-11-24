@@ -2094,6 +2094,7 @@ def _run_point_in_time_scores(
     args: argparse.Namespace,
     *,
     authorization_mode: str = "rolling",
+    prepared_bundle=None,
 ) -> int:
     _validate_args(args)
     settings = get_breakout_quality_workflow_settings(
@@ -2147,16 +2148,16 @@ def _run_point_in_time_scores(
     # entire authorized build (including Fold FIT imports and rescores), not
     # only the final manifest, so two processes cannot mutate the same Fold.
     if bool(args.plan_only):
-        return _run_authorized_point_in_time_scores(args, settings=settings)
+        return _run_authorized_point_in_time_scores(args, settings=settings, **({"prepared_bundle": prepared_bundle} if prepared_bundle is not None else {}))
     pit_dir = _point_in_time_dir_for_args(args)
     with exclusive_file_lock(
         selection_pit_build_lock_path(pit_dir),
         conflict_message="Another Selection PIT build or FIT repair is active for this output directory",
     ):
-        return _run_authorized_point_in_time_scores(args, settings=settings)
+        return _run_authorized_point_in_time_scores(args, settings=settings, **({"prepared_bundle": prepared_bundle} if prepared_bundle is not None else {}))
 
 
-def _run_authorized_point_in_time_scores(args, *, settings) -> int:
+def _run_authorized_point_in_time_scores(args, *, settings, prepared_bundle=None) -> int:
     started = time.perf_counter()
     color_enabled = console_color_enabled()
     data_started = time.perf_counter()
@@ -2185,7 +2186,11 @@ def _run_authorized_point_in_time_scores(args, *, settings) -> int:
     if daily_scope:
         daily_data_progress.update("[PIT data] 建立daily stock-day index／40D target...")
     try:
-        bundle = load_continuous_ranker_data(
+        if prepared_bundle is not None and (
+                prepared_bundle.profile.name != str(args.experiment_profile)
+                or prepared_bundle.model_spec.architecture != str(args.model_architecture)):
+            raise ValueError("Prepared PIT bundle identity differs from requested recipe")
+        bundle = prepared_bundle if prepared_bundle is not None else load_continuous_ranker_data(
             filter_id=args.filter_id,
             model_architecture=args.model_architecture,
             experiment_profile=args.experiment_profile,
@@ -2966,6 +2971,7 @@ def build_selection_point_in_time_scores(
     allow_stale_source: bool = False,
     single_score_block: bool = False,
     _authorization_mode: str = "rolling",
+    prepared_bundle=None,
 ) -> int:
     """Programmatic PIT producer used by formal workflows.
 
@@ -3008,7 +3014,8 @@ def build_selection_point_in_time_scores(
     if allow_stale_source:
         argv.append("--allow-stale-source")
     return _run_point_in_time_scores(
-        parse_args(argv), authorization_mode=str(_authorization_mode)
+        parse_args(argv), authorization_mode=str(_authorization_mode),
+        **({"prepared_bundle": prepared_bundle} if prepared_bundle is not None else {})
     )
 
 

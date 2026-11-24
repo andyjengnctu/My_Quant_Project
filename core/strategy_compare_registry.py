@@ -1199,6 +1199,20 @@ STRATEGY_COMPARE_ARMS = {
     },
 }
 
+# AI: Controlled candidates share the exact C123 execution contract.
+from config.learning_studies import LEARNING_STUDIES as _LEARNING_STUDIES
+for _study in _LEARNING_STUDIES.values():
+    _source_id = "CONT" + _study["model_id"].removeprefix("MR-") + "_ROLL"
+    STRATEGY_DL_SOURCES[_source_id] = {
+        **STRATEGY_DL_SOURCES[STRATEGY_COMPARE_ARMS[_study["control_arm"]]["dl_id"]],
+        "model_architecture": _study["architecture"], "experiment_profile": _study["profile"],
+        "description": _study["label"],
+    }
+    STRATEGY_COMPARE_ARMS[_study["arm_id"]] = {
+        **STRATEGY_COMPARE_ARMS[_study["control_arm"]],
+        "name": _study["label"] + " / P16 Exact", "description": _study["label"], "dl_id": _source_id,
+    }
+
 # AI: Materialize mode-specific parameter-source overrides from the canonical
 # arm definitions, after those definitions exist. This keeps Full P17 and Min
 # P16 in the same generic Compare Suite without per-arm dispatch exceptions.

@@ -880,6 +880,7 @@ def _print_main_menu() -> None:
     print(render_menu_item(8, "查看目前研究狀態與工件"))
     print(render_menu_item(9, "Market Data generation／Research V2 lifecycle"))
     print(render_menu_item(10, "策略升格（Research → Trading）"))
+    print(render_menu_item(11, "受控學習實驗"))
     print(render_menu_item(0, "離開"))
 
 
@@ -915,8 +916,11 @@ def _interactive_menu() -> int:
                 _market_data_menu()
             elif choice == "10":
                 _strategy_promotion_menu()
+            elif choice == "11":
+                from services.research.learning_studies import menu
+                menu()
             else:
-                print("選項無效，請按 Enter 或輸入 0～10。")
+                print("選項無效，請按 Enter 或輸入 0～11。")
         except (FileNotFoundError, ImportError, RuntimeError, ValueError) as exc:
             print(f"[錯誤] {type(exc).__name__}: {exc}")
         except KeyboardInterrupt:
@@ -939,6 +943,7 @@ def _print_help(program_name: str) -> None:
         f"或 integration {integration_actions}"
     )
     print("  audit      目前 config 指定 Audit module；可接 run、status 或 latest")
+    print("  study      受控學習實驗；可接 run、status 或 latest")
     print("  market-data Research Market Data lifecycle；可接 status/freeze/precheck/promote/verify")
     print("  status     查看目前設定與工件狀態")
 
@@ -977,6 +982,9 @@ def main(argv=None) -> int:
         else:
             raise ValueError(f"target不支援的命令: {action}")
         return 0
+    if command == "study":
+        from services.research.learning_studies import main as study_main
+        return study_main(rest)
     if command == "model":
         return _run_model_cli(rest)
     if command in {"optimizer", "optimize"}:
