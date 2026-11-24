@@ -1,13 +1,9 @@
-"""Study data capabilities, composed over canonical label and input producers."""
+"""Training-history composition over canonical label and parameter producers."""
 from dataclasses import replace
 from functools import partial
 from pathlib import Path
 
-from config.learning_studies import LEARNING_STUDIES
-
-
-def study_for_profile(profile):
-    return next((dict(s) for s in LEARNING_STUDIES.values() if s['profile'] == profile), None)
+from config.breakout_quality_history import TRAINING_HISTORY_EXTENSIONS
 
 
 def _early_inspect(*, contract, project_root, seed):
@@ -78,10 +74,10 @@ def _prefix_materializer(*, control, extended, boundary, frame, positions, **kwa
 
 
 def extend_source_capability(source, profile):
-    study = study_for_profile(profile)
-    if study is None or not study.get('history_extension'):
+    extension = TRAINING_HISTORY_EXTENSIONS.get(profile)
+    if extension is None:
         return source
-    contract = dict(study['history_extension'])
+    contract = dict(extension)
     early = replace(source.dependencies[0],
         name='early_history', builder_type='optimizer_early_history', priority=50,
         inspect=partial(_early_inspect, contract=contract), execute=partial(_early_execute, contract=contract))

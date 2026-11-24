@@ -306,7 +306,7 @@ def registered_trade_path_source(experiment_profile: str) -> TradePathSource | N
         if key not in _DECLARED_DAILY_SOURCES:
             _DECLARED_DAILY_SOURCES[key] = _declared_daily_source(capability)
         source = _DECLARED_DAILY_SOURCES[key]
-    from services.breakout_quality.learning_data import extend_source_capability
+    from services.breakout_quality.training_history import extend_source_capability
     return extend_source_capability(source, experiment_profile)
 
 

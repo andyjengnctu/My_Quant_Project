@@ -1184,9 +1184,9 @@ _EXPERIMENT_PROFILES = {
     ),
 }
 
-# AI: Controlled study recipes preserve the original target and training settings.
+# AI: History extension preserves the original target and training settings.
 from dataclasses import replace as _replace_study
-from config.learning_studies import CO_PROFILE, HISTORY_PROFILE
+from config.breakout_quality_history import CO_PROFILE, HISTORY_PROFILE
 for _name, _architecture in ((HISTORY_PROFILE, "inception_time_v1"),):
     _EXPERIMENT_PROFILES[_name] = _replace_study(
         _EXPERIMENT_PROFILES[CO_PROFILE], name=_name, model_architecture=_architecture,
