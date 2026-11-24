@@ -191,6 +191,3 @@ def ensure_runtime_dirs():
     assert_runtime_write_path_is_not_research_dataset(PROJECT_ROOT, SAVE_DIR)
     os.makedirs(SAVE_DIR, exist_ok=True)
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-
-
-# # (AI註: 防錯透明化 - 將錯誤摘要落檔，避免長時間批次執行後 console 訊息遺失)
