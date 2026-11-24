@@ -13,12 +13,6 @@ from core.breakout_quality_policy import (
     is_breakout_quality_model_test_profile,
     get_breakout_quality_workflow_settings,
 )
-from config.compatibility.strategy_compare_history import (
-    HISTORICAL_STRATEGY_COMPARE_ARMS,
-    HISTORICAL_STRATEGY_COMPARE_CONTRASTS,
-    HISTORICAL_STRATEGY_DL_SOURCES,
-    HISTORICAL_STRATEGY_PARAM_SOURCES,
-)
 from config.strategy_compare import (
     STRATEGY_COMPARE_DEFAULT_PROFILE,
     STRATEGY_COMPARE_DEFAULT_ROBUSTNESS_PROFILE,
@@ -97,39 +91,14 @@ def _merge_compatibility_catalog(
     return {**active, **historical}
 
 
-def _compatibility_catalogs() -> tuple[
-    dict[str, dict],
-    dict[str, dict],
-    dict[str, dict],
-    dict[str, dict],
-]:
-    """Return runtime catalogs including read-only historical compatibility entries."""
-
+def _compatibility_catalogs() -> tuple[dict[str, dict], dict[str, dict], dict[str, dict], dict[str, dict]]:
+    """Return executable current catalogs; retired research remains in evidence."""
     return (
         _merge_compatibility_catalog(
-            _merge_compatibility_catalog(
-                STRATEGY_PARAM_SOURCES,
-                STRATEGY_EXPERIMENTAL_PARAM_SOURCES,
-                catalog_name="current/experimental parameter source",
-            ),
-            HISTORICAL_STRATEGY_PARAM_SOURCES,
-            catalog_name="parameter source",
+            STRATEGY_PARAM_SOURCES, STRATEGY_EXPERIMENTAL_PARAM_SOURCES,
+            catalog_name="current/experimental parameter source",
         ),
-        _merge_compatibility_catalog(
-            STRATEGY_DL_SOURCES,
-            HISTORICAL_STRATEGY_DL_SOURCES,
-            catalog_name="DL source",
-        ),
-        _merge_compatibility_catalog(
-            STRATEGY_COMPARE_ARMS,
-            HISTORICAL_STRATEGY_COMPARE_ARMS,
-            catalog_name="arm",
-        ),
-        _merge_compatibility_catalog(
-            STRATEGY_COMPARE_CONTRASTS,
-            HISTORICAL_STRATEGY_COMPARE_CONTRASTS,
-            catalog_name="contrast",
-        ),
+        STRATEGY_DL_SOURCES, STRATEGY_COMPARE_ARMS, STRATEGY_COMPARE_CONTRASTS,
     )
 
 
@@ -298,6 +267,8 @@ def get_strategy_runtime_integration_settings() -> StrategyRuntimeIntegrationSet
         max_selector_latency_ms=float(raw.get("max_selector_latency_ms", 10000.0)),
     )
     validate_strategy_runtime_integration_settings(settings)
+    if not settings.enabled:
+        return settings
     profile_ids = set(STRATEGY_COMPARE_PROFILES)
     robustness_ids = set(STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES)
     if settings.selection_profile_id not in profile_ids or settings.forward_profile_id not in profile_ids:

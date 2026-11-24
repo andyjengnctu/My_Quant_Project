@@ -4,160 +4,35 @@ from .checks import run_bound_checks
 
 from .synthetic_breakout_quality_support import (
     ACTIVE_MODEL_ARCHITECTURES,
-    ADAMW_ONLY_EXPERIMENT_PROFILE,
-    ADAM_WARMUP_COSINE_EXPERIMENT_PROFILE,
-    BASELINE_EXPERIMENT_PROFILE,
-    BREAKOUT_DEFAULT_HIGH_LEN,
-    BREAKOUT_HIGH_LEN_SEARCH_MAX,
-    BREAKOUT_HIGH_LEN_SEARCH_MIN,
-    BREAKOUT_HIGH_LEN_SEARCH_STEP,
-    BREAKOUT_OPTIMIZER_SEARCH_SPACE,
-    BREAKOUT_PARAM_SPECS,
     BREAKOUT_QUALITY_ALLOW_TF32,
-    BREAKOUT_QUALITY_CLASS_WEIGHT_MODE,
-    BREAKOUT_QUALITY_DEFAULT_BATCH_SIZE,
-    BREAKOUT_QUALITY_DEFAULT_EPOCHS,
-    BREAKOUT_QUALITY_DEFAULT_GRADIENT_CLIP_NORM,
-    BREAKOUT_QUALITY_DEFAULT_LEARNING_RATE,
-    BREAKOUT_QUALITY_DEFAULT_SCORE_THRESHOLD,
-    BREAKOUT_QUALITY_DEFAULT_WEIGHT_DECAY,
     BREAKOUT_QUALITY_DETERMINISTIC_ALGORITHMS,
-    BREAKOUT_QUALITY_EARLY_STOPPING_MIN_DELTA,
-    BREAKOUT_QUALITY_EARLY_STOPPING_PATIENCE,
-    BREAKOUT_QUALITY_EVALUATION_BATCH_SIZE,
-    BREAKOUT_QUALITY_EVALUATION_WORKERS,
-    BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
-    BREAKOUT_QUALITY_FEATURE_WINDOW_BARS,
-    BREAKOUT_QUALITY_FINAL_REFIT_MODE,
-    BREAKOUT_QUALITY_INCEPTION_DEPTH,
-    BREAKOUT_QUALITY_INCEPTION_RESIDUAL_EVERY,
-    BREAKOUT_QUALITY_INCEPTION_TARGET_RECEPTIVE_FIELD_BARS,
-    BREAKOUT_QUALITY_INNER_VALIDATION_MONTHS,
-    BREAKOUT_QUALITY_LABEL_HORIZON_BARS,
-    BREAKOUT_QUALITY_LABEL_MAX_ADVERSE_RETURN,
-    BREAKOUT_QUALITY_LABEL_MIN_MFE_RETURN,
-    BREAKOUT_QUALITY_LABEL_MIN_REWARD_RISK_RATIO,
-    BREAKOUT_QUALITY_LABEL_PATH_CACHE_BARS,
-    BREAKOUT_QUALITY_MARKET_SET_CANDIDATE_QUERY_COUNT,
-    BREAKOUT_QUALITY_MIN_TRAIN_SAMPLES,
-    BREAKOUT_QUALITY_MIN_VALIDATION_SAMPLES,
     BREAKOUT_QUALITY_MIXED_PRECISION_DTYPE,
     BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
-    BREAKOUT_QUALITY_PARALLEL_SPLIT_EVALUATION,
-    BREAKOUT_QUALITY_PRELOAD_FEATURE_BANK,
-    BREAKOUT_QUALITY_PRETRAINING_PROFILE,
-    BREAKOUT_QUALITY_RANDOM_SEED,
-    BREAKOUT_QUALITY_TIME_WEIGHT_MODE,
     BREAKOUT_QUALITY_TORCH_DEVICE,
-    BREAKOUT_QUALITY_TRAIN_PREFETCH_BATCHES,
-    BREAKOUT_QUALITY_USE_INNER_VALIDATION,
     BREAKOUT_QUALITY_USE_MIXED_PRECISION,
-    BreakoutQualityLabelPolicy,
-    CONFIGURED_EXPERIMENT,
-    CONFIGURED_PRETRAINING,
-    CONTEXT_COLUMNS,
-    DATASET_STORAGE_FORMAT,
-    DATASET_STORAGE_SCHEMA_VERSION,
-    DEFAULT_LABEL_POLICY,
-    DEFAULT_MODEL_ARCHITECTURE,
-    FEATURE_COLUMNS,
-    HISTORY_MASKING_ONLY_EXPERIMENT_PROFILE,
-    INCEPTION_TIME_MARKET_SET_CANDIDATE_V1,
-    INCEPTION_TIME_MARKET_SET_V1,
-    IndexedFeatureBank,
-    IndexedMarketSetBank,
-    LABEL_INVALID,
-    LABEL_OBJECTIVE,
-    LABEL_PASS,
-    LABEL_REJECT,
-    LEGACY_LABEL_OBJECTIVE,
     LEGACY_MODEL_ARCHITECTURES,
-    LR_SCHEDULE_LINEAR_WARMUP_COSINE,
-    MOMENT_REPOSITORY,
-    MOMENT_REVISION,
     OUTER_SPLIT_SELECTION,
-    PATCH_TRANSFORMER_V1,
     Path,
-    REGIME_CONTEXT_ANNUALIZATION_BARS,
-    REGIME_CONTEXT_FEATURES,
-    REGIME_CONTEXT_LOOKBACK_BARS,
-    RUNTIME_SCOPE_FORWARD_OOS,
-    RUNTIME_SCOPE_RESEARCH,
-    SCORE_COLUMN,
     SELECTION_ROLE_EMBARGO,
     SELECTION_ROLE_INNER_EMBARGO,
     SELECTION_ROLE_INVALID,
     SELECTION_ROLE_NOT_APPLICABLE,
     SELECTION_ROLE_TRAIN,
     SELECTION_ROLE_VALIDATION,
-    STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
-    SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES,
-    SUPPORTED_BREAKOUT_QUALITY_LR_SCHEDULES,
-    SUPPORTED_BREAKOUT_QUALITY_OPTIMIZERS,
-    SUPPORTED_BREAKOUT_QUALITY_PRETRAINING_PROFILES,
-    SimpleNamespace,
-    TIME_WEIGHT_MODE_DATE_BALANCED,
-    TRAINING_SAMPLING_ALL_EVENT_ROWS,
-    TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
-    TRAINING_WEIGHT_REDUCTION_FIXED_BATCH_SIZE,
-    TS2VEC_SELECTION_ONLY_PRETRAINING_PROFILE,
-    UNIQUE_GROUP_DATE_BALANCED_EXPERIMENT_PROFILE,
+    STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE,
     UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE,
-    V16StrategyParams,
-    _validate_torch_execution_record,
     bind_checks,
-    apply_training_augmentation,
     ast,
-    breakout_quality_common,
-    breakout_quality_evaluate,
-    breakout_quality_export_scores,
     breakout_quality_train,
-    build_breakout_optimizer_high_len_values,
-    build_breakout_quality_default_high_len_values,
-    build_breakout_quality_inception_kernel_sizes,
-    build_breakout_quality_inference_dataset_for_frame,
     build_active_model,
-    build_breakout_quality_model,
-    build_breakout_quality_pretraining_profile_payload,
-    build_event_label,
-    build_market_daily_base_features,
-    build_market_relative_return_delta_representation,
-    build_pretraining_file_record,
-    build_regime_context_from_level_sequence,
-    build_return_delta_representation,
     build_selection_oos_split_assignments,
-    build_source_data_inventory,
-    build_training_augmentation_plan,
-    build_window_zscore_representation,
-    close_pretraining_windows,
     compute_outer_policy_fingerprint,
-    compute_pretraining_configuration_fingerprint,
-    count_trainable_parameters,
     get_active_model_spec,
-    get_breakout_quality_experiment_profile,
     get_model_spec,
-    hierarchical_contrastive_loss,
-    json,
-    label_from_cached_path,
-    label_manifest_payload_from_policy_manifest,
-    load_validated_pretrained_encoder_manifest,
-    load_validated_pretraining_dataset,
     np,
     patch,
     pd,
-    resolve_breakout_quality_inception_receptive_field_bars,
     resolve_breakout_quality_outer_policy,
-    resolve_breakout_quality_random_seed,
-    resolve_filter_artifact_paths,
-    resolve_filter_output_dir,
-    resolve_filter_research_score_path,
-    resolve_pretrained_encoder_paths,
-    resolve_pretraining_dataset_paths,
-    resolve_torch_execution_plan,
-    strict_parallel_batched_logits,
-    strict_unique_group_batched_logits,
-    tempfile,
-    validate_model_sequence_length,
 )
 
 from .source_index import read_source_ast, read_source_text
@@ -179,7 +54,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     from core import breakout_quality_policy as policy
     from core import breakout_quality_registry as registry
     from core.breakout_quality_registry import (
-        DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE,
+        DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
     )
     from filters.breakout_quality.models.active import ACTIVE_MODEL_ARCHITECTURES, get_active_model_spec
@@ -222,7 +97,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
             experiment_profile=UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE
         )
         continuous_settings = policy.get_breakout_quality_workflow_settings(
-            experiment_profile=STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE
+            experiment_profile=STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE
         )
     check(
         "workflow_profiles_share_same_seed_ssot",
@@ -274,7 +149,7 @@ def validate_breakout_quality_policy_single_source_case(_base_params):
     )
 
     daily_settings = policy.get_breakout_quality_workflow_settings(
-        experiment_profile=DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE
+        experiment_profile=DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE
     )
     check_true(
         "daily_universal_profile_keeps_daily_stock_day_training_scope",
@@ -537,20 +412,21 @@ def validate_breakout_quality_active_legacy_model_isolation_contract_case(_base_
         configured_model_spec.as_manifest_payload(),
         active_spec.as_manifest_payload(),
     )
+    legacy_architecture = next(iter(LEGACY_MODEL_ARCHITECTURES))
     try:
-        get_active_model_spec("tiny_cnn_v1")
+        get_active_model_spec(legacy_architecture)
         active_spec_rejects_legacy = False
     except ValueError as exc:
         active_spec_rejects_legacy = "正式新訓練只允許 active architecture" in str(exc)
     check_true("formal_active_model_api_rejects_legacy_architecture", active_spec_rejects_legacy)
     try:
-        build_active_model(10, 4, architecture="tiny_cnn_v1")
+        build_active_model(10, 4, architecture=legacy_architecture)
         active_builder_rejects_legacy = False
     except ValueError as exc:
         active_builder_rejects_legacy = "正式新訓練只允許 active architecture" in str(exc)
     check_true("formal_active_model_builder_rejects_legacy_architecture", active_builder_rejects_legacy)
     try:
-        breakout_quality_train.get_model_spec("tiny_cnn_v1")
+        breakout_quality_train.get_model_spec(legacy_architecture)
         binary_trainer_rejects_legacy = False
     except ValueError as exc:
         binary_trainer_rejects_legacy = "正式新訓練只允許 active architecture" in str(exc)

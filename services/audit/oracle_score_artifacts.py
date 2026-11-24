@@ -155,6 +155,29 @@ _AUDITED_PARALLEL_DATA_ONLY_REVISION = (
 )
 
 
+# Retired model builders removed against cd1356c1. All retained profile/spec
+# payloads and current model tensors were compared with that source snapshot.
+# Oracle price eligibility only consumes the unchanged provider specifications.
+# Pin both newline encodings; unknown edits still use their own source hash.
+_RETIRED_MODEL_SPEC_SOURCES = {
+    "filters/breakout_quality/models/architectures.py": (
+        "dff30439ad2dee75eec374afc3d408c0fb77fed8bd58e72e3fc8996d1668a19c",
+        "e4e65d64d69238d856bf73d554247dbea25c0f38ab7200c6c8d459f361d0904c",
+        "7759ecf25673d4e1709376f19f1dffb885e00fa8294b3275d718d1dda473f302",
+    ),
+    "filters/breakout_quality/models/spec_registry.py": (
+        "6c1d70b79fa8ab307c5a5a36fa8545dfccdb0d954f5bd6ba62186035e7730bbd",
+        "923d6615c83782379930b037bfd276d54c3563b063e7c2235c345d388cc0178b",
+        "ee2f9c496d6dafcaf7d810c8e0cb10c6dabee3f88159b46fc371bfea9122f329",
+    ),
+    "filters/breakout_quality/models/spec_builders.py": (
+        "5d2cd6b9ac072797d5f205201a0ab04df55abe865c0c611ee250de16d1f6aa42",
+        "0dece696b753b7182873b14daf0091cdf03da3a7846a27ee3a20a7585dbfed6e",
+        "82ffabeea6b096e09370ab2ae871e95f5c4f430ab119984ffd1fad89bbe158ca",
+    ),
+}
+
+
 def _oracle_price_provider_contract_sha256() -> str:
     """Hash *effective* provider policies, not unrelated MR registration rows.
 
@@ -257,6 +280,10 @@ def _oracle_daily_source_fingerprints(
         except (ValueError, KeyError, TypeError):
             pre_p20_attested = False
     def project_source(relative: str, physical_sha: str) -> str:
+        retired = _RETIRED_MODEL_SPEC_SOURCES.get(relative)
+        if ((attested or pre_p20_attested) and retired
+                and physical_sha in retired[:2]):
+            return retired[2]
         if current_root:
             # Independently byte-pinned, model-registration-only revisions
             # do not alter any existing Oracle producer. Other edits remain

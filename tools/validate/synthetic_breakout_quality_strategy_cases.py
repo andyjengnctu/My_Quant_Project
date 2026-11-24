@@ -119,6 +119,32 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
     summary = {"ticker": case_id, "synthetic": True}
     check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
 
+    # Summary needs dormant selector witnesses as well as enabled Replay arms.
+    # Exercise the real current dependency closure without loading artifacts.
+    from core.audit_policy import get_reusable_audit_definitions
+    from core.audit_registry import oracle_comparison_key, resolve_current_oracle_comparisons
+    from services.audit.target_oracle_romd import _oracle_strategy_scopes
+    oracle_definition = next(
+        row for row in get_reusable_audit_definitions("breakout_quality", enabled_only=True)
+        if row.report_type == "target_ground_truth_strategy_romd"
+    )
+    scopes = _oracle_strategy_scopes(oracle_definition)
+    check(
+        "summary_current_oracle_scopes_resolve_all_selector_witnesses",
+        {oracle_comparison_key(row) for row in resolve_current_oracle_comparisons(oracle_definition.source)},
+        {oracle_comparison_key(row) for _, scope in scopes
+         for row in resolve_current_oracle_comparisons(scope.source)},
+    )
+
+    from services.audit import oracle_score_artifacts as source_owner
+    from unittest.mock import patch
+    source_before = source_owner.oracle_daily_source_fingerprint()
+    original_hasher = source_owner.compute_file_sha256
+    with patch.object(source_owner, "compute_file_sha256", side_effect=lambda path:
+                      "0" * 64 if Path(path).name == "spec_builders.py" else original_hasher(path)):
+        check_true("unreviewed_model_spec_edit_invalidates_oracle_source",
+                   source_owner.oracle_daily_source_fingerprint() != source_before)
+
     base = V16StrategyParams()
     common = {
         "breakout_quality_filter_id": BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
@@ -1207,20 +1233,6 @@ def validate_breakout_quality_legacy_research_cleanup_contract_case(_base_params
         tuple((project_root / relative_path).exists() for relative_path in current_paths),
     )
 
-    compatibility_paths = (
-        "tools/filters/breakout_quality/build_pretraining_dataset.py",
-        "tools/filters/breakout_quality/pretrain.py",
-        "filters/breakout_quality/models/ts2vec.py",
-        "filters/breakout_quality/models/mantis_v2.py",
-        "filters/breakout_quality/models/moment.py",
-        "config/compatibility/strategy_compare_history.py",
-    )
-    check(
-        "required_historical_reconstruction_compatibility_is_preserved",
-        tuple(True for _ in compatibility_paths),
-        tuple((project_root / relative_path).exists() for relative_path in compatibility_paths),
-    )
-
     application_source = (
         project_root / "services/research/breakout_quality_application.py"
     ).read_text(encoding="utf-8")
@@ -1313,7 +1325,6 @@ def validate_breakout_quality_legacy_research_cleanup_contract_case(_base_params
 
     summary["retired_paths"] = list(retired_paths)
     summary["current_replacements"] = list(current_paths)
-    summary["compatibility_preserved"] = list(compatibility_paths)
     summary["maintenance_contract_fixture"] = maintenance
     return results, summary
 
@@ -1665,93 +1676,6 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
     from filters.breakout_quality.strategy_compare_sources import (
         strategy_param_source_identity_sha256,
     )
-
-    # Historical validation-budget regressions: P9 must never fall back to
-    # P5 identity even when the benchmark seed and parameter policy are equal.
-    from core.strategy_compare_policy import get_strategy_comparison_settings
-    from services.research import strategy_multi_seed_robustness as robustness_owner
-    validation_robustness = get_strategy_multi_seed_robustness_settings(
-        "non_dl_validation_budget_rolling"
-    )
-    validation_settings = get_strategy_comparison_settings(validation_robustness.profile_id)
-    validation_arm = next(
-        validation_settings.arms[arm_id]
-        for arm_id in validation_robustness.benchmark_strategy_arm_ids
-        if (
-            validation_settings.parameter_sources[
-                validation_settings.arms[arm_id].param_source
-            ].builder is not None
-            and validation_settings.parameter_sources[
-                validation_settings.arms[arm_id].param_source
-            ].builder.builder_type == "optimizer_validation_budget_refit_strategy_params"
-        )
-    )
-    validation_source = validation_settings.parameter_sources[validation_arm.param_source]
-    # AI: A missing field is not permission to silently fit under legacy P5.
-    # Verify both the single identity owner and pre-execution config validation.
-    from core.strategy_param_policy import resolve_validation_budget_builder_identity
-    from core.strategy_comparison import validate_strategy_comparison_settings
-    incomplete_validation_builders = (
-        {},
-        {"parameter_set": "PARAM-P9"},
-        {"optimizer_search_protocol": "validation_plateau_refit_v3"},
-        {"parameter_set": " ", "optimizer_search_protocol": " "},
-    )
-    for index, options in enumerate(incomplete_validation_builders):
-        try:
-            resolve_validation_budget_builder_identity(options)
-        except ValueError:
-            resolver_rejected = True
-        else:
-            resolver_rejected = False
-        malformed_settings = replace(
-            validation_settings,
-            parameter_sources={
-                **validation_settings.parameter_sources,
-                validation_arm.param_source: replace(
-                    validation_source, builder=replace(validation_source.builder, options=options),
-                ),
-            },
-        )
-        try:
-            validate_strategy_comparison_settings(malformed_settings)
-        except ValueError:
-            config_rejected = True
-        else:
-            config_rejected = False
-        check_true(
-            f"validation_budget_incomplete_identity_{index}_fails_closed_at_owner_and_config",
-            resolver_rejected and config_rejected,
-        )
-    check_true(
-        "validation_budget_legacy_explicit_identity_remains_supported",
-        resolve_validation_budget_builder_identity(validation_source.builder.options)
-        == ("PARAM-P5", "validation_budget_refit_v1"),
-    )
-    for index, options in enumerate((
-        {"parameter_set": "PARAM-UNKNOWN", "optimizer_search_protocol": "validation_budget_refit_v1"},
-        {"parameter_set": "PARAM-P9", "optimizer_search_protocol": "validation_budget_refit_v1"},
-        {"parameter_set": "PARAM-P5", "optimizer_search_protocol": "validation_budget_refit_v1",
-         "training_profile_id": "validation_plateau_current"},
-    )):
-        malformed_settings = replace(
-            validation_settings,
-            parameter_sources={
-                **validation_settings.parameter_sources,
-                validation_arm.param_source: replace(
-                    validation_source, builder=replace(validation_source.builder, options=options),
-                ),
-            },
-        )
-        try:
-            validate_strategy_comparison_settings(malformed_settings)
-        except ValueError:
-            config_rejected = True
-        else:
-            config_rejected = False
-        check_true(f"validation_budget_unregistered_or_conflicting_profile_{index}_rejected", config_rejected)
-    # AI: Static publication must consume the Rolling owner even when a new
-    # policy rule is injected. A matching hard-coded switch is not sufficient.
     from services.optimizer import application as optimizer_application
     from services.optimizer import outer_rolling_policy as finalist_policy_owner
     for policy_name in finalist_policy_owner.FINALISTS_AGREE_POLICY_NAMES:
@@ -1792,101 +1716,6 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         "nonrolling_finalists_agree_snapshot_follows_single_owner_mutation",
         published["min_agree"] == 1 and published["selection_rule"] == "synthetic_owner_rule",
     )
-    validation_seed = int(validation_robustness.resolved_seeds[0])
-    baseline_binding = _benchmark_param_binding(
-        settings=validation_settings, robustness=validation_robustness,
-        arm=validation_arm, seed=validation_seed,
-    )
-    historical_options = {
-        **dict(validation_source.builder.options),
-        "parameter_set": "PARAM-P9",
-        "optimizer_search_protocol": "validation_plateau_refit_v3",
-    }
-    historic_settings = replace(
-        validation_settings,
-        parameter_sources={
-            **validation_settings.parameter_sources,
-            validation_arm.param_source: replace(
-                validation_source, builder=replace(
-                    validation_source.builder, options=historical_options,
-                ),
-            ),
-        },
-    )
-    historical_binding = _benchmark_param_binding(
-        settings=historic_settings, robustness=validation_robustness,
-        arm=validation_arm, seed=validation_seed,
-    )
-    check_true(
-        "robustness_validation_budget_builder_identity_isolation",
-        historical_binding["parameter_set_identity"] == "PARAM-P9"
-        and historical_binding["validation_protocol_id"] == "validation_plateau_refit_v3"
-        and historical_binding["path"] != baseline_binding["path"]
-        and historical_binding["manifest_path"] != baseline_binding["manifest_path"],
-    )
-    with patch.object(
-        robustness_owner, "inspect_validation_budget_robustness_strategy_parameter_artifact",
-        return_value={"ready": False, "action": "BUILD", "status": "MISSING"},
-    ) as validation_inspection:
-        robustness_owner._inspect_benchmark_strategy_parameter_binding(
-            settings=historic_settings, robustness=validation_robustness,
-            binding=historical_binding, seed=validation_seed,
-            comparison_start="2021-01-01", comparison_end="2026-03-02",
-        )
-    check_true(
-        "robustness_validation_budget_inspection_uses_declared_identity",
-        validation_inspection.call_args.kwargs.get("parameter_set_identity") == "PARAM-P9"
-        and validation_inspection.call_args.kwargs.get("validation_protocol_id") == "validation_plateau_refit_v3",
-    )
-
-    # Physical-truth de-dup must distinguish two registered parameter-set
-    # identities, while still building one physical source for duplicate arms.
-    historic_arm = replace(
-        validation_arm, arm_id="SYN-P9", param_source="synthetic_validation_p9",
-    )
-    historic_source = replace(
-        historic_settings.parameter_sources[validation_arm.param_source],
-        source_id="synthetic_validation_p9",
-    )
-    mixed_settings = replace(
-        validation_settings, parameter_sources={
-            **validation_settings.parameter_sources,
-            historic_arm.param_source: historic_source,
-        },
-    )
-    single_seed_robustness = replace(
-        validation_robustness, resolved_seeds=(validation_seed,), seed_count=1,
-    )
-    with patch.object(
-        robustness_owner, "_inspect_benchmark_strategy_parameter_binding",
-        return_value={"action": "BUILD", "status": "MISSING"},
-    ) as mixed_inspector:
-        mixed_plan, mixed_blockers, _ = robustness_owner._benchmark_parameter_plan_rows(
-            settings=mixed_settings, robustness=single_seed_robustness,
-            benchmark_arms=(validation_arm, historic_arm),
-            comparison_start="2021-01-01", comparison_end="2026-03-02",
-        )
-    check_true(
-        "robustness_distinct_validation_producer_units_have_distinct_plan_rows",
-        not mixed_blockers and len(mixed_plan) == 2
-        and len({label for _action, label, _detail in mixed_plan}) == 2
-        and mixed_inspector.call_count == 2,
-    )
-    duplicate_arm = replace(validation_arm, arm_id="SYN-DUP")
-    with patch.object(
-        robustness_owner, "_inspect_benchmark_strategy_parameter_binding",
-        return_value={"action": "BUILD", "status": "MISSING"},
-    ) as same_inspector:
-        same_plan, _same_blockers, _ = robustness_owner._benchmark_parameter_plan_rows(
-            settings=mixed_settings, robustness=single_seed_robustness,
-            benchmark_arms=(validation_arm, duplicate_arm),
-            comparison_start="2021-01-01", comparison_end="2026-03-02",
-        )
-    check_true(
-        "robustness_identical_validation_producer_units_dedup_once",
-        len(same_plan) == 1 and same_inspector.call_count == 1,
-    )
-
     run_bound_checks(
         check,
         (
@@ -2063,24 +1892,25 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
     # committed strategy-param scientific SHA.
     from core.strategy_compare_policy import get_strategy_comparison_settings
     current_rolling_robustness = get_strategy_multi_seed_robustness_settings(
-        "non_dl_reference_only_rolling"
+        "broker_cash_dl_conversion_rolling"
     )
     current_rolling_settings = get_strategy_comparison_settings(
         current_rolling_robustness.profile_id
     )
     historical_seed = int(current_rolling_robustness.resolved_seeds[0])
-    historical_arm = next(
-        current_rolling_settings.arms[arm_id]
-        for arm_id in current_rolling_robustness.stochastic_arm_ids
-        if not current_rolling_settings.arms[arm_id].dl_enabled
-        and str(
-            _benchmark_param_binding(
-                settings=current_rolling_settings,
-                robustness=current_rolling_robustness,
-                arm=current_rolling_settings.arms[arm_id],
-                seed=historical_seed,
-            )["producer_variant"]
-        ) == "canonical_schedule_v1"
+    # Exercise canonical schedule reuse with an isolated generic fixture, not
+    # a retired production comparison registration.
+    historical_arm = replace(
+        next(arm for arm in current_rolling_settings.enabled_arms if not arm.dl_enabled),
+        arm_id="SYN-CANONICAL-MIN", param_source="min_rolling", rule_policy="all_off",
+    )
+    current_rolling_settings = replace(current_rolling_settings, arms={
+        **current_rolling_settings.arms, historical_arm.arm_id: historical_arm,
+    })
+    current_rolling_robustness = replace(
+        current_rolling_robustness,
+        stochastic_arm_ids=(*current_rolling_robustness.stochastic_arm_ids, historical_arm.arm_id),
+        benchmark_strategy_arm_ids=(*current_rolling_robustness.benchmark_strategy_arm_ids, historical_arm.arm_id),
     )
     fixed_multiseed_arm = next(
         current_rolling_settings.arms[arm_id]
@@ -2220,10 +2050,10 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
     )
 
     materialize_settings = get_strategy_comparison_settings(
-        "non_dl_validation_budget_rolling"
+        "broker_cash_dl_conversion_rolling"
     )
     materialize_arms = tuple(
-        materialize_settings.arms[arm_id] for arm_id in ("C62", "C61", "C58", "C84")
+        materialize_settings.arms[arm_id] for arm_id in ("C98", "C97", "C96", "C179")
     )
     materialize_seed = 11
     materialize_contract = {
@@ -2233,7 +2063,7 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         "model_seed_sensitive_arm_ids": [],
         "benchmark_parameter_artifact_identities": {
             f"{arm_id}:seed={materialize_seed}": {"sha256": f"sha-{arm_id}"}
-            for arm_id in ("C62", "C61", "C58", "C84")
+            for arm_id in ("C98", "C97", "C96", "C179")
         },
     }
     materialize_contract["stochastic_arms"] = [
@@ -2243,7 +2073,7 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         for arm in materialize_arms
     ]
     materialize_reuse = {}
-    for arm_id in ("C62", "C61", "C58"):
+    for arm_id in ("C98", "C97", "C96"):
         row = {
             "arm_id": arm_id, "name": "historical", "seed": materialize_seed,
             "arm_order": 99, "seed_order": 99,
@@ -2288,9 +2118,9 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         and len(materialized_yearly) == 18
         and all(
             materialized_states[(arm_id, materialize_seed)]["action"] == "REUSE"
-            for arm_id in ("C62", "C61", "C58")
+            for arm_id in ("C98", "C97", "C96")
         )
-        and materialized_states[("C84", materialize_seed)]["action"] != "REUSE",
+        and materialized_states[("C179", materialize_seed)]["action"] != "REUSE",
     )
 
     from config.execution_policy import (
@@ -3048,19 +2878,19 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         evidence_root.mkdir(parents=True, exist_ok=True)
         evidence_contract = {
             "fingerprint": evidence_root.name,
-            "profile_id": "extending_window_rolling",
+            "profile_id": "broker_cash_dl_conversion_rolling",
             "benchmark_id": "end_to_end_v1",
             "comparison_period": {"start": "2021-01-01", "end": "2021-12-31"},
             "resolved_seeds": [11],
-            "stochastic_arms": [{"arm_id": "C59"}],
+            "stochastic_arms": [{"arm_id": "C96"}],
             "model_seed_sensitive_arm_ids": [],
             "benchmark_parameter_artifact_identities": {
-                "C59:seed=11": {"sha256": "param-sha"},
+                "C96:seed=11": {"sha256": "param-sha"},
             },
             "retention": {"keep_attribution_source": False},
         }
         seed_row = {
-            "arm_id": "C59",
+            "arm_id": "C96",
             "seed": 11,
             "arm_order": 1,
             "seed_order": 1,
@@ -3070,7 +2900,7 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         seed_row.update({key: 1.0 for _label, key, _unit in MEAN_METRICS})
         evidence_seed_frame = pd.DataFrame([seed_row])
         evidence_yearly_frame = pd.DataFrame([{
-            "arm_id": "C59", "seed": 11, "arm_order": 1, "seed_order": 1,
+            "arm_id": "C96", "seed": 11, "arm_order": 1, "seed_order": 1,
             "year": 2021, "return_pct": 1.0, "is_complete_year": True,
         }])
         _write_seed_results(evidence_root / "seed_results.csv", evidence_seed_frame)
@@ -3130,8 +2960,8 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         ),
     )
 
-    oos_robustness = get_strategy_multi_seed_robustness_settings("extending_window_oos")
-    rolling_robustness = get_strategy_multi_seed_robustness_settings("extending_window_rolling")
+    oos_robustness = get_strategy_multi_seed_robustness_settings("broker_cash_dl_conversion_oos")
+    rolling_robustness = get_strategy_multi_seed_robustness_settings("broker_cash_dl_conversion_rolling")
     oos_cache_root = str(oos_robustness.checkpoint_cache_root or "").strip()
     rolling_cache_root = str(rolling_robustness.checkpoint_cache_root or "").strip()
     check_true(
@@ -3342,7 +3172,6 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         paired_trade_r_conversion_diagnostic,
     )
     from core.breakout_quality_registry import (
-        DAILY_UNIVERSAL_CONDITIONAL_MFE_SAFETY_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         get_breakout_quality_experiment_profile,
     )
     from config.strategy_compare import STRATEGY_COMPARE_UPSIDE_REALIZATION_PATH_PROFILE
@@ -3352,13 +3181,11 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
 
     diagnostic_owner = _pure_mfe_diagnostic_profile()
     diagnostic_owner_profile = get_breakout_quality_experiment_profile(diagnostic_owner)
-    conditional_profile = get_breakout_quality_experiment_profile(
-        DAILY_UNIVERSAL_CONDITIONAL_MFE_SAFETY_FULL_LIST_NDCG_PAIRWISE_PROFILE
-    )
+    conditional_profile = replace(diagnostic_owner_profile, name="synthetic_same_target_alias")
     check_true(
         "upside_path_diagnostic_owner_is_explicit_when_research_profiles_share_pure_mfe_target",
         diagnostic_owner == STRATEGY_COMPARE_UPSIDE_REALIZATION_PATH_PROFILE
-        and diagnostic_owner != DAILY_UNIVERSAL_CONDITIONAL_MFE_SAFETY_FULL_LIST_NDCG_PAIRWISE_PROFILE
+        and diagnostic_owner != conditional_profile.name
         and str(diagnostic_owner_profile.continuous_target_id or "")
         == str(conditional_profile.continuous_target_id or "")
         == DAILY_FULL_HORIZON_PURE_MFE_TARGET_ID,
@@ -3706,62 +3533,17 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
     )
 
     from core.strategy_compare_policy import get_strategy_comparison_settings
-    from services.research.strategy_comparison import render_safety_gate_sensitivity_table
-
-    # C71-C73 are historical-only now.  Keep testing the reusable sensitivity renderer
-    # with a deliberate historical fixture instead of requiring retired arms in current.
-    current_settings = get_strategy_comparison_settings("extending_window_oos")
-    historical_gate_ids = {"C58", "C71", "C72", "C73"}
-    sensitivity_settings = replace(
-        current_settings,
-        arms={
-            arm_id: replace(
-                arm,
-                enabled=arm_id in historical_gate_ids,
-                param_source=("min_rolling" if arm_id == "C58" else arm.param_source),
-            )
-            for arm_id, arm in current_settings.arms.items()
-        },
-        contrasts={
-            contrast_id: replace(contrast, enabled=False)
-            for contrast_id, contrast in current_settings.contrasts.items()
-        },
-    )
-    sensitivity_scenarios = {
-        arm_id: {"avg_exposure_pct": exposure, "return_over_max_drawdown": romd}
-        for arm_id, exposure, romd in (("C71", 62.0, 6.0), ("C72", 64.0, 7.0), ("C73", 61.0, 6.5))
-    }
-    sensitivity_diagnostics = {
-        "mfe_safety_geometry": {
-            "status": "AVAILABLE",
-            "arms": {
-                arm_id: {
-                    "high_mfe_high_safety_pct": hmhs,
-                    "high_mfe_low_safety_pct": hmls,
-                    "high_mfe_total_pct": hm,
-                    "high_safety_total_pct": hs,
-                }
-                for arm_id, hmhs, hmls, hm, hs in (
-                    ("C71", 25.0, 25.0, 50.0, 49.0),
-                    ("C72", 28.0, 20.0, 48.0, 56.0),
-                    ("C73", 29.0, 15.0, 44.0, 63.0),
-                )
-            },
-        },
-        "upside_realization": [
-            {"arm_id": arm_id, "full_horizon_mfe_mean_r": mfe, "full_horizon_adverse_to_peak_mean_r": adverse, "realized_mean_r": ev}
-            for arm_id, mfe, adverse, ev in (("C71", 1.4, 0.34, 0.54), ("C72", 1.3, 0.28, 0.62), ("C73", 1.1, 0.24, 0.58))
-        ],
-    }
-    sensitivity_text = render_safety_gate_sensitivity_table(
-        sensitivity_scenarios, sensitivity_diagnostics, settings=sensitivity_settings
-    )
-    check_true(
-        "raw_safety_gate_sensitivity_table_renders_only_p50_p60_p70_curve_and_key_metrics",
-        all(token in sensitivity_text for token in ("C71", "C72", "C73", ">=0.50", ">=0.60", ">=0.70", "HM/HS", "HM/LS", "Full-MFE", "Adverse", "Realized EV", "平均曝險", "RoMD"))
-        and "C70" not in sensitivity_text
-        and "C64/C66" in sensitivity_text,
-    )
+    # Multiple treatments using one model still need distinct storage/scenario
+    # keys. Use isolated current-capability arms instead of a retired study.
+    current_settings = get_strategy_comparison_settings("broker_cash_dl_conversion_oos")
+    baseline_arm = next(arm for arm in current_settings.enabled_arms if not arm.dl_enabled and arm.rule_policy == "all_off")
+    treatment_arm = next(arm for arm in current_settings.enabled_arms if arm.dl_enabled and arm.param_source == baseline_arm.param_source)
+    sensitivity_settings = replace(current_settings, arms={
+        baseline_arm.arm_id: baseline_arm,
+        **{name: replace(treatment_arm, arm_id=name, dl_runtime_options={
+            **dict(treatment_arm.dl_runtime_options or {}), "synthetic_scope": name,
+        }) for name in ("SYN1", "SYN2", "SYN3")},
+    }, contrasts={})
 
     from services.research.strategy_compare_reuse import _pair_group_id
     from filters.breakout_quality.strategy_compare_runtime import _execution_pairs, _arm_runtime_spec
@@ -3769,7 +3551,7 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
 
     sensitivity_pairs = [
         row for row in _execution_pairs(sensitivity_settings)
-        if row[3].arm_id in {"C71", "C72", "C73"}
+        if row[3].arm_id in {"SYN1", "SYN2", "SYN3"}
     ]
     sensitivity_group_ids = {
         on_arm.arm_id: _pair_group_id(
@@ -3782,8 +3564,8 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         for param_source, rule_policy, _off_arm, on_arm in sensitivity_pairs
     }
     check_true(
-        "raw_safety_gate_sensitivity_pair_storage_keys_are_arm_unique",
-        set(sensitivity_group_ids) == {"C71", "C72", "C73"}
+        "shared_model_treatment_pair_storage_keys_are_arm_unique",
+        set(sensitivity_group_ids) == {"SYN1", "SYN2", "SYN3"}
         and len(set(sensitivity_group_ids.values())) == 3
         and all(arm_id in group_id for arm_id, group_id in sensitivity_group_ids.items()),
     )
@@ -3798,7 +3580,7 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
             "payload": {
                 "no_filter": {"total_return_pct": 1.0},
                 active_key: {
-                    "total_return_pct": float({"C71": 1, "C72": 2, "C73": 3}[on_arm.arm_id]),
+                    "total_return_pct": float({"SYN1": 1, "SYN2": 2, "SYN3": 3}[on_arm.arm_id]),
                     "avg_exposure_pct": 60.0,
                 },
             },
@@ -3808,11 +3590,11 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         synthetic_pair_payloads, synthetic_direct_r, settings=sensitivity_settings
     )
     check_true(
-        "raw_safety_gate_sensitivity_scenario_materialization_keeps_all_three_arms",
-        all(arm_id in synthetic_scenarios for arm_id in ("C71", "C72", "C73"))
-        and synthetic_scenarios["C71"]["total_return_pct"] == 1.0
-        and synthetic_scenarios["C72"]["total_return_pct"] == 2.0
-        and synthetic_scenarios["C73"]["total_return_pct"] == 3.0,
+        "shared_model_treatment_scenario_materialization_keeps_all_three_arms",
+        all(arm_id in synthetic_scenarios for arm_id in ("SYN1", "SYN2", "SYN3"))
+        and synthetic_scenarios["SYN1"]["total_return_pct"] == 1.0
+        and synthetic_scenarios["SYN2"]["total_return_pct"] == 2.0
+        and synthetic_scenarios["SYN3"]["total_return_pct"] == 3.0,
     )
 
     # AI: SSOT-04/06 behavior checks.  Test values deliberately differ from

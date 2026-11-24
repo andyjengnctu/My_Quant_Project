@@ -4728,34 +4728,6 @@ def validate_research_model_readiness_architecture_case(_base_params):
             )):
                 check_true("dataset_unchanged_revision_does_not_rehash",
                            readiness_owner.collect_dataset_readiness(project, **readiness_args).ready)
-            # Market-set input is architecture-dependent, but its evidence
-            # must use the same Dataset content-verification owner.
-            from filters.breakout_quality.models.architectures import SUPPORTED_MODEL_ARCHITECTURES
-            from filters.breakout_quality.models.spec import get_model_spec
-            from filters.breakout_quality.market_set import market_set_contract_payload
-            market_arch = next(
-                arch for arch in SUPPORTED_MODEL_ARCHITECTURES
-                if get_model_spec(arch).requires_market_set
-            )
-            for name, market_path in dataset_paths.market_set_artifact_paths().items():
-                market_path.write_bytes(f"{name} valid market".encode())
-            summary_data["market_set_contract"] = market_set_contract_payload()
-            summary_data["market_set_artifacts"] = {
-                name: build_file_manifest(path)
-                for name, path in dataset_paths.market_set_artifact_paths().items()
-            }
-            dataset_paths.summary.write_text(json.dumps(summary_data), encoding="utf-8")
-            market_args = {**readiness_args, "model_architecture": market_arch}
-            check_true("market_set_artifacts_sha_ready_when_valid",
-                       readiness_owner.collect_dataset_readiness(project, **market_args).ready)
-            market_feature = dataset_paths.market_daily_features
-            market_feature.write_bytes(b"X" + market_feature.read_bytes()[1:])
-            invalid_market = readiness_owner.collect_dataset_readiness(project, **market_args)
-            check_true("market_set_artifacts_sha_mismatch_rejects_ready",
-                       not invalid_market.ready and any(
-                           "market_daily_features artifact SHA256 mismatch" in reason
-                           for reason in invalid_market.reasons
-                       ))
             # Start the race from a *valid* publication. Otherwise a stale
             # summary can reject the file without exercising the concurrent
             # mutation guard at all.

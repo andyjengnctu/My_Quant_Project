@@ -312,18 +312,8 @@ def show_latest_strategy_multi_seed_robustness_report(*, robustness_id: str) -> 
 
 
 def runtime_integration_execution_enabled() -> bool:
-    """Return whether the gate is both enabled and bound only to current profiles."""
-
-    cfg = get_strategy_runtime_integration_settings()
-    current_profiles = {row["profile_id"] for row in get_strategy_comparison_menu_profiles()}
-    current_robustness = {row["robustness_id"] for row in get_strategy_multi_seed_robustness_profiles()}
-    return bool(
-        cfg.enabled
-        and cfg.selection_profile_id in current_profiles
-        and cfg.forward_profile_id in current_profiles
-        and cfg.selection_robustness_id in current_robustness
-        and cfg.forward_robustness_id in current_robustness
-    )
+    """The historical promotion producer is retired."""
+    return False
 
 
 def runtime_integration_allowed_actions() -> tuple[str, ...]:
@@ -335,45 +325,19 @@ def runtime_integration_allowed_actions() -> tuple[str, ...]:
 
 
 def dispatch_runtime_integration_action(action: str) -> None:
-    """Dispatch the legacy runtime gate with a config-authoritative fail-closed guard.
-
-    Read-only historical inspection remains available for compatibility.  Any
-    action that can create gate output or change runtime state is rejected before
-    importing the producer when the integration is disabled in config.
-    """
-
+    """Retired research can be inspected but cannot execute or publish runtime state."""
     normalized = str(action).strip().lower()
-    supported = _RUNTIME_INTEGRATION_MUTATING_ACTIONS | _RUNTIME_INTEGRATION_READ_ONLY_ACTIONS
-    if normalized not in supported:
+    if normalized in _RUNTIME_INTEGRATION_MUTATING_ACTIONS:
+        raise RuntimeError("Runtime Promotion Gate 已退役；只允許 status/latest 歷史唯讀檢視。")
+    if normalized not in _RUNTIME_INTEGRATION_READ_ONLY_ACTIONS:
         raise ValueError(f"compare integration不支援的命令: {action}")
-
-    cfg = get_strategy_runtime_integration_settings()
-    if normalized in _RUNTIME_INTEGRATION_MUTATING_ACTIONS and not runtime_integration_execution_enabled():
-        raise RuntimeError(
-            f"{cfg.label}目前未綁定可執行的current Strategy Compare profiles；"
-            "historical compatibility只允許status/latest唯讀檢視。"
-        )
-
     from services.research.runtime_integration_gate import (
-        run_runtime_integration_gate,
-        show_latest_runtime_integration_report,
-        show_runtime_integration_status,
+        show_latest_runtime_integration_report, show_runtime_integration_status,
     )
-
-    if normalized in {"run", "gate"}:
-        run_runtime_integration_gate()
-        return
-    if normalized in {"promote", "apply", "refresh"}:
-        from services.breakout_quality.runtime_promotion import (
-            apply_or_refresh_runtime_promotion,
-        )
-
-        apply_or_refresh_runtime_promotion()
-        return
     if normalized in {"status", "show"}:
         show_runtime_integration_status()
-        return
-    show_latest_runtime_integration_report()
+    else:
+        show_latest_runtime_integration_report()
 
 
 __all__ = [

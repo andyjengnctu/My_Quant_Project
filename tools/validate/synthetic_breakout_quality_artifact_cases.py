@@ -1,90 +1,34 @@
 from __future__ import annotations
 
-from .checks import bind_synthetic_case, bind_checks
+from .checks import (
+    bind_synthetic_case,
+)
 
 from .synthetic_breakout_quality_support import (
-    ARTIFACT_CONTRACT_VERSION,
-    BASELINE_EXPERIMENT_PROFILE,
-    BREAKOUT_DEFAULT_HIGH_LEN,
-    BREAKOUT_QUALITY_CLASS_WEIGHT_MODE,
     BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
-    BREAKOUT_QUALITY_FINAL_REFIT_MODE,
     BREAKOUT_QUALITY_PRETRAINING_PROFILE,
     BREAKOUT_QUALITY_TIME_WEIGHT_MODE,
     CONFIGURED_EXPERIMENT,
-    CONTEXT_COLUMNS,
     DEFAULT_LABEL_POLICY,
     DEFAULT_MODEL_ARCHITECTURE,
-    DEFAULT_UNAVAILABLE_SCORE_FILENAME,
-    FEATURE_COLUMNS,
-    FILTER_FAMILY,
-    MANTIS_V2_CHECKPOINT_FILENAME,
-    MANTIS_V2_CHECKPOINT_SHA256,
-    MANTIS_V2_CONFIG_FILENAME,
-    MANTIS_V2_CONFIG_SHA256,
-    MANTIS_V2_REPOSITORY,
-    MANTIS_V2_REVISION,
-    MOMENT_CHECKPOINT_FILENAME,
-    MOMENT_CHECKPOINT_SHA256,
-    MOMENT_CHECKPOINT_SIZE_BYTES,
-    MOMENT_CONFIG_FILENAME,
-    MOMENT_CONFIG_SIZE_BYTES,
-    MOMENT_PACKAGE_NAME,
-    MOMENT_PACKAGE_VERSION,
-    MOMENT_REPOSITORY,
-    MOMENT_REVISION,
-    MOMENT_TRANSFORMERS_PACKAGE_NAME,
-    MOMENT_TRANSFORMERS_VERSION,
-    OUTER_SPLIT_OOS,
-    OUTER_SPLIT_OUT_OF_SCOPE,
-    OUTER_SPLIT_SELECTION,
     Path,
-    RUNTIME_SCOPE_FORWARD_OOS,
     SCORE_COLUMN,
-    SCORE_COMPARISON,
     SCORE_TABLE_REQUIRED_COLUMNS,
-    SCORE_TABLE_SCHEMA_VERSION,
-    SCORE_THRESHOLD_SOURCE,
-    SELECTION_ROLE_EMBARGO,
-    SELECTION_ROLE_INNER_EMBARGO,
-    SELECTION_ROLE_INVALID,
-    SELECTION_ROLE_NOT_APPLICABLE,
-    SELECTION_ROLE_TRAIN,
-    SELECTION_ROLE_VALIDATION,
-    SPLIT_ASSIGNMENT_REQUIRED_COLUMNS,
-    SPLIT_ASSIGNMENT_SCHEMA_VERSION,
     SimpleNamespace,
-    TIME_WEIGHT_MODE_DATE_BALANCED,
-    TRAINING_MODE_INNER_VALIDATION_FULL_REFIT,
-    TRAINING_SAMPLING_ALL_EVENT_ROWS,
-    TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
     add_check,
     breakout_quality_export_scores,
-    breakout_quality_train,
     build_breakout_quality_model,
     build_breakout_quality_pretraining_profile_payload,
-    build_file_manifest,
-    build_pass_condition_from_score_table,
     build_report_payload,
-    compute_outer_policy_fingerprint,
     count_trainable_parameters,
     generate_signals,
-    get_breakout_quality_experiment_profile,
     get_model_spec,
-    json,
-    load_model_artifact_contract,
-    load_runtime_artifact_contract,
-    load_score_table,
-    load_shared_group_score_table,
-    load_split_assignment_frame,
-    lookup_breakout_quality_candidate_score,
     np,
     os,
     patch,
     pd,
     render_console_summary,
     render_markdown_report,
-    resolve_existing_filter_artifact_paths,
     resolve_filter_artifact_paths,
     resolve_filter_report_json_path,
     resolve_filter_report_markdown_path,
@@ -938,45 +882,16 @@ def validate_breakout_quality_runtime_artifact_contract_case(_base_params):
             )
             check("path_resolution_has_no_output_side_effect", False, (project_root / "outputs").exists())
 
-            legacy_dir = models_dir / "filters" / FILTER_FAMILY / filter_id / architecture
-            legacy_dir.mkdir(parents=True, exist_ok=True)
-            (legacy_dir / "manifest.json").write_text("{}", encoding="utf-8")
-            legacy_paths = resolve_existing_filter_artifact_paths(
-                project_root,
-                filter_id,
-                architecture,
-                BASELINE_EXPERIMENT_PROFILE,
-            )
-            try:
-                breakout_quality_export_scores._resolve_forward_export_write_paths(
-                    filter_id=filter_id,
-                    model_architecture=architecture,
-                    experiment_profile=BASELINE_EXPERIMENT_PROFILE,
-                    loaded_paths=legacy_paths,
-                    project_root=project_root,
-                )
-            except ValueError as exc:
-                legacy_write_rejected = "僅供唯讀相容" in str(exc)
-            else:
-                legacy_write_rejected = False
-            check_true("legacy_artifact_fallback_is_read_only", legacy_write_rejected)
-
-            canonical_baseline = resolve_filter_artifact_paths(
-                project_root,
-                filter_id,
-                architecture,
-                BASELINE_EXPERIMENT_PROFILE,
-            )
             forward_paths = breakout_quality_export_scores._resolve_forward_export_write_paths(
                 filter_id=filter_id,
                 model_architecture=architecture,
-                experiment_profile=BASELINE_EXPERIMENT_PROFILE,
-                loaded_paths=canonical_baseline,
+                experiment_profile=BREAKOUT_QUALITY_EXPERIMENT_PROFILE,
+                loaded_paths=canonical,
                 project_root=project_root,
             )
             check_true(
                 "canonical_forward_export_stays_in_canonical_model_domain",
-                forward_paths.model_dir == canonical_baseline.model_dir,
+                forward_paths.model_dir == canonical.model_dir,
             )
 
     from filters.breakout_quality.models.active import ACTIVE_MODEL_ARCHITECTURES

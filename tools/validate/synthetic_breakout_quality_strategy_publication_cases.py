@@ -687,14 +687,13 @@ def append_latest_publication_checks(*, check_true):
         gate_root = temp_root / "gate"
         gate_cfg = SimpleNamespace(output_root="gate")
         gate_payload = {"fingerprint": "gate-case", "status": "NO_GO"}
+        gate_latest = gate_root / "latest"
+        gate_latest.mkdir(parents=True)
+        (gate_latest / gate_writer.RESULT_FILENAME).write_text(json.dumps(gate_payload), encoding="utf-8")
+        (gate_latest / gate_writer.REPORT_FILENAME).write_bytes(latest_integrity.text_publication_bytes("gate markdown"))
         with patch.object(
             gate_writer, "get_strategy_runtime_integration_settings", return_value=gate_cfg,
-        ), patch.object(
-            gate_writer, "collect_runtime_integration_status", return_value=gate_payload,
-        ), patch.object(
-            gate_writer, "render_runtime_integration_report", return_value="gate markdown",
-        ), patch.object(gate_writer, "_print_console_summary"), redirect_stdout(io.StringIO()):
-            gate_writer.run_runtime_integration_gate(project_root=temp_root)
+        ), redirect_stdout(io.StringIO()):
             gate_latest = gate_root / "latest"
             gate_original = {
                 name: (gate_latest / name).read_bytes()
@@ -724,7 +723,6 @@ def append_latest_publication_checks(*, check_true):
 
     # The retained Runtime Promotion latest view also uses the canonical
     # binary publisher. Its completed run artifacts and bytes are immutable.
-    from services.breakout_quality import runtime_promotion as promotion_writer
     from services.audit import strategy_compare_source as audit_compare_reader
     with tempfile.TemporaryDirectory(prefix="promotion_latest_contract_") as temp_dir:
         synthetic_root = Path(temp_dir)
@@ -751,7 +749,7 @@ def append_latest_publication_checks(*, check_true):
             "runtime_promotion_latest_keeps_original_run_bytes_and_shared_owner",
             all((latest / file.name).read_bytes() == file.read_bytes()
                 for file in (md, js))
-            and "publish_latest_snapshot" in inspect.getsource(promotion_writer.apply_or_refresh_runtime_promotion),
+            ,
         )
         # A canonical Audit reading mutable latest must use the same lock as
         # Strategy Compare's publisher; immutable pinned runs remain unaffected.
@@ -775,125 +773,6 @@ def append_latest_publication_checks(*, check_true):
         check_true(
             "strategy_compare_audit_latest_reader_respects_canonical_writer_lock",
             audited_latest_is_locked,
-        )
-
-    # Publication-complete must mean Manifest-last + canonical pair bytes,
-    # not just a run JSON claiming status=COMPLETED. This is the same
-    # integrity owner used by Strategy Compare REUSE, not a second gate.
-    from services.research.strategy_compare_pair_integrity import (
-        build_completed_pair_file_integrity,
-    )
-    from services.research import runtime_integration_gate as gate_evidence
-    with tempfile.TemporaryDirectory(prefix="strategy_gate_publication_boundary_") as temp_dir:
-        root = Path(temp_dir)
-        source_row = {
-            "filter_id": "synthetic", "model_architecture": "test",
-            "experiment_profile": "test", "threshold": 0.1,
-            "score_source": "selection_point_in_time",
-        }
-        on_fields = {
-            "arm_id": "on", "param_source": "p", "rule_policy": "all_off",
-            "dl_enabled": True, "dl_id": "q", "dl_runtime_mode": "score",
-            "dl_runtime_options": {},
-        }
-        off_fields = {
-            "arm_id": "off", "param_source": "p", "rule_policy": "all_off",
-            "dl_enabled": False, "dl_id": None, "dl_runtime_mode": "",
-        }
-        source = SimpleNamespace(as_dict=lambda: source_row)
-        settings = SimpleNamespace(output_root="comparison", dl_sources={"q": source})
-        on_arm = SimpleNamespace(arm_id="on", dl_id="q", as_dict=lambda: on_fields)
-        off_arm = SimpleNamespace(arm_id="off", as_dict=lambda: off_fields)
-        runs = root / "comparison" / "runs"
-        run_dir = runs / "fixed_run"
-        latest = root / "comparison" / "latest"
-        run_dir.mkdir(parents=True)
-        latest.mkdir()
-        result = {
-            "status": "COMPLETED", "config_fingerprint": "0123456789ab",
-            "settings": {"arms": {"on": on_fields, "off": off_fields},
-                         "dl_sources": {"q": source_row}},
-            "pairs": {"group": {"metadata": {"synthetic": True}}},
-        }
-        run_json = run_dir / "strategy_comparison.json"
-        latest_json = latest / "strategy_comparison.json"
-        run_json.write_text(json.dumps(result), encoding="utf-8")
-        latest_json.write_text(json.dumps(result), encoding="utf-8")
-
-        def _gate_evidence():
-            with patch.object(
-                gate_evidence, "resolve_strategy_comparison_result_search_roots",
-                return_value=("comparison",),
-            ):
-                return gate_evidence._find_strategy_result_evidence(
-                    root, settings, candidate=on_arm, baseline=off_arm,
-                )
-
-        try:
-            _gate_evidence()
-        except FileNotFoundError:
-            incomplete_rejected = True
-        else:
-            incomplete_rejected = False
-        check_true(
-            "strategy_gate_does_not_trust_uncommitted_completed_json",
-            incomplete_rejected,
-        )
-        pair_dir = run_dir / "pairs" / "group"
-        pair_dir.mkdir(parents=True)
-        (pair_dir / "strategy_comparison.json").write_text(
-            json.dumps(result["pairs"]["group"]), encoding="utf-8"
-        )
-        (pair_dir / "strategy_comparison.md").write_text(
-            "historical pair", encoding="utf-8"
-        )
-        sidecar = pair_dir / "orderable_candidates.csv"
-        sidecar.write_text("ticker,score\n2330,0.2\n", encoding="utf-8")
-        record = build_completed_pair_file_integrity({"group": pair_dir})
-        result["pair_file_integrity"] = record
-        for result_path in (run_json, latest_json):
-            result_path.write_text(json.dumps(result), encoding="utf-8")
-        manifest = {
-            "config_fingerprint": result["config_fingerprint"],
-            "run_dir": str(run_dir.relative_to(root)),
-            "pair_file_integrity": record,
-        }
-        for manifest_path in (run_dir / "manifest.json", latest / "manifest.json"):
-            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
-        path, _payload = _gate_evidence()
-        check_true(
-            "strategy_gate_committed_latest_matches_canonical_run_and_pair_integrity",
-            path == latest_json,
-        )
-        with latest_integrity.exclusive_file_lock(
-            latest_integrity.sibling_publication_lock_path(latest)
-        ):
-            try:
-                _gate_evidence()
-            except RuntimeError:
-                latest_guarded = True
-            else:
-                latest_guarded = False
-        check_true(
-            "strategy_gate_cannot_read_during_latest_publication",
-            latest_guarded,
-        )
-        latest_json.write_text(json.dumps({**result, "status": "FAILED"}), encoding="utf-8")
-        path, _payload = _gate_evidence()
-        check_true(
-            "strategy_gate_rejects_mixed_latest_and_uses_only_committed_run",
-            path == run_json,
-        )
-        sidecar.write_text("ticker,score\n2330,0.9\n", encoding="utf-8")
-        try:
-            _gate_evidence()
-        except FileNotFoundError:
-            modified_pair_rejected = True
-        else:
-            modified_pair_rejected = False
-        check_true(
-            "strategy_gate_does_not_trust_changed_completed_pair_sidecars",
-            modified_pair_rejected,
         )
 
     # RUN (not just Audit) must allocate immutable evidence even when the
@@ -920,23 +799,4 @@ def append_latest_publication_checks(*, check_true):
             and second.name.startswith(suggested.name + "_")
             and "reserve_immutable_output_dir(run_dir.parent, run_dir.name)"
                 in inspect.getsource(comparison_writer.run_strategy_comparison),
-        )
-        gate_cfg = SimpleNamespace(output_root="gate")
-        with patch.object(
-            gate_evidence, "get_strategy_runtime_integration_settings",
-            return_value=gate_cfg,
-        ), patch.object(
-            gate_evidence, "collect_runtime_integration_status",
-            return_value={"fingerprint": "0123456789ab", "status": "BLOCKED"},
-        ), patch.object(
-            gate_evidence, "render_runtime_integration_report", return_value="report",
-        ), patch.object(gate_evidence, "_print_console_summary"), patch.object(
-            gate_evidence, "datetime"
-        ) as fake_clock, redirect_stdout(io.StringIO()):
-            fake_clock.now.return_value.astimezone.return_value.strftime.return_value = "20261021_120000"
-            gate_evidence.run_runtime_integration_gate(project_root=base)
-            gate_evidence.run_runtime_integration_gate(project_root=base)
-        check_true(
-            "runtime_gate_same_second_immutable_reports_are_not_overwritten",
-            len(list((base / "gate" / "runs").iterdir())) == 2,
         )

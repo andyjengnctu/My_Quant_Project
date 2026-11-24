@@ -250,8 +250,7 @@ def append_robustness_benchmark_plan_checks(
         check_true(
             f"robustness_result_reuse_search_is_registry_derived:{robustness.robustness_id}",
             roots[0] == robustness.output_root
-            and "outputs/strategy_compare/robustness/extending_window/oos_2021_forward" in roots
-            and "outputs/strategy_compare/robustness/extending_window/rolling_2021_forward" in roots
+            and all(item.output_root in roots for item in current_robustness)
             and len(roots) == len(set(roots)),
         )
 

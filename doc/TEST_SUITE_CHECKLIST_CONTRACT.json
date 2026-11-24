@@ -1558,8 +1558,8 @@
       "section": "B2",
       "priority": "P1",
       "order": 184,
-      "item": "正式新訓練只能由`models/active.py`解析與建立`ACTIVE_MODEL_ARCHITECTURES`，binary與continuous/daily trainer不得直接使用可解析全部歷史architecture的compatibility factory；legacy architecture必須在CLI／active model API層fail-fast。歷史checkpoint／manifest、forward score重建與read-only inference仍可經`models/factory.py`＋`models/legacy_compatibility.py`嚴格重建，且所有既有`model_spec` manifest payload不得改變。MOMENT／Mantis／TS2Vec builder、pretrained dependency與external contract只可在historical branch實際需要時lazy載入，不得污染current model-provider import graph",
-      "gap": "`validate_breakout_quality_active_legacy_model_isolation_contract_case`驗證active API接受current architectures、拒絕legacy、formal trainers不import compatibility factory、active factory不import legacy builders、compatibility factory lazy delegation；`validate_dataset_cli_contract_case`釘死正式Research command surface不再公開legacy pretraining commands且legacy architecture在workflow execution前被拒絕；runtime artifact contract維持全部歷史MOMENT／Mantis／TS2Vec strict reconstruction，22個supported architecture model-spec payload與修改前逐一完全一致",
+      "item": "新訓練只由 models/active.py 解析正式 ACTIVE_MODEL_ARCHITECTURES；未註冊或退役 architecture 在 active API／CLI 明確拒絕，不得替換成現行模型。保留模型的完整 model_spec manifest 與重建語意必須不變。",
+      "gap": "驗證目前 registry/spec/factory 一致、current model manifests 不變，以及非法 architecture fail-closed。",
       "entry": "`filters/breakout_quality/models/active.py`, `filters/breakout_quality/models/factory.py`, `filters/breakout_quality/models/legacy_compatibility.py`, `filters/breakout_quality/models/runtime.py`, `filters/breakout_quality/models/spec.py`, `services/breakout_quality/train.py`, `services/breakout_quality/train_continuous_ranker.py`, `filters/breakout_quality/artifacts.py`, `services/research/breakout_quality_application.py`, `validate_breakout_quality_policy_single_source_case`, `validate_breakout_quality_runtime_artifact_contract_case`",
       "category": "Breakout Quality active model training／historical artifact physical isolation",
       "status": "DONE"
@@ -1642,83 +1642,6 @@
       "status": "DONE"
     },
     {
-      "id": "B213",
-      "section": "B2",
-      "priority": "P1",
-      "order": 198,
-      "item": "`SR-C37`與條件式`SR-C38`必須重用frozen MR-13E score，不重訓模型、不改Target、K/R0、sizing、cash、orderability或execution；唯一portfolio變更為把basket objective由frozen score-sum改成`Σ(Expected R × canonical planned initial risk)`。Expected-R calibration以daily score percentile為輸入並維持非負斜率；Selection逐策略年只使用該年以前且target已成熟的PIT rows，Forward只使用frozen OOS `execution_start`前Selection PIT成熟target fit，禁止Forward target進入calibration；負Expected R第一輪不得改K或移除R0。Calibration identity必須納入正式artifact／pair cache identity，period contract改變時不得誤用舊mapping。",
-      "gap": "`validate_strategy_compare_config_driven_app_contract_case`直接驗證同候選、同K/R0下score objective與Expected-PnL objective可選不同basket，Expected-PnL偏好較高`Expected R × exact planned risk`總值且維持resource floor；同時驗證historical C37/C38 calibration source、maturity cutoff、no-Forward-target、artifact identity與compatibility reproduction contract。",
-      "entry": "`filters/breakout_quality/expected_r_calibration.py`, `services/breakout_quality/expected_r_calibration.py`, `core/exact_accounting.py`, `core/portfolio_entry_selection_max_dl.py`, `services/research/strategy_compare_preparation.py`, `services/research/strategy_comparison.py`, `config/strategy_compare.py`, `tools/validate/synthetic_breakout_quality_strategy_app_cases.py`",
-      "category": "SR-C37/C38 Frozen MR-13E Expected-PnL strategy contract",
-      "status": "DONE"
-    },
-    {
-      "id": "B217",
-      "section": "B2",
-      "priority": "P1",
-      "order": 202,
-      "item": "C39必須重用C35相同`DL-CONT13E-PIT`、historical Min params、K/R0、sizing、cash、orderability與execution；唯一portfolio變更為`Σ(Expected Excess-R × canonical planned initial risk)`。`Excess R = raw R − same-day full canonical daily-eligible target-valid mean R`，MR-13E score只轉daily percentile；Selection逐策略年只用`date < cutoff`且`label_eval_end_date < cutoff`成熟rows fit nondecreasing isotonic PAVA，不得用absolute-R共同baseline、Forward target、人工Top-X bucket/slope/intercept或negative-excess減少K/R0。Calibration identity必須進正式artifact/pair cache；本輪只允許Selection C39，未通過不得建立Forward arm。",
-      "gap": "`validate_strategy_compare_config_driven_app_contract_case` extension驗證同K/R0下score-sum與Excess-Alpha可選不同basket、relative alpha×exact planned risk objective、full daily-eligible mean scope、PAVA monotonicity、C39 Selection-only/current matrix/direct C39-C35 contrast與無Forward arm；generic preparation/cache/runtime contract同步覆蓋。",
-      "entry": "`filters/breakout_quality/rank_calibration.py`, `filters/breakout_quality/excess_r_calibration.py`, `services/breakout_quality/excess_r_calibration.py`, `core/portfolio_entry_selection_max_dl.py`, `services/research/strategy_compare_preparation.py`, `services/research/strategy_comparison.py`, `config/strategy_compare.py`, `tools/validate/synthetic_breakout_quality_strategy_app_cases.py`",
-      "category": "SR-C39 Frozen MR-13E Relative Excess-Alpha Selection contract",
-      "status": "DONE"
-    },
-    {
-      "id": "B218",
-      "section": "B2",
-      "priority": "P1",
-      "order": 203,
-      "item": "C40必須與C39重用相同`DL-CONT13E-PIT`、Expected Excess-R PIT calibration、historical Min params、K、`Expected Excess-R × canonical planned initial risk` objective、sizing、actual cash、orderability與execution；唯一controlled change為移除Min ROOS `R0` hard floor與R0-driven minimum repair。`preserve_r0=False`、`r0_minimum_repair=False`；raw Top-K只要真正cash-capped reservation能保留K即可接受，即使reserved capital低於baseline R0。若raw Top-K因真實cash constraint無法保留K，只可用同參數baseline basket作K-only cash-feasible seed再做one-swap objective ascent；不得把seed解讀成R0 restoration，repair steps/evaluations必須為0。只允許Selection C40，不建立Forward arm。",
-      "gap": "`validate_strategy_compare_config_driven_app_contract_case` No-R0 extension驗證C39會為R0 repair而回到高reserved basket、C40在同一objective/同K下可直接保留低reserved高Excess-Alpha basket、`resource_preservation_required=False`、repair steps/evaluations=`0`、reserved capital可低於baseline R0、C40-C39/C40-C35 contrasts與無Forward C40。",
-      "entry": "`core/buy_sort.py`, `core/portfolio_entry_selection.py`, `core/portfolio_entry_selection_max_dl.py`, `core/portfolio_engine.py`, `core/strategy_comparison.py`, `services/research/strategy_compare_engine.py`, `services/research/strategy_compare_preparation.py`, `services/research/strategy_comparison.py`, `config/strategy_compare.py`, `tools/validate/synthetic_breakout_quality_strategy_app_cases.py`",
-      "category": "SR-C40 Frozen MR-13E Relative Excess-Alpha No-R0 Selection contract",
-      "status": "DONE"
-    },
-    {
-      "id": "B219",
-      "section": "B2",
-      "priority": "P1",
-      "order": 204,
-      "item": "C41必須與C39重用相同`DL-CONT13E-PIT`、Expected Excess-R calibration、historical Min params、K/R0、`Expected Excess-R × canonical planned initial risk` objective、sizing、cash、orderability與execution；唯一controlled change為把Top-K→R0 minimum-repair→1-swap local ascent替換為完整candidate universe deterministic exact branch-and-bound。C39 feasible-ascent只可作incumbent lower bound，不得限制search space；所有include state必須用canonical cash-capped reservation重算planned risk/reserved capital；pruning只可用admissible count/reserve/objective upper bounds，禁止candidate truncation、beam width、time budget、lambda或新門檻。搜尋完整結束才可標`optimality_certified=True`；只允許Selection C41，不建立Forward arm。",
-      "gap": "`validate_strategy_compare_config_driven_app_contract_case`直接以小型完整K-basket exhaustive oracle驗證C41 exact solver等於canonical global optimum、K/R0保持、repair/ascent正式path為0、certificate為True，並驗證C41/C39同objective/calibration/K/R0、C41-C39/C41-C35 contrasts與無Forward C41；另由GPT獨立30-case randomized exhaustive oracle交叉驗證；並加入固定multi-swap trap，驗證C39 repair+1-swap會停在局部解，而C41需同時替換2檔才能取得嚴格較高的canonical Excess-Alpha合法basket。",
-      "entry": "`core/buy_sort.py`, `core/portfolio_entry_selection.py`, `core/portfolio_entry_selection_max_dl.py`, `core/portfolio_entry_selection_common.py`, `core/portfolio_engine.py`, `core/strategy_comparison.py`, `services/research/strategy_compare_engine.py`, `services/research/strategy_compare_preparation.py`, `filters/breakout_quality/strategy_compare_reporting.py`, `services/research/strategy_comparison.py`, `config/strategy_compare.py`, `tools/validate/synthetic_breakout_quality_strategy_app_cases.py`",
-      "category": "SR-C41 Frozen MR-13E Relative Excess-Alpha Exact Constrained Selection contract",
-      "status": "DONE"
-    },
-    {
-      "id": "B220",
-      "section": "B2",
-      "priority": "P1",
-      "order": 205,
-      "item": "C42必須與C35重用相同`DL-CONT13E-PIT`、historical Min params、K/R0、原始MR-13E continuous score objective、sizing、cash、orderability與execution；唯一controlled change為把score Top-K→R0 minimum-repair→1-swap local ascent替換為與C41同源的完整candidate universe deterministic exact branch-and-bound。C42不得依賴Expected-R或Expected Excess-R calibration；C35 feasible-ascent只可作incumbent lower bound，不得限制search space；所有include state仍用canonical cash-capped reservation，pruning僅可用admissible count/reserve/score upper bounds，禁止candidate truncation、beam width、time budget、lambda或新門檻。只允許Selection C42，不建立Forward arm。",
-      "gap": "`validate_strategy_compare_config_driven_app_contract_case`新增score exact constrained exhaustive oracle：完整枚舉所有合法K-basket後以既有`_max_dl_basket_quality_key`取得global score optimum，C42 membership必須完全一致、K/R0保持、repair/ascent正式path=0、certificate=True、seed source=`c35-feasible-ascent`；同時驗證C42無calibration options、C42-C35純solver contrast、C42-C41純objective contrast及無Forward C42。",
-      "entry": "`core/buy_sort.py`, `core/portfolio_entry_selection.py`, `core/portfolio_entry_selection_max_dl.py`, `core/strategy_comparison.py`, `services/research/strategy_compare_engine.py`, `services/research/strategy_comparison.py`, `config/strategy_compare.py`, `tools/validate/synthetic_breakout_quality_strategy_app_cases.py`",
-      "category": "SR-C42 Frozen MR-13E Score Exact Constrained Selection contract",
-      "status": "DONE"
-    },
-    {
-      "id": "B221",
-      "section": "B2",
-      "priority": "P1",
-      "order": 206,
-      "item": "C43必須與C28重用相同`DL-CONT13A-PIT`、historical Min params、K/R0、原始MR-13A continuous score objective、sizing、cash、orderability與execution；唯一controlled change為把score Top-K→R0 minimum-repair→1-swap local ascent替換為C42同源generic exact branch-and-bound。C43與C42的exact runtime options必須一致，僅DL source不同；不得依賴Expected-R/Expected Excess-R calibration，不得新增12B constrained、Forward C43或robustness arm。",
-      "gap": "`validate_strategy_compare_config_driven_app_contract_case`直接驗證C43=`CONT13A_PIT + resource-aware-continuous-score-constrained-optimal`、與C42同`preserve_k_r0/exact_branch_and_bound_v1/selection_only` options、無calibration fields、C43-C28純solver contrast、C42-C43純DL source contrast及Forward無C43。Generic score exact exhaustive oracle仍由B220/T318保護同一solver owner，避免為13A複製第二套solver。",
-      "entry": "`config/strategy_compare.py`, `services/research/strategy_compare_engine.py`, `tools/validate/synthetic_breakout_quality_strategy_app_cases.py`, `doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`",
-      "category": "SR-C43 Frozen MR-13A Score Exact Constrained Selection contract",
-      "status": "DONE"
-    },
-    {
-      "id": "B222",
-      "section": "B2",
-      "priority": "P1",
-      "order": 207,
-      "item": "C44必須與historical C36重用相同`DL-CONT13E` frozen Forward score、current Min ROOS params、K/R0、原始MR-13E continuous score objective、sizing、cash、orderability與execution；唯一controlled change為把score Top-K→R0 minimum-repair→1-swap local ascent替換為C42同源generic exact branch-and-bound。Score-constrained runtime的`selection_only`必須與DL source stage一致。Current Forward active matrix只允許C1/C3/C44；C20/C29/C36只供歷史工件重現與既有決策證據。",
-      "gap": "`validate_strategy_compare_config_driven_app_contract_case`驗證C44與historical C36同`min_roos/all_off`、與C42共用exact solver且stage flag正確；current contrasts只保留C1-C3/C44-C3/C44-C1，historical C44-C20/C44-C36仍可由compatibility catalog解讀。",
-      "entry": "`core/strategy_comparison.py`, `config/strategy_compare.py`, `config/compatibility/strategy_compare_history.py`, `tools/validate/synthetic_breakout_quality_strategy_app_cases.py`",
-      "category": "SR-C44 Frozen MR-13E Score Exact Constrained Forward-OOS contract",
-      "status": "DONE"
-    },
-    {
       "id": "B223",
       "section": "B2",
       "priority": "P1",
@@ -1760,28 +1683,6 @@
       "gap": "這是2026-08-18 C56/C57階段的historical snapshot：當時Selection fixed=C32/C23、stochastic=C57；Forward fixed=C1/C3、stochastic=C56；paired contrasts皆空。Current Extending contract已由B189取代，不得再把本列matrix解讀為current。",
       "entry": "`core/strategy_comparison.py`, `config/strategy_compare.py`, `services/research/strategy_multi_seed_robustness.py`, `tools/validate/synthetic_breakout_quality_strategy_app_cases.py`",
       "category": "Historical C56/C57 config-driven multi-seed robustness snapshot",
-      "status": "DONE"
-    },
-    {
-      "id": "B227",
-      "section": "B2",
-      "priority": "P1",
-      "order": 212,
-      "item": "SR-C45 negative result後不得留在current profile；其Full-transfer arm/contrasts只保留historical compatibility供舊工件重現，且不得由C45結論自動建立下一個Full arm或Full multi-seed。後續Min-side受控研究可依Registry取得新的SR-C ID，不受C45歷史命名限制。",
-      "gap": "Generic Strategy Compare contract驗證C45 historical-only、exact solver identity不漂移、current Selection/Forward均不啟用C45；Registry/Log保存正式negative result。後續C46/C47為獨立Min-side No-R0研究，並非C45 Full-transfer延伸。",
-      "entry": "`config/strategy_compare.py`, `config/compatibility/strategy_compare_history.py`, `tools/validate/synthetic_breakout_quality_strategy_app_cases.py`, `doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`",
-      "category": "SR-C45 rejected Full-transfer lifecycle / historical compatibility boundary",
-      "status": "DONE"
-    },
-    {
-      "id": "B228",
-      "section": "B2",
-      "priority": "P1",
-      "order": 213,
-      "item": "當時matrix只保留固定核心references與尚待決策的最小controlled arm；此列只保存historical compatibility，不再定義current Research matrix。",
-      "gap": "Historical Selection=`C32/C23/C42/C57`、Forward=`C1/C3/C44/C56`；C53/C54 source-only與C55 raw-safety當時已退historical compatibility。Current Extending matrix已由B189取代；Production identity仍另由正式promotion治理。",
-      "entry": "`config/strategy_compare.py`, `config/compatibility/strategy_compare_history.py`, `tools/validate/synthetic_breakout_quality_strategy_app_cases.py`, `doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`",
-      "category": "Historical C56/C57 minimal-matrix snapshot",
       "status": "DONE"
     },
     {
@@ -1862,17 +1763,6 @@
       "status": "DONE"
     },
     {
-      "id": "B236",
-      "section": "B2",
-      "priority": "P1",
-      "order": 221,
-      "item": "C48歷史重現必須與C42共用frozen MR-13E PIT、Min params、all-off、baseline K與canonical 1% risk/cash/orderability/execution，只移除R0；exact三pass先在最大Score coverage的K/cash-feasible universe分別求Score與reserved-capital端點，再用端點min-max normalization全域最大化`Q_norm × C_norm`。不得引入lambda、score shift、candidate-level Score×Capital、Future Target、repair/ascent或Forward arm。",
-      "gap": "C48 Selection結果已REJECT並退出current matrix；schema33只保留`C32/C23/C42` current Selection，C48與`C48-C42`移入historical compatibility。Synthetic exhaustive oracle仍完整驗證score endpoint、capital endpoint、normalized-product winner與exact certificate，確保歷史工件可重現。",
-      "entry": "`core/portfolio_entry_selection_max_dl.py`, `core/portfolio_entry_selection.py`, `core/buy_sort.py`, `core/strategy_comparison.py`, `config/strategy_compare.py`, `filters/breakout_quality/strategy_compare_runtime.py`, `services/research/strategy_compare_engine.py`, `tools/validate/synthetic_breakout_quality_strategy_app_cases.py`",
-      "category": "SR-C48 Basket-level Pareto Exact No-R0 Selection contract",
-      "status": "DONE"
-    },
-    {
       "id": "B240",
       "section": "B2",
       "priority": "P1",
@@ -1917,39 +1807,6 @@
       "status": "DONE"
     },
     {
-      "id": "B248",
-      "section": "B2",
-      "priority": "P1",
-      "order": 233,
-      "item": "C55只允許Forward第一關；必須與C54共用Min ROOS、all-off、K/R0、canonical sizing/cash/orderability/execution、`CONT13K` primary frozen score與`exact_branch_and_bound_v1`。`CONT13M`只能作secondary path-safety constraint：同日C3 DL-off Min ROOS baseline已選basket的13M score coverage與score-sum形成hard floor；C55合法basket不得低於兩項floor，但objective仍只最大化13K score-sum。禁止13K/13M score加權、lambda、absolute safety threshold、candidate truncation或把C55加入robustness/production。Secondary DL artifact identity必須進readiness與pair-cache fingerprint，runtime/report必須保存safety floor/binding/violation diagnostics。",
-      "gap": "新增`resource-aware-continuous-score-safety-constrained-optimal` runtime/policy與`baseline_coverage_and_score_sum_floor_v1`；exact B&B以C54 semantics為基礎增加admissible safety coverage/sum pruning與baseline-feasible incumbent。Synthetic直接建立13K-only最高但安全不足的basket，驗證C55會排除它並取得滿足baseline safety floor下13K objective全域最優解；config contract驗證`CONT13M` readiness/cache identity、C55-C54 controlled difference、robustness仍C42/C53與C44/C54、production仍C42/C44。",
-      "entry": "`core/buy_sort.py`, `core/portfolio_entry_selection_common.py`, `core/portfolio_entry_selection_max_dl.py`, `core/portfolio_entry_selection.py`, `filters/breakout_quality/runtime.py`, `services/research/strategy_compare_engine.py`, `filters/breakout_quality/strategy_compare_dl_artifacts.py`, `services/research/strategy_compare_reuse.py`, `services/research/strategy_comparison.py`, `config/strategy_compare.py`, `tools/validate/synthetic_breakout_quality_strategy_app_cases.py`",
-      "category": "SR-C55 MR-13K primary + MR-13M baseline-relative safety exact contract",
-      "status": "DONE"
-    },
-    {
-      "id": "B249",
-      "section": "B2",
-      "priority": "P1",
-      "order": 234,
-      "item": "C56初始Seed42 Forward第一關與C54共用Min ROOS、all-off、K/R0、canonical sizing/cash/orderability/execution、`CONT13K` primary frozen score與exact B&B。Secondary `CONT13M`不得直接作raw floor或objective；每天只在當日orderable候選內，把13K/13M frozen scores各自轉average-rank percentile，以含intercept OLS `M_pct ~ K_pct`估計expected safety rank，`Residual Safety=M_pct-expected`。C3 DL-off baseline的Residual Safety coverage與sum形成hard floor；合法basket不得低於floor但objective仍只最大化13K score-sum。禁止future Target、跨日fit、lambda、absolute threshold或score fusion；其Seed42 Forward概念通過後，後續robustness授權由B250另行治理，production仍不得自動變更。",
-      "gap": "新增`resource-aware-continuous-score-residual-safety-constrained-optimal` policy/runtime與`same_day_rank_ols_v1` residualizer；exact solver重用同一owner，只把safety metric切成residual。Synthetic以小型完整basket exhaustive oracle驗證raw高13K但異常危險候選可被排除、同upside較安全候選保留，C56輸出等於residual-floor下13K global optimum；同時驗證CONT13M readiness/cache/pinned runtime、C56-C54/C56-C55 contrasts、robustness仍C42/C53與C44/C54、production仍C42/C44。",
-      "entry": "`core/buy_sort.py`, `core/portfolio_entry_selection_common.py`, `core/portfolio_entry_selection_max_dl.py`, `core/portfolio_entry_selection.py`, `core/portfolio_engine.py`, `core/portfolio_replay_support.py`, `core/strategy_comparison.py`, `services/research/strategy_compare_engine.py`, `filters/breakout_quality/strategy_compare_dl_artifacts.py`, `filters/breakout_quality/strategy_compare_runtime.py`, `services/research/strategy_compare_reuse.py`, `services/research/strategy_comparison.py`, `config/strategy_compare.py`, `tools/validate/synthetic_breakout_quality_strategy_app_cases.py`",
-      "category": "SR-C56 MR-13K primary + MR-13M same-day conditional residual-safety exact contract",
-      "status": "DONE"
-    },
-    {
-      "id": "B250",
-      "section": "B2",
-      "priority": "P1",
-      "order": 235,
-      "item": "C56 Seed42 Forward GO後，當時完整驗證新增Selection counterpart C57並限制MR-13M PIT作C57 secondary use。Historical Selection=`C32/C23/C42/C57`、Forward=`C1/C3/C44/C56`；當時Selection stochastic只=C57、Forward只=C56，每seed以同一generated seed建立13K與13M兩source。此列不再定義current matrix；current Extending contract由B189持有。",
-      "gap": "新增`CONT13M_PIT`與C57；runtime dual-source loader支援Selection PIT且各自pin score/manifest；model-artifact preparation會解析secondary source；robustness scientific contract v2保存全部runtime source identity，training scheduler按`(dl_id,seed)`建立兩source並以same-seed readiness gate enqueue單一replay。Targeted Strategy Compare synthetic驗證current/historical catalog、C57 PIT lookup、兩stage每seed雙source與C56/C57-only robustness。",
-      "entry": "`config/breakout_quality.py`, `config/strategy_compare.py`, `config/compatibility/strategy_compare_history.py`, `services/research/breakout_quality_application.py`, `filters/breakout_quality/runtime.py`, `services/research/strategy_comparison.py`, `services/research/strategy_multi_seed_robustness.py`, `tools/validate/synthetic_breakout_quality_strategy_app_cases.py`",
-      "category": "Historical C56/C57 full-flow PIT + same-seed dual-model robustness snapshot",
-      "status": "DONE"
-    },
-    {
       "id": "B253",
       "section": "B2",
       "priority": "P1",
@@ -1983,50 +1840,6 @@
       "status": "DONE"
     },
     {
-      "id": "B256",
-      "section": "B2",
-      "priority": "P1",
-      "order": 241,
-      "item": "`MR-13P / inception_time_conditional_mfe_safety_v1`只允許單一shared InceptionTime encoder＋Pure-MFE primary head＋MFE-conditioned conditional-safety head。Primary target固定同日Pure-MFE percentile；secondary target固定同日low-adverse percentile對true MFE percentile做含intercept OLS residual後再同日percentile化，future labels只作supervision不得進inference feature。Conditional head只接收stop-gradient primary probability；conditional loss不得更新primary classifier，但兩head都可更新shared encoder。兩head固定各自使用full-list Delta-NDCG pairwise loss後等權平均，不得掃lambda／bucket／threshold。Forward Model Gate與後續current authorization由Registry/config state決定，不由此模型數學validator硬編；若授權single-model conversion，PIT必須維持單checkpoint dual-head score artifact，runtime secondary只能明確讀不同的`conditional_safety_score`且不得再次OLS residualize，相關current Strategy Compare/PIT contract由B189共同覆蓋。",
-      "gap": "`validate_breakout_quality_conditional_mfe_safety_single_model_contract_case`驗identity、target residual math、雙head shape、stop-gradient；交付前另以tiny synthetic optimizer-step與Forward dual-head inference確認trainer/inference可執行。",
-      "entry": "`config/breakout_quality.py`, `filters/breakout_quality/conditional_mfe_safety.py`, `filters/breakout_quality/models/inception_time.py`, `filters/breakout_quality/inference.py`, `filters/breakout_quality/ranker_training_contract.py`, `services/breakout_quality/train_continuous_ranker.py`, `services/breakout_quality/train_daily_ranker.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`",
-      "category": "MR-13P single-model Conditional MFE–Safety model-gate contract",
-      "status": "DONE"
-    },
-    {
-      "id": "B257",
-      "section": "B2",
-      "priority": "P1",
-      "order": 242,
-      "item": "兩個模型必須共用完全相同`J=U-E(U∣S)` supervision：`U`為同日Pure-MFE percentile、`S`為同日Low-Adverse Safety percentile；每日含intercept OLS residual再同日percentile化，future truth只作label。MR-13Q只能以`inception_time_v1` single-head直接學J；MR-13R只能以`inception_time_safety_conditional_mfe_v1` shared encoder＋Raw Safety auxiliary head＋stop-gradient Safety-conditioned final J head。Duo Conditional loss不得更新Safety classifier；strategy/PIT對Q/R都只能使用final Conditional-MFE score。C65/C66必須共用C58 Min base-finalist-best、all-off、K/R0與exact constrained execution，禁止C64 Safety hard floor、runtime residualization或score fusion；`C66-C65`只允許architecture差異。正式模型選單只能顯示穩定工作類型，current Q/R profile集合須由config驅動，禁止把MR/Conditional/Single/Duo等current實驗名稱硬編進選單。",
-      "gap": "`validate_breakout_quality_reverse_conditional_mfe_ab_contract_case`直接驗共同target residual math、single/duo final target一致、duo head shape與gradient isolation，以及穩定模型比較選單＋config-driven dispatch；config-driven Strategy Compare contract驗C65/C66同baseline與current suite。",
-      "entry": "`config/breakout_quality.py`, `config/strategy_compare.py`, `filters/breakout_quality/conditional_mfe_opportunity.py`, `filters/breakout_quality/models/inception_time.py`, `filters/breakout_quality/ranker_training_contract.py`, `services/breakout_quality/train_continuous_ranker.py`, `services/breakout_quality/train_daily_ranker.py`, `services/research/breakout_quality_application.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`, `tools/validate/synthetic_breakout_quality_strategy_app_cases.py`",
-      "category": "MR-13Q/R Reverse-Conditional MFE A/B contract",
-      "status": "DONE"
-    },
-    {
-      "id": "B258",
-      "section": "B2",
-      "priority": "P1",
-      "order": 243,
-      "item": "`C67`必須與C59共用`CONT13E_ROLL`、Min `base-finalist-best`、all-off、canonical sizing/cash/orderability/execution、同一C58 baseline與R0 floor；唯一scientific change為planned-order count由`selected_count == C58 K`改成`C58 K <= selected_count <= physical free slots`。K-Flex必須由physical free-slot cap與canonical minimum-entry-notional導出的admissible cash-count cap界定不可能超越的count上限，再往下找最大canonical cash-feasible count；在該count仍使用同一`exact_branch_and_bound_v1`與原始MR-13E score objective求global optimum。Pure-score exact solver必須維持canonical execution-order traversal，但可使用cached admissible bounds／minimum-notional cash pruning，且Raw Top-K若已通過K/R0/cash可直接certify global optimum；這些只能改execution strategy，不得改canonical execution order、R0、cash/sizing、score/target/model、Safety floor、capital weighting或deterministic tie-break。Production C42/C44不得因研究arm新增或效能優化而改變。C67因large-K exact certification兩次實機不可完成已轉historical compute-blocked；此列只保護其已實作exact semantics與歷史可重現性，不再要求current suite執行C67。",
-      "gap": "resource-aware selector synthetic以C58 `K=1`、physical free slots=`3`、同一R0 fixture驗證fixed-K C59仍1檔，而C67在count=3不可行後取最大可行count=2並維持`reserved >= R0`；另以physical free slots=`10`/cash-count cap=`5` stress fixture驗證不嘗試數學上不可能的6–10檔、最終Raw Top-3合法時`search_states=0`直接certify exact score optimum；config-driven Strategy Compare contract另驗C67與C59除K-Flex runtime contract外完全相同、OOS/rolling param source正確且current contrasts只新增`C67-C59/C67-C58`。",
-      "entry": "`config/strategy_compare.py`, `core/buy_sort.py`, `core/portfolio_entry_selection.py`, `core/portfolio_entry_selection_max_dl.py`, `core/portfolio_engine.py`, `core/strategy_comparison.py`, `filters/breakout_quality/strategy_compare_runtime.py`, `services/research/strategy_compare_engine.py`, `tools/validate/synthetic_flow_cases.py`, `tools/validate/synthetic_breakout_quality_strategy_app_cases.py`",
-      "category": "Historical SR-C67 K-Flex / R0-preserved exact selection contract",
-      "status": "DONE"
-    },
-    {
-      "id": "B259",
-      "section": "B2",
-      "priority": "P1",
-      "order": 244,
-      "item": "`C68`必須與C59共用MR-13E source、Min `base-finalist-best`、all-off、C58 baseline K/R0、canonical sizing/cash/orderability/execution，唯一scientific change為global exact solver改成deterministic feasible-ascent且count仍固定K；`C69`必須與C68共用完全相同local-search family與R0，唯一scientific change為允許`C58 K <= selected_count <= physical free slots`。C68/C69必須由專用matched policy承接score-order membership proposal，歷史feasible-ascent policy不得改寫；正式feasibility必須回canonical execution order重算；C69 count lexicographically優先，count內維持同一MR-13E score local-improvement objective。兩者都不得宣稱global optimum，且C68/C69只授權single-seed OOS/Rolling；C67不得回current suite，production C42/C44不變。",
-      "gap": "resource-aware selector synthetic固定matched fixture驗C68維持baseline K、C69可在同一R0/cash下增加部位且`optimality_certified=False`；config-driven Strategy Compare synthetic曾驗C68/C69 matched contract；完成結果後兩arm已移至historical compatibility，仍須保留C68專用matched runtime、C69 K-Flex/R0 contract與`C68-C59`/`C69-C68`歷史解讀，不得因current suite聚焦C70而改寫既有結果。",
-      "entry": "`config/strategy_compare.py`, `config/compatibility/strategy_compare_history.py`, `core/buy_sort.py`, `core/portfolio_entry_selection.py`, `core/portfolio_entry_selection_max_dl.py`, `core/strategy_comparison.py`, `filters/breakout_quality/strategy_compare_runtime.py`, `services/research/strategy_compare_engine.py`, `tools/validate/synthetic_flow_cases.py`, `tools/validate/synthetic_breakout_quality_strategy_app_cases.py`",
-      "category": "SR-C68/C69 matched feasible-ascent K-Flex strategy contract",
-      "status": "DONE"
-    },
-    {
       "id": "B260",
       "section": "B2",
       "priority": "P1",
@@ -2035,28 +1848,6 @@
       "gap": "Synthetic 驗證真正保留的 reusable attribution、Strategy Compare MFE×Safety geometry/renderer、歷史 evidence 可追溯與無 one-time runtime registration；historical K/R0 fingerprint/source resolver 可按共享 capability 驗證，不可把舊 K/R0 模組存在／可重跑當正式必要條件。C69 只保留歷史，沒有再次啟動 dedicated audit 的要求。",
       "entry": "`core/audit_registry.py`, `core/audit_policy.py`, `core/report_metrics.py`, `filters/breakout_quality/mfe_safety_geometry.py`, `filters/breakout_quality/strategy_compare_diagnostics.py`, `services/research/strategy_comparison.py`, `services/audit/catalog.py`, `services/audit/mfe_safety_truth.py`, `services/audit/strategy_compare_source.py`, `services/audit/opportunity_selection.py`, `services/audit/trade_outcome_path.py`, `services/audit/portfolio_drawdown.py`, `tools/validate/synthetic_breakout_quality_audit_cases.py`, `doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`",
       "category": "Historical K/R0 and C69 Audit evidence + reusable Strategy Compare MFE×Safety geometry",
-      "status": "DONE"
-    },
-    {
-      "id": "B261",
-      "section": "B2",
-      "priority": "P1",
-      "order": 246,
-      "item": "SR-C70啟動時的focused suite為`C61/C58/C59/C64/C66/C70`；該六-arm snapshot是C70結果解讀的historical scientific context。後續若新增新controlled treatment（如B262 C71）可擴充current suite，但不得改寫C70本身或把已退出的C62/C63/C60/C65/C68/C69/C67無故帶回current主表。C70必須與C66完全共用Min `base-finalist-best`、all-off、`CONT13R_ROLL` final model_score、OOS/Rolling param source、canonical sizing/cash/orderability/execution與physical max positions；唯一scientific change為移除C58-derived K count target/min與R0 reserved-capital floor。C70不得新增Raw Safety gate、threshold、capital objective、模型重訓或global combinatorial objective；ranking固定existing model_score descending + deterministic canonical tie，再逐序交由canonical reservation simulator，因此selected count允許`0..physical free slots`且仍受真實cash/sizing/orderability限制。Primary contrast=`C70-C66`；Production C42/C44不得改變。",
-      "gap": "selector synthetic固定baseline K=1/R0較高而physical slots=3，驗C70按C66 score順序選入3個canonical-cash可行候選、selected count>K且reserved<R0；config-driven synthetic驗C70與C66除runtime mode/options/identity文字外其餘controlled contract一致、OOS/Rolling source同源；C70啟動時六-arm snapshot已完成，current matrix後續由B262擴充但不得改寫C70 contrast。",
-      "entry": "`config/strategy_compare.py`, `config/compatibility/strategy_compare_history.py`, `core/buy_sort.py`, `core/portfolio_entry_selection.py`, `core/portfolio_entry_selection_max_dl.py`, `core/strategy_comparison.py`, `filters/breakout_quality/strategy_compare_runtime.py`, `services/research/strategy_compare_engine.py`, `tools/validate/synthetic_flow_cases.py`, `tools/validate/synthetic_breakout_quality_strategy_app_cases.py`",
-      "category": "SR-C70 MR-13R No-K / No-R0 joint resource-ablation + focused current suite contract",
-      "status": "DONE"
-    },
-    {
-      "id": "B262",
-      "section": "B2",
-      "priority": "P1",
-      "order": 247,
-      "item": "C71啟動時的historical snapshot：suite=`C61/C58/C59/C64/C66/C70/C71`、schema59；C71與C70共用MR-13R/No-K/No-R0/final Conditional-MFE contract，只新增same-checkpoint `raw_safety_score` orderable-percentile P50 eligibility。此identity/result永久保留，但後續current suite可依完成決策移出C71；不得把本列snapshot重新解讀為current membership。",
-      "gap": "PIT/selector/config-driven synthetic保留C71 historical scientific contract、score-output projection與compatibility lookup；current membership由B189/current config唯一解析。",
-      "entry": "`config/compatibility/strategy_compare_history.py`, `filters/breakout_quality/ranking_score_store.py`, `services/breakout_quality/point_in_time_scores.py`, `tools/validate/synthetic_breakout_quality_strategy_app_cases.py`",
-      "category": "Historical SR-C71 MR-13R Raw-Safety eligibility gate + same-checkpoint PIT auxiliary score snapshot",
       "status": "DONE"
     },
     {
@@ -2093,17 +1884,6 @@
       "status": "DONE"
     },
     {
-      "id": "B266",
-      "section": "B2",
-      "priority": "P1",
-      "order": 251,
-      "item": "C72/P60與C73/P70只保存已完成的MR-13R Raw-Safety gate sensitivity；當時C70退出current、suite擴充至C71/C72/C73。結果完成後threshold tuning已STOP，C71/C72/C73可全部移出current但必須保留historical identity/results/compatibility。",
-      "gap": "config-driven synthetic驗historical C71/C72/C73 cutoff isolation與compatibility；current suite不得因historical snapshot自動帶回threshold arms。",
-      "entry": "`config/compatibility/strategy_compare_history.py`, `tools/validate/synthetic_breakout_quality_strategy_app_cases.py`, `doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`",
-      "category": "Historical SR-C72/C73 Raw-Safety cutoff sensitivity snapshot",
-      "status": "DONE"
-    },
-    {
       "id": "B267",
       "section": "B2",
       "priority": "P1",
@@ -2112,39 +1892,6 @@
       "gap": "Readable-report synthetic直接建立C71/C72/C73同source/mode不同cutoff execution pairs，驗group keys三者唯一且scenario materialization同時保留三arm；config/reuse regression驗舊legacy group key仍可命中既有completed pair。",
       "entry": "`services/research/strategy_compare_reuse.py`, `services/research/strategy_comparison.py`, `tools/validate/synthetic_breakout_quality_strategy_cases.py`, `tools/validate/synthetic_breakout_quality_strategy_app_cases.py`",
       "category": "Strategy Compare same-source multi-arm pair storage identity / aggregate completeness",
-      "status": "DONE"
-    },
-    {
-      "id": "B268",
-      "section": "B2",
-      "priority": "P1",
-      "order": 253,
-      "item": "C74 scientific identity固定為同一MR-13R/Min/all-off/No-K/No-R0下，以orderable same-day `Safety_pct × ConditionalMFE_pct` descending排序，無threshold/K/R0/fitted weight/calibration。其schema61 current snapshot與C74-C71等contrasts只作historical evidence；Joint selector已完成並STOP後可退出current，但historical compatibility必須可讀。",
-      "gap": "selector synthetic與historical config lookup驗C74 product mathematics、No-K/No-R0與identity保留；current suite由B189/current config決定。",
-      "entry": "`config/compatibility/strategy_compare_history.py`, `core/portfolio_entry_selection_max_dl.py`, `tools/validate/synthetic_breakout_quality_strategy_app_cases.py`",
-      "category": "Historical SR-C74 MR-13R Safety×Conditional-MFE percentile-product selector snapshot",
-      "status": "DONE"
-    },
-    {
-      "id": "B271",
-      "section": "B2",
-      "priority": "P1",
-      "order": 256,
-      "item": "MR-13S必須重用MR-13R `inception_time_safety_conditional_mfe_v1`，Raw Safety head target仍為同日Low-Adverse Safety percentile S、final head仍讀`stop_gradient_raw_safety_probability`；唯一scientific change是final supervision由residual `J=U-E(U∣S)`改為absolute同日Pure-MFE percentile U。兩head維持full-list Delta-NDCG pairwise logistic固定等權平均，MFE loss不得更新Safety classifier，shared encoder可受兩headgradient；epoch selection只看Validation Raw-MFE Dailyρ。Forward-OOS只可在checkpoint後做model-only Gate，必須輸出Raw Safety/Raw-MFE marginal metrics、predicted Safety×Raw-MFE 5×5 `N / actual HM/HS%`、S5×M5 support、Safety cohort Raw-MFE→actual-MFE Dailyρ/High-MFE/HMHS及joint-product→HM/HS Dailyρ；不得用OOS cell fit threshold/weight/calibration。`selection_pit_authorized=False`、`current_time_validation_authorized=False`，Gate前不得建立DL source或C75。Q/R既有兩profile A/B選單不得因MR-13S加入而破壞。",
-      "gap": "`validate_breakout_quality_safety_raw_mfe_duo_contract_case`驗MR-13S active identity、與MR-13R architecture/pairwise reduction一致、S target byte-identical、final target精確等於absolute U且不同於J、model-only authorization、synthetic 5×5 upper-right support/joint diagnostics、無C75，以及Forward report直接含joint Gate；同輪回跑MR-13Q/R contract確認歷史A/B入口不受影響。",
-      "entry": "`config/breakout_quality.py`, `filters/breakout_quality/conditional_mfe_opportunity.py`, `filters/breakout_quality/ranker_training_contract.py`, `services/breakout_quality/train_continuous_ranker.py`, `services/breakout_quality/ranker_training.py`, `services/breakout_quality/train_daily_ranker.py`, `services/research/breakout_quality_application.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`",
-      "category": "MR-13S Safety→Raw-MFE Duo-head model-only controlled-contrast contract",
-      "status": "DONE"
-    },
-    {
-      "id": "B272",
-      "section": "B2",
-      "priority": "P1",
-      "order": 257,
-      "item": "MR-13S Forward Model Gate失敗後，在啟動新representation identity前必須先比較actual joint support。正式入口只能讀既有frozen `daily_ranker_oos_scores.csv.gz`與canonical breakout membership；Daily與Breakout都使用score artifact已封存的daily-universal同日Low-Adverse Safety/Pure-MFE percentile，Breakout只filter ticker/date membership，禁止subset rerank。每個actual 5×5 cell固定輸出`N / population% / independence enrichment×`，Expected=`N × P(S-bin) × P(M-bin)`使用各scope實際marginals；另輸出actual S↔MFE Dailyρ、predicted S↔Raw-MFE Dailyρ、S5×M5與S4+×M4+ support。此control不得訓練模型、改checkpoint、fit threshold/weight/calibration、建立PIT/C75或新增Audit/scientific identity；來源score artifact須與frozen report manifest一致，Breakout membership count須與原model report一致。",
-      "gap": "`validate_breakout_quality_safety_raw_mfe_duo_contract_case`新增actual truth 5×5/enrichment、predicted-vs-actual relation與breakout no-subset-rerank fixture；Truth Geometry已升格為標準Model SOP的一部分：正式訓練／Forward-OOS報表必須直接顯示actual/predicted geometry，Research主模型選單不得再保留MR-13S專屬`Actual MFE×Safety Truth Geometry（只讀）`入口；既有`mr13s_truth_geometry_control.json/.md`只作historical compatibility，不再是SOP必需操作。",
-      "entry": "`filters/breakout_quality/daily_ranker_data.py`, `services/breakout_quality/train_continuous_ranker.py`, `services/breakout_quality/ranker_training.py`, `services/breakout_quality/train_daily_ranker.py`, `services/research/breakout_quality_application.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`, `doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`",
-      "category": "MR-13S Actual Daily/Breakout MFE×Safety Truth Geometry read-only control",
       "status": "DONE"
     },
     {
@@ -2192,36 +1939,14 @@
       "status": "DONE"
     },
     {
-      "id": "B277",
-      "section": "B2",
-      "priority": "P1",
-      "order": 262,
-      "item": "MR-13T必須以MR-13S為strict control：canonical input仍為300×10 stock/0050 raw normalized OHLCV、InceptionTime trunk主要超參數與Raw Safety／Safety-conditioned Raw-MFE heads不變；新增architecture identity `ARCH-inception_time_safety_raw_mfe_hmhs_v1`只反映第三個Direct HM/HS head。Targets固定S=同日Low-Adverse Safety percentile、U=同日Pure-MFE percentile、H=`1[S>=0.5 AND U>=0.5]`；Joint head只能讀shared latent，不得讀Safety/MFE predicted score arithmetic。三head各用full-list Delta-NDCG pairwise logistic且固定等權平均，MFE loss不得更新Safety classifier、Joint loss不得更新兩個marginal classifiers，但三head都可更新shared trunk。epoch selection仍只看Raw-MFE Validation Dailyρ；Forward OOS/Breakout只作checkpoint後frozen Gate，不得建立PIT/runtime/Strategy arm或用OOS fit threshold/weight。Standard Model SOP共用1～6 schema不得被MR-13T改寫；marginal heads與適用的actual/predicted 5×5仍依共用SOP顯示，Direct Joint vs same-model marginal product的Pair/PR-AUC/Top10/20 HM/HS enrichment只可作Model-specific Extension；OOS score artifact封存joint score與evaluable direct truth。",
-      "gap": "`validate_breakout_quality_safety_raw_mfe_hmhs_tri_head_contract_case`驗current MR/architecture/objective、raw 10-channel representation與MR-13S trunk超參數一致、S/U byte-identical與H exact intersection、三headshape/gradient isolation、固定三head mean loss、Raw-MFE epoch selection、Direct-vs-product retrieval fixture、Model SOP與OOS score columns、no C75/PIT；同輪回跑MR-13S與Q/R historical contracts。",
-      "entry": "`config/breakout_quality.py`, `filters/breakout_quality/conditional_mfe_opportunity.py`, `filters/breakout_quality/models/spec.py`, `filters/breakout_quality/models/active.py`, `filters/breakout_quality/models/inception_time.py`, `filters/breakout_quality/ranker_training_contract.py`, `services/breakout_quality/train_continuous_ranker.py`, `services/breakout_quality/ranker_training.py`, `services/breakout_quality/train_daily_ranker.py`, `services/research/breakout_quality_application.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`",
-      "category": "MR-13T raw-data Direct HM/HS tri-head controlled-contrast contract",
-      "status": "DONE"
-    },
-    {
       "id": "B278",
       "section": "B2",
       "priority": "P1",
       "order": 263,
-      "item": "`strict_parallel_batched_logits`是continuous/binary score inference的共用SSOT，buffer width必須與正式`output_head` surface一致：default/single-head=`2`、`conditional_both/both`=`4`、`tri_head/safety_raw_mfe_hmhs/all_three`=`6`；unknown explicit head不得靜默fallback成2，必須fail-fast。MR-13T Validation/OOS不得在trainer建立專屬buffer或繞過shared inference。",
-      "gap": "`validate_breakout_quality_safety_raw_mfe_hmhs_tri_head_contract_case`以輕量6-logit probe model直接走`strict_parallel_batched_logits(..., output_head=\"tri_head\")`驗`(N,6)`，並與既有MR-13S/Q/R inference contracts共同防止2/4-logit regression。",
+      "item": "`strict_parallel_batched_logits` 是 continuous/binary inference 共用 owner；輸出寬度與 head 順序須符合目前註冊 model spec，依請求 indices 順序回傳，未知 explicit head 必須 fail-fast。",
+      "gap": "目前 single-head 與 shared Safety/MFE 模型以實際前向驗證 2／4 欄輸出、head 順序及非順序 indices。",
       "entry": "`filters/breakout_quality/inference.py`, `services/breakout_quality/train_continuous_ranker.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`",
       "category": "breakout-quality shared batched inference output-head width contract",
-      "status": "DONE"
-    },
-    {
-      "id": "B279",
-      "section": "B2",
-      "priority": "P1",
-      "order": 264,
-      "item": "MR-13U必須以MR-13T為learnability ablation：canonical input仍為raw 300×10 normalized stock/0050 OHLCV，InceptionTime trunk主要超參數、daily-universal universe、Seed42、split、optimizer、H=`1[S>=0.5 AND U>=0.5]`與full-list Delta-NDCG pairwise reduction不變；唯一scientific change是移除Raw Safety/Raw-MFE heads與loss，只保留既有`inception_time_v1` single classifier，encoder只受H supervision。不得因training recipe變更建立等價新ARCH identity。Epoch selection事前固定Validation HM/HS Pair concordance，只有Pair完全同值才以Validation global PR-AUC tie-break；OOS/Breakout不得回流selection/fitting。Standard Model SOP共用1～6 schema不得被MR-13U改寫；HM/HS population、Pair、Global/Mean-Daily PR-AUC、Top10/20 HM/HS rate/enrichment只可作Model-specific Extension；不得建立PIT/runtime/C75。",
-      "gap": "`validate_breakout_quality_hmhs_single_head_contract_case`驗current MR-13U/profile/objective、既有`inception_time_v1`與MR-13T raw 10-channel/trunk超參數一致、H exact canonical intersection、single two-logit model且無MR-13T auxiliary classifiers、full-list training semantics、Validation Pair→PR-AUC epoch-selection、H-only Model SOP/OOS truth column與no C75/PIT；MR-13T validator改為historical registration contract並同輪回歸。",
-      "entry": "`config/breakout_quality.py`, `filters/breakout_quality/ranker_training_contract.py`, `services/breakout_quality/train_continuous_ranker.py`, `services/breakout_quality/ranker_training.py`, `services/breakout_quality/train_daily_ranker.py`, `services/research/breakout_quality_application.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`, `doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`",
-      "category": "MR-13U raw-data Direct HM/HS H-only single-head learnability control",
       "status": "DONE"
     },
     {
@@ -2233,72 +1958,6 @@
       "gap": "`validate_research_report_contract_freeze_case`驗全部persistent fingerprint完全匹配approved map、Standard common schema跨profile invariant、multi-head/truth-geometry與其他profile-specific evidence只存在Extension；Audit framework regression另驗persistent First-Passage與contract-driven precision/direction。",
       "entry": "`core/research_report_contract.py`, `services/research/breakout_quality_application.py`, `services/breakout_quality/train_daily_ranker.py`, `services/research/strategy_compare_application.py`, `services/research/strategy_comparison.py`, `services/audit/reusable_report.py`, `services/audit/opportunity_selection.py`, `services/audit/trade_outcome_path.py`, `services/audit/portfolio_drawdown.py`, `tools/validate/synthetic_meta_cases.py`",
       "category": "Persistent Research report canonical contract freeze＋Model-specific Extension isolation",
-      "status": "DONE"
-    },
-    {
-      "id": "B281",
-      "section": "B2",
-      "priority": "P1",
-      "order": 266,
-      "item": "MR-13V必須以MR-13T為strict architecture contrast：canonical raw 300×10、shared InceptionTime trunk主要超參數、Raw Safety head、stop-gradient Safety-conditioned Raw-MFE head、S/U/H targets、Seed42、split、optimizer、full-list Delta-NDCG、三head固定等權loss與Raw-MFE Validation epoch selection全部不變。唯一scientific change為Direct HM/HS classifier由`Linear(latent,2)`改為固定`Linear(latent,latent)→ReLU→Linear(latent,2)`，hidden width必須等於shared latent width=128；不得新增dropout或width/depth/activation/lambda sweep，Joint head仍不得讀Safety/MFE predicted scores。Architecture必須使用新identity `ARCH-inception_time_safety_raw_mfe_hmhs_mlp_v1`。依B280，Standard Model SOP 1～6、Generalization/Evidence schema與approved fingerprint不得修改；MR-13V Direct-vs-Product evidence必須重用既有`Model-specific Extension/direct_hmhs_joint_retrieval`，不得新增Standard section或persistent report contract。PIT/current Rolling/runtime/Strategy arm維持未授權。",
-      "gap": "`validate_breakout_quality_nonlinear_hmhs_head_contract_case`驗active MR-13V/profile/architecture、MR-13T objective/loss/epoch/reduction完全一致、raw 300×10/trunk一致、fixed 128→128→2 ReLU MLP、tri-head output/gradient isolation、既有three-head training semantics、approved Standard Model SOP fingerprint不變、synthetic renderer只在`Model-specific Extension｜MR-13V｜Direct HM/HS Joint Retrieval`出現MR-specific evidence且no C75/PIT；同輪回歸MR-13T/U與report-freeze。",
-      "entry": "`config/breakout_quality.py`, `filters/breakout_quality/models/spec.py`, `filters/breakout_quality/models/active.py`, `filters/breakout_quality/models/inception_time.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`, `doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`",
-      "category": "MR-13V MR-13T-control nonlinear Direct HM/HS readout contract",
-      "status": "DONE"
-    },
-    {
-      "id": "B282",
-      "section": "B2",
-      "priority": "P1",
-      "order": 267,
-      "item": "MR-13W必須以MR-13V為strict target-only contrast：canonical raw 300×10、shared InceptionTime trunk、Raw Safety head、stop-gradient Safety-conditioned Raw-MFE head、fixed 128→128→2 ReLU joint MLP、Seed42、split、optimizer、full-list Delta-NDCG、三head固定等權loss與Raw-MFE Validation epoch selection全部不變；architecture必須沿用`ARCH-inception_time_safety_raw_mfe_hmhs_mlp_v1`，不得因target改變建立新ARCH。唯一fitting change為第三head truth由binary `1[S>=0.5 AND U>=0.5]`改成parameter-free continuous `Jmin=min(S,U)`；不得threshold、subset/date rerank、soft-min/product/harmonic mean或OOS挑aggregation。Joint-Min evidence必須包含Dailyρ/Pair、population mean min、Top10/20 actual min、Top10 mean Safety/MFE與binary HM/HS rate/enrichment；binary HM/HS只作interpretation truth。依B280，Standard Model SOP 1～6與approved fingerprint不得修改，MR-specific evidence只能使用`Model-specific Extension/joint_min_retrieval`。PIT/current Rolling/runtime/Strategy arm維持未授權。",
-      "gap": "`validate_breakout_quality_joint_min_target_contract_case`驗active MR-13W/profile/objective、MR-13V architecture/loss/epoch/reduction完全一致、exact unthresholded `np.minimum(S,U)`與marginal target byte-identical、binary-positive內仍保留continuous depth、fixed equal three-head training semantics、perfect-score Joint-Min metrics/top-tail floor、approved Standard Model SOP fingerprint不變、renderer只在`Model-specific Extension｜MR-13W｜Continuous Joint-Min Retrieval`顯示MR-specific evidence、OOS artifact保存`target_joint_min/joint_min_score`且no C75/PIT；同輪回歸MR-13V/T/U與report-freeze。",
-      "entry": "`config/breakout_quality.py`, `filters/breakout_quality/conditional_mfe_opportunity.py`, `filters/breakout_quality/ranker_training_contract.py`, `services/breakout_quality/train_continuous_ranker.py`, `services/breakout_quality/ranker_training.py`, `services/breakout_quality/train_daily_ranker.py`, `services/research/breakout_quality_application.py`, `core/research_report_contract.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`, `doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`",
-      "category": "MR-13W continuous Joint-Min target-only controlled contrast",
-      "status": "DONE"
-    },
-    {
-      "id": "B283",
-      "section": "B2",
-      "priority": "P1",
-      "order": 268,
-      "item": "MR-13X必須以MR-13W為strict representation-only contrast：canonical raw 300×10、InceptionTime trunk filters/kernels/residual/BatchNorm、Raw Safety與stop-gradient Safety-conditioned Raw-MFE global-average paths、exact continuous `Jmin=min(S,U)` target、128→128→2 ReLU joint MLP、Seed42、split、optimizer、full-list Delta-NDCG、三head固定等權loss與Raw-MFE Validation epoch selection全部不變。唯一scientific change為Joint branch從global mean改為shared temporal feature map上的`Conv1d(128→1,k=1)` scalar score、softmax(time)、weighted temporal sum；不得加入positional encoding、多頭attention/QKV、temperature、dropout、attention hidden width/window mask或sweep。Same-seed construction必須讓MR-13W/X所有既有state tensors逐一相同，X只新增`joint_attention_scorer.weight/bias`；Safety/Raw-MFE logits在eval相同input下必須與W完全相同。依B280，Standard Model SOP 1～6與approved fingerprint不得修改，MR-13X直接重用既有`Model-specific Extension/joint_min_retrieval`。PIT/current Rolling/runtime/Strategy arm維持未授權。",
-      "gap": "`validate_breakout_quality_joint_attention_pool_contract_case`驗active MR-13X/profile/architecture、與MR-13W objective/loss/epoch/reduction一致、raw/trunk/joint MLP spec不變、same-seed既有state tensor exact-equal且只新增attention scorer、attention weights為每bar nonnegative softmax且sum=1、marginal logits exact-identical、Joint loss只更新attention/joint MLP/shared trunk不更新marginal classifiers、approved Standard Model SOP fingerprint不變、renderer沿用`Model-specific Extension｜MR-13X｜Continuous Joint-Min Retrieval`且no C75/PIT；同輪回歸MR-13W/V/T/U與report-freeze。",
-      "entry": "`config/breakout_quality.py`, `filters/breakout_quality/models/spec.py`, `filters/breakout_quality/models/active.py`, `filters/breakout_quality/models/inception_time.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`, `doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`",
-      "category": "MR-13X Joint-Min learned temporal attention pooling controlled contrast",
-      "status": "DONE"
-    },
-    {
-      "id": "B284",
-      "section": "B2",
-      "priority": "P1",
-      "order": 269,
-      "item": "MR-13Y必須以MR-13X為same-objective architecture-family contrast：canonical raw 300×10、exact continuous `Jmin=min(S,U)`、Raw Safety與stop-gradient Safety-conditioned Raw-MFE global-average semantics、Joint scalar temporal attention softmax pooling、latent-width→latent-width→2 ReLU joint MLP、Seed42、split、optimizer、full-list Delta-NDCG、三head固定等權loss與Raw-MFE Validation epoch selection全部不變；唯一research dimension為temporal trunk family。不得直接復活historical `modern_tcn_v1`：新architecture必須使用`ARCH-modern_tcn_safety_raw_mfe_joint_attn_mlp_v1`，舊9B保持legacy read-only。ModernTCN trunk固定historical 9B recipe `depth=6/channels=96/kernel=51/expansion=4/BatchNorm/dropout=0.10/receptive field=301`，不得做depth/kernel/channels/expansion/dropout sweep；head/attention width僅隨latent為96，不加adapter。Same Seed42下新architecture的`stem.*`/`blocks.*`必須與legacy 9B exact equal。依B280，Standard Model SOP 1～6與approved fingerprint不得修改，MR-13Y必須重用既有Joint-Min Model-specific Extension。PIT/current Rolling/runtime/Strategy arm維持未授權。",
-      "gap": "`validate_breakout_quality_modern_tcn_joint_min_contract_case`驗active MR-13Y/profile/new architecture、MR-13X objective/loss/epoch/reduction一致、historical 9B identity仍legacy、ModernTCN recipe固定、same-seed legacy/new trunk tensor exact-equal、96D marginal/joint/attention topology、per-bar attention softmax與6-logit tri-head surface、Joint gradient isolation、Standard Model SOP fingerprint不變、renderer沿用`Model-specific Extension｜MR-13Y｜Continuous Joint-Min Retrieval`且no C75/PIT；同輪回歸MR-13X/W/V/T/U與legacy ModernTCN reconstruction。",
-      "entry": "`config/breakout_quality.py`, `filters/breakout_quality/models/spec.py`, `filters/breakout_quality/models/active.py`, `filters/breakout_quality/models/large_kernel_tcn_joint_min.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`, `doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`",
-      "category": "MR-13Y Joint-Min ModernTCN raw-data architecture-family controlled comparison",
-      "status": "DONE"
-    },
-    {
-      "id": "B285",
-      "section": "B2",
-      "priority": "P1",
-      "order": 270,
-      "item": "MR-13Z必須以MR-13X為same-objective architecture-family contrast：canonical raw 300×10、exact continuous `Jmin=min(S,U)`、Raw Safety與stop-gradient Safety-conditioned Raw-MFE、marginal mean semantics、Joint scalar softmax attention pooling、latent-width→latent-width→2 ReLU joint MLP、Seed42、split、optimizer、full-list Delta-NDCG、三head固定等權loss與Raw-MFE Validation epoch selection全部不變；唯一research dimension為temporal trunk family。不得直接復活historical `patch_transformer_v1`：新architecture=`ARCH-patch_token_transformer_safety_raw_mfe_joint_attn_mlp_v1`，舊9F保持legacy read-only。Patch Transformer固定historical 9F recipe `patch=10/stride=10/embedding=128/depth=3/heads=4/FFN=256/sinusoidal/LayerNorm/dropout=0.10`，不得做patch/depth/head/embedding/FFN/position/dropout/pooling sweep。300 bars必須形成30 tokens；marginal headsmean-pool normalized encoded tokens，Joint head只加scalar token attention。Same Seed42下新architecture的`patch_projection.* / patch_normalization.* / encoder.* / output_normalization.*`必須與legacy 9F exact equal；active builder不得import legacy `models.patch_transformer`。依B280，Standard Model SOP 1～6與approved fingerprint不得修改，MR-13Z必須重用Joint-Min Model-specific Extension。PIT/current Rolling/runtime/Strategy arm維持未授權。",
-      "gap": "`validate_breakout_quality_patch_transformer_joint_min_contract_case`驗active MR-13Z/profile/new architecture、MR-13X objective/loss/epoch/reduction一致、historical 9F identity仍legacy、Patch recipe固定、300→30 token sequence contract、same-seed legacy/new trunk tensor exact-equal、128D tri-head/attention topology、token attention softmax與6-logit surface、Joint gradient isolation、Standard Model SOP fingerprint不變、renderer沿用`Model-specific Extension｜MR-13Z｜Continuous Joint-Min Retrieval`且no C75/PIT；同輪回歸MR-13Y/X/W與legacy Patch Transformer reconstruction。",
-      "entry": "`config/breakout_quality.py`, `filters/breakout_quality/models/spec.py`, `filters/breakout_quality/models/active.py`, `filters/breakout_quality/models/patch_token_joint_min.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`, `doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`",
-      "category": "MR-13Z Joint-Min Patch Transformer raw-data architecture-family controlled comparison",
-      "status": "DONE"
-    },
-    {
-      "id": "B286",
-      "section": "B2",
-      "priority": "P1",
-      "order": 271,
-      "item": "MR-13Z Model Gate PASS後曾授權research PIT/current validation；C75 scientific identity固定為Min/all-off/No-K/No-R0、`CONT13Z_ROLL.joint_min_score` direct descending，無Safety gate/threshold/product/fitted weight/calibration。Historical activation snapshot為schema62、primary contrast=C75-C74；最終C75已`OOS_LOCAL_GAIN / ROLLING_COLLAPSE / CONVERSION_GATE_FAIL / NO_ROBUSTNESS`，因此**允許且要求退出current suite**，但`CONT13Z_ROLL`、C75及contrasts必須完整移入historical compatibility供重現/Audit。MR-13Z Model Gate PASS與persistent report fingerprint不得因strategy FAIL改寫。",
-      "gap": "`validate_mr13z_c75_conversion_contract_case`驗historical C75 exact No-K/No-R0 Joint-Min contract仍可解析、current schema已不含C75、historical source/arm/contrast retained，以及no-production-promotion。",
-      "entry": "`config/compatibility/strategy_compare_history.py`, `tools/validate/synthetic_breakout_quality_strategy_app_cases.py`, `doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`",
-      "category": "Historical MR-13Z → SR-C75 Direct Joint-Min conversion contract",
       "status": "DONE"
     },
     {
@@ -2335,61 +1994,6 @@
       "status": "DONE"
     },
     {
-      "id": "B290",
-      "section": "B2",
-      "priority": "P1",
-      "order": 275,
-      "item": "MR-13AA必須完全沿用MR-13H `daily_full_horizon_opportunity_r_v1`、daily-universal universe、full-list ΔNDCG pairwise reduction、Seed42、split、optimizer、epoch selection、training label/sample scope，唯一scientific change為InceptionTime→frozen Patch Transformer。新active architecture=`ARCH-patch_token_transformer_ranker_v1` / `patch_token_transformer_ranker_v1`，historical `patch_transformer_v1`不得復活；Patch recipe固定10-bar non-overlap、300→30 tokens、embed128/depth3/heads4/FFN256/sinusoidal/LayerNorm/dropout0.10/mean pooling，輸出只允許single 128→2 rank head，不得加入Safety/MFE/Joint heads。same Seed42 Patch trunk必須與legacy 9F及MR-13Z frozen trunk tensor exact-equal。MR-13AA只授權Model Gate，不得PIT/current strategy authorization、Strategy arm、Multi-seed或Fixed；Standard Model SOP approved fingerprint必須維持`2b372bd465258234`。",
-      "gap": "`validate_breakout_quality_mr13aa_patch_transformer_h_target_contract_case`驗current profile/identity、MR-13H exact controlled fields、no PIT/current-strategy authorization、新ARCH/legacy isolation、MR-13Z frozen Patch recipe exactness、300→30 sequence contract、same-seed trunk tensor identity、single-head output shape與persistent report fingerprint；另回歸MR-13Z historical registered architecture contract。",
-      "entry": "`config/breakout_quality.py`, `filters/breakout_quality/models/spec.py`, `filters/breakout_quality/models/active.py`, `filters/breakout_quality/models/patch_token_joint_min.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`, `tools/validate/synthetic_cases.py`, `doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`",
-      "category": "MR-13AA MR-13H exact target × frozen Patch Transformer architecture-only Model Gate contract",
-      "status": "DONE"
-    },
-    {
-      "id": "B291",
-      "section": "B2",
-      "priority": "P1",
-      "order": 276,
-      "item": "MR-13AB必須完全沿用MR-13K `inception_time_v1`、daily-universal universe、300×10 input、40D horizon、fixed canonical R scale、full-list ΔNDCG pairwise objective/reduction、Seed42、split、optimizer、`mean_daily_spearman` epoch selection與training/sample scope；唯一scientific change為Pure-MFE future path改用MR-13E canonical first-risk-breach truncation。target=`daily_first_risk_breach_pure_mfe_r_v1`：same-bar adverse-first、breach-day high與其後upside排除、first-bar breach=`0R`、no-breach必須與MR-13K Pure-MFE exact相同；adverse-to-peak只允許diagnostic不得從target扣除。禁止Safety head、threshold、lambda、time penalty、fusion/product、PIT/current strategy authorization、Strategy arm、Multi-seed或Fixed；Standard Model SOP approved fingerprint必須維持`2b372bd465258234`。",
-      "gap": "`validate_breakout_quality_mr13ab_first_breach_pure_mfe_contract_case`驗historical identity、MR-13K strict controlled fields、no-breach scalar/components identity、breach-day/post-breach high exclusion、first-bar breach 0R、scalar/vectorized target exactness、canonical target contract、MR-13K comparison relation、no strategy registration與persistent report freeze。",
-      "entry": "`config/breakout_quality.py`, `filters/breakout_quality/continuous_target.py`, `filters/breakout_quality/daily_ranker_data.py`, `services/breakout_quality/daily_target_comparison.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`, `tools/validate/synthetic_cases.py`, `tools/validate/synthetic_breakout_quality_pit_cases.py`, `doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`",
-      "category": "MR-13AB Pure-MFE first-risk-breach target-only Model Gate contract",
-      "status": "DONE"
-    },
-    {
-      "id": "B292",
-      "section": "B2",
-      "priority": "P1",
-      "order": 277,
-      "item": "MR-13AB Forward/Target geometry完成後曾建立一次性read-only frozen survival-increment Audit，隔離changed rows與same-date target-order conflicts；不得training/PIT/replay或以aggregate unchanged rows冒充increment。該Audit後續已依B295退役，但historical decision contract必須保留。",
-      "gap": "`validate_breakout_quality_audit_framework_contract_case`保留generic Audit framework與historical governance coverage；MR-13AB final evidence以Registry/Log保存。",
-      "entry": "`doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`, `services/audit/catalog.py`",
-      "category": "MR-13AB frozen survival-increment Audit historical contract",
-      "status": "DONE"
-    },
-    {
-      "id": "B293",
-      "section": "B2",
-      "priority": "P1",
-      "order": 278,
-      "item": "曾允許在既有MR-13K frozen checkpoint/manifest/report完整時作deterministic inference-only source reconstruction；不得重訓historical model。後續實際artifact state證明checkpoint亦不存在，故此fallback被B294 supersede，但歷史治理狀態必須在主表與convergence一致。",
-      "gap": "歷史 frozen checkpoint 若不存在，不得將 source reconstruction 偽裝成可用的 current evidence，也不得因此重訓已結案模型；正式 Audit 缺件依既有合法性契約判定。",
-      "entry": "`doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`",
-      "category": "MR-13AB historical frozen-source retention fallback contract",
-      "status": "DONE"
-    },
-    {
-      "id": "B294",
-      "section": "B2",
-      "priority": "P1",
-      "order": 279,
-      "item": "實際retention state下MR-13K historical score/checkpoint皆不存在；Audit改用MR-13AB canonical frozen OOS內嵌AB/K兩Target truth做reference-target-controlled changed/conflict analysis，移除historical checkpoint dependency且禁止重訓。",
-      "gap": "`validate_breakout_quality_audit_framework_contract_case`保留no-preparer/no-historical-checkpoint與read-only canonical-artifact治理語意。",
-      "entry": "`doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`",
-      "category": "MR-13AB AB-only embedded-reference truth Audit contract",
-      "status": "DONE"
-    },
-    {
       "id": "B295",
       "section": "B2",
       "priority": "P1",
@@ -2401,23 +2005,12 @@
       "status": "DONE"
     },
     {
-      "id": "B296",
-      "section": "B2",
-      "priority": "P1",
-      "order": 281,
-      "item": "MR-13AC固定Stage-1=`MR-13K / daily_universal_full_horizon_pure_mfe_full_list_ndcg_pairwise / inception_time_v1 / Seed42`；Selection predicted-upside context只能由isolated expanding cross-fitted/PIT-safe Stage-1 score產生，Stage-2 Selection training universe只含PIT context-covered rows；Forward context固定單一pre-2021 Stage-1 fit，不得以OOS label/statistics改寫。Stage-2固定MR-13M InceptionTime/full-list ΔNDCG/Seed42/split/optimizer/epoch-selection，只增加1個direct predicted-upside percentile scalar；正式target為Low-Adverse percentile對context含intercept OLS residual後的same-day residual percentile。禁止context MLP/multi-head、threshold/lambda/fusion、portfolio state。**後續Model Gate GO可另行授權research PIT/Strategy arm，但不得因此改Stage-1 context、target、architecture、loss或Standard Model SOP fingerprint `2b372bd465258234`。**",
-      "gap": "`validate_breakout_quality_mr13ac_predicted_upside_conditional_safety_contract_case`驗Stage-1 identity/PIT legality、Selection cross-fit與Forward fixed-fit、PIT-covered universe、residual-percentile target、MR-13P helper preservation、exact 1-scalar input、artifact provenance；Model Gate GO後另驗C78 current research source/arm不改scientific contract與persistent report freeze。",
-      "entry": "`config/breakout_quality.py`, `filters/breakout_quality/predicted_upside_context.py`, `filters/breakout_quality/daily_ranker_data.py`, `filters/breakout_quality/models/`, `services/breakout_quality/predicted_upside_context.py`, `services/breakout_quality/point_in_time_scores.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`, `doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`",
-      "category": "MR-13AC PIT-safe predicted-upside conditional Low-Adverse stacking scientific contract",
-      "status": "DONE"
-    },
-    {
       "id": "B297",
       "section": "B2",
       "priority": "P1",
       "order": 282,
-      "item": "`build_daily_ranker_split()`的inner-train／validation／selection／OOS target-evaluation membership不得只依日期／label-end，必須再與`bundle.target_valid`取交集；target-invalid/context-missing rows可保留score eligibility但不得進same-date target transform、training或target metric。Forward score universe仍由`resolve_forward_oos_score_group_ids()`獨立決定。Stage-1/context CSV的`ticker`必須以string dtype讀取，禁止mixed-type inference改變leading-zero/alphanumeric join identity；此修正不得改MR-13AC context manifest schema/scientific identity，以允許既有合法10+1 Stage-1 artifacts REUSE。",
-      "gap": "`validate_breakout_quality_mr13ac_predicted_upside_conditional_safety_contract_case`新增date合法但target-invalid row不得進split、`target_valid_filter_applied` report flag及`0050/2330/00632R`ticker identity regression；同鏈回歸MR-13P、generic architecture、PIT builder/performance、Audit、Registry/Checklist與persistent report。",
+      "item": "`build_daily_ranker_split()` 的 train／validation／selection／OOS supervised membership 必須與 bundle.target_valid 相交；invalid target 或 unavailable context 不得參與 fitting／target metrics，但合法 feature rows 的 Forward score eligibility 獨立保留。",
+      "gap": "以包含 target-invalid rows 的 fixture 分別驗證全部 supervised splits 與完整 Forward score universe。",
       "entry": "`filters/breakout_quality/daily_ranker_data.py`, `filters/breakout_quality/predicted_upside_context.py`, `services/breakout_quality/predicted_upside_context.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`, `doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`",
       "category": "Daily Universal split必須忠實採用canonical `target_valid`；MR-13AC context ticker ingest identity固定",
       "status": "DONE"
@@ -2431,138 +2024,6 @@
       "gap": "`validate_strategy_compare_config_driven_app_contract_case`仍驗C79-C59 DL-source-only contract、C77/C78 direct contract與C76 historical retention；current membership改由B306覆蓋。",
       "entry": "`config/strategy_compare.py`, `config/compatibility/strategy_compare_history.py`, `tools/validate/synthetic_breakout_quality_strategy_app_cases.py`, `doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`",
       "category": "Historical schema64 C61/C58/C59/C77/C78/C79 controlled MR-13AC replacement snapshot",
-      "status": "DONE"
-    },
-    {
-      "id": "B299",
-      "section": "B2",
-      "priority": "P1",
-      "order": 284,
-      "item": "MR-13AD必須是MR-13AC methodology的完整direction-reversal controlled cell，而不是single-head偏好：Stage-1固定MR-13M Low-Adverse `inception_time_v1` / Seed42；Selection context只可由expanding cross-fitted/PIT-safe Stage-1 predicted-safety score轉same-date percentile，Forward只可由single fixed pre-OOS Stage-1 fit產生，禁止full-fit Selection backfill與OOS-stat fitting。Stage-2固定MR-13K InceptionTime/full-list ΔNDCG/Seed42/split/optimizer/epoch-selection/training scope，只在GAP後direct concat 1個predicted-safety percentile scalar；正式response=Pure-MFE same-date percentile，target=其對predicted-safety percentile同日OLS residual再same-date percentile化，不得讀true future Safety作context。AC/AD可共用generic predicted-context producer但artifact directory/manifest contract必須隔離；`target_valid`必須排除context-missing rows且ticker CSV需保留leading-zero/alphanumeric identity。Model Gate結果前`selection_pit_authorized=False/current_time_validation_authorized=False`、不得建立CONT13AD或Strategy arm；Standard Model SOP fingerprint與production C42/C44不變。",
-      "gap": "`validate_breakout_quality_mr13ad_predicted_safety_conditional_mfe_contract_case`驗current identity、MR-13M Stage-1 / MR-13K Stage-2 strict control、shared PIT producer、predicted-context-only residual truth、target-valid split、ticker dtype、single direct scalar architecture、artifact/training provenance、no PIT/strategy與persistent report freeze；同輪回歸MR-13AC 18項contract，確保shared producer refactor不改AC science。",
-      "entry": "`config/breakout_quality.py`, `filters/breakout_quality/predicted_safety_context.py`, `filters/breakout_quality/daily_ranker_data.py`, `filters/breakout_quality/models/spec.py`, `filters/breakout_quality/models/active.py`, `filters/breakout_quality/models/inception_time.py`, `filters/breakout_quality/artifact_dependency_registry.py`, `filters/breakout_quality/ranker_training_contract.py`, `services/breakout_quality/predicted_context.py`, `services/breakout_quality/predicted_upside_context.py`, `services/breakout_quality/predicted_safety_context.py`, `services/research/breakout_quality_application.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`",
-      "category": "MR-13AD PIT-safe Predicted-Safety Conditional-MFE reverse-control contract",
-      "status": "DONE"
-    },
-    {
-      "id": "B300",
-      "section": "B2",
-      "priority": "P1",
-      "order": 285,
-      "item": "MR-13AE必須重用MR-13AD canonical Stage-1 predicted-safety context owner：Stage-1固定MR-13M Low-Adverse `inception_time_v1` / Seed42，Selection只能使用expanding cross-fitted/PIT-safe predicted-safety percentile，Forward只能使用single fixed pre-OOS Stage-1 fit；既有合法AD 10+1 context不得因AE consumer identity而被重訓/複製。Stage-2必須恢復MR-13K canonical full-horizon Pure-MFE target/order與InceptionTime/full-list ΔNDCG/Seed42/split/optimizer/epoch-selection/training scope，只在GAP後direct concat 1個predicted-safety percentile scalar；禁止conditional residualization、true future Safety conditioning、context MLP/gate/attention/multi-head、threshold/lambda/fusion/product/portfolio state。target-valid與context coverage必須共同限制target-evaluation/training rows。Model-specific Extension只可diagnostic讀actual MFE/Safety geometry，不得參與fit/epoch selection；結果前`selection_pit_authorized=False/current_time_validation_authorized=False`且不得建立CONT13AE/Strategy arm。Standard Model SOP approved fingerprint=`2b372bd465258234`與production C42/C44必須不變。",
-      "gap": "`validate_breakout_quality_mr13ae_predicted_safety_context_pure_mfe_contract_case`驗active MR-13AE identity、MR-13K target/training strict control、MR-13AD canonical context-owner reuse、no residualization、target-valid/context coverage、single direct scalar architecture、model-specific MFE/Safety diagnostic-only extension、no PIT/strategy與persistent report freeze；同鏈回歸MR-13AD與MR-13AC，確保shared producer/context reuse不改既有science。",
-      "entry": "`config/breakout_quality.py`, `filters/breakout_quality/predicted_safety_context.py`, `filters/breakout_quality/daily_ranker_data.py`, `filters/breakout_quality/artifact_dependency_registry.py`, `filters/breakout_quality/ranker_training_contract.py`, `services/breakout_quality/predicted_safety_context.py`, `services/breakout_quality/train_daily_ranker.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`, `tools/validate/synthetic_cases.py`, `doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`",
-      "category": "MR-13AE PIT-safe Predicted-Safety Context Pure-MFE Model Gate contract",
-      "status": "DONE"
-    },
-    {
-      "id": "B301",
-      "section": "B2",
-      "priority": "P1",
-      "order": 286,
-      "item": "MR-13AF必須重用MR-13M/Seed42 canonical predicted-Safety PIT context，但Safety不得作network input；Stage-2 architecture回到`inception_time_v1`，target/order維持MR-13K `daily_full_horizon_pure_mfe_r_v1`。唯一loss change=`MR-13K full-list ΔNDCG pair relevance × min(S_i,S_j)`，S為same-date PIT-safe predicted-Safety percentile，最後以weight sum做normalized weighted mean；禁止bucket/cutoff/lambda/temperature/joint head/residual/product。Safety全1時loss須精確退化MR-13K；低Safety item造成的pair error須被連續降權。Selection training universe須同時target-valid與context-covered。AF與K target相同，因此不得設定`reference_profile_name`或checkpoint Target-reference evaluation；post-checkpoint reference diagnostics只允許顯式`evaluation_reference_profile_name`。結果前不得PIT/Strategy/robustness/fixed。",
-      "gap": "`validate_breakout_quality_mr13af_high_safety_weighted_pure_mfe_contract_case`固定frozen identity、MR-13K recipe control、canonical Safety dependency、no model-input Safety、loss退化/降權數值性質、training semantics provenance、AF no Target-reference與explicit-only checkpoint reference-eval regression、與MR-13O Pareto scope區隔、MFE/Safety Model-specific diagnostics、Standard SOP freeze與no downstream authorization。",
-      "entry": "`config/breakout_quality.py`, `filters/breakout_quality/daily_ranker_data.py`, `filters/breakout_quality/artifact_dependency_registry.py`, `filters/breakout_quality/ranker_training_contract.py`, `services/breakout_quality/train_continuous_ranker.py`, `services/breakout_quality/train_daily_ranker.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`, `tools/validate/synthetic_cases.py`, `doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`",
-      "category": "MR-13AF PIT-safe High-Safety-Weighted Pure-MFE anti-shortcut contract",
-      "status": "DONE"
-    },
-    {
-      "id": "B302",
-      "section": "B2",
-      "priority": "P1",
-      "order": 287,
-      "item": "MR-13AG必須重用MR-13M/Seed42 canonical predicted-Safety PIT context，但Safety不得作network input；Stage-2固定MR-13K `inception_time_v1`與`daily_full_horizon_pure_mfe_r_v1` target/order，base pair relevance維持full-list ΔNDCG。唯一scientific change為generic `pair_weight_policy=mfe_winner_predicted_safety`：每個同日non-tied MFE pair乘較高Pure-MFE item的Safety percentile `S_winner`，safe winner > unsafe loser不得因loser低Safety被共同降權，unsafe winner > safe loser仍須低權重；pair truth永不反轉。最後用weight sum做normalized weighted mean；禁止額外mean normalization、bucket/cutoff/lambda/temperature/joint head/residual/product。Safety全1時loss須精確退化MR-13K；AF legacy min-Safety identity/contract不得漂移。Pair-weight必須為first-class runtime plugin：generic trainer、data/training contract、renderer與synthetic registry不得辨認特定pair-weight identity；新增第三種policy只需registry/primitive＋declarative spec＋generic primitive test。結果前不得PIT/Strategy/robustness/fixed。",
-      "gap": "`validate_breakout_quality_continuous_ranker_contract_case`逐profile驗AG ExecutionRecipe/context/dependency/training semantics，並以pair-weight registry驗min/winner primitive、Safety=1精確退化base、動態注入synthetic第三種policy可直接通過generic loss/scientific-contract/report metadata；另掃generic trainer/renderer不得含特定pair-weight ID。`validate_breakout_quality_mr13af_high_safety_weighted_pure_mfe_contract_case`保留AF frozen legacy regression。",
-      "entry": "`config/breakout_quality.py`, `core/breakout_quality_runtime.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`, `doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`",
-      "category": "MR-13AG PIT-safe MFE-Winner-Safety-Weighted Pure-MFE directional anti-shortcut contract",
-      "status": "DONE"
-    },
-    {
-      "id": "B303",
-      "section": "B2",
-      "priority": "P1",
-      "order": 288,
-      "item": "MR-13AH必須重用MR-13M/Seed42 canonical predicted-Safety PIT context，但Safety不得作network input；Stage-2固定MR-13K `inception_time_v1`與`daily_full_horizon_pure_mfe_r_v1` target/order，base pair relevance維持full-list ΔNDCG。唯一scientific change為generic `pair_weight_policy=product_predicted_safety`：每個同日non-tied MFE pair乘兩端Safety percentile乘積`S_i×S_j`，weight必須對pair方向完全對稱，不得依MFE winner改變；相較AF `min(S_i,S_j)`只允許更集中high-Safety manifold與更強壓低low/low pairs，不得引入bucket/cutoff/lambda/exponent/temperature/joint head/residual/product score。最後用weight sum做normalized weighted mean；Safety全1時loss須精確退化MR-13K。MR-13AG directional winner policy與MR-13AF legacy min policy contract不得漂移。Round 7 pair-weight plugin modification-radius必須維持：generic trainer/data/report不得新增MR-13AH identity branch；新增此primitive只需runtime registry＋declarative profile/spec＋generic primitive test。結果前不得PIT/Strategy/robustness/fixed。",
-      "gap": "`validate_breakout_quality_continuous_ranker_contract_case`逐profile自動驗AH ExecutionRecipe/context/dependency/training semantics，並驗product policy數值為`S_i×S_j`、對target_diff正負完全對稱、low/low比AF min更低、Safety=1精確退化base；同時回歸min/winner policies與synthetic injected policy，確保generic trainer/data/report不辨認AH identity。",
-      "entry": "`config/breakout_quality.py`, `core/breakout_quality_runtime.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`, `doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`",
-      "category": "MR-13AH PIT-safe Safety-Product-Weighted Pure-MFE symmetric high-Safety concentration contract",
-      "status": "DONE"
-    },
-    {
-      "id": "B305",
-      "section": "B2",
-      "priority": "P1",
-      "order": 290,
-      "item": "MR-13AJ必須重用MR-13M/Seed42 canonical predicted-Safety PIT context，Safety不得作network input；Stage-2固定MR-13K `inception_time_v1`、`daily_full_horizon_pure_mfe_r_v1` target/order與full-list ΔNDCG。唯一scientific change為generic `pair_weight_policy=conflict_unsafe_winner_predicted_safety`：MFE與Safety ordering一致或Safety tie時multiplier必須精確為1，只有MFE winner較不安全的conflict pair才乘該winner的Safety percentile；pair truth永不反轉。Safety全1時loss須精確退化MR-13K；AF min、AG winner、AH product contracts不得漂移。Round 7 modification-radius持續成立：新增此primitive只需runtime registry＋declarative profile/spec＋generic primitive invariant test，generic trainer/data/report不得新增MR-13AJ identity branch。結果前不得PIT/Strategy/robustness/fixed。",
-      "gap": "`validate_breakout_quality_continuous_ranker_contract_case`自動覆蓋AJ ExecutionRecipe/context/dependency/training semantics，並驗conflict-only policy：aligned pair=`1`、unsafe-winner conflict=`S_winner`、反向pair對稱語意正確、Safety=1退化base；同時回歸AF/AG/AH既有primitive與identity leakage guard。",
-      "entry": "`config/breakout_quality.py`, `core/breakout_quality_runtime.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`, `doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`",
-      "category": "MR-13AJ PIT-safe conflict-only unsafe-winner discount Pure-MFE contract",
-      "status": "DONE"
-    },
-    {
-      "id": "B306",
-      "section": "B2",
-      "priority": "P1",
-      "order": 291,
-      "item": "使用者明確授權既有MR-13AH frozen identity做一次Seed42 OOS+Rolling economic conversion，Model Gate FAIL與STOP_PAIR_WEIGHT_STRENGTH_FAMILY結論不撤銷。`CONT13AH_ROLL`必須引用AH profile/inception_time_v1/selection_point_in_time並合法取得PIT-safe predicted-Safety context。C80必須與C59逐欄相同param/rule/runtime/options，唯一DL source=`CONT13AH_ROLL`；C81必須與C78逐欄相同No-K/No-R0 direct contract，唯一DL source=`CONT13AH_ROLL`。C80/C81永久保留於strategy arm catalog與source-scoped authorization；current active Compare Suite membership由共用model-test SSOT＋既有正式strategy binding動態派生，不得以歷史schema66八-arm集合硬編成唯一current truth。MR-13AH model-level `selection_pit_authorized/current_time_validation_authorized`必須維持`False/False`；只允許`CONT13AH_ROLL`持有source-scoped single-seed exception，且只能建current OOS/Rolling profile指定的canonical dates/folds、Seed42，generic model PIT/Rolling／Multi-seed全部fail-closed。不得改target/architecture/loss/pair-weight或production。",
-      "gap": "`validate_strategy_compare_config_driven_app_contract_case`驗CONT13AH source、C80-C59與C81-C78 source-only contract、C80/C81 catalog retention、current suite由shared model list與正式binding派生、source-scoped canonical PIT plan、非canonical seed與robustness exclusion；generic model/runtime contract驗AH model-level PIT/current authorization仍為False/False。",
-      "entry": "`config/breakout_quality.py`, `config/strategy_compare.py`, `core/strategy_comparison.py`, `services/breakout_quality/point_in_time_scores.py`, `services/research/strategy_compare_training.py`, `tools/validate/synthetic_breakout_quality_strategy_app_cases.py`, `doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`",
-      "category": "MR-13AH dual strategy conversion：C80 exact K/R0 constrained + C81 No-K/No-R0",
-      "status": "DONE"
-    },
-    {
-      "id": "B307",
-      "section": "B2",
-      "priority": "P1",
-      "order": 292,
-      "item": "使用者明確要求：凡MR-13後續會共同比較的漲／跌／可學性指標必須升格為固定Standard SOP，不得再放`Model-specific Extension`。`model.standard_sop`由v1升v2，原1～6不改，新增7 `Upside / Downside Alignment`與8 `Top-tail Economic Quality`。所有Daily Universal DL統一輸出Target→Full-MFE、Target→Low-Adverse、Pred-Safety→Target、Score→Full-MFE、Score→Low-Adverse、Pred-Safety→Score，以及Top10 N/MFE R/Adverse R/High-MFE%/High-Safety%/HMHS%/HMHS enrichment；Validation、Forward OOS、Breakout slice共用同一schema。Actual MFE/Safety percentile必須先在完整Daily Universal同日計算，Breakout只能filter、不得subset rerank。Pred-Safety固定讀canonical PIT-safe shared owner artifact，只作post-checkpoint reporting reference；`[1]→[1]` preparation可BUILD/REUSE該reference，但不得把它加入model fitting identity、target-valid membership、input、loss、epoch selection或score generation。reference缺失/無效時只降為明確N/A/PARTIAL evidence，不得因evaluation-only reference讓已完成模型fit失敗。Approved `model.standard_sop` fingerprint=`f220fdd4542ee32b`；其他persistent report fingerprints與scientific identities不變。",
-      "gap": "`validate_research_report_contract_freeze_case`驗v2 sections 1～8、approved fingerprint、H/control/joint profile共同欄位與MR-specific extension isolation；`validate_breakout_quality_mr13ae_predicted_safety_context_pure_mfe_contract_case`驗target-neutral shared MFE/Safety diagnostic公式、Pred-Safety reporting-only semantics與actual same-date truth；source `compileall`與contract validation需PASS。",
-      "entry": "`core/research_report_contract.py`, `filters/breakout_quality/artifact_dependency_registry.py`, `services/breakout_quality/train_daily_ranker.py`, `services/research/breakout_quality_application.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`, `tools/validate/synthetic_meta_cases.py`, `doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`",
-      "category": "Standard Model SOP v2 common MFE × Safety comparison contract",
-      "status": "DONE"
-    },
-    {
-      "id": "B308",
-      "section": "B2",
-      "priority": "P1",
-      "order": 293,
-      "item": "使用者明確要求`[1]→[1]`與`[1]→[4]`共用同一Standard SOP口徑。`model.standard_sop`升v3：Learnability新增`Top-Bottom Target`；section 4/5前移為Upside/Downside Alignment與Top-tail Economic Quality，舊Truth Geometry/Ranking後移至6/7，Evidence Coverage固定最後8；Section 4移除非共通MR-13M `Pred-Safety→Target/Score`，只保留actual truth `Target/Score→MFE/Safety`；Section 5以`Top10 Low-Adverse=-Adverse`統一higher-is-better並將HM/HS rate×enrichment合cell，再補HM/LS、LM/HS、LM/LS四象限；Ranking移除Top-K Target、`Lift→Top-K Lift`並顯示`競爭日 / Pool日`。`[1]→[1]`必須先驗canonical model+manifest+machine report identity，合法即REUSE current renderer且不得因schema升版或OOS score sidecar缺失重訓，缺失/stale才BUILD。`[1]→[4]`新增persistent `model.standard_comparison`，所有section/table須由Standard SOP程式化派生＋prepend Model欄；model list config-driven可3個以上任意擴充，current初始H/AF/AH，每model同樣REUSE/缺失自動BUILD。Scientific profile自己的Pred-Safety dependency仍可存在，但不得由Standard report額外注入。Approved fingerprints：`model.standard_sop=5a1c1377b207204a`、`model.standard_comparison=84aad5e28c5d2ce3`；其餘science/production不變。",
-      "gap": "`validate_research_report_contract_freeze_case`驗v3 section order/headers/fingerprints、Standard-vs-comparison schema derivation、H/AF/AH current set與4-model synthetic擴充、[1][1] report-only REUSE/BUILD fault-injection、無Standard Pred-Safety dependency；`validate_breakout_quality_mr13ae_predicted_safety_context_pure_mfe_contract_case`驗actual-truth-only MFE/Safety helper、Top10 Low-Adverse與四象限；generic ranker regression驗menu仍從Enter進Forward Gate且[4]改由config comparison label。",
-      "entry": "`core/research_report_contract.py`, `config/breakout_quality.py`, `filters/breakout_quality/ranking_score_store.py`, `filters/breakout_quality/artifact_dependency_registry.py`, `services/breakout_quality/train_daily_ranker.py`, `services/research/breakout_quality_application.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`, `tools/validate/synthetic_meta_cases.py`, `doc/TEST_SUITE_CHECKLIST.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`",
-      "category": "Standard Model SOP v3 actual-truth common scorecard + report REUSE + arbitrary multi-model comparison",
-      "status": "DONE"
-    },
-    {
-      "id": "B309",
-      "section": "B2",
-      "priority": "P1",
-      "order": 294,
-      "item": "使用者明確授權常駐Model SOP顯示調整：`[1][1]` Generalization主列固定`Validation → OOS`；`model.standard_sop`升v4，四象限direction明確為HM/HS higher、HM/LS/LM/HS/LM/LS lower。`[1][4]` `model.standard_comparison`升v2：不顯示Validation，Forward OOS與Breakout slice各自獨立比較表，scope title固定且省略冗餘Split欄；Generalization只保留OOS→Breakout。所有具canonical higher/lower direction的跨模型metric用best=綠、worst=紅、tie中性；section title淡藍，Evidence/workflow status沿用既有規則。H/AF/AH current set、artifact REUSE/BUILD與scientific identity不變。Approved fingerprints：`model.standard_sop=72cc375fdf115504`、`model.standard_comparison=71d1789521ca6d79`。",
-      "gap": "`validate_research_report_contract_freeze_case`驗v4/v2 fingerprints、comparison仍由Standard metric schema派生但省略Split、[1][4]無Validation且OOS/Breakout分表、best/worst/blue-title palette、[1][1] `Validation → OOS` label與既有REUSE/BUILD regression。",
-      "entry": "`core/research_report_contract.py`, `services/research/breakout_quality_application.py`, `services/breakout_quality/train_daily_ranker.py`, `tools/validate/synthetic_meta_cases.py`, `doc/TEST_SUITE_CHECKLIST.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`",
-      "category": "Standard Model SOP v4 display palette + [1][4] OOS/Breakout split comparison",
-      "status": "DONE"
-    },
-    {
-      "id": "B310",
-      "section": "B2",
-      "priority": "P1",
-      "order": 295,
-      "item": "使用者明確授權：原Standard `Multi-head Learnability`與`Truth / Prediction Geometry`因只適用部分multi-head DL，移入Model-specific Extension；`model.standard_sop`升v5，共通section固定連續`1 Learnability / 2 Generalization / 3 Upside / Downside Alignment / 4 Top-tail Economic Quality / 5 Ranking / Boundary / 6 Evidence Coverage`，不得跳號。`model.standard_comparison`升v3且只派生共通1～6；[1][4]不顯示Validation，Generalization固定第二且只保留OOS→Breakout；每個scope-bearing section只顯示一次section標題，底下依序為Forward OOS與Breakout slice兩張獨立表，不得把scope附在section title造成重複標題。best/worst palette、status色彩、H/AF/AH current set與REUSE/BUILD semantics不變。Approved fingerprints：`model.standard_sop=9ec49fe2aaf3a2d6`、`model.standard_comparison=7bf0ef0427519507`。",
-      "gap": "`validate_research_report_contract_freeze_case`驗v5/v3 fingerprints、1～6連續共通schema、Multi-head/Truth Geometry只在Extension、comparison section 2順序、單一section title下OOS→Breakout兩表、no Validation及既有palette/reuse contract；`validate_breakout_quality_app_simple_report_contract_case`與MR-13S regression驗multi-head evidence不再取得Standard編號。",
-      "entry": "`core/research_report_contract.py`, `services/research/breakout_quality_application.py`, `services/breakout_quality/train_daily_ranker.py`, `tools/validate/synthetic_meta_cases.py`, `tools/validate/synthetic_cli_cases.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`, `doc/TEST_SUITE_CHECKLIST.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`",
-      "category": "Standard Model SOP v5 common 1～6 + multi-head extension isolation + [1][4] single-title dual-table layout",
-      "status": "DONE"
-    },
-    {
-      "id": "B311",
-      "section": "B2",
-      "priority": "P1",
-      "order": 296,
-      "item": "使用者明確授權：`model.standard_sop`維持v5；`model.standard_comparison`升v4。`[1][4]`的`2. Generalization`在同一淡藍section主標題下固定分成`Validation → OOS`與`OOS → Breakout slice`兩張獨立表，Comparison不再作重複table欄位；其他scope-bearing section仍在同一主標題下分Forward OOS/Breakout兩表。Forward OOS、Breakout slice與Generalization transition全部為無色次標題。Configured comparison model只有在model/manifest/report scientific identity與current Standard SOP 1～6共通evidence都完整時才可REUSE；缺任何required row/metric即由canonical producer自動BUILD/REFRESH，補建後仍不完整須fail-fast，renderer不得以`-`或靜默漏列輸出殘缺H/AF/AH比較。best/worst與status palette不變。Approved fingerprints：`model.standard_sop=9ec49fe2aaf3a2d6`、`model.standard_comparison=7ca43620ac4a01e0`。",
-      "gap": "`validate_research_report_contract_freeze_case`驗comparison v4 schema/fingerprint、Generalization雙transition獨立表、plain secondary headings、complete report可REUSE、缺Standard共通evidence必須不可REUSE並走canonical BUILD，以及configured model不得在SOP 3/4靜默漏列。",
-      "entry": "`core/research_report_contract.py`, `services/research/breakout_quality_application.py`, `tools/validate/synthetic_meta_cases.py`, `doc/TEST_SUITE_CHECKLIST.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`",
-      "category": "[1][4] complete Standard evidence + dual Generalization tables + plain secondary headings",
       "status": "DONE"
     },
     {
@@ -2676,17 +2137,6 @@
       "status": "DONE"
     },
     {
-      "id": "B326",
-      "section": "B2",
-      "priority": "P1",
-      "order": 307,
-      "item": "使用者明確授權補回前一版multi-head專用第3/4 evidence，但不得恢復Standard section number。`model.standard_sop`必須維持v7/common 1～6/fingerprint不變；`model.standard_comparison`升v7並在machine-readable contract明確授權`multi_head_learnability`與`truth_prediction_geometry`。comparison只能依每個model既有payload capability追加extension，不得硬編MR/profile/objective；無capability model不顯示空extension。Model-specific Extension固定排在Standard section 6後、Rolling/Robustness mode extension前；所有metric直接消費canonical evaluation payload，不得重算或要求重訓。",
-      "gap": "`validate_research_report_contract_freeze_case`驗comparison v7 approved fingerprint、Standard 1～6 schema invariance、multi/non-multi mixed payload capability detection、Forward/Rolling extension輸出與ordering；現有single-model extension regression保持通過。",
-      "entry": "`core/research_report_contract.py`, `services/research/breakout_quality_application.py`, `tools/validate/synthetic_meta_cases.py`, `doc/TEST_SUITE_CHECKLIST.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`",
-      "category": "Model comparison multi-head Model-specific Extension restoration",
-      "status": "DONE"
-    },
-    {
       "id": "B327",
       "section": "B2",
       "priority": "P1",
@@ -2698,61 +2148,6 @@
       "status": "DONE"
     },
     {
-      "id": "B328",
-      "section": "B2",
-      "priority": "P1",
-      "order": 309,
-      "item": "A2不得新增trainer/loss/architecture identity。A1的`daily_shared_safety_weighted_mfe_pairwise_ranking`、Low-Adverse/Pure-MFE truths、Safety full-list ΔNDCG、same-date Safety-percentile `S_i×S_j` MFE weighting、pair direction、equal head-loss mean、Seed/split/optimizer全部固定；只把final MFE topology由independent raw-MFE head改為既有`ARCH-inception_time_safety_conditional_mfe_v1`，即`concat(shared_latent, detach(Raw Safety probability))`。MFE/context gradient不得更新Safety classifier；current Training Model切MR-13AL時AK必保留為explicit A1 compare control，B325自動注入AL。",
-      "gap": "`validate_breakout_quality_shared_ah_contract_case`以A1/A2 profile recipe equality＋topology difference、Safety perturbation、MFE-only backward與實際shared-weight loss `_train_epoch`驗one-control-point；`validate_breakout_quality_continuous_ranker_contract_case`維持current training pair自動包含於H/AF/AH/AK/AL shared list。",
-      "entry": "`config/breakout_quality.py`, `filters/breakout_quality/models/inception_time.py`, `filters/breakout_quality/ranker_training_contract.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`, `doc/TEST_SUITE_CHECKLIST.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`",
-      "category": "MR-13AL A2 Shared-AH + stop-gradient Safety-context one-control-point composition",
-      "status": "DONE"
-    },
-    {
-      "id": "B329",
-      "section": "B2",
-      "priority": "P1",
-      "order": 310,
-      "item": "使用者明確授權[3]/[4]同類multi-head方法合併到同一comparison table，不得每個model重複一套extension。`model.standard_sop v7`不得改；`model.standard_comparison`升v8並持有comparison-specific extension schema，single-model extension schema維持原樣。Multi-head Learnability固定`Model/Split/Head/Daily rho/Global rho/Pair`；Truth/Prediction Geometry每scope以Model summary同表，Actual truth 5×5只印一次、Predicted 5×5加Model欄合併；Safety cohort固定`Model/Pred Safety/N/Raw-MFE→MFE rho/High-MFE/HM/HS`同表。best/worst必重用Standard SOP `best_worst_signals`且只在同Split+Head或同Pred-Safety quintile比較；無canonical higher/lower preference的geometry欄位不得擅自上色。",
-      "gap": "`validate_research_report_contract_freeze_case`驗comparison v8 approved fingerprint、single/comparison extension schema隔離、同extension多model只出現一個heading/table family、non-capability model不混入extension、Rolling ordering，以及Safety cohort S1/S5跨model group-aware green/red反轉。",
-      "entry": "`core/research_report_contract.py`, `services/research/breakout_quality_application.py`, `tools/validate/synthetic_meta_cases.py`, `doc/TEST_SUITE_CHECKLIST.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`",
-      "category": "Multi-head Model-specific Extension cross-model merged comparison / SOP color contract",
-      "status": "DONE"
-    },
-    {
-      "id": "B330",
-      "section": "B2",
-      "priority": "P1",
-      "order": 311,
-      "item": "A2結果不得因MFE小幅提升誤判成功：AL explicit Safety context若未改善predicted Safety/MFE geometry即保留historical identity但退出current [3]～[6] membership。A3必直接重用AK topology/loss/Safety-product contract，只允許primary target Pure-MFE→`daily_full_horizon_opportunity_r_v1`；不得帶AL Safety-context input。B325 current-training-pair merge必自動形成H/AF/AH/AK/AM且無第二份AL exclusion list。Economic-target second head必由generic capability標示，不得錯套Raw-MFE-specific geometry extension。",
-      "gap": "`validate_breakout_quality_shared_ah_contract_case`驗A1/A2/A3 composition、AM=AK topology/loss但target不同、AM不使用Safety context、AL歷史profile仍可解析但current membership自動排除；`validate_breakout_quality_continuous_ranker_contract_case`驗current pair→shared test list containment仍成立。",
-      "entry": "`config/breakout_quality.py`, `core/breakout_quality_runtime.py`, `filters/breakout_quality/safety_primary_target.py`, `filters/breakout_quality/ranker_training_contract.py`, `services/breakout_quality/train_continuous_ranker.py`, `services/breakout_quality/train_daily_ranker.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`, `doc/TEST_SUITE_CHECKLIST.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`",
-      "category": "MR-13AL A2 negative-control closure + MR-13AM A3 AK→economic-target one-control-point / current membership rollover",
-      "status": "DONE"
-    },
-    {
-      "id": "B331",
-      "section": "B2",
-      "priority": "P1",
-      "order": 312,
-      "item": "已使用的MR-13AM不得被改寫；AM Seed42 Forward若economic target仍未改善Safety，保留其identity/artifact作direct control。MR-13AN只可把AM既有`daily_shared_safety_weighted_primary_pairwise_ranking`/economic target與歷史A2既有Safety-conditioned topology重新組合：AM target/loss/Safety-product weighting/Seed/split/optimizer全部固定，唯一change為final primary head加入`detach(Raw Safety probability)` context。不得新增trainer/objective/architecture primitive；Safety context不得接受primary loss gradient。B325 current membership必保留AM direct control、自動加入AN，AL仍排除。",
-      "gap": "`validate_breakout_quality_shared_ah_contract_case`驗AN與AM training recipe/target完全相同、AN只切到A2既有topology、canonical semantics顯示stop-gradient Safety context、production `_train_epoch`可直接訓練此組合且無新trainer branch，並驗current list=`H/AF/AH/AK/AM/AN`且不含AL。",
-      "entry": "`config/breakout_quality.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`, `doc/TEST_SUITE_CHECKLIST.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`",
-      "category": "MR-13AM result closure + MR-13AN AM economic-target + A2 Safety-context declarative composition",
-      "status": "DONE"
-    },
-    {
-      "id": "B332",
-      "section": "B2",
-      "priority": "P1",
-      "order": 313,
-      "item": "使用者於MR-13AN Forward Model Gate判定Safety增量不足後明確授權回到MR-13AK做strategy conversion。新增`CONT13AK_ROLL`綁定MR-13AK shared-Safety-weighted Pure-MFE canonical score；C82必逐欄複製C80 exact K/R0 constrained contract、C83必逐欄複製C81 No-K/No-R0 direct contract，兩個primary contrast唯一scientific treatment皆為`CONT13AH_ROLL → CONT13AK_ROLL`。current model research pair切回MR-13AK，AL/AN不得因歷史identity重新加入current membership；先只做Seed42 Forward OOS與Rolling OOS，strategy robustness必須依實際RoMD/MDD/EV/path effect-size另行授權。不得改AK模型、Min params、allocator physics、production C42/C44或persistent report contract。",
-      "gap": "`validate_strategy_compare_config_driven_app_contract_case`驗`CONT13AK_ROLL` profile/architecture/score-source、C82==C80與C83==C81除DL source外逐欄相同、OOS/rolling param source正確、C82-C80/C83-C81/C82-C83 contrasts存在且current strategy membership由shared model-list派生；`validate_breakout_quality_shared_ah_contract_case`驗current model list回到`H/AF/AH/AK/AM`且不含AL/AN。",
-      "entry": "`config/breakout_quality.py`, `config/strategy_compare.py`, `tools/validate/synthetic_breakout_quality_strategy_app_cases.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`, `doc/TEST_SUITE_CHECKLIST.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`",
-      "category": "MR-13AK strategy conversion C82/C83 source-only controls",
-      "status": "DONE"
-    },
-    {
       "id": "B333",
       "section": "B2",
       "priority": "P1",
@@ -2761,50 +2156,6 @@
       "gap": "`validate_breakout_quality_true_hs_scoped_pair_membership_contract_case`直接驗declarative recipe、AK topology重用、true-HS target geometry、LS margin不影響HS-sublist ΔNDCG、current authorization fail-closed及AK同gate reference不在Breakout subset重算Safety percentile。",
       "entry": "`config/breakout_quality.py`, `core/breakout_quality_runtime.py`, `filters/breakout_quality/hs_conditional_mfe.py`, `services/breakout_quality/train_continuous_ranker.py`, `services/breakout_quality/train_daily_ranker.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`, `tools/validate/synthetic_cases.py`, `doc/TEST_SUITE_CHECKLIST.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`",
       "category": "MR-13AO True-HS Conditional-MFE membership-scoped supervision contract",
-      "status": "DONE"
-    },
-    {
-      "id": "B334",
-      "section": "B2",
-      "priority": "P1",
-      "order": 315,
-      "item": "MR-13AP固定LS relevance=0、true-HS依同日HS cohort MFE percentile映射至[0.5,1.0]，任一HS truth嚴格高於任一LS；shared Safety auxiliary/encoder與full-list ΔNDCG保留，final ranking direct all-daily，不使用Pred-Safety gate或Safety pair weighting。歷史Seed42 Forward Gate結果不改寫；current workflow availability只依shared membership判定。",
-      "gap": "`validate_breakout_quality_hs_priority_mfe_contract_case`驗AP target、architecture、runtime score、HS/LS ordering與current membership外fail-closed。",
-      "entry": "`config/breakout_quality.py`, `core/breakout_quality_runtime.py`, `filters/breakout_quality/hs_conditional_mfe.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`, `tools/validate/synthetic_cases.py`, `doc/TEST_SUITE_CHECKLIST.md`",
-      "category": "MR-13AP HS-Priority MFE non-compensatory truth contract",
-      "status": "DONE"
-    },
-    {
-      "id": "B335",
-      "section": "B2",
-      "priority": "P1",
-      "order": 316,
-      "item": "MR-13AQ完全重用AP truth與architecture，只把HS↔LS、HS↔HS comparable pairs在相同full-list rank/IDCG/ΔNDCG geometry下各自依自身weight sum normalize再固定1:1平均；不得改pair direction、target、inference或加入Safety weighting。",
-      "gap": "`validate_breakout_quality_hs_priority_stratified_mfe_contract_case`驗AQ只改pair aggregation、AP truth完全重用、兩strata normalization與current membership外fail-closed。",
-      "entry": "`config/breakout_quality.py`, `core/breakout_quality_runtime.py`, `services/breakout_quality/train_continuous_ranker.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`, `tools/validate/synthetic_cases.py`, `doc/TEST_SUITE_CHECKLIST.md`",
-      "category": "MR-13AQ HS-Priority pair-stratified normalization contract",
-      "status": "DONE"
-    },
-    {
-      "id": "B336",
-      "section": "B2",
-      "priority": "P1",
-      "order": 317,
-      "item": "MR-13AR固定P50 true-HS定義與AO Conditional-MFE sublist，只把primary head改成binary HS↔LS qualification；同cohort pair tie，Conditional-MFE只在true-HS sublist產生gradient，Pred-HS P50→Conditional-MFE inference與AO same-gate attribution固定。歷史Forward Gate結果保留，但AR若位於current shared Model Compare/Test membership，不得被歷史Forward-only flag二次阻擋。",
-      "gap": "`validate_breakout_quality_hs_qualification_conditional_mfe_contract_case`驗binary qualification、true-HS conditional upside、same-gate reference與current shared-membership authorization。",
-      "entry": "`config/breakout_quality.py`, `core/breakout_quality_runtime.py`, `filters/breakout_quality/hs_conditional_mfe.py`, `services/breakout_quality/train_continuous_ranker.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`, `tools/validate/synthetic_cases.py`, `doc/TEST_SUITE_CHECKLIST.md`",
-      "category": "MR-13AR Direct HS-Qualification + Conditional-MFE contract",
-      "status": "DONE"
-    },
-    {
-      "id": "B337",
-      "section": "B2",
-      "priority": "P1",
-      "order": 318,
-      "item": "MR-13AS重用AR完整two-head contract，唯一scientific change為qualification HS↔LS pair在canonical full-list ΔNDCG上再乘`1 - abs(SafetyPct_i - SafetyPct_j)` truth-side proximity weight；不改pair direction、input、HS threshold、Conditional-MFE或inference。歷史AS identity不得反向綁死current model membership；B325只泛化保證「目前current training pair」自動注入shared Model Compare/Test list。",
-      "gap": "`validate_breakout_quality_hs_boundary_weighted_conditional_mfe_contract_case`驗boundary weight formula/ordering、AR one-control-point、AS歷史identity可解析且不pin current membership；current training-pair containment由generic Continuous-DL contract驗證。",
-      "entry": "`config/breakout_quality.py`, `core/breakout_quality_runtime.py`, `services/breakout_quality/train_continuous_ranker.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`, `tools/validate/synthetic_cases.py`, `doc/TEST_SUITE_CHECKLIST.md`",
-      "category": "MR-13AS P50-boundary-weighted HS qualification contract",
       "status": "DONE"
     },
     {
@@ -2863,17 +2214,6 @@
       "status": "DONE"
     },
     {
-      "id": "B343",
-      "section": "B2",
-      "priority": "P1",
-      "order": 324,
-      "item": "在既有AO shared InceptionTime feature map上，Safety branch可選擇parameter-minimal `1×1 Conv scorer → softmax(time) → weighted temporal sum` pooling；MFE branch必須維持原Global Average Pool。不得新增attention head count、temperature、query count、window length或hidden-width knob。相同seed下AO/AW共同參數初始化與MFE stochastic path必須保持一致；Safety loss可更新attention scorer，MFE-only loss不得更新attention scorer。",
-      "gap": "`validate_breakout_quality_reusable_model_component_contract_case`驗descriptor capability、AO/AW spec除architecture/family/pooling外一致、same-seed common weights bit-identical、AW MFE logits與AO逐位相同、attention權重finite且sum=1，以及Safety/MFE gradient ownership隔離。",
-      "entry": "`filters/breakout_quality/models/architectures.py`, `filters/breakout_quality/models/spec.py`, `filters/breakout_quality/models/inception_time.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`",
-      "category": "Safety-specific scalar temporal attention pooling reusable architecture primitive",
-      "status": "DONE"
-    },
-    {
       "id": "B344",
       "section": "B2",
       "priority": "P1",
@@ -2882,50 +2222,6 @@
       "gap": "`validate_research_report_contract_freeze_case`驗comparison v10 approved fingerprint、Standard SOP fingerprint不變、HS-Conditional extension欄位/order、AO/AW capability-driven merged rendering；`validate_breakout_quality_reusable_model_component_contract_case`維持AW architecture evidence。",
       "entry": "`core/research_report_contract.py`, `services/research/breakout_quality_application.py`, `tools/validate/synthetic_meta_cases.py`",
       "category": "Continuous Safety learnability evidence加入Conditional-MFE cross-model Model-specific Extension",
-      "status": "DONE"
-    },
-    {
-      "id": "B345",
-      "section": "B2",
-      "priority": "P1",
-      "order": 326,
-      "item": "既有B340/B343 capabilities必可正交組合：最後一個完整residual group維持Safety/MFE task-specific，僅Safety-specific feature map使用既有single-scalar temporal attention，MFE-specific branch仍GAP。不得新增head count、temperature、query/window/hidden-width或branch-depth knob；相同seed下AV/AX共同參數與MFE path必須exact，Safety/MFE gradient ownership仍維持task isolation。",
-      "gap": "`validate_breakout_quality_reusable_model_component_contract_case`驗descriptor capability composition、AV/AX spec除architecture/family/pooling外一致、same-seed只新增Safety scorer、AX attention確實讀Safety-specific feature map、MFE logits exact，以及Safety/MFE branch/scorer gradient隔離。",
-      "entry": "`filters/breakout_quality/models/architectures.py`, `filters/breakout_quality/models/spec.py`, `filters/breakout_quality/models/spec_contract.py`, `filters/breakout_quality/models/inception_time.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`",
-      "category": "Task-specific Safety representation × scalar temporal attention reusable composition",
-      "status": "DONE"
-    },
-    {
-      "id": "B346",
-      "section": "B2",
-      "priority": "P1",
-      "order": 327,
-      "item": "AO shared InceptionTime feature map與MFE GAP必須exact；僅Safety path可加入single-head full-width Q/K/V temporal self-attention，canonical scaled-dot-product、residual後仍GAP。不得新增FFN、positional encoding、dropout、window、head-count、hidden-width或temperature knob；same-seed AO共同參數/MFE logits必須exact，Q/K/V gradient只能來自Safety head。",
-      "gap": "`validate_breakout_quality_reusable_model_component_contract_case`驗descriptor/spec只改interaction identity、same-seed僅新增Q/K/V projection、MFE logits exact、Safety output改變與Safety-only Q/K/V gradient ownership。",
-      "entry": "`filters/breakout_quality/models/architectures.py`, `filters/breakout_quality/models/spec.py`, `filters/breakout_quality/models/inception_time.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`",
-      "category": "Safety temporal self-attention interaction reusable primitive",
-      "status": "DONE"
-    },
-    {
-      "id": "B347",
-      "section": "B2",
-      "priority": "P1",
-      "order": 328,
-      "item": "Safety encoder固定historical 9F/MR-13Z Patch recipe（patch10/embed128/depth3/heads4/FFN256/sinusoidal/dropout0.10/token mean），Conditional-MFE encoder固定AO-form InceptionTime+GAP。兩encoder必須gradient隔離；same-seed hybrid內AO MFE submodel初始化與AO standalone exact，eval MFE logits exact。generic trainer/inference只消費既有duo-head contract，不得辨認MR identity。",
-      "gap": "`validate_breakout_quality_reusable_model_component_contract_case`驗hybrid spec同時保存Patch/Inception recipe、topology gradient ownership、same-seed AO MFE state/logits exact、duo-head output width與Safety↔MFE雙向gradient isolation。",
-      "entry": "`filters/breakout_quality/models/architectures.py`, `filters/breakout_quality/models/spec_builders.py`, `filters/breakout_quality/models/runtime_registry.py`, `filters/breakout_quality/models/patch_token_joint_min.py`, `filters/breakout_quality/models/hybrid_safety_patch_mfe.py`, `filters/breakout_quality/models/spec_contract.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`",
-      "category": "Safety Patch Transformer + Conditional-MFE InceptionTime dual-encoder reusable primitive",
-      "status": "DONE"
-    },
-    {
-      "id": "B348",
-      "section": "B2",
-      "priority": "P1",
-      "order": 329,
-      "item": "InceptionTime architecture descriptor可宣告逐module dilation；未宣告者維持既有全1語意。MR-13BA只在AO shared InceptionTime最後一個residual group使用dilation=2，module dilations固定`(1,1,1,1,2,2)`，使300-bar input的actual receptive field由229擴至305；kernels/depth/filters/bottleneck/residual cadence/pooling/trainable parameter count與AO控制組保持不變。generic model/spec builder必須由descriptor-driven dilation建構，不得硬編MR identity。",
-      "gap": "`validate_breakout_quality_reusable_model_component_contract_case`驗full-window capability、RF=305、module dilations、AO kernels/depth/width/pooling/parameter-count exact control，以及descriptor-driven dilation。",
-      "entry": "`filters/breakout_quality/models/architectures.py`, `filters/breakout_quality/models/spec_contract.py`, `filters/breakout_quality/models/spec_builders.py`, `filters/breakout_quality/models/inception_time.py`, `config/breakout_quality.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`",
-      "category": "InceptionTime per-module dilation / full-window receptive-field reusable primitive",
       "status": "DONE"
     },
     {
@@ -3278,17 +2574,6 @@
       "gap": "Full rule-based strategy_fill持股在completed daily position roll-forward後，必須以position-level immutable strategy_lineage frozen params判定ind_sell_signal；legacy持股才可fallback entry-order frozen params。Signal成立後以immutable signal_key保存完整持股SELL decision obligation，後續completed bar即使signal轉false也不得洗掉，直到使用者登錄實際SELL fill或持股關閉。Primary Workbench只顯示SELL signal與建議動作，由使用者自行至券商處理；legacy explicit broker submission/cancel/retry lifecycle僅保留compatibility backend，不得成為primary UI前置。Operations Status必須優先處理persistent strategy indicator obligation；D3/D4 lock以actual account SELL fill date判定，不得以active broker order代替。Market Data由獨立DataOps更新、position roll-forward與Indicator decision透過canonical lifecycle sync管理，不得依賴已退役的Trading Data→Params→Scanner批次入口；pre-live audit仍須驗account/cash、roll-forward、fresh indicator decision與open-position SELL coverage。",
       "entry": "`core/trading_order_state.py`, `core/trading_capabilities.py`, `services/trading/strategy_param_runtime.py`, `services/trading/indicator_exit_planning.py`, `services/trading/indicator_exit_order_submission.py`, `services/trading/fill_reconciliation.py`, `services/trading/operations_status.py`, `services/trading/operational_audit.py`, `services/trading/daily_workflow.py`, `services/workbench_ui/trading_account_panel.py`, `tools/validate/synthetic_trading_cases.py`",
       "category": "Trading rule-based indicator exit execution",
-      "status": "DONE"
-    },
-    {
-      "id": "B374",
-      "section": "B2",
-      "priority": "P1",
-      "order": 362,
-      "item": "Model Standard SOP absorbs reusable head learnability while retired geometry diagnostics leave persistent comparison",
-      "gap": "使用者明確授權精簡Continuous DL常駐報表：multi-head Head Learnability屬基本learnability，必須成為Standard SOP 1條件式子表；Truth / Prediction Geometry保留歷史scientific payload但退出persistent single/cross-model report extension；HS-Conditional extension刪除重複Safety/head/attribution欄位，cross-model不再nested reference comparison；Evidence Coverage在6/6 AVAILABLE時compact，Rolling/Robustness定位為Standard Mode Evidence。Canonical report contract與renderer必須同源，舊artifact可直接讀取，不得因report schema升級重訓。",
-      "entry": "`core/research_report_contract.py`, `services/breakout_quality/standard_model_sop.py`, `services/breakout_quality/train_daily_ranker.py`, `services/research/breakout_quality_application.py`, `tools/validate/synthetic_meta_cases.py`, `tools/validate/synthetic_cli_cases.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`",
-      "category": "Research reporting / Canonical contract",
       "status": "DONE"
     },
     {
@@ -5419,7 +4704,7 @@
     },
     {
       "id": "T298",
-      "description": "`validate_breakout_quality_multi_dl_ranker_architecture_contract_case`",
+      "description": "`validate_breakout_quality_reusable_model_component_contract_case`：B201",
       "b_id": "B201",
       "order": 290,
       "status": "DONE"
@@ -5460,55 +4745,6 @@
       "status": "DONE"
     },
     {
-      "id": "T311",
-      "description": "`validate_strategy_compare_config_driven_app_contract_case`：B213",
-      "b_id": "B213",
-      "order": 303,
-      "status": "DONE"
-    },
-    {
-      "id": "T315",
-      "description": "`validate_strategy_compare_config_driven_app_contract_case`：B217",
-      "b_id": "B217",
-      "order": 307,
-      "status": "DONE"
-    },
-    {
-      "id": "T316",
-      "description": "`validate_strategy_compare_config_driven_app_contract_case`：B218",
-      "b_id": "B218",
-      "order": 308,
-      "status": "DONE"
-    },
-    {
-      "id": "T317",
-      "description": "`validate_strategy_compare_config_driven_app_contract_case`：B219",
-      "b_id": "B219",
-      "order": 309,
-      "status": "DONE"
-    },
-    {
-      "id": "T318",
-      "description": "`validate_strategy_compare_config_driven_app_contract_case`：B220",
-      "b_id": "B220",
-      "order": 310,
-      "status": "DONE"
-    },
-    {
-      "id": "T319",
-      "description": "`validate_strategy_compare_config_driven_app_contract_case`：B221",
-      "b_id": "B221",
-      "order": 311,
-      "status": "DONE"
-    },
-    {
-      "id": "T320",
-      "description": "`validate_strategy_compare_config_driven_app_contract_case`：B222",
-      "b_id": "B222",
-      "order": 312,
-      "status": "DONE"
-    },
-    {
       "id": "T321",
       "description": "`validate_strategy_compare_config_driven_app_contract_case`：B223",
       "b_id": "B223",
@@ -5534,20 +4770,6 @@
       "description": "`validate_strategy_compare_config_driven_app_contract_case`：B226",
       "b_id": "B226",
       "order": 316,
-      "status": "DONE"
-    },
-    {
-      "id": "T325",
-      "description": "`validate_strategy_compare_config_driven_app_contract_case`：B227",
-      "b_id": "B227",
-      "order": 317,
-      "status": "DONE"
-    },
-    {
-      "id": "T326",
-      "description": "`validate_strategy_compare_config_driven_app_contract_case`：B228",
-      "b_id": "B228",
-      "order": 318,
       "status": "DONE"
     },
     {
@@ -5607,13 +4829,6 @@
       "status": "DONE"
     },
     {
-      "id": "T336",
-      "description": "`validate_strategy_compare_config_driven_app_contract_case`：B236",
-      "b_id": "B236",
-      "order": 328,
-      "status": "DONE"
-    },
-    {
       "id": "T340",
       "description": "`validate_strategy_compare_config_driven_app_contract_case`：B189/T340",
       "b_id": "B189",
@@ -5663,27 +4878,6 @@
       "status": "DONE"
     },
     {
-      "id": "T351",
-      "description": "`validate_strategy_compare_config_driven_app_contract_case`：B248",
-      "b_id": "B248",
-      "order": 343,
-      "status": "DONE"
-    },
-    {
-      "id": "T352",
-      "description": "`validate_strategy_compare_config_driven_app_contract_case`：B249",
-      "b_id": "B249",
-      "order": 344,
-      "status": "DONE"
-    },
-    {
-      "id": "T353",
-      "description": "`validate_strategy_compare_config_driven_app_contract_case`：B250",
-      "b_id": "B250",
-      "order": 345,
-      "status": "DONE"
-    },
-    {
       "id": "T357",
       "description": "`validate_strategy_compare_config_driven_app_contract_case`：B253",
       "b_id": "B253",
@@ -5719,73 +4913,10 @@
       "status": "DONE"
     },
     {
-      "id": "T364",
-      "description": "`validate_breakout_quality_conditional_mfe_safety_single_model_contract_case`",
-      "b_id": "B256",
-      "order": 354,
-      "status": "DONE"
-    },
-    {
-      "id": "T365",
-      "description": "`validate_breakout_quality_reverse_conditional_mfe_ab_contract_case`",
-      "b_id": "B257",
-      "order": 355,
-      "status": "DONE"
-    },
-    {
-      "id": "T366",
-      "description": "`validate_synthetic_candidate_order_fill_layer_separation_case`：B258",
-      "b_id": "B258",
-      "order": 356,
-      "status": "DONE"
-    },
-    {
-      "id": "T367",
-      "description": "`validate_strategy_compare_config_driven_app_contract_case`：B259",
-      "b_id": "B259",
-      "order": 357,
-      "status": "DONE"
-    },
-    {
       "id": "T368",
       "description": "`validate_breakout_quality_audit_framework_contract_case`：B260",
       "b_id": "B260",
       "order": 358,
-      "status": "DONE"
-    },
-    {
-      "id": "T369",
-      "description": "`validate_synthetic_candidate_order_fill_layer_separation_case`：B261",
-      "b_id": "B261",
-      "order": 359,
-      "status": "DONE"
-    },
-    {
-      "id": "T370",
-      "description": "`validate_strategy_compare_config_driven_app_contract_case`：B261",
-      "b_id": "B261",
-      "order": 360,
-      "status": "DONE"
-    },
-    {
-      "id": "T371",
-      "description": "`validate_breakout_quality_point_in_time_score_builder_contract_case`：B262",
-      "b_id": "B262",
-      "order": 361,
-      "status": "DONE"
-    },
-    {
-      "id": "T372",
-      "description": "`validate_synthetic_candidate_order_fill_layer_separation_case`：B262",
-      "b_id": "B262",
-      "order": 362,
-      "status": "DONE"
-    },
-    {
-      "id": "T373",
-      "description": "`validate_strategy_compare_config_driven_app_contract_case`：B262",
-      "b_id": "B262",
-      "order": 363,
       "status": "DONE"
     },
     {
@@ -5810,59 +4941,10 @@
       "status": "DONE"
     },
     {
-      "id": "T377",
-      "description": "`validate_strategy_compare_config_driven_app_contract_case`：B266",
-      "b_id": "B266",
-      "order": 367,
-      "status": "DONE"
-    },
-    {
-      "id": "T378",
-      "description": "`validate_breakout_quality_strategy_readable_report_contract_case`：B266",
-      "b_id": "B266",
-      "order": 368,
-      "status": "DONE"
-    },
-    {
-      "id": "T379",
-      "description": "`validate_breakout_quality_strategy_comparison_contract_case`：B266",
-      "b_id": "B266",
-      "order": 369,
-      "status": "DONE"
-    },
-    {
       "id": "T380",
       "description": "`validate_breakout_quality_strategy_readable_report_contract_case`：B267",
       "b_id": "B267",
       "order": 370,
-      "status": "DONE"
-    },
-    {
-      "id": "T381",
-      "description": "`validate_synthetic_candidate_order_fill_layer_separation_case`：B268",
-      "b_id": "B268",
-      "order": 371,
-      "status": "DONE"
-    },
-    {
-      "id": "T382",
-      "description": "`validate_strategy_compare_config_driven_app_contract_case`：B268",
-      "b_id": "B268",
-      "order": 372,
-      "status": "DONE"
-    },
-    {
-      "id": "T385",
-      "description": "`validate_breakout_quality_safety_raw_mfe_duo_contract_case`：B271",
-      "b_id": "B271",
-      "order": 375,
-      "status": "DONE"
-    },
-    {
-      "id": "T386",
-      "description": "`validate_breakout_quality_safety_raw_mfe_duo_contract_case`：B272",
-      "b_id": "B272",
-      "order": 376,
       "status": "DONE"
     },
     {
@@ -5915,24 +4997,10 @@
       "status": "DONE"
     },
     {
-      "id": "T394",
-      "description": "`validate_breakout_quality_safety_raw_mfe_hmhs_tri_head_contract_case`：B277",
-      "b_id": "B277",
-      "order": 384,
-      "status": "DONE"
-    },
-    {
       "id": "T395",
-      "description": "`validate_breakout_quality_safety_raw_mfe_hmhs_tri_head_contract_case`：B278",
+      "description": "`validate_breakout_quality_reusable_model_component_contract_case`：B278",
       "b_id": "B278",
       "order": 385,
-      "status": "DONE"
-    },
-    {
-      "id": "T396",
-      "description": "`validate_breakout_quality_hmhs_single_head_contract_case`",
-      "b_id": "B279",
-      "order": 386,
       "status": "DONE"
     },
     {
@@ -5940,48 +5008,6 @@
       "description": "`validate_research_report_contract_freeze_case`：B280",
       "b_id": "B280",
       "order": 387,
-      "status": "DONE"
-    },
-    {
-      "id": "T398",
-      "description": "`validate_breakout_quality_nonlinear_hmhs_head_contract_case`",
-      "b_id": "B281",
-      "order": 388,
-      "status": "DONE"
-    },
-    {
-      "id": "T399",
-      "description": "`validate_breakout_quality_joint_min_target_contract_case`",
-      "b_id": "B282",
-      "order": 389,
-      "status": "DONE"
-    },
-    {
-      "id": "T400",
-      "description": "`validate_breakout_quality_joint_attention_pool_contract_case`",
-      "b_id": "B283",
-      "order": 390,
-      "status": "DONE"
-    },
-    {
-      "id": "T401",
-      "description": "`validate_breakout_quality_modern_tcn_joint_min_contract_case`",
-      "b_id": "B284",
-      "order": 391,
-      "status": "DONE"
-    },
-    {
-      "id": "T402",
-      "description": "`validate_breakout_quality_patch_transformer_joint_min_contract_case`",
-      "b_id": "B285",
-      "order": 392,
-      "status": "DONE"
-    },
-    {
-      "id": "T403",
-      "description": "`validate_mr13z_c75_conversion_contract_case`",
-      "b_id": "B286",
-      "order": 393,
       "status": "DONE"
     },
     {
@@ -6006,50 +5032,8 @@
       "status": "DONE"
     },
     {
-      "id": "T407",
-      "description": "`validate_breakout_quality_mr13aa_patch_transformer_h_target_contract_case`",
-      "b_id": "B290",
-      "order": 397,
-      "status": "DONE"
-    },
-    {
-      "id": "T408",
-      "description": "`validate_breakout_quality_mr13ab_first_breach_pure_mfe_contract_case`",
-      "b_id": "B291",
-      "order": 398,
-      "status": "DONE"
-    },
-    {
-      "id": "T409",
-      "description": "`validate_breakout_quality_audit_framework_contract_case`：B292",
-      "b_id": "B292",
-      "order": 399,
-      "status": "DONE"
-    },
-    {
-      "id": "T410",
-      "description": "`validate_breakout_quality_audit_framework_contract_case`：B293",
-      "b_id": "B293",
-      "order": 400,
-      "status": "DONE"
-    },
-    {
-      "id": "T411",
-      "description": "`validate_breakout_quality_audit_framework_contract_case`：B294",
-      "b_id": "B294",
-      "order": 401,
-      "status": "DONE"
-    },
-    {
-      "id": "T412",
-      "description": "`validate_breakout_quality_mr13ac_predicted_upside_conditional_safety_contract_case`：B296",
-      "b_id": "B296",
-      "order": 402,
-      "status": "DONE"
-    },
-    {
       "id": "T413",
-      "description": "`validate_breakout_quality_mr13ac_predicted_upside_conditional_safety_contract_case`：B297",
+      "description": "`validate_breakout_quality_full_horizon_target_components_contract_case`：B297",
       "b_id": "B297",
       "order": 403,
       "status": "DONE"
@@ -6066,104 +5050,6 @@
       "description": "`validate_breakout_quality_audit_framework_contract_case`：B295",
       "b_id": "B295",
       "order": 405,
-      "status": "DONE"
-    },
-    {
-      "id": "T416",
-      "description": "`validate_breakout_quality_mr13ad_predicted_safety_conditional_mfe_contract_case`",
-      "b_id": "B299",
-      "order": 406,
-      "status": "DONE"
-    },
-    {
-      "id": "T417",
-      "description": "`validate_breakout_quality_mr13ae_predicted_safety_context_pure_mfe_contract_case`：B300",
-      "b_id": "B300",
-      "order": 407,
-      "status": "DONE"
-    },
-    {
-      "id": "T418",
-      "description": "`validate_breakout_quality_mr13af_high_safety_weighted_pure_mfe_contract_case`",
-      "b_id": "B301",
-      "order": 408,
-      "status": "DONE"
-    },
-    {
-      "id": "T419",
-      "description": "`validate_breakout_quality_continuous_ranker_contract_case`：B302",
-      "b_id": "B302",
-      "order": 409,
-      "status": "DONE"
-    },
-    {
-      "id": "T420",
-      "description": "`validate_breakout_quality_continuous_ranker_contract_case`：B303",
-      "b_id": "B303",
-      "order": 410,
-      "status": "DONE"
-    },
-    {
-      "id": "T422",
-      "description": "`validate_breakout_quality_continuous_ranker_contract_case`：B305",
-      "b_id": "B305",
-      "order": 412,
-      "status": "DONE"
-    },
-    {
-      "id": "T423",
-      "description": "`validate_strategy_compare_config_driven_app_contract_case`：B306",
-      "b_id": "B306",
-      "order": 413,
-      "status": "DONE"
-    },
-    {
-      "id": "T424",
-      "description": "`validate_research_report_contract_freeze_case`：B307",
-      "b_id": "B307",
-      "order": 414,
-      "status": "DONE"
-    },
-    {
-      "id": "T425",
-      "description": "`validate_research_report_contract_freeze_case`：B308",
-      "b_id": "B308",
-      "order": 415,
-      "status": "DONE"
-    },
-    {
-      "id": "T426",
-      "description": "`validate_breakout_quality_mr13ae_predicted_safety_context_pure_mfe_contract_case`：B308",
-      "b_id": "B308",
-      "order": 416,
-      "status": "DONE"
-    },
-    {
-      "id": "T427",
-      "description": "`validate_breakout_quality_continuous_ranker_contract_case`：B308",
-      "b_id": "B308",
-      "order": 417,
-      "status": "DONE"
-    },
-    {
-      "id": "T428",
-      "description": "`validate_research_report_contract_freeze_case`：B309",
-      "b_id": "B309",
-      "order": 418,
-      "status": "DONE"
-    },
-    {
-      "id": "T429",
-      "description": "`validate_research_report_contract_freeze_case`：B310",
-      "b_id": "B310",
-      "order": 419,
-      "status": "DONE"
-    },
-    {
-      "id": "T430",
-      "description": "`validate_research_report_contract_freeze_case`：B311",
-      "b_id": "B311",
-      "order": 420,
       "status": "DONE"
     },
     {
@@ -6265,13 +5151,6 @@
       "status": "DONE"
     },
     {
-      "id": "T445",
-      "description": "`validate_research_report_contract_freeze_case`：B326",
-      "b_id": "B326",
-      "order": 435,
-      "status": "DONE"
-    },
-    {
       "id": "T446",
       "description": "`validate_breakout_quality_point_in_time_score_builder_contract_case`：B327",
       "b_id": "B327",
@@ -6279,80 +5158,10 @@
       "status": "DONE"
     },
     {
-      "id": "T447",
-      "description": "`validate_breakout_quality_shared_ah_contract_case`：B328",
-      "b_id": "B328",
-      "order": 437,
-      "status": "DONE"
-    },
-    {
-      "id": "T448",
-      "description": "`validate_research_report_contract_freeze_case`：B329",
-      "b_id": "B329",
-      "order": 438,
-      "status": "DONE"
-    },
-    {
-      "id": "T449",
-      "description": "`validate_breakout_quality_shared_ah_contract_case`：B330",
-      "b_id": "B330",
-      "order": 439,
-      "status": "DONE"
-    },
-    {
-      "id": "T450",
-      "description": "`validate_breakout_quality_shared_ah_contract_case`：B331",
-      "b_id": "B331",
-      "order": 440,
-      "status": "DONE"
-    },
-    {
-      "id": "T451",
-      "description": "`validate_strategy_compare_config_driven_app_contract_case`：B332",
-      "b_id": "B332",
-      "order": 441,
-      "status": "DONE"
-    },
-    {
-      "id": "T452",
-      "description": "`validate_breakout_quality_shared_ah_contract_case`：B332",
-      "b_id": "B332",
-      "order": 442,
-      "status": "DONE"
-    },
-    {
       "id": "T453",
       "description": "`validate_breakout_quality_true_hs_scoped_pair_membership_contract_case`",
       "b_id": "B333",
       "order": 443,
-      "status": "DONE"
-    },
-    {
-      "id": "T454",
-      "description": "`validate_breakout_quality_hs_priority_mfe_contract_case`",
-      "b_id": "B334",
-      "order": 444,
-      "status": "DONE"
-    },
-    {
-      "id": "T455",
-      "description": "`validate_breakout_quality_hs_priority_stratified_mfe_contract_case`",
-      "b_id": "B335",
-      "order": 445,
-      "status": "DONE"
-    },
-    {
-      "id": "T456",
-      "description": "`validate_breakout_quality_hs_qualification_conditional_mfe_contract_case`",
-      "b_id": "B336",
-      "order": 446,
-      "status": "DONE"
-    },
-    {
-      "id": "T457",
-      "description": "`validate_breakout_quality_hs_boundary_weighted_conditional_mfe_contract_case`：B337",
-      "b_id": "B337",
-      "order": 447,
       "status": "DONE"
     },
     {
@@ -6391,45 +5200,10 @@
       "status": "DONE"
     },
     {
-      "id": "T463",
-      "description": "`validate_breakout_quality_reusable_model_component_contract_case`：B343",
-      "b_id": "B343",
-      "order": 453,
-      "status": "DONE"
-    },
-    {
       "id": "T464",
       "description": "`validate_research_report_contract_freeze_case`：B344",
       "b_id": "B344",
       "order": 454,
-      "status": "DONE"
-    },
-    {
-      "id": "T465",
-      "description": "`validate_breakout_quality_reusable_model_component_contract_case`：B345",
-      "b_id": "B345",
-      "order": 455,
-      "status": "DONE"
-    },
-    {
-      "id": "T466",
-      "description": "`validate_breakout_quality_reusable_model_component_contract_case`：B346",
-      "b_id": "B346",
-      "order": 456,
-      "status": "DONE"
-    },
-    {
-      "id": "T467",
-      "description": "`validate_breakout_quality_reusable_model_component_contract_case`：B347",
-      "b_id": "B347",
-      "order": 457,
-      "status": "DONE"
-    },
-    {
-      "id": "T468",
-      "description": "`validate_breakout_quality_reusable_model_component_contract_case`：B348",
-      "b_id": "B348",
-      "order": 458,
       "status": "DONE"
     },
     {
@@ -6497,7 +5271,7 @@
     },
     {
       "id": "T478",
-      "description": "`validate_breakout_quality_hs_boundary_weighted_conditional_mfe_contract_case`：B358",
+      "description": "`validate_breakout_quality_continuous_ranker_contract_case`：B358",
       "b_id": "B358",
       "order": 468,
       "status": "DONE"
@@ -6605,13 +5379,6 @@
       "description": "`validate_trading_indicator_sell_execution_contract_case`",
       "b_id": "B373",
       "order": 483,
-      "status": "DONE"
-    },
-    {
-      "id": "T494",
-      "description": "`validate_research_report_contract_freeze_case`：B374",
-      "b_id": "B374",
-      "order": 484,
       "status": "DONE"
     },
     {

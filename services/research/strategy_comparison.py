@@ -728,57 +728,6 @@ def _value_with_signal(text: str, signal: str, *, target: str) -> str:
     return styled_signal(text, signal, target=target)
 
 
-def render_safety_gate_sensitivity_table(
-    scenarios: dict[str, dict[str, Any]],
-    diagnostics: dict[str, Any],
-    *,
-    settings: StrategyComparisonSettings,
-) -> str:
-    """Render the controlled Raw-Safety percentile sensitivity curve only."""
-
-    gate_arms = []
-    for arm in settings.enabled_arms:
-        options = dict(arm.dl_runtime_options or {})
-        if str(options.get("safety_gate") or "") != "same_day_orderable_percentile_gte_v1":
-            continue
-        try:
-            cutoff = float(options["safety_percentile_cutoff"])
-        except (KeyError, TypeError, ValueError):
-            continue
-        gate_arms.append((cutoff, arm))
-    gate_arms.sort(key=lambda item: (item[0], item[1].arm_id))
-    if len(gate_arms) < 2:
-        return "目前沒有至少兩個Raw Safety gate cutoff，Sensitivity不適用。"
-
-    geometry = dict(diagnostics.get("mfe_safety_geometry") or {})
-    geometry_arms = dict(geometry.get("arms") or {}) if str(geometry.get("status")) == "AVAILABLE" else {}
-    upside_by_arm = {
-        str(row.get("arm_id") or ""): dict(row)
-        for row in list(diagnostics.get("upside_realization") or [])
-    }
-    rows = []
-    for cutoff, arm in gate_arms:
-        scenario = dict(scenarios.get(arm.arm_id) or {})
-        geo = dict(geometry_arms.get(arm.arm_id) or {})
-        upside = dict(upside_by_arm.get(arm.arm_id) or {})
-        rows.append((
-            arm.arm_id,
-            f">={cutoff:.2f}",
-            _fmt(scenario.get("avg_exposure_pct"), unit="%"),
-            _fmt(geo.get("high_mfe_high_safety_pct"), unit="%"),
-            _fmt(geo.get("high_mfe_low_safety_pct"), unit="%"),
-            _fmt(geo.get("high_mfe_total_pct"), unit="%"),
-            _fmt(geo.get("high_safety_total_pct"), unit="%"),
-            _fmt(upside.get("full_horizon_mfe_mean_r"), unit="R"),
-            _fmt(upside.get("full_horizon_adverse_to_peak_mean_r"), unit="R"),
-            _fmt(upside.get("realized_mean_r"), unit="R"),
-            _fmt(scenario.get("return_over_max_drawdown")),
-        ))
-    table = render_table(
-        ("編號", "Raw Safety gate", "平均曝險", "HM/HS", "HM/LS", "High-MFE", "High-Safety", "Full-MFE", "Adverse", "Realized EV", "RoMD"),
-        rows,
-    )
-    return table + "\nGate curve只比較C71/C72/C73同一MR-13R No-K/No-R0 formulation；C64/C66保留於主表作reference，不混入threshold curve。"
 
 
 def _delta(left: dict[str, Any], right: dict[str, Any], key: str) -> float | None:
