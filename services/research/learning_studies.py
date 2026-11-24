@@ -135,14 +135,13 @@ def _episode_inventory(bundle, *, teacher, mask, cutoff):
     from filters.breakout_quality.daily_trade40_target import compute_counterfactual_trade40_batch
     keys = []
     from filters.breakout_quality.daily_trade40_target import collect_canonical_exchange_sessions
-    from filters.breakout_quality.workflow_io import discover_dataset_csv_inputs
+    from filters.breakout_quality.workflow_io import discover_dataset_csv_inputs, load_dataset_frame
     csv_inputs, _duplicates = discover_dataset_csv_inputs(ROOT, bundle.summary['dataset'])
     calendar = collect_canonical_exchange_sessions(csv_inputs, benchmark_ticker='0050', horizon_sessions=None)
+    paths_by_ticker = dict(csv_inputs)
     selected = bundle.group_table.loc[mask]
     for ticker, rows in selected.groupby('ticker', observed=True, sort=False):
-        ticker_id = int(rows['ticker_id'].iloc[0])
-        bank = bundle.feature_bank
-        frame = pd.DataFrame(bank._frame_arrays[ticker_id], index=pd.DatetimeIndex(bank._frame_dates[ticker_id]), columns=['Open','High','Low','Close','Volume'])
+        frame = load_dataset_frame(paths_by_ticker[str(ticker)], str(ticker), min_rows=1)
         frame = frame.loc[frame.index <= pd.Timestamp(cutoff)]
         observed = {}
         compute_counterfactual_trade40_batch(
