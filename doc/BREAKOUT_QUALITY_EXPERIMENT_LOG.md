@@ -5345,3 +5345,41 @@ Assessment: `USER_REPORTED_ROLLING_RESULT_AVAILABLE / FULL_HORIZON_MAE_SMALL_PAI
 同批 Daily Oracle 回報值（RoMD／Oracle 交易勝率）為 P20 的 C169 6087.97／88.38%、C172 2450.16／100.00%、C173 2298.24／93.08%，以及 P21 的 C181 3196.59／90.62%、C182 1562.92／92.98%、C183 1460.17／100.00%。
 
 **工件定位與證據範圍。** 模型比較由 `outputs/filters/breakout_quality/breakout_quality_v1/standard_model_comparison/rolling_oos_robustness/standard_model_comparison.json` 發布。策略原始目錄為 `outputs/strategy_compare/robustness/broker_cash_dl_conversion/rolling_2021_forward/ce59086dd0346870/`，含 `robustness_report.md`、`robustness_summary.json` 與 `seed_results.csv`。本筆依附件 Console 的原始精度登錄。附件未包含這些簽章工件、Checkpoint 或逐筆成交檔，Oracle parity 與市場回放尚未獨立複驗。C186 的 Oracle 仍為缺值。
+
+
+### 2026-11-24 — MR-13DN／C193：CO 早期真實事件擴充，Seed42 未晉級
+
+**受控條件與期間。** MR-13DN 沿用 MR-13CO 的 300×10 InceptionTime、完整交易週期 MinTrade_NetPnL、full-list Delta-NDCG、內層 24M validation 選 epoch 與最終歷史重訓。唯一變數為加入 2008～2013 的 canonical same-seed Optimizer teacher／合法成熟資訊列；每年仍以 120M 訓練、12M OOS、300 trials 建立當時參數，不以晚期 P16 回填。策略 C193 與控制 C123 共用 P16、Exact K/R0、費稅、資金與退出規則。透過原 Research 清單完成 16 個模型的 Standard SOP Rolling 比較及 34 個策略的 Rolling 比較，其他既有成果均由原 validator 決定 REUSE。Seed=42；策略期間 2021-01-01～2026-03-02 為迭代研究 OOS。
+
+**實際擴充與真值核對。** 新增 32,013 筆在 2021 部署前自然成熟的資訊列，涵蓋 347 檔股票、1,288 個日期（2008-01-03～2013-12-30），對應 4,336 個 canonical 原始突破訊號。每訊號平均 7.3831 列，最多 103 列，最大單一訊號占 0.3217%；不能把這些列當成同數量獨立交易。原有年份的股票／日期、有效性、完整週期 NetPnL 與成熟日期逐筆完全一致；Standard SOP 各 split 的共同 cohort／獨立價格真值 SHA 亦一致。2021 首折 final refit 由 72,630 增至 104,643 groups，inner train 52,114→84,127，validation 同為 19,974。沿用既有凍結價量股票母體，未建立歷史退市股完整覆蓋的證明。
+
+**2018～2020 前置篩選（共同合法突破候選）。** Top-10 lift 為原始 NetPnL 單位，只含候選數大於 10 的競爭日，各日等權；續跑條件事前固定為三年等權平均 lift 改善、至少兩年改善、平均配對判對率不下降。
+
+| 年度 | 共同候選列 | 競爭日 | CO Top-10 lift | DN Top-10 lift | CO Pair | DN Pair |
+|---|---:|---:|---:|---:|---:|---:|
+| 2018 | 714 | 9 | 143.62 | −187.70 | 50.9121% | 50.1920% |
+| 2019 | 1,170 | 18 | 320.90 | 111.31 | 52.7478% | 51.9064% |
+| 2020 | 1,770 | 58 | −597.97 | −28.18 | 48.7775% | 48.4768% |
+
+三年平均 lift Δ=+9.6217，但僅 1/3 年改善；平均 Pair Δ=−0.6207 個百分點，篩選結果 **REJECT**。2018／2019 競爭日較少，未據此宣稱統計顯著。
+
+**原有 Standard Model SOP Rolling。** 同一共同 40D 價格成熟口徑，Global 為 68,701 groups，Breakout 為 10,204 groups。Global Daily ρ 由 CO 0.0672204 升至 DN 0.0718533；Breakout Daily ρ 由 0.0483813 降至 0.0199522，Pair 由 51.0680% 變為 51.0697%，幾乎持平。Breakout 前十分位 NetPnL 均值由 6,405.6450 降至 5,511.2597，前後十分位差由 2,319.9228 降至 1,496.1007。不能以 Global 指標改善推論實際突破排序改善。逐年 Top-10 診斷保留於下列工件；2026 片段沒有共同 40D 價格成熟樣本，明示缺值，策略回放仍完整至 2026-03-02。
+
+| Seed42 策略 | RoMD | MDD | 總報酬 | 交易數 | 平均曝險 |
+|---|---:|---:|---:|---:|---:|
+| C96：P16 No DL | 8.355970 | 13.6819% | 114.3260% | 350 | 91.5039% |
+| C106：CI R40 Exact 參照 | 8.039325 | 15.9161% | 127.9552% | 337 | 91.7769% |
+| C123：CO Exact 控制 | 10.882721 | 14.2143% | 154.6918% | 353 | 91.7443% |
+| C193：DN Exact 擴充 | 9.531304 | 13.9292% | 132.7647% | 332 | 91.3377% |
+
+DN−CO：RoMD **−1.351416**、MDD −0.285105 個百分點、總報酬 **−21.927051 個百分點**。回撤略小，但沒有通過正 ΔRoMD 的續跑條件。C106 與 C96 均為同批 Seed42 參照，不能混用它們過往四 seed 平均當作本次控制。
+
+**大贏家與交易路徑。** 依 canonical 已平倉交易身分，兩組共同 151 筆；CO 獨有 202 筆、DN 獨有 181 筆。DN 漏掉的 CO 贏家為 80 筆／251.6618 R，DN 新增替代贏家為 71 筆／214.7983 R；CO 獨有虧損絕對 R 為 106.7961，DN 獨有虧損絕對 R 為 92.3091。獨有交易的現金淨損益差 −181,013.16、共同交易的現金損益差 −38,257.35，合計 −219,270.51，與原投組損益差核對一致。這是各自持倉路徑的描述歸因，不能當成逐筆替換的反事實收益；最大贏家清單與完整獨有交易明細保留於工件。
+
+**決策。** 固定 2008～2013 擴充方案在前置篩選與 Seed42 策略 Rolling 均未晉級，停止本輪擴張，不執行四 seed Robustness 或追加 Target 驗證，不搜尋其他起始年份。保留 DN／C193 研究比較列及原始成果供檢視，不自動升格 Trading；此結論不證明所有歷史擴充皆無效。新增的是訓練資訊，評估期 NetPnL 真值與 Exact 契約不變，沒有新 Oracle Target。法人研究維持暫停。
+
+**正式證據。**
+
+- 原模型比較：`outputs/filters/breakout_quality/breakout_quality_v1/standard_model_comparison/rolling_oos/standard_model_comparison.json`（同名 Markdown）。
+- 原策略比較：`outputs/strategy_compare/broker_cash_dl_conversion/rolling_2021_forward/runs/20261124_201556_C96-C97-C98-C103-C106-C107-C109-C189-C190-C111-C112-C118-C123-C124-C125-C126-C147-C148-C153-C154-C155-C156-C157-C158-C179-C181-C182-C183-C186-C168-C173-C172-C169-C193_c9c6292b11bb/strategy_comparison.json`（同名 Markdown）；current `latest/` 為此結果投影。
+- 一次性樣本／排序／逐筆歸因：`outputs/filters/breakout_quality/breakout_quality_v1/research_diagnostics/early_history_sample_inventory_seed42.json`、`early_history_paired_ranking_seed42.json`、`early_history_trade_attribution_seed42.json`，各有同名 Markdown；另保留 CO／DN 獨有交易 CSV。

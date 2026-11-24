@@ -997,10 +997,12 @@ The canonical `config/research_summary.py` roster alone determines current Model
 
 | 身分 | 定義 | 狀態 |
 |---|---|---|
-| `MR-13DN` / `PROFILE-daily_universal_formal_mintrade_fullcycle_netpnl_per_seed_full_list_ndcg_pairwise_extended_history` | 原 CO Target、300×10 InceptionTime、Adam、full-list Delta-NDCG、epoch selection 不變；僅增加 2008～2013 的合法自然成熟突破事件。 | IMPLEMENTED / FIT v1 / MARKET_VALIDATION_RUNNING / RESEARCH_ONLY / NO_TRADING |
+| `MR-13DN` / `PROFILE-daily_universal_formal_mintrade_fullcycle_netpnl_per_seed_full_list_ndcg_pairwise_extended_history` | 原 CO Target、300×10 InceptionTime、Adam、full-list Delta-NDCG、epoch selection 不變；僅增加 2008～2013 的合法自然成熟突破事件。 | FIT v1 / SEED42_ROLLING_COMPLETE / NO_ADVANCEMENT / RESEARCH_ONLY / NO_TRADING |
 | `MINTRADE_P16_EARLY_LABEL_HISTORY_V1` | canonical Min Optimizer 2008～2013 年度有效參數；120M 訓練窗、12M OOS、原 trial 預算、same seed；不借用晚期參數。原 2014～2020/P16 參數與資訊列真值保留，舊列使用原始訊號生命週期。 | OPTIMIZER_SOLE_PRODUCER / BUILD_OR_RESUME |
 | `DL-CONT13DN_ROLL` / `SR-C193` | DN PIT scores × 原 C123 的 P16 Exact K/R0，保持費稅、sizing、帳務、退出；C123 控制、C106 正向參照。 | CURRENT_RESEARCH_COMPARE / REPLAY v1 / NO_PROMOTION |
 
 依使用者明確指示，加入 **Research 原有比較功能與架構**。`config/research_summary.py` 的既有 NetPnL Exact group 同時綁定 CO／C123 與 DN／C193，單一清單派生 Forward／Rolling 模型測試、模型比較、策略比較、四 seed Robustness 與 Summary；Training Model 為 DN。策略登錄 `C193−C123`、`C193−C106`、`C193−C96`，不另設比較入口、排程或報表。沿用既有七項模型工作、canonical FIT／Score／Optimizer／Replay、Standard SOP、artifact planner 與 resume／REUSE 契約。先完成模型與策略 Rolling 比較，結果好才進入 Robustness 與 Target，最後 Summary；事前研究門檻沿用核准計畫，不改正式 SOP。
 
 歷史擴充的唯一資料設定為 `config/breakout_quality_history.py`，由 `services/breakout_quality/training_history.py` 組合合法前綴與未改動的原標籤。2014 起資料已包含於控制組，不將其計為新增歷史；2021 起是迭代研究 OOS。新增訓練歷史不產生新的 Oracle 真值，C193 使用原 CO 的 NetPnL Exact Target。原始訊號數由 canonical pending-signal lifecycle 的純診斷投影取得，不能以 ticker/date 數冒充。先前獨立排程已停止，已發布的合法 teacher／FIT 工件保留供 canonical validator 驗證重用。法人研究依使用者當輪指示暫不進行，沒有新增法人模型／架構／策略身分；研究結果不自動升格 Trading。
+
+**2026-11-24 實測決策。** 新增 32,013 筆成熟資訊列／4,336 個原始訊號，原資訊列真值與成熟日期完全不變。2018～2020 Top-10 lift 僅 1/3 年改善、平均 Pair −0.6207 個百分點；原 Research Seed42 Rolling 的 C193−C123 ΔRoMD=−1.351416（9.531304−10.882721），MDD −0.285105 個百分點、總報酬 −21.927051 個百分點。依事前條件不續跑四 seed Robustness／Target、不搜尋其他起始年份；研究比較列與完整原始證據保留，沒有 Trading promotion。詳見 Experiment Log 同日條目。
