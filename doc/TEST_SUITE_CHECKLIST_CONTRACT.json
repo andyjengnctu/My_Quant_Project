@@ -1472,7 +1472,7 @@
       "order": 174,
       "item": "`apps/research.py`的`[3] 策略組合比較`current入口由`config/strategy_compare.py`解析OOS／Rolling single-seed mode與各自的OOS／Rolling robustness binding；OOS與Rolling single-seed必須共用同一Compare Suite與strategy engine。OOS與Rolling robustness也必須各自可執行、共用同一robustness Compare Suite，且每個robustness的`suite_id`必須與其自身`profile_id`解析出的Compare Suite一致。分階段研究期間，current single-seed treatment可在使用者已授權的research staging下先切換到新suite，而robustness暫留上一個已註冊suite；resolver不得因此把未授權的新multi-seed語意自動綁入current treatment。每一個comparison framework內的arm／contrast／model-sensitive membership只能由該framework的Compare Suite與arm dependency解析，不得在validator、robustness profile或文件另維護第二份硬編矩陣。Strategy params唯一由Optimizer canonical SSOT產生；same-seed benchmark seed唯一由`config/training_policy.py`解析；single/multi共用upstream→period→params→models→replay→report dependency graph、fitting-cache identity與PIT legality。Strategy Compare不得建立Label、改模型science、挑best seed/model或複製trainer/optimizer search；current direct CLI只接受current menu profiles。",
       "gap": "direct synthetic驗current menu/mode、single-seed OOS/Rolling共用Compare Suite、robustness OOS/Rolling共用且與各自backing profile自洽的Compare Suite、各framework的suite/contrast/model-dependency由registry唯一解析、分階段研究不得因current single-seed切換而自動重綁未授權robustness、historical catalog隔離、same-seed parameter/model/replay binding、Optimizer與benchmark seed SSOT、fitting-cache/PIT chronology/reuse與current CLI legality；不得以某一歷史Cxx snapshot硬編為永久current答案。",
-      "entry": "`apps/research.py`, `config/strategy_compare.py`, `config/training_policy.py`, `config/compatibility/strategy_compare_history.py`, `core/strategy_comparison.py`, `core/strategy_param_artifacts.py`, `services/research/strategy_multi_seed_robustness.py`, `filters/breakout_quality/strategy_compare_dl_artifacts.py`, `filters/breakout_quality/strategy_compare_pit_contract.py`, `services/breakout_quality/point_in_time_scores.py`, `tools/validate/synthetic_breakout_quality_pit_cases.py`, `tools/validate/synthetic_breakout_quality_strategy_app_cases.py`",
+      "entry": "`apps/research.py`, `config/strategy_compare.py`, `config/training_policy.py`, `core/strategy_comparison.py`, `core/strategy_param_artifacts.py`, `services/research/strategy_multi_seed_robustness.py`, `filters/breakout_quality/strategy_compare_dl_artifacts.py`, `filters/breakout_quality/strategy_compare_pit_contract.py`, `services/breakout_quality/point_in_time_scores.py`, `tools/validate/synthetic_breakout_quality_pit_cases.py`, `tools/validate/synthetic_breakout_quality_strategy_app_cases.py`",
       "category": "Config-driven Strategy Compare時間驗證工作類型契約",
       "status": "DONE"
     },
@@ -1529,17 +1529,6 @@
       "gap": "`validate_breakout_quality_app_simple_report_contract_case`直接驗證console、persistent Markdown、相對路徑、active identity、成功subcommand與workflow summary掛載，並驗證MR-13P類conditional multi-head採標準Model SOP、顯示Forward Conditional Safety指標且console／Markdown一致、不含Strategy round-trip PnL；既有CLI contract另維持選單與command行為",
       "entry": "`apps/research.py`, `services/research/breakout_quality_application.py`, `core/console_report.py`, `tools/validate/synthetic_cli_cases.py`, `tools/validate/synthetic_cases.py`, `doc/PROJECT_SETTINGS.md`",
       "category": "`apps/research.py`模型訓練工作類型正式輸出簡易報表契約",
-      "status": "DONE"
-    },
-    {
-      "id": "B197",
-      "section": "B2",
-      "priority": "P0",
-      "order": 182,
-      "item": "`MR-13A / daily_universal_no_time_pairwise`進入Selection策略驗證前，PIT inference universe必須只由當日可得的300-bar feature history與benchmark history決定；future 40-bar target完整性只可控制train／validation／final-refit／audit target，**不得控制PIT score是否存在**。Daily PIT manifest必須保存future-independent `score_eligibility_contract`，舊target-complete-only PIT工件不得直接進strategy並須fail-fast要求重建Scores＋Audit。Runtime對event profile維持原breakout `signal_date` score；daily profile每個盤前decision必須使用最新已完成交易日`information_date`重新查score，continuation／extended candidate不得沿用突破日舊rank，也不得使用當日尚未完成OHLCV。Forward-OOS score artifact必須依profile sample scope解析：event continuous ranker固定使用`continuous_ranker_scores.csv`並要求`split=oos`，daily universal ranker固定使用trainer canonical `daily_ranker_oos_scores.csv.gz`，整份檔案即為OOS daily stock-day universe且不得要求event-only `split`欄；兩者的runtime score universe都必須由prediction-time feature history＋OOS date決定，future target完整性只能控制model-quality／OOS metrics subset，target未完成row仍須有score且`target_*`為NaN；manifest／report file identity須分別驗證`scores`與`oos_scores_gzip`，並保存`score_eligibility_contract`與`forward_score_coverage`。Forward runtime candidate lookup不得在每筆候選重新掃描整張score table計算可用日期範圍；score period必須於table／contract載入時一次建立並由indexed `(ticker,date)` lookup重用，daily refresh不得因資料表大小退化成O(N) per-candidate。Stage 3固定`SR-C27`完全沿用C24 minimum-repair、`SR-C28`完全沿用C25 feasible-ascent，只將DL source改為`DL-CONT13A-PIT`；不得帶入C26 22日stale guard、改K/R0、fixed risk、selector、target、loss或training。核心contrast固定C27-C24、C28-C25、C27-C23、C28-C23、C28-C27；Future Target只可在replay後作diagnostic，不得參與runtime排序",
-      "gap": "dedicated synthetic直接驗證daily score eligibility future-target-independent、target-invalid row仍進PIT score但不進training、MR-12B event-date與MR-13A information-date lookup分流、daily continuation每日刷新、舊daily PIT eligibility contract拒絕、C27/C28只替換DL source且五個Stage3 contrasts固定；另以trainer-format gzip／無`split`fixture直接驗證MR-13A Forward-OOS contract可載入且event loader維持原CSV＋split語意，並以禁止`MultiIndex.get_level_values()`的warm-cache lookup fixture驗證daily runtime使用預先計算score period、不在每筆候選掃描全表；另驗證training與strategy diagnostic共用filter/domain-layer profile sample provider",
-      "entry": "`filters/breakout_quality/daily_ranker_data.py`, `filters/breakout_quality/continuous_ranker_data.py`, `filters/breakout_quality/profile_ranker_data.py`, `filters/breakout_quality/ranker_sample_contract.py`, `services/breakout_quality/point_in_time_scores.py`, `services/breakout_quality/train_daily_ranker.py`, `filters/breakout_quality/ranking_score_store.py`, `filters/breakout_quality/runtime.py`, `core/portfolio_candidates.py`, `services/research/strategy_compare_engine.py`, `services/research/strategy_compare_preparation.py`, `config/strategy_compare.py`, `tools/validate/synthetic_cases.py`",
-      "category": "MR-13A Daily score無前視、Selection strategy translation與Forward-OOS artifact契約",
       "status": "DONE"
     },
     {
@@ -1675,17 +1664,6 @@
       "status": "DONE"
     },
     {
-      "id": "B226",
-      "section": "B2",
-      "priority": "P1",
-      "order": 211,
-      "item": "Multi-seed robustness的fixed/stochastic membership完全由robustness profile指定；dual-model stochastic arm必須把全部runtime DL sources納入scientific identity，並對每個generated seed以同一seed建立primary/secondary source，全部READY後才queue單一strategy replay。Training仍按`(dl_id, seed)`去重；不得只vary primary而固定secondary。",
-      "gap": "這是2026-08-18 C56/C57階段的historical snapshot：當時Selection fixed=C32/C23、stochastic=C57；Forward fixed=C1/C3、stochastic=C56；paired contrasts皆空。Current Extending contract已由B189取代，不得再把本列matrix解讀為current。",
-      "entry": "`core/strategy_comparison.py`, `config/strategy_compare.py`, `services/research/strategy_multi_seed_robustness.py`, `tools/validate/synthetic_breakout_quality_strategy_app_cases.py`",
-      "category": "Historical C56/C57 config-driven multi-seed robustness snapshot",
-      "status": "DONE"
-    },
-    {
       "id": "B229",
       "section": "B2",
       "priority": "P1",
@@ -1745,10 +1723,10 @@
       "section": "B2",
       "priority": "P1",
       "order": 219,
-      "item": "Gate-approved daily-universal continuous workflow進入「套用／更新正式 Runtime」時，score exporter必須接受目前config指定的continuous profile並dispatch到daily ranker inference，不得落回binary event exporter；production score必須使用獨立`ticker/date/model_score` artifact、核對同一frozen canonical checkpoint identity，且全域coverage超界fail-fast、coverage內單一ticker/date缺score則保留candidate並回`score unavailable`。歷史fixed-signal continuation synthetic不得因目前daily workflow設定而被污染。",
-      "gap": "exporter argparse改用profile SSOT並新增continuous daily branch，production score store改為continuous model contract與daily key；runtime refresh後clear cache。`validate_breakout_quality_runtime_integration_gate_contract_case`新增config-driven profile acceptance/dispatch、daily continuous source與score lookup正反案例；原strategy comparison fixed-signal case使用隔離non-daily context。Formal bundle原consistency唯一FAIL與coverage連鎖根因已由targeted contracts直接閉環。",
-      "entry": "`services/breakout_quality/export_scores.py`, `filters/breakout_quality/daily_ranker_data.py`, `filters/breakout_quality/workflow_runtime_score_store.py`, `services/breakout_quality/runtime_promotion.py`, `tools/validate/synthetic_breakout_quality_strategy_app_cases.py`, `tools/validate/synthetic_breakout_quality_strategy_cases.py`",
-      "category": "Runtime promotion daily continuous score production contract",
+      "item": "Runtime Promotion Gate 已退役；正式入口只允許 status／latest 讀取歷史證據，任何 run／gate／promote／apply／refresh mutation 必須 fail-closed，不得重新啟用已退役 producer。",
+      "gap": "直接驗證 execution disabled、read-only action set、BLOCKED status，並逐一驗證 mutation action 拒絕。",
+      "entry": "`services/research/strategy_compare_application.py`, `services/research/runtime_integration_gate.py`, `tools/validate/synthetic_breakout_quality_strategy_app_cases.py`",
+      "category": "Retired Runtime Promotion Gate read-only boundary",
       "status": "DONE"
     },
     {
@@ -1793,17 +1771,6 @@
       "gap": "Target comparison與Seed42 Forward/PIT已完成；C53 Selection與C54 Forward single-seed translation均低於MR-13E reference。Source-only paired robustness不再是current優先Gate；13K改作C56/C57 full-flow primary source，與13M同seed接受完整dual-model robustness。",
       "entry": "`config/breakout_quality.py`, `config/strategy_compare.py`, `filters/breakout_quality/continuous_target.py`, `services/breakout_quality/daily_target_comparison.py`, `services/breakout_quality/train_daily_ranker.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`, `tools/validate/synthetic_breakout_quality_strategy_app_cases.py`",
       "category": "MR-13K pure-MFE Target / full-flow controlled evaluation contract",
-      "status": "DONE"
-    },
-    {
-      "id": "B244",
-      "section": "B2",
-      "priority": "P1",
-      "order": 229,
-      "item": "MR-13M必須沿用MR-13H/13K的40D complete horizon、earliest max-MFE selected peak、risk-breach diagnostics、fixed canonical R scale、daily feature-eligible universe、`inception_time_v1`與Full-list Delta-NDCG same-day RankNet；唯一Target改為`daily_full_horizon_low_adverse_r_v1 = -adverse-to-peak R`。MFE只可定位selected peak，不得提供reward，也不得加入strategy state。Forward結果前`selection_pit_authorized=False`且production維持MR-13E。",
-      "gap": "新增adverse-only Target contract與vectorized/scalar parity；synthetic驗證與MR-13H peak/diagnostics一致、Target精確等於negative adverse R、training semantics固定、strategy-agnostic與PIT staged off。",
-      "entry": "`config/breakout_quality.py`, `filters/breakout_quality/continuous_target.py`, `filters/breakout_quality/daily_ranker_data.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`, `tools/validate/synthetic_cases.py`",
-      "category": "MR-13M adverse-only full-horizon pairwise learnability contract",
       "status": "DONE"
     },
     {
@@ -1994,17 +1961,6 @@
       "status": "DONE"
     },
     {
-      "id": "B295",
-      "section": "B2",
-      "priority": "P1",
-      "order": 280,
-      "item": "Final conflict evidence已充分支持`NO_SURVIVAL_INCREMENT / MODEL_GATE_FAIL`後，一次性config/catalog/implementation與專屬synthetic依法退役；scientific evidence永久保留，generic reusable Audit framework不得受影響。",
-      "gap": "`validate_breakout_quality_audit_framework_contract_case`驗generic Audit framework仍完整；Registry/Log保存MR-13AB final decision，專屬Audit不再current reachable。",
-      "entry": "`doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`, `doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`",
-      "category": "MR-13AB one-time survival Audit final retirement",
-      "status": "DONE"
-    },
-    {
       "id": "B297",
       "section": "B2",
       "priority": "P1",
@@ -2012,18 +1968,7 @@
       "item": "`build_daily_ranker_split()` 的 train／validation／selection／OOS supervised membership 必須與 bundle.target_valid 相交；invalid target 或 unavailable context 不得參與 fitting／target metrics，但合法 feature rows 的 Forward score eligibility 獨立保留。",
       "gap": "以包含 target-invalid rows 的 fixture 分別驗證全部 supervised splits 與完整 Forward score universe。",
       "entry": "`filters/breakout_quality/daily_ranker_data.py`, `filters/breakout_quality/predicted_upside_context.py`, `services/breakout_quality/predicted_upside_context.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`, `doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`",
-      "category": "Daily Universal split必須忠實採用canonical `target_valid`；MR-13AC context ticker ingest identity固定",
-      "status": "DONE"
-    },
-    {
-      "id": "B298",
-      "section": "B2",
-      "priority": "P1",
-      "order": 283,
-      "item": "Schema64六-arm matrix已完成並由Experiment Log保存；C79逐欄複製C59 exact K/R0 contract、唯一換`CONT13AC_ROLL`，C77/C78為既有No-K/No-R0 direct references，C76 historical-only。2026-08-29使用者另行授權AH conversion後由B306 schema66 supersede；不得把B298重新解讀為current exact membership。",
-      "gap": "`validate_strategy_compare_config_driven_app_contract_case`仍驗C79-C59 DL-source-only contract、C77/C78 direct contract與C76 historical retention；current membership改由B306覆蓋。",
-      "entry": "`config/strategy_compare.py`, `config/compatibility/strategy_compare_history.py`, `tools/validate/synthetic_breakout_quality_strategy_app_cases.py`, `doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`",
-      "category": "Historical schema64 C61/C58/C59/C77/C78/C79 controlled MR-13AC replacement snapshot",
+      "category": "Daily Universal canonical supervised membership and score eligibility",
       "status": "DONE"
     },
     {
@@ -4675,13 +4620,6 @@
       "status": "DONE"
     },
     {
-      "id": "T294",
-      "description": "`validate_breakout_quality_daily_pit_strategy_runtime_contract_case`",
-      "b_id": "B197",
-      "order": 286,
-      "status": "DONE"
-    },
-    {
       "id": "T295",
       "description": "`validate_breakout_quality_legacy_research_cleanup_contract_case`",
       "b_id": "B198",
@@ -4766,13 +4704,6 @@
       "status": "DONE"
     },
     {
-      "id": "T324",
-      "description": "`validate_strategy_compare_config_driven_app_contract_case`：B226",
-      "b_id": "B226",
-      "order": 316,
-      "status": "DONE"
-    },
-    {
       "id": "T327",
       "description": "`validate_strategy_compare_config_driven_app_contract_case`：B229",
       "b_id": "B229",
@@ -4812,13 +4743,6 @@
       "description": "`validate_breakout_quality_runtime_integration_gate_contract_case`",
       "b_id": "B234",
       "order": 324,
-      "status": "DONE"
-    },
-    {
-      "id": "T333",
-      "description": "`validate_breakout_quality_strategy_comparison_contract_case`：B234",
-      "b_id": "B234",
-      "order": 325,
       "status": "DONE"
     },
     {
@@ -4868,13 +4792,6 @@
       "description": "`validate_strategy_compare_config_driven_app_contract_case`：B242",
       "b_id": "B242",
       "order": 337,
-      "status": "DONE"
-    },
-    {
-      "id": "T347",
-      "description": "`validate_breakout_quality_low_adverse_target_component_contract_case`",
-      "b_id": "B244",
-      "order": 339,
       "status": "DONE"
     },
     {
@@ -5036,20 +4953,6 @@
       "description": "`validate_breakout_quality_full_horizon_target_components_contract_case`：B297",
       "b_id": "B297",
       "order": 403,
-      "status": "DONE"
-    },
-    {
-      "id": "T414",
-      "description": "`validate_strategy_compare_config_driven_app_contract_case`：B298",
-      "b_id": "B298",
-      "order": 404,
-      "status": "DONE"
-    },
-    {
-      "id": "T415",
-      "description": "`validate_breakout_quality_audit_framework_contract_case`：B295",
-      "b_id": "B295",
-      "order": 405,
       "status": "DONE"
     },
     {

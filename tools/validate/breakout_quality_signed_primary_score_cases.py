@@ -1,9 +1,4 @@
-"""Independent regression for signed continuous-R vs bounded probability scores.
-
-A signed primary score is valid for the registered margin transformation only.
-Historical probability models and optional sidecar probabilities remain [0,1].
-This is not a formal-suite runner and does not create fitted/OOS artifacts.
-"""
+"""Current probability-score domains and PIT producer/reader/audit integrity."""
 
 from __future__ import annotations
 
@@ -38,10 +33,8 @@ from services.breakout_quality.point_in_time_scores import (
     POINT_IN_TIME_SCHEMA_VERSION,
 )
 
-MARGIN_PROFILE = "daily_universal_full_horizon_mfe_minus_d40_huber"
-HISTORICAL_MARGIN_PROFILE = "daily_universal_no_time_r_huber"
+SINGLE_HEAD_PROFILE = "daily_universal_full_horizon_pure_mfe_full_list_ndcg_pairwise"
 PROBABILITY_PROFILE = "daily_universal_shared_safety_hs_conditional_mfe_full_list_ndcg_pairwise"
-CATEGORICAL_PROFILE = "daily_universal_joint_mfe_d40_quadrant_cross_entropy"
 FOLD_ID = "fold_20210101_20211231"
 CUTOFF = "2020-12-31"
 
@@ -106,7 +99,8 @@ def _write_audit_fixture(folder: Path, scores: list[float], *, profile: str) -> 
         "status": "BUILT",
         "score_column": "breakout_quality_score",
         "filter_id": "breakout_quality_v1",
-        "model_architecture": "inception_time_v1" if profile == MARGIN_PROFILE else "inception_time_shared_safety_mfe_v1",
+        "model_architecture": (get_breakout_quality_experiment_profile(profile).model_architecture
+                               or "inception_time_v1"),
         "experiment_profile": profile,
         "lookahead_contract": {
             "every_score_uses_model_not_trained_on_scored_event": True,
@@ -120,8 +114,7 @@ def _write_audit_fixture(folder: Path, scores: list[float], *, profile: str) -> 
             "coverage": build_file_manifest(coverage_path),
         },
         "score_columns": get_continuous_ranker_score_output_columns(
-            "daily_raw_r_regression" if profile == MARGIN_PROFILE
-            else "daily_shared_safety_hs_conditional_mfe_pairwise_ranking"
+            get_breakout_quality_experiment_profile(profile).training_objective
         ),
         "score_period": {"start": "2021-01-01", "end": "2021-12-31"},
         "fold_count": 1,
@@ -144,62 +137,49 @@ def _write_audit_fixture(folder: Path, scores: list[float], *, profile: str) -> 
 
 
 def case() -> None:
-    signed = np.array([-3.25, -0.13, 0.0, 0.95, 4.70], dtype=np.float64)
-    for profile in (MARGIN_PROFILE, HISTORICAL_MARGIN_PROFILE):
-        validate_continuous_ranker_score_values(
-            signed, experiment_profile=profile, column="breakout_quality_score", label="signed"
-        )
-        validate_continuous_ranker_score_values(
-            signed, experiment_profile=profile, column="model_score", label="signed"
-        )
-        _expect_rejected(lambda: validate_continuous_ranker_score_values(
-            [-0.4], experiment_profile=profile, column="conditional_safety_score", label="sidecar"
-        ), "[0,1]")
-    for profile in (PROBABILITY_PROFILE, CATEGORICAL_PROFILE, None):
-        _expect_rejected(lambda pro=profile: validate_continuous_ranker_score_values(
-            signed, experiment_profile=pro, column="breakout_quality_score", label="probability"
-        ), "[0,1]")
-    for nonfinite in (float("nan"), float("inf"), -float("inf")):
-        for profile in (MARGIN_PROFILE, PROBABILITY_PROFILE):
+    outside_probability = np.array([-3.25, -0.13, 0.0, 0.95, 4.70], dtype=np.float64)
+    for profile in (SINGLE_HEAD_PROFILE, PROBABILITY_PROFILE, None):
+        for column in ("breakout_quality_score", "model_score", "raw_safety_score"):
+            _expect_rejected(lambda pro=profile, col=column: validate_continuous_ranker_score_values(
+                outside_probability, experiment_profile=pro, column=col, label="probability"
+            ), "[0,1]")
+        for nonfinite in (float("nan"), float("inf"), -float("inf")):
             _expect_rejected(lambda v=nonfinite, pro=profile: validate_continuous_ranker_score_values(
                 [v], experiment_profile=pro, column="breakout_quality_score", label="value"
             ), "非有限")
-
-    scores = signed.tolist()
+    scores = [0.0, 0.13, 0.50, 0.95, 1.0]
     frame = _score_frame(scores)
-    validated = _validate_score_frame(frame, fold_contract=_fold_contract(MARGIN_PROFILE))
+    validated = _validate_score_frame(frame, fold_contract=_fold_contract(SINGLE_HEAD_PROFILE))
     assert validated["breakout_quality_score"].to_list() == scores
     _validate_validation_score_frame(frame, ids=np.arange(len(scores)), fold_id=FOLD_ID)
-    _expect_rejected(lambda: _validate_score_frame(frame, fold_contract=_fold_contract(PROBABILITY_PROFILE)), "[0,1]")
-    unknown = _fold_contract(MARGIN_PROFILE)
+    unknown = _fold_contract(SINGLE_HEAD_PROFILE)
     unknown.pop("experiment_profile")
-    _expect_rejected(lambda: _validate_score_frame(frame, fold_contract=unknown), "[0,1]")
+    _expect_rejected(lambda: _validate_score_frame(_score_frame(outside_probability.tolist()), fold_contract=unknown), "[0,1]")
     broken = frame.copy()
     broken.loc[0, "breakout_quality_score"] = np.nan
-    _expect_rejected(lambda: _validate_score_frame(broken, fold_contract=_fold_contract(MARGIN_PROFILE)), "非有限")
-    broken = frame.copy()
-    broken["conditional_safety_score"] = 0.4
-    broken.loc[0, "conditional_safety_score"] = -0.4
-    _expect_rejected(lambda: _validate_score_frame(broken, fold_contract=_fold_contract(MARGIN_PROFILE)), "[0,1]")
+    _expect_rejected(lambda: _validate_score_frame(broken, fold_contract=_fold_contract(SINGLE_HEAD_PROFILE)), "非有限")
+    broken = frame.assign(raw_safety_score=0.4)
+    broken.loc[0, "raw_safety_score"] = -0.4
+    _expect_rejected(lambda: _validate_score_frame(broken, fold_contract=_fold_contract(SINGLE_HEAD_PROFILE)), "[0,1]")
 
-    with TemporaryDirectory(prefix="u40_score_domain_") as tmp:
+    with TemporaryDirectory(prefix="current_score_domain_") as tmp:
         root = Path(tmp)
         selection = root / "scores.csv"
         manifest = root / "manifest.json"
         frame.to_csv(selection, index=False, encoding="utf-8-sig")
         manifest.write_text(json.dumps({
-            "experiment_profile": MARGIN_PROFILE,
+            "experiment_profile": SINGLE_HEAD_PROFILE,
             "score_period": {"start": "2021-01-01", "end": "2021-12-31"},
             "coverage": {"scored_group_count": len(scores)},
         }), encoding="utf-8")
         loaded = load_selection_point_in_time_score_table_from_path(
-            str(selection), manifest_path=str(manifest), experiment_profile=MARGIN_PROFILE
+            str(selection), manifest_path=str(manifest), experiment_profile=SINGLE_HEAD_PROFILE
         )
         assert loaded.loc[("T0000", "2021-01-04"), "breakout_quality_score"] == scores[0]
         assert loaded.loc[("T0004", "2021-01-04"), "breakout_quality_score"] == scores[4]
         looked_up = lookup_selection_point_in_time_candidate_score(
             project_root=str(root), filter_id="breakout_quality_v1",
-            model_architecture="inception_time_v1", experiment_profile=MARGIN_PROFILE,
+            model_architecture="inception_time_v1", experiment_profile=SINGLE_HEAD_PROFILE,
             ticker="T0000", signal_date="2021-01-04",
             score_path_override=str(selection), manifest_path_override=str(manifest),
         )
@@ -211,48 +191,48 @@ def case() -> None:
             score_path_override=str(selection), manifest_path_override=str(manifest),
         ), "profile不一致")
         bare = load_selection_point_in_time_score_table_from_path(
-            str(selection), experiment_profile=MARGIN_PROFILE,
+            str(selection), experiment_profile=SINGLE_HEAD_PROFILE,
         )
         assert len(bare) == len(scores)
-        _expect_rejected(lambda: load_selection_point_in_time_score_table_from_path(str(selection)), "[0,1]")
 
         forward = root / "forward.csv"
         forward_frame = frame[["ticker", "date", "group_index", "breakout_quality_score"]].rename(
             columns={"breakout_quality_score": "model_score"}
         )
         forward_frame.to_csv(forward, index=False, encoding="utf-8-sig")
-        fwd = load_continuous_ranker_oos_score_table_from_path(str(forward), MARGIN_PROFILE)
+        fwd = load_continuous_ranker_oos_score_table_from_path(str(forward), SINGLE_HEAD_PROFILE)
         assert len(fwd) == len(scores)
         found = lookup_continuous_ranker_oos_candidate_score(
             project_root=str(root), filter_id="breakout_quality_v1",
-            model_architecture="inception_time_v1", experiment_profile=MARGIN_PROFILE,
+            model_architecture="inception_time_v1", experiment_profile=SINGLE_HEAD_PROFILE,
             ticker="T0004", signal_date="2021-01-04", score_path_override=str(forward),
         )
         assert found["available"] and found["score"] == scores[4]
         # Multi-head probability profiles have required score sidecars.  Test
-        # missing-column rejection separately from the signed-score domain:
+        # missing-column rejection separately from the score-domain domain:
         # otherwise an incomplete fixture fails before the [0,1] check and
         # silently stops exercising the intended score-domain invariant.
         _expect_rejected(lambda: load_continuous_ranker_oos_score_table_from_path(
             str(forward), PROBABILITY_PROFILE
         ), "raw_safety_score")
         probability_forward = forward_frame.assign(raw_safety_score=0.5)
+        probability_forward.loc[0, "model_score"] = -0.4
         probability_forward.to_csv(forward, index=False, encoding="utf-8-sig")
         _expect_rejected(lambda: load_continuous_ranker_oos_score_table_from_path(
             str(forward), PROBABILITY_PROFILE
         ), "[0,1]")
         broken_forward = forward_frame.copy()
-        broken_forward["conditional_safety_score"] = -0.15
+        broken_forward["raw_safety_score"] = -0.15
         broken_forward.to_csv(forward, index=False, encoding="utf-8-sig")
         load_continuous_ranker_oos_score_table_from_path.cache_clear()
         _expect_rejected(lambda: load_continuous_ranker_oos_score_table_from_path(
-            str(forward), MARGIN_PROFILE
+            str(forward), SINGLE_HEAD_PROFILE
         ), "0~1")
 
-    with TemporaryDirectory(prefix="u40_audit_domain_") as tmp:
+    with TemporaryDirectory(prefix="current_audit_domain_") as tmp:
         folder = Path(tmp)
-        args, paths = _write_audit_fixture(folder, scores, profile=MARGIN_PROFILE)
-        owner_profile = get_breakout_quality_experiment_profile(MARGIN_PROFILE)
+        args, paths = _write_audit_fixture(folder, scores, profile=SINGLE_HEAD_PROFILE)
+        owner_profile = get_breakout_quality_experiment_profile(SINGLE_HEAD_PROFILE)
         persisted = json.loads(paths["manifest"].read_text(encoding="utf-8"))
         persisted.update({
             "training_sample_scope": str(owner_profile.training_sample_scope),
@@ -307,7 +287,7 @@ def case() -> None:
             _expect_rejected(verify_owned_score_source, "synthetic stale publication")
             assert verify_owned_score_source(allow_stale_source=True).seed == 42
 
-        # This fixture isolates Audit-specific signed-score/fold checks from the
+        # This fixture isolates Audit-specific score-domain/fold checks from the
         # canonical SCORE loader, whose full upstream lineage is tested by its
         # own producer-reader synthetic contracts.
         def verified_fixture_source(*_args, **_kwargs):
@@ -451,4 +431,4 @@ def case() -> None:
 
 if __name__ == "__main__":
     case()
-    print("Signed PIT/Forward producer-reader-audit domains: PASS")
+    print("PIT/Forward producer-reader-audit domains: PASS")

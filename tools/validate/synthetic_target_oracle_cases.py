@@ -6448,6 +6448,44 @@ class OracleTargetCatalogAdditionDeletionSafetyCases(TestCase):
     that only works for adding but not removing a Target is not a valid SSOT.
     """
 
+    def test_dl_off_truth_ignores_adapter_edits_but_keeps_execution_sources_strict(self):
+        from services.audit import mintrade_truth_source_attestation as owner
+        from services.audit.daily_trade40_oracle import _truth_source_sha
+        from core.file_integrity import compute_file_sha256
+
+        before = _truth_source_sha(ROOT)
+        adapter = ROOT / owner._DL_OFF_ADAPTER
+        read_bytes = Path.read_bytes
+        # A future unrelated calibration can be added, changed or removed.
+        # This deliberately changes real source bytes, not an expected hash.
+        with patch.object(Path, "read_bytes", lambda path: (
+                b"def unrelated_calibration(): return 999\n"
+                if path == adapter else read_bytes(path))):
+            owner._mintrade_source_fingerprint_proof.cache_clear()
+            try:
+                self.assertEqual(_truth_source_sha(ROOT), before)
+                self.assertEqual(owner._mintrade_source_fingerprint_proof()[0], before)
+            finally:
+                owner._mintrade_source_fingerprint_proof.cache_clear()
+        # A teacher/entry/fee mutation is an actual dependency, so it cannot
+        # inherit the old identity even though the DL adapter is excluded.
+        for relative in ("filters/breakout_quality/daily_trade40_target.py",
+                         "core/signal_utils.py", "core/exact_accounting.py"):
+            with self.subTest(relative=relative):
+                with patch.object(owner, "compute_file_sha256", side_effect=lambda path: (
+                        "0" * 64 if path == ROOT / relative else compute_file_sha256(path))):
+                    self.assertNotEqual(_truth_source_sha(ROOT), before)
+
+    def test_min_truth_rejects_each_dl_capability_before_execution(self):
+        from filters.breakout_quality.daily_trade40_target import build_formal_min_execution_schedule
+        from core.strategy_params import V16StrategyParams
+        for flag in ("use_breakout_quality_filter", "use_breakout_quality_ranking"):
+            with self.subTest(flag=flag):
+                params = V16StrategyParams(**{flag: True})
+                with self.assertRaisesRegex(ValueError, "DL-off"):
+                    build_formal_min_execution_schedule(
+                        [{"params_obj": params}], seed=1, param_sha256="a" * 64)
+
     def test_add_then_delete_oracle_target_does_not_mutate_price_lineage(self):
         from services.audit.oracle_score_artifacts import oracle_daily_source_fingerprint
         original = _ACTIVE_ORACLE_DEFINITION

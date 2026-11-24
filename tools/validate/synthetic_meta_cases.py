@@ -4962,15 +4962,9 @@ def validate_research_report_contract_freeze_case(_base_params):
     )
     from services.research import breakout_quality_application as app
     from core.breakout_quality_registry import (
-        DAILY_UNIVERSAL_SAFETY_RAW_MFE_DUO_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        DAILY_UNIVERSAL_SHARED_FULL_D40_SAFETY_HS_CONDITIONAL_MFE_PROFILE,
     )
-    from core.breakout_quality_runtime import (
-        TRAINING_OBJECTIVE_DAILY_HMHS_PAIRWISE_RANKING,
-        TRAINING_OBJECTIVE_DAILY_SHARED_HS_QUALIFICATION_CONDITIONAL_MFE_PAIRWISE_RANKING,
-        TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_PAIRWISE_RANKING,
-        TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_HMHS_PAIRWISE_RANKING,
-        TRAINING_OBJECTIVE_DAILY_SAFETY_RAW_MFE_JOINT_MIN_PAIRWISE_RANKING,
-    )
+
 
     case_id = "RESEARCH_REPORT_CONTRACT_FREEZE"
     results = []
@@ -5492,14 +5486,11 @@ def validate_research_report_contract_freeze_case(_base_params):
     synthetic_model_paths = SimpleNamespace(model_dir=Path("synthetic_model"))
     settings = SimpleNamespace(
         filter_id="breakout_quality_v1",
-        model_architecture="inception_time_v1",
-        experiment_profile=DAILY_UNIVERSAL_SAFETY_RAW_MFE_DUO_HEAD_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        model_architecture=bq_registry.get_breakout_quality_experiment_profile(
+            DAILY_UNIVERSAL_SHARED_FULL_D40_SAFETY_HS_CONDITIONAL_MFE_PROFILE
+        ).model_architecture,
+        experiment_profile=DAILY_UNIVERSAL_SHARED_FULL_D40_SAFETY_HS_CONDITIONAL_MFE_PROFILE,
         seed=42,
-    )
-    check_true(
-        "old_optional_multihead_extension_is_not_a_permanent_sop_v8_evidence_obligation",
-        bool(app._comparison_evidence_issues(control_payload, settings))
-        and app._standard_model_sop_completeness_issues(control_payload) == (),
     )
     with patch.object(
         app, "load_continuous_ranker_oos_contract", return_value=reusable_contract
@@ -5856,7 +5847,7 @@ def validate_model_extension_architecture_contract_case(_base_params):
 def validate_ssot_regression_guard_case(_base_params):
     """A permanent, mutation-tested guard against silent SSOT regressions."""
     from dataclasses import replace
-    from filters.breakout_quality.models.architectures import PATCH_TRANSFORMER_V1
+    from filters.breakout_quality.models.architectures import INCEPTION_TIME_V1
     from filters.breakout_quality.models.spec import validate_model_sequence_length
     from filters.breakout_quality.models.spec_registry import get_model_spec
     from .ssot_regression_guard import (
@@ -5879,7 +5870,10 @@ def validate_ssot_regression_guard_case(_base_params):
 
     # New declarative architecture family: no second hand-maintained family list
     # may allow an invalid sequence length to bypass patch validation.
-    future_patch = replace(get_model_spec(PATCH_TRANSFORMER_V1), family="future_patch_family")
+    future_patch = replace(
+        get_model_spec(INCEPTION_TIME_V1), family="future_patch_family",
+        patch_transformer_patch_size=16, patch_transformer_patch_stride=16,
+    )
     detected_bad_length = False
     try:
         validate_model_sequence_length(future_patch, 13)

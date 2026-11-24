@@ -29,7 +29,7 @@ from core.breakout_quality_registry import (
     DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE,
     DAILY_UNIVERSAL_FULL_HORIZON_MFE_ADVERSE_DUAL_MSE_PROFILE,
     DAILY_UNIVERSAL_FULL_HORIZON_PARETO_MFE_LOW_ADVERSE_PAIRWISE_PROFILE,
-    DAILY_UNIVERSAL_CONDITIONAL_MFE_SAFETY_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+    DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
 )
 from .checks import bind_synthetic_case, bind_checks
 
@@ -579,8 +579,8 @@ def validate_breakout_quality_app_simple_report_contract_case(_base_params):
             and "None" not in audit_console,
         )
 
-        conditional_profile = DAILY_UNIVERSAL_CONDITIONAL_MFE_SAFETY_FULL_LIST_NDCG_PAIRWISE_PROFILE
-        conditional_architecture = "inception_time_conditional_mfe_safety_v1"
+        conditional_profile = DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+        conditional_architecture = "inception_time_shared_safety_mfe_v1"
         conditional_output_dir = app_breakout_quality.resolve_filter_model_output_dir(
             simple_root,
             "synthetic_quality",
@@ -589,7 +589,7 @@ def validate_breakout_quality_app_simple_report_contract_case(_base_params):
         )
         conditional_output_dir.mkdir(parents=True, exist_ok=True)
         conditional_payload = {
-            "model_research_id": "MR-13P",
+            "model_research_id": "MODEL-SYNTHETIC",
             "training": {
                 "selected_epoch": 1,
                 "epoch_selection": {
@@ -622,38 +622,38 @@ def validate_breakout_quality_app_simple_report_contract_case(_base_params):
                     "bottom_score_decile_raw_target_mean": 0.5352,
                 },
             },
-            "conditional_mfe_safety_evaluation": {
+            "hs_conditional_mfe_evaluation": {
                 "validation": {
-                    "primary_mfe": {
+                    "raw_safety": {
                         "mean_daily_spearman": 0.4348,
                         "global_spearman_vs_raw_target": 0.4335,
                         "pairwise_concordance": 0.6507,
                     },
-                    "conditional_safety": {
+                    "conditional_mfe_true_hs": {
                         "mean_daily_spearman": 0.3210,
                         "global_spearman_vs_raw_target": 0.3100,
                         "pairwise_concordance": 0.6120,
                     },
                 },
                 "oos": {
-                    "primary_mfe": {
+                    "raw_safety": {
                         "mean_daily_spearman": 0.3953,
                         "global_spearman_vs_raw_target": 0.3019,
                         "pairwise_concordance": 0.6364,
                     },
-                    "conditional_safety": {
+                    "conditional_mfe_true_hs": {
                         "mean_daily_spearman": 0.2876,
                         "global_spearman_vs_raw_target": 0.2744,
                         "pairwise_concordance": 0.5988,
                     },
                 },
                 "breakout_candidate_oos": {
-                    "primary_mfe": {
+                    "raw_safety": {
                         "mean_daily_spearman": 0.3736,
                         "global_spearman_vs_raw_target": 0.3771,
                         "pairwise_concordance": 0.6441,
                     },
-                    "conditional_safety": {
+                    "conditional_mfe_true_hs": {
                         "mean_daily_spearman": 0.3012,
                         "global_spearman_vs_raw_target": 0.2955,
                         "pairwise_concordance": 0.6077,
@@ -661,8 +661,8 @@ def validate_breakout_quality_app_simple_report_contract_case(_base_params):
                 },
             },
         }
-        # Current v8 human SOP requires complete, source-identified M3/M4 truth.
-        # These are isolated synthetic UI fixture values, not historical MR-13P
+        # Current human SOP requires complete, source-identified M3/M4 truth.
+        # These are isolated synthetic UI fixture values, not historical model
         # results; the numerical producer is tested separately in meta checks.
         from hashlib import sha256
         conditional_payload["standard_model_sop"] = {
@@ -720,7 +720,7 @@ def validate_breakout_quality_app_simple_report_contract_case(_base_params):
             )
         conditional_markdown = conditional_report_path.read_text(encoding="utf-8")
         check_true(
-            "breakout_quality_model_sop_v8_keeps_full_common_sections_but_isolates_conditional_head_audit_evidence",
+            "breakout_quality_model_sop_keeps_common_sections_and_isolates_shared_head_audit_evidence",
             all(f"MODEL SOP | {i}. " in conditional_console for i in range(1,5))
             and "Global" in conditional_console
             and "Breakout" in conditional_console
@@ -735,7 +735,7 @@ def validate_breakout_quality_app_simple_report_contract_case(_base_params):
             and "Model-specific Extension" not in conditional_markdown
             and "Top 10% Joint Quality" in conditional_markdown
             and "Actual Round-trip R" not in conditional_markdown
-            and "conditional_safety" in conditional_payload["conditional_mfe_safety_evaluation"]["oos"],
+            and "conditional_mfe_true_hs" in conditional_payload["hs_conditional_mfe_evaluation"]["oos"],
         )
         with patch.object(app_breakout_quality, "console_color_enabled", return_value=True):
             colored_model_console = app_breakout_quality._render_continuous_ranker_simple_console(

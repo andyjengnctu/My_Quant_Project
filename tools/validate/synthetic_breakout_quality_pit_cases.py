@@ -5,11 +5,11 @@ from .checks import run_bound_checks
 from .synthetic_breakout_quality_support import (
     BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
     BUY_LIMIT_OVERAGE_SORT_METHOD,
-    DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE,
+    DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE,
     LABEL_PASS,
     Path,
     STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_PAIRWISE_PROFILE,
-    STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE,
+    STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE,
     SimpleNamespace,
     TRAINING_LABEL_SCOPE_ALL,
     TRAINING_LABEL_SCOPE_PASS_ONLY,
@@ -239,16 +239,14 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
     from .check_result_utils import run_unittest_capability_cases
     from .synthetic_positive_netpnl_contract_cases import ScoreOutputCompletenessCases
     from .test_categorical_decision import PayoffDecisionCases
-    from .synthetic_trade_decision_context_cases import TradeDecisionContextCases
     output_checks, _details = run_unittest_capability_cases(
-        case_id, "synthetic_breakout_quality", (ScoreOutputCompletenessCases, PayoffDecisionCases, TradeDecisionContextCases),
+        case_id, "synthetic_breakout_quality", (ScoreOutputCompletenessCases, PayoffDecisionCases),
     )
     results.extend(output_checks)
 
     from core.breakout_quality_registry import (
         CONTINUOUS_RANKER_TRAINING_OBJECTIVES,
-        DAILY_UNIVERSAL_SHARED_HS_QUALIFICATION_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
-        DAILY_UNIVERSAL_SHARED_SAFETY_CONTEXT_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+        DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         DAILY_UNIVERSAL_SHARED_SAFETY_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         get_breakout_quality_experiment_profile,
     )
@@ -300,7 +298,7 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
     _check_selection_pit_publication_invariants(check_true, pit_module)
     with tempfile.TemporaryDirectory(prefix="strategy_fit_cross_mode_source_") as td:
         base = Path(td).resolve()
-        profile = DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE
+        profile = DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE
         source = SimpleNamespace(
             filter_id=BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
             model_architecture="inception_time_v1", experiment_profile=profile,
@@ -669,7 +667,7 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         "allow_tf32": False,
     }
     profile_payload = {
-        "name": DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE,
+        "name": DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         "training_sample_scope": TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
     }
     checkpoint_manifest = {"sha256": "abc", "size_bytes": 123}
@@ -686,7 +684,7 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
     fold_contract = {
         "filter_id": "synthetic_quality",
         "model_architecture": "synthetic_arch",
-        "experiment_profile": DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE,
+        "experiment_profile": DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         "continuous_target_id": "synthetic_target",
         "training_label_scope": TRAINING_LABEL_SCOPE_ALL,
         "training_sample_scope": TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
@@ -856,10 +854,10 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         experiment_profile=UNIQUE_GROUP_SAMPLING_EXPERIMENT_PROFILE
     )
     continuous = get_breakout_quality_workflow_settings(
-        experiment_profile=STRATEGY_ALIGNED_NO_TIME_PASS_MAGNITUDE_MSE_PROFILE
+        experiment_profile=STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE
     )
     daily = get_breakout_quality_workflow_settings(
-        experiment_profile=DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE
+        experiment_profile=DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE
     )
     check_true(
         "workflow_profiles_keep_binary_continuous_and_daily_pit_semantics",
@@ -888,14 +886,14 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
     expected_contract = {
         "filter_id": "breakout_quality_v1",
         "model_architecture": "inception_time_v1",
-        "experiment_profile": DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE,
+        "experiment_profile": DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         "continuous_target_id": "daily_opportunity_no_time_r_v1",
         "training_label_scope": TRAINING_LABEL_SCOPE_ALL,
         "training_sample_scope": TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
         "seed": 42,
         "model_information_cutoff": "2020-12-31",
         "model_spec": {"architecture": "inception_time_v1"},
-        "experiment_settings": {"profile": DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE},
+        "experiment_settings": {"profile": DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE},
         "training_settings": {"objective": "daily_pairwise_ranking"},
         "source_contract": {"training_universe_start_date": "2004-09-08"},
         "lookahead_contract": {"future_target_in_scoring": False},
@@ -1099,9 +1097,7 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
     a1_profile = get_breakout_quality_experiment_profile(
         DAILY_UNIVERSAL_SHARED_SAFETY_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
     )
-    a2_profile = get_breakout_quality_experiment_profile(
-        DAILY_UNIVERSAL_SHARED_SAFETY_CONTEXT_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
-    )
+    a2_profile = replace(a1_profile, model_architecture="synthetic_other_topology")
     expected_raw_duo_columns = {
         "primary": "breakout_quality_score",
         "raw_safety": "raw_safety_score",
@@ -1295,7 +1291,7 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         hs_frame,
         np.arange(0, group_count, 2, dtype=np.int64),
         experiment_profile=(
-            DAILY_UNIVERSAL_SHARED_HS_QUALIFICATION_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
+            DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE
         ),
     )
     check_true(
@@ -1921,99 +1917,6 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
                pit_owner._verified_archived_rolling_fit.__name__
                == "_verified_archived_rolling_fit")
 
-    # Byte-backed historical Context attestation survives score regeneration.
-    # It is a reference to the archived aggregate, NOT a newly invented
-    # training-time Context witness.
-    from services.breakout_quality.fitting_data_dependencies import (
-        context_source_for_profile, verified_published_context_fit_proof,
-    )
-    from filters.breakout_quality.predicted_context_artifact import maybe_predicted_context_artifact_spec
-    with tempfile.TemporaryDirectory(prefix="pit_archive_context_") as td:
-        test_root = Path(td)
-        profile_name = "daily_universal_predicted_safety_product_weighted_pure_mfe_full_list_ndcg_pairwise"
-        context_source = context_source_for_profile(profile_name)
-        context_spec = maybe_predicted_context_artifact_spec(context_source)
-        old_pit = (test_root / "models" / "flt" / "arch" / "historical_fit_repairs"
-                   / profile_name / "stamp" / "original" / "point_in_time")
-        new_pit = test_root / "models" / "flt" / "arch" / profile_name / "point_in_time"
-        fold_id = "fold_20220101_20221231"
-        archived = old_pit / "folds" / fold_id
-        current = new_pit / "folds" / fold_id
-        archived.mkdir(parents=True)
-        current.mkdir(parents=True)
-        (archived / "model.pt").write_bytes(b"immutable rolling context fitted bytes")
-        (current / "model.pt").write_bytes((archived / "model.pt").read_bytes())
-        record = build_file_manifest(archived / "model.pt")
-        stage = {
-            "research_id": "stage1", "profile": "source", "architecture": "architecture", "seed": 42,
-            **{k: {"sha256": "a" * 64, "size_bytes": 1} for k in (
-                "selection_score", "selection_manifest", "forward_score", "forward_manifest",
-            )},
-        }
-        context = {
-            "schema_version": 1, "filter_id": "flt", "model_architecture": "arch",
-            "experiment_profile": "source", "contract": {"pit": True},
-            "dataset_policy": "canonical", "periods": {"start": "2020"},
-            "rows": {"total": 1}, "artifact": {"sha256": "b" * 64, "size_bytes": 9},
-            "source_stage1": stage,
-        }
-        target = {
-            "schema_version": 1, "target_contract": {"horizon": 40}, "artifacts": None,
-            context_spec.manifest_key: context,
-        }
-        identity = {
-            "fold_id": fold_id, "filter_id": "flt", "model_architecture": "arch",
-            "experiment_profile": profile_name, "continuous_target_id": "target",
-            "training_sample_scope": "daily", "training_label_scope": "all", "seed": 42,
-            "artifacts": {"checkpoint": record},
-        }
-        old_manifest_path = archived / "manifest.json"
-        old_manifest_path.write_text(json.dumps(identity), encoding="utf-8")
-        def aggregate_for(manifest_path):
-            return {
-                **{k: identity[k] for k in (
-                    "filter_id", "model_architecture", "experiment_profile",
-                    "continuous_target_id", "training_sample_scope", "training_label_scope", "seed",
-                )},
-                "folds": [{"fold_id": fold_id, "fold_manifest": build_file_manifest(manifest_path),
-                           "artifacts": identity["artifacts"]}],
-                "source_continuous_target": target,
-            }
-        old_aggregate = old_pit / "selection_point_in_time_manifest.json"
-        old_aggregate.write_text(json.dumps(aggregate_for(old_manifest_path)), encoding="utf-8")
-        binding = {
-            "source_fold_path": archived.relative_to(test_root).as_posix(),
-            "source_fold_manifest": build_file_manifest(old_manifest_path),
-            "source_aggregate_manifest": build_file_manifest(old_aggregate),
-            "source_checkpoint": record,
-        }
-        restored_manifest = {
-            **identity,
-            "migration": {"kind": "fitting_identity_checkpoint_reuse",
-                          "training_contract_unchanged": True,
-                          "source_checkpoint_sha_preserved": True},
-            "archived_rolling_fit_source": binding,
-        }
-        current_manifest_path = current / "manifest.json"
-        current_manifest_path.write_text(json.dumps(restored_manifest), encoding="utf-8")
-        current_aggregate = new_pit / "selection_point_in_time_manifest.json"
-        current_aggregate.write_text(json.dumps(aggregate_for(current_manifest_path)), encoding="utf-8")
-        bundle = SimpleNamespace(target_manifest=target)
-        verified, reason = verified_published_context_fit_proof(
-            manifest_path=current_manifest_path, fold_manifest=restored_manifest,
-            bundle=bundle, project_root=test_root,
-        )
-        check_true("pit_archived_native_fold_context_verified_through_original_aggregate",
-                   verified and reason.startswith("verified published Rolling"))
-        prior = old_aggregate.read_text(encoding="utf-8")
-        old_aggregate.write_text(prior + " ", encoding="utf-8")
-        verified, reason = verified_published_context_fit_proof(
-            manifest_path=current_manifest_path, fold_manifest=restored_manifest,
-            bundle=bundle, project_root=test_root,
-        )
-        check_true("pit_archive_context_attestation_rejects_tampered_original_aggregate",
-                   not verified and "original SHA binding" in reason)
-
     pit_source = read_source_text("services/breakout_quality/point_in_time_scores.py")
     rescore_start = pit_source.index("def _rescore_fold_from_compatible_checkpoint(")
     rescore_end = pit_source.index("def _rescore_fold_from_fitting_checkpoint(", rescore_start)
@@ -2071,48 +1974,7 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         load_selection_point_in_time_score_table_from_path,
         lookup_selection_point_in_time_candidate_score,
     )
-    with tempfile.TemporaryDirectory(prefix="mr13p_dual_head_pit_") as temp_dir:
-        score_path = Path(temp_dir) / "selection_point_in_time_scores.csv"
-        manifest_path = Path(temp_dir) / "selection_point_in_time_manifest.json"
-        pd.DataFrame([
-            {
-                "ticker": "2330",
-                "date": "2021-01-04",
-                "group_index": 1,
-                "breakout_quality_score": 0.81,
-                "primary_mfe_score": 0.81,
-                "conditional_safety_score": 0.73,
-                "fold_id": "fold_20210101_20211231",
-                "model_information_cutoff": "2020-12-31",
-            }
-        ]).to_csv(score_path, index=False, encoding="utf-8-sig")
-        manifest_path.write_text(json.dumps({
-            "score_period": {"start": "2021-01-01", "end": "2021-12-31"},
-            "coverage": {"scored_group_count": 1},
-        }), encoding="utf-8")
-        dual_table = load_selection_point_in_time_score_table_from_path(
-            str(score_path), manifest_path=str(manifest_path)
-        )
-        conditional_lookup = lookup_selection_point_in_time_candidate_score(
-            project_root=str(Path(__file__).resolve().parents[2]),
-            ticker="2330",
-            signal_date="2021-01-04",
-            filter_id="breakout_quality_v1",
-            model_architecture="inception_time_conditional_mfe_safety_v1",
-            experiment_profile="daily_universal_conditional_mfe_safety_full_list_ndcg_pairwise",
-            score_path_override=str(score_path),
-            manifest_path_override=str(manifest_path),
-            score_column="conditional_safety_score",
-        )
-    check_true(
-        "mr13p_dual_head_pit_retains_conditional_score_and_lookup_selects_it_without_second_source",
-        "conditional_safety_score" in dual_table.columns
-        and abs(float(conditional_lookup["score"]) - 0.73) < 1e-12
-        and bool(conditional_lookup["available"]),
-    )
-
-
-    with tempfile.TemporaryDirectory(prefix="mr13r_dual_head_pit_") as temp_dir:
+    with tempfile.TemporaryDirectory(prefix="current_shared_head_pit_") as temp_dir:
         score_path = Path(temp_dir) / "selection_point_in_time_scores.csv"
         manifest_path = Path(temp_dir) / "selection_point_in_time_manifest.json"
         pd.DataFrame([
@@ -2143,14 +2005,14 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
             ticker="2330",
             signal_date="2021-01-04",
             filter_id="breakout_quality_v1",
-            model_architecture="inception_time_safety_conditional_mfe_v1",
-            experiment_profile="daily_universal_safety_conditional_mfe_duo_head_full_list_ndcg_pairwise",
+            model_architecture="inception_time_shared_safety_mfe_v1",
+            experiment_profile=DAILY_UNIVERSAL_SHARED_SAFETY_HS_CONDITIONAL_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
             score_path_override=str(score_path),
             manifest_path_override=str(manifest_path),
             score_column="raw_safety_score",
         )
     check_true(
-        "mr13r_pit_retains_raw_safety_score_and_lookup_selects_same_source_aux_head",
+        "shared_head_pit_retains_raw_safety_score_and_lookup_selects_same_source_aux_head",
         "raw_safety_score" in reverse_dual_table.columns
         and abs(float(raw_safety_lookup["score"]) - 0.88) < 1e-12
         and bool(raw_safety_lookup["available"]),
@@ -2160,7 +2022,7 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         breakout_quality_ranking_source_context,
         resolve_breakout_quality_candidate_rank,
     )
-    with tempfile.TemporaryDirectory(prefix="mr13z_joint_min_pit_") as temp_dir:
+    with tempfile.TemporaryDirectory(prefix="current_primary_override_pit_") as temp_dir:
         score_path = Path(temp_dir) / "selection_point_in_time_scores.csv"
         manifest_path = Path(temp_dir) / "selection_point_in_time_manifest.json"
         pd.DataFrame([
@@ -2170,8 +2032,7 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
                 "group_index": 1,
                 "breakout_quality_score": 0.31,
                 "raw_safety_score": 0.82,
-                "raw_mfe_score": 0.31,
-                "joint_min_score": 0.67,
+                "raw_mfe_score": 0.67,
                 "fold_id": "fold_20210101_20211231",
                 "model_information_cutoff": "2020-12-31",
             }
@@ -2183,7 +2044,6 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
                 "primary": "breakout_quality_score",
                 "raw_safety": "raw_safety_score",
                 "raw_mfe": "raw_mfe_score",
-                "joint_min": "joint_min_score",
             },
         }), encoding="utf-8")
         joint_table = load_selection_point_in_time_score_table_from_path(
@@ -2191,9 +2051,9 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
         )
         with breakout_quality_ranking_source_context(
             score_source="selection_point_in_time",
-            model_architecture="patch_token_transformer_safety_raw_mfe_joint_attn_mlp_v1",
-            experiment_profile="daily_universal_safety_raw_mfe_joint_min_patch_transformer_attn_pool_mlp_head_full_list_ndcg_pairwise",
-            ranking_options={"primary_score_column": "joint_min_score"},
+            model_architecture="inception_time_shared_safety_mfe_v1",
+            experiment_profile=DAILY_UNIVERSAL_SHARED_SAFETY_WEIGHTED_PURE_MFE_FULL_LIST_NDCG_PAIRWISE_PROFILE,
+            ranking_options={"primary_score_column": "raw_mfe_score"},
             score_path_override=str(score_path),
             score_manifest_path_override=str(manifest_path),
         ):
@@ -2205,8 +2065,8 @@ def validate_breakout_quality_point_in_time_score_builder_contract_case(_base_pa
                 project_root=str(Path(__file__).resolve().parents[2]),
             )
     check_true(
-        "mr13z_pit_preserves_all_three_heads_and_runtime_primary_explicitly_consumes_joint_min",
-        {"raw_safety_score", "raw_mfe_score", "joint_min_score"}.issubset(joint_table.columns)
+        "shared_head_pit_preserves_sidecars_and_runtime_primary_explicitly_consumes_requested_column",
+        {"raw_safety_score", "raw_mfe_score"}.issubset(joint_table.columns)
         and abs(float(joint_table.iloc[0]["breakout_quality_score"]) - 0.31) < 1e-12
         and abs(float(joint_runtime["score"]) - 0.67) < 1e-12
         and bool(joint_runtime["available"]),
@@ -2312,7 +2172,7 @@ def validate_breakout_quality_selection_point_in_time_score_sort_contract_case(_
         "shared_group_score": True,
         "filter_id": BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
         "model_architecture": "inception_time_v1",
-        "experiment_profile": "strategy_aligned_no_time_pass_magnitude_mse",
+        "experiment_profile": "strategy_aligned_no_time_all_event_mse",
     }
     signal_state = {}
     attach_breakout_quality_rank(signal_state, unavailable_rank)
@@ -2325,7 +2185,7 @@ def validate_breakout_quality_selection_point_in_time_score_sort_contract_case(_
     with breakout_quality_ranking_source_context(
         score_source="selection_point_in_time",
         model_architecture="inception_time_v1",
-        experiment_profile="strategy_aligned_no_time_pass_magnitude_mse",
+        experiment_profile="strategy_aligned_no_time_all_event_mse",
     ):
         with patch(
             "core.portfolio_candidates.resolve_breakout_quality_candidate_rank",
@@ -2387,7 +2247,7 @@ def validate_breakout_quality_selection_point_in_time_score_sort_contract_case(_
     with breakout_quality_ranking_source_context(
         score_source="selection_point_in_time",
         model_architecture="inception_time_v1",
-        experiment_profile="strategy_aligned_no_time_pass_magnitude_mse",
+        experiment_profile="strategy_aligned_no_time_all_event_mse",
     ):
         inside_source = get_breakout_quality_ranking_source_context().score_source
     restored_source = get_breakout_quality_ranking_source_context().score_source
@@ -2426,7 +2286,7 @@ def validate_breakout_quality_selection_point_in_time_score_sort_contract_case(_
         with breakout_quality_ranking_source_context(
             score_source="selection_point_in_time",
             model_architecture="inception_time_v1",
-            experiment_profile=DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE,
+            experiment_profile=DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         ):
             resolve_breakout_quality_candidate_rank(
                 ticker="2330",
@@ -2450,13 +2310,13 @@ def validate_breakout_quality_selection_point_in_time_score_sort_contract_case(_
             "score_source": "selection_point_in_time",
             "filter_id": BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
             "model_architecture": "inception_time_v1",
-            "experiment_profile": DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE,
+            "experiment_profile": DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE,
         },
     )
     with breakout_quality_ranking_source_context(
         score_source="selection_point_in_time",
         model_architecture="inception_time_v1",
-        experiment_profile=DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE,
+        experiment_profile=DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE,
     ):
         with patch(
             "core.portfolio_candidates.resolve_breakout_quality_candidate_rank",
@@ -2467,7 +2327,7 @@ def validate_breakout_quality_selection_point_in_time_score_sort_contract_case(_
                 "score_source": "selection_point_in_time",
                 "filter_id": BREAKOUT_QUALITY_DEFAULT_FILTER_ID,
                 "model_architecture": "inception_time_v1",
-                "experiment_profile": DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE,
+                "experiment_profile": DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE,
             },
         ) as refreshed_lookup:
             refreshed_rank = _resolve_candidate_quality_ranking(
@@ -2484,7 +2344,7 @@ def validate_breakout_quality_selection_point_in_time_score_sort_contract_case(_
     )
 
     daily_profile = get_breakout_quality_experiment_profile(
-        DAILY_UNIVERSAL_NO_TIME_PAIRWISE_PROFILE
+        DAILY_UNIVERSAL_NO_TIME_FULL_LIST_NDCG_PAIRWISE_PROFILE
     )
     current_daily_contract = build_score_eligibility_contract(daily_profile)
     current_daily_accepted = True

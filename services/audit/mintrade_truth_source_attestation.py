@@ -27,6 +27,18 @@ from core.file_integrity import compute_file_sha256
 from core.research_execution_equivalence import reviewed_execution_source_sha256
 
 _SOURCE_OWNER = "services/audit/daily_trade40_oracle.py"
+# Min truth is produced with both DL flags disabled by
+# build_formal_min_execution_schedule. The runtime adapter supplies only the
+# callbacks behind those flags; its calibration/ranking code is never an
+# input to this producer. Keep the old provenance slot for signed receipts,
+# but do not couple DL-off truth to unrelated model/selector maintenance.
+# The schedule, signal dispatcher and actual trade/accounting owners remain
+# strict dependencies, so enabling DL or changing its bypass invalidates truth.
+_DL_OFF_ADAPTER = "filters/breakout_quality/runtime.py"
+_DL_OFF_ADAPTER_PROVENANCE = (
+    "548e0d32024a09a0e03d9ead82327904fa285f3320b3dd50b8d078bcf79dedc5",
+    "ea2564e7c5d36f34f89cb93afaf8380100bc64cd9af2fd359059aa8dedd4c843",
+)
 # (pre-addition source SHA, exact reviewed post-addition source SHA)
 _AUDITED_IDENTITY_ONLY_REVISION = (
     "e93b116b89eb28c69e5cf814beb0bfd84f15819378225bdeebebd497c721fa3e",
@@ -116,6 +128,8 @@ def attested_mintrade_source_sha256(relative: str, path: Path) -> str:
     executable owner AST is unchanged. This is not a wildcard for any code or
     independent data-source change; unrecognized revisions hash normally.
     """
+    if relative == _DL_OFF_ADAPTER:
+        return _DL_OFF_ADAPTER_PROVENANCE[0]
     actual = compute_file_sha256(path)
     actual = reviewed_execution_source_sha256(relative, actual)
     if relative != _SOURCE_OWNER:
@@ -184,6 +198,9 @@ def _mintrade_source_fingerprint_proof() -> tuple[str, frozenset[str]]:
         for raw_owner in (False, True):
             hashes = {}
             for name, data in contents.items():
+                if name == _DL_OFF_ADAPTER:
+                    hashes[name] = _DL_OFF_ADAPTER_PROVENANCE[0]
+                    continue
                 if newline is not None:
                     data = data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
                     if newline == b"\r\n":
@@ -197,6 +214,11 @@ def _mintrade_source_fingerprint_proof() -> tuple[str, frozenset[str]]:
             # encoding proof, not acceptance of an arbitrary historical SHA.
             variants = [hashes]
             for name, data in contents.items():
+                if name == _DL_OFF_ADAPTER:
+                    variants.extend({**hashes, name: value}
+                                    for value in _DL_OFF_ADAPTER_PROVENANCE
+                                    if value != hashes[name])
+                    continue
                 if name == _SOURCE_OWNER and not raw_owner:
                     continue  # This owner already has an executable-AST proof.
                 lf = data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")

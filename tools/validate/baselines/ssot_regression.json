@@ -342,12 +342,12 @@
       "path": "tools/validate/synthetic_meta_cases.py"
     },
     {
-      "ast_sha256": "19594cd076354f41540e3b7327bc29f4e80ad52c7b76f1877efa6b48ac45d771",
+      "ast_sha256": "45acc6cafa2e45d3b23b9bb5dce1494b56f4b425ac3d8457e6ced067179b8088",
       "function": "validate_research_report_contract_freeze_case",
       "path": "tools/validate/synthetic_meta_cases.py"
     },
     {
-      "ast_sha256": "00d20e814318b24db8128107c443712bb4843a9c3cf329803d371f03e73610de",
+      "ast_sha256": "0c41319a98ea2d765e5ea2782f04b9348786447d130b01c2e619da75009577d3",
       "function": "validate_ssot_regression_guard_case",
       "path": "tools/validate/synthetic_meta_cases.py"
     },
