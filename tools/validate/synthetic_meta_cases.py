@@ -2640,6 +2640,10 @@ def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
         "tpe",
         optimizer_runtime.resolve_optimizer_sampler_kind(),
     )
+    from .check_result_utils import run_unittest_capability_cases
+    from .test_optimizer_progress import OptimizerProgressTests
+    progress_results, _ = run_unittest_capability_cases(case_id, "meta_coverage", [OptimizerProgressTests])
+    results.extend(progress_results)
     telemetry_probe = optimizer_progress._collect_optimizer_progress_phase_metrics([
         {
             "fold_idx": 1,

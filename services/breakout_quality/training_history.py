@@ -18,6 +18,26 @@ def _early_execute(*, contract, project_root, seed):
         project_root=project_root, seed=seed, authorized=True, history_contract=contract)
 
 
+def _early_execute_coordinator(*, contract, project_root, seed):
+    # Each isolated coordinator retains the canonical producer and publication.
+    _early_execute(contract=contract, project_root=project_root, seed=seed)
+    return int(seed)
+
+
+def _early_execute_many(*, contract, project_root, seeds):
+    from services.optimizer.independent_seed_fold_queue import (
+        run_independent_optimizer_producers_shared_fold_queue,
+    )
+    ordered = tuple(seeds)
+    if any(type(seed) is not int or seed <= 0 for seed in ordered) or len(set(ordered)) != len(ordered):
+        raise ValueError("Historical teacher batch requires distinct positive seeds")
+    return run_independent_optimizer_producers_shared_fold_queue(
+        _early_execute_coordinator,
+        [{"contract": dict(contract), "project_root": str(project_root), "seed": seed}
+         for seed in ordered],
+    )
+
+
 def _early_loader(*, contract, project_root, seed, authorized_build):
     from services.breakout_quality.formal_mintrade40_training_source import resolve_formal_mintrade40_loader_kwargs
     control = resolve_formal_mintrade40_loader_kwargs(
@@ -80,7 +100,8 @@ def extend_source_capability(source, profile):
     contract = dict(extension)
     early = replace(source.dependencies[0],
         name='early_history', builder_type='optimizer_early_history', priority=50,
-        inspect=partial(_early_inspect, contract=contract), execute=partial(_early_execute, contract=contract))
+        inspect=partial(_early_inspect, contract=contract), execute=partial(_early_execute, contract=contract),
+        execute_many=partial(_early_execute_many, contract=contract))
     return replace(source, loader=partial(_early_loader, contract=contract),
                    dependencies=(*source.dependencies, early))
 

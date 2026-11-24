@@ -31,6 +31,7 @@ class TeacherDependency:
     priority: int
     inspect: Callable[..., dict[str, object]]
     execute: Callable[..., object]
+    execute_many: Callable[..., object] | None = None
 
 
 @dataclass(frozen=True)

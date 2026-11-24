@@ -180,6 +180,12 @@ from services.optimizer.outer_rolling_runtime import (
     _validate_optimizer_runtime_context,
 )
 from services.optimizer.execution_settings import OptimizerExecutionSettings
+from services.optimizer.independent_seed_fold_queue import (
+    acquire_independent_finalization_slot,
+    independent_fold_executor,
+    independent_fold_queue_workers,
+    release_independent_finalization_slot,
+)
 from services.optimizer.outer_rolling_parallel_progress import (
     PARALLEL_FOLD_LOG_STATUS_MAX_CHARS,
     _MirroredLogWriter,
@@ -762,7 +768,7 @@ def _run_parallel_fold_futures(*, executor, tasks: list[dict], rows: list[dict],
                     )
                 except Exception as exc:
                     task = future_map[future]
-                    if _is_non_retryable_fold_failure(exc):
+                    if independent_fold_queue_workers() is not None or _is_non_retryable_fold_failure(exc):
                         _cancel_parallel_fold_executor_after_failure(executor, pending)
                         raise RuntimeError(_build_parallel_fold_failure_message(task=task, exc=exc)) from exc
                     retryable_failures.append({
@@ -1747,6 +1753,7 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
         session.rolling_fold_workers_max = int(fold_workers)
         session.rolling_fold_parallel = True
         session.set_trial_prep_execution_mode(
+            "inline" if task.get("independent_fold_queue") else
             _resolve_outer_rolling_trial_prep_execution_mode(fold_workers=int(fold_workers))
         )
         reset_prep_cache_stats = getattr(session, "reset_prep_cache_stats", None)
@@ -1871,6 +1878,7 @@ def _run_outer_rolling_oos_fold_task(task: dict) -> dict:
                     inner_session.rolling_fold_workers_max = int(fold_workers)
                     inner_session.rolling_fold_parallel = True
                     inner_session.set_trial_prep_execution_mode(
+                        "inline" if task.get("independent_fold_queue") else
                         _resolve_outer_rolling_trial_prep_execution_mode(fold_workers=int(fold_workers))
                     )
                     inner_session.n_trials = int(config.trials_per_fold)
@@ -2519,6 +2527,8 @@ def run_outer_rolling_oos(
     from services.optimizer.session import close_study_storage
     from services.optimizer.session_factory import build_optimizer_session_from_spec
 
+    release_independent_finalization_slot()
+
     session_spec = dict(optimizer_session_spec or {})
     progress_display_contract = build_optimizer_progress_display_contract(
         session_spec.get("strategy_param_scientific_contract")
@@ -2571,6 +2581,12 @@ def run_outer_rolling_oos(
     execution_settings = OptimizerExecutionSettings.from_environ(environ)
     fold_workers = _resolve_rolling_fold_workers(environ, timing_mode=bool(timing_mode), fold_count=fold_count)
     fold_parallel_enabled = _is_rolling_fold_parallel_enabled(environ, timing_mode=bool(timing_mode), fold_count=fold_count)
+    shared_fold_workers = independent_fold_queue_workers()
+    if shared_fold_workers is not None:
+        if seed_ensemble_enabled:
+            raise ValueError("Independent Optimizer producers cannot use a seed ensemble queue")
+        fold_workers = int(shared_fold_workers)
+        fold_parallel_enabled = True
     from services.optimizer.runtime import resolve_optimizer_sampler_kind
     sampler_kind = resolve_optimizer_sampler_kind()
     plan_validation_spec = (
@@ -2687,6 +2703,8 @@ def run_outer_rolling_oos(
                 validation_budget_spec=plan_validation_spec,
                 seed_ensemble_policy=runtime_seed_policy,
             ))
+            if shared_fold_workers is not None:
+                tasks[-1]["independent_fold_queue"] = True
             # Fold log path is kept internally for diagnostics, but not printed during normal progress.
         chain_state = {"chain_max_positions": None, "chain_enable_rotation": None}
         try:
@@ -2719,6 +2737,16 @@ def run_outer_rolling_oos(
                     per_fold_cap=int(per_fold_seed_cap),
                     priority_warmup_max_sec=float(priority_warmup_max_sec),
                 )
+            elif shared_fold_workers is not None:
+                with independent_fold_executor(fold_count=fold_count) as executor:
+                    chain_state = _run_parallel_fold_futures(
+                        executor=executor,
+                        tasks=tasks,
+                        rows=rows,
+                        fold_timing_rows=fold_timing_rows,
+                        overall_start=overall_start,
+                        raw_data_load_sec=raw_data_load_sec,
+                    )
             else:
                 with ProcessPoolExecutor(max_workers=int(fold_workers)) as executor:
                     chain_state = _run_parallel_fold_futures(
@@ -2730,6 +2758,8 @@ def run_outer_rolling_oos(
                         raw_data_load_sec=raw_data_load_sec,
                     )
         except Exception as exc:
+            if shared_fold_workers is not None:
+                raise
             chain_state = _run_missing_parallel_fold_tasks_sequentially(
                 tasks=tasks,
                 rows=rows,
@@ -3157,6 +3187,8 @@ def run_outer_rolling_oos(
                 close_study_storage(study)
 
     _shutdown_rolling_shared_prep_executor_holder(rolling_shared_prep_executor_holder)
+
+    acquire_independent_finalization_slot()
 
     # One resolved fitting policy must reach OOS_CHAIN and every published paramset.
     # A single-seed fold has no ensemble policy field in its historical row shape.

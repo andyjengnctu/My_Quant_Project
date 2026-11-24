@@ -7,6 +7,8 @@ execution dependencies remain independently verified by their original owners.
 """
 from __future__ import annotations
 
+from functools import lru_cache
+
 # Baseline ZIP SHA256: 3aae4d710c451d519245c2c1d204ffc235bcc453497f607b4078751659c21c6e
 _REVIEWED = {
     # AI: b0548fab input-read optimization: unchanged SHA bytes, Dataset rows
@@ -271,7 +273,116 @@ _REVIEWED["filters/breakout_quality/daily_trade40_target.py"][
 }
 
 
+# Independent producer queue resource additions, proved against de64a6dc.
+# Remove only the literal resource capacity and the exact isolated resolver;
+# the entire remaining module AST must equal its separately observed predecessor.
+# The queue, producer, trial protocol and numerical owners are never aliased here.
+_INDEPENDENT_QUEUE_RESOURCE_PREDECESSORS = {
+    "config/training_performance_policy.py": (
+        "a4ff690da29d325a70593df2003476ea5740ee8d795f662e5678b0200c130a12",
+        "f1dd90b1ff94eba4e4b6ef4703de6518a7f0ae5c2e292f8d4ce6e2bc483a09f1",
+        "d635114d3cdfb70be4944f41c49e7ae010c89ef13284e168a850cbe0a0ad2965",
+    ),
+    "core/training_performance.py": (
+        "959dd0b181d961751270836aed619afd4a0461211bd56ac4443f20b851286886",
+        "b5e79dc378cadd244e755d8d794fe0bca1ca8dce929b57b13dbdb44426a6bc14",
+        "5fd746c14b39fabdf906c2a0907329efaa59b63fb1e60f92f89b9a53deb77984",
+    ),
+}
+_INDEPENDENT_QUEUE_RESOLVER_AST = "ddf7e6ac18666c506a39f3492213f07de7998221d3dd19d026d5eb5ee68ec367"
+
+
+@lru_cache(maxsize=32)
+def _independent_queue_resource_predecessor(relative: str, content: bytes) -> str | None:
+    """Prove an additive execution-resource declaration; unknown AST fails closed."""
+    import ast
+    from hashlib import sha256
+    proof = _INDEPENDENT_QUEUE_RESOURCE_PREDECESSORS.get(relative)
+    if proof is None:
+        return None
+    try:
+        tree = ast.parse(content)
+    except (SyntaxError, UnicodeDecodeError):
+        return None
+    def fingerprint(node):
+        return sha256(ast.dump(canonical_ast_schema(node), annotate_fields=True,
+                               include_attributes=False).encode("utf-8")).hexdigest()
+    knob = "OPTIMIZER_INDEPENDENT_SEED_FOLD_GLOBAL_WORKERS"
+    declarations = 0
+    imports = 0
+    resource_exports = 0
+    exports = {
+        "build_optimizer_outer_rolling_env_defaults":
+            "str(resolve_optimizer_independent_seed_fold_global_workers())",
+        "build_training_performance_policy_snapshot":
+            "resolve_optimizer_independent_seed_fold_global_workers()",
+    }
+    for statement in list(tree.body):
+        if relative.startswith("config/"):
+            if (isinstance(statement, ast.Assign) and len(statement.targets) == 1
+                    and isinstance(statement.targets[0], ast.Name)
+                    and statement.targets[0].id == knob):
+                if (not isinstance(statement.value, ast.Constant)
+                        or type(statement.value.value) is not int
+                        or not 1 <= statement.value.value <= 64):
+                    return None
+                declarations += 1
+                tree.body.remove(statement)
+        else:
+            if (isinstance(statement, ast.ImportFrom)
+                    and statement.module == "config.training_performance_policy"
+                    and statement.level == 0):
+                for alias in list(statement.names):
+                    if alias.name == knob:
+                        if alias.asname is not None:
+                            return None
+                        imports += 1
+                        statement.names.remove(alias)
+            if (isinstance(statement, ast.FunctionDef)
+                    and statement.name == "resolve_optimizer_independent_seed_fold_global_workers"):
+                if fingerprint(statement) != _INDEPENDENT_QUEUE_RESOLVER_AST:
+                    return None
+                declarations += 1
+                tree.body.remove(statement)
+            if isinstance(statement, ast.FunctionDef) and statement.name in exports:
+                expected = ast.parse(exports[statement.name], mode="eval").body
+                found = 0
+                for node in ast.walk(statement):
+                    if not isinstance(node, ast.Dict):
+                        continue
+                    for index in reversed(range(len(node.keys))):
+                        key = node.keys[index]
+                        if isinstance(key, ast.Constant) and key.value == knob:
+                            if fingerprint(node.values[index]) != fingerprint(expected):
+                                return None
+                            found += 1
+                            del node.keys[index]
+                            del node.values[index]
+                if found != 1:
+                    return None
+                resource_exports += 1
+    if resource_exports != (0 if relative.startswith("config/") else len(exports)):
+        return None
+    if declarations != 1 or imports != (0 if relative.startswith("config/") else 1):
+        return None
+    return proof[2 if b"\r\n" in content else 1] if fingerprint(tree) == proof[0] else None
+
+
+def _independent_queue_resource_certificate(relative: str):
+    from hashlib import sha256
+    from pathlib import Path
+    if relative not in _INDEPENDENT_QUEUE_RESOURCE_PREDECESSORS:
+        return None
+    source = Path(__file__).resolve().parents[1] / relative
+    raw = source.read_bytes()
+    predecessor = _independent_queue_resource_predecessor(relative, raw)
+    return None if predecessor is None else (sha256(raw).hexdigest(), predecessor, raw)
+
+
 def reviewed_execution_source_sha256(relative: str, actual: str) -> str:
+    resource = _independent_queue_resource_certificate(relative)
+    if resource is not None and actual == resource[0]:
+        actual = resource[1]
     optimizer_previous = _reviewed_optimizer_execution_sha256(relative, actual)
     if optimizer_previous != actual:
         return optimizer_previous
@@ -1109,7 +1220,15 @@ def _reviewed_source_group(scope: str):
     updates = _OPTIMIZER_EXECUTION_GROUP_UPDATES.get(scope)
     if not _OPTIMIZER_EXECUTION_REVIEW_ENABLED or proof is None or not updates:
         return proof
-    return {**proof, "current": {**proof["current"], **updates}}
+    current = {**proof["current"], **updates}
+    for relative in _INDEPENDENT_QUEUE_RESOURCE_PREDECESSORS:
+        if relative not in current:
+            continue
+        certificate = _independent_queue_resource_certificate(relative)
+        if certificate is not None:
+            from services.research.oracle_artifact_contract import _source_content_attestation
+            current[relative] = _source_content_attestation(certificate[2], is_python=True)[1]
+    return {**proof, "current": current}
 
 
 def reviewed_replay_predecessor_sources(parts, *, project_root):

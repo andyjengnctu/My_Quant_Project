@@ -36,11 +36,57 @@ class OptimizerExecutionEquivalenceTests(unittest.TestCase):
             for name, pins in proof._OPTIMIZER_EXECUTION_PHYSICAL_PINS.items():
                 raw = (ROOT / name).read_bytes()
                 current = sha256(raw).hexdigest()
-                self.assertIn(current, pins, name)
-                self.assertEqual(proof.reviewed_execution_source_sha256(name, current), pins[current])
+                resource = proof._independent_queue_resource_predecessor(name, raw)
+                predecessor = current if resource is None else resource
+                self.assertIn(predecessor, pins, name)
+                self.assertEqual(proof.reviewed_execution_source_sha256(name, current), pins[predecessor])
                 mutation = sha256(raw + b'\n_UNKNOWN_EXECUTION_EDIT = True\n').hexdigest()
                 self.assertNotEqual(current, mutation)
                 self.assertEqual(proof.reviewed_execution_source_sha256(name, mutation), mutation)
+
+    def test_queue_capacity_is_literal_only_and_cannot_hide_unknown_config(self):
+        name = 'config/training_performance_policy.py'
+        raw = (ROOT / name).read_bytes()
+        import ast
+        tree = ast.parse(raw)
+        knob = 'OPTIMIZER_INDEPENDENT_SEED_FOLD_GLOBAL_WORKERS'
+        assignment = next(node for node in tree.body if isinstance(node, ast.Assign)
+                          and any(isinstance(target, ast.Name) and target.id == knob
+                                  for target in node.targets))
+        declaration = ast.get_source_segment(raw.decode(), assignment).encode()
+        expected = proof._independent_queue_resource_predecessor(name, raw)
+        self.assertIsNotNone(expected)
+        for value, admitted in ((1, True), (64, True), ('int(6)', False),
+                                ('True', False), (0, False), (65, False)):
+            changed = raw.replace(declaration, f'{knob} = {value}'.encode())
+            observed = proof._independent_queue_resource_predecessor(name, changed)
+            self.assertEqual(observed, expected if admitted else None)
+        for tail in (b'\n_UNKNOWN_TRAINING_SETTING = 1\n', b'\n' + declaration + b'\n'):
+            self.assertIsNone(proof._independent_queue_resource_predecessor(name, raw + tail))
+
+    def test_queue_resolver_requires_exact_body_and_complete_predecessor(self):
+        name = 'core/training_performance.py'
+        raw = (ROOT / name).read_bytes()
+        self.assertIsNotNone(proof._independent_queue_resource_predecessor(name, raw))
+        resolver = b'def resolve_optimizer_independent_seed_fold_global_workers(environ=None) -> int:'
+        changed = raw.replace(resolver, resolver + b'\n    return 2')
+        self.assertIsNone(proof._independent_queue_resource_predecessor(name, changed))
+        self.assertIsNone(proof._independent_queue_resource_predecessor(
+            name, raw + b'\n_UNKNOWN_RESOURCE_CONSUMER = True\n'))
+        self.assertIsNone(proof._independent_queue_resource_predecessor(
+            name, raw.replace(b'"OPTIMIZER_ROLLING_FOLD_WORKERS"', b'"UNKNOWN_WORKER_OVERRIDE"')))
+
+    def test_unknown_resource_source_cannot_inherit_syntax_group(self):
+        name = 'core/training_performance.py'
+        path = ROOT / name
+        raw = path.read_bytes()
+        mutate = raw + b'\n_UNKNOWN_RESOURCE_CONSUMER = True\n'
+        original = Path.read_bytes
+        with patch.object(Path, 'read_bytes', lambda p: mutate if p == path else original(p)):
+            self.assertEqual(proof.reviewed_execution_source_sha256(name, sha256(mutate).hexdigest()),
+                             sha256(mutate).hexdigest())
+            self.assertNotEqual(proof._reviewed_source_group('portfolio_candidates')['current'][name],
+                                contracts._source_content_attestation(mutate, is_python=True)[1])
 
     def test_complete_group_reconstructs_formal_zip_predecessor(self):
         with patch.object(proof, '_OPTIMIZER_EXECUTION_REVIEW_ENABLED', True):

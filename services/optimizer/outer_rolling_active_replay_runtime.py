@@ -102,20 +102,25 @@ def _load_active_replay_contexts_by_signature(
         static_master_dates = set()
         for df in raw_data_cache.values():
             static_master_dates.update(df.index)
-        active_prep_workers = resolve_optimizer_active_replay_prep_workers(len(raw_data_cache))
-        prep_executor, pool_start_method, supports_initializer = _build_process_pool_executor(
-            int(active_prep_workers or 1),
-            raw_data_cache,
-        )
-        if supports_initializer:
-            reusable_prep_executor_bundle = {
-                "executor": prep_executor,
-                "max_workers": int(active_prep_workers or 1),
-                "pool_start_method": pool_start_method,
-                "executor_kind": "process",
-            }
+        from services.optimizer.independent_seed_fold_queue import independent_fold_preparation_bundle
+        reusable_prep_executor_bundle = independent_fold_preparation_bundle()
+        if reusable_prep_executor_bundle is not None:
+            active_prep_workers = 1
         else:
-            prep_executor.shutdown(wait=True, cancel_futures=False)
+            active_prep_workers = resolve_optimizer_active_replay_prep_workers(len(raw_data_cache))
+            prep_executor, pool_start_method, supports_initializer = _build_process_pool_executor(
+                int(active_prep_workers or 1),
+                raw_data_cache,
+            )
+            if supports_initializer:
+                reusable_prep_executor_bundle = {
+                    "executor": prep_executor,
+                    "max_workers": int(active_prep_workers or 1),
+                    "pool_start_method": pool_start_method,
+                    "executor_kind": "process",
+                }
+            else:
+                prep_executor.shutdown(wait=True, cancel_futures=False)
 
     def _covers_text(index: int, item: dict) -> str:
         year = _record_year(item)
@@ -193,7 +198,7 @@ def _load_active_replay_contexts_by_signature(
             context["normal_setup_index"] = build_normal_setup_index(context.get("all_dfs_fast") or {})
             contexts_by_signature[signature] = context
     finally:
-        if reusable_prep_executor_bundle is not None:
+        if reusable_prep_executor_bundle is not None and reusable_prep_executor_bundle.get("executor") is not None:
             reusable_prep_executor_bundle["executor"].shutdown(wait=True, cancel_futures=False)
 
     if total:

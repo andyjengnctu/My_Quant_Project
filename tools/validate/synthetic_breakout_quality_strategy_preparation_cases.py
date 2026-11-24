@@ -725,11 +725,14 @@ def append_strategy_compare_preparation_contract_checks(
     from .test_optimizer_execution_equivalence import OptimizerExecutionEquivalenceTests
     from .test_optimizer_oos_context_reuse import OptimizerOOSContextReuseTests
     from .test_optimizer_shadow_context import OptimizerShadowContextTests
+    from .test_research_seed_dependency_queue import ResearchSeedDependencyQueueTests
+    from .test_independent_seed_fold_queue import IndependentSeedFoldQueueTests
     boundary_rows, boundary_summary = run_unittest_capability_cases(
         case_id, "synthetic_breakout_quality", [
             OptimizerBoundaryTests, OptimizerDeferredSignalReuseTests,
             OptimizerEntrySizingTests, OptimizerExecutionEquivalenceTests,
             OptimizerOOSContextReuseTests, OptimizerShadowContextTests,
+            ResearchSeedDependencyQueueTests, IndependentSeedFoldQueueTests,
         ],
     )
     results.extend(boundary_rows)

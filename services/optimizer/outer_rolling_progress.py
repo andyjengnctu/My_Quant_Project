@@ -268,11 +268,15 @@ def _count_local_min_completed_neighbors_from_progress(progress: dict) -> int:
     """
     data = dict(progress or {})
     for key in ("local_min_neighbor_completed", "completed_local_min_neighbors"):
+        if key not in data:
+            continue
         try:
-            value = int(data.get(key, 0) or 0)
-        except (TypeError, ValueError):
-            value = 0
-        if value > 0:
+            value = int(data[key])
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if value >= 0:
+            # An explicit zero is authoritative, including when local-min is
+            # disabled and the finalist review still emits positional events.
             return value
     if str(data.get("stage") or "").upper() != "LOCAL_MIN_REVIEW":
         return 0

@@ -7,6 +7,8 @@ scientific semantics. Runtime resolution belongs to ``core.training_performance`
 
 # Rolling fold parallelism.
 OPTIMIZER_ROLLING_FOLD_WORKERS = "fold_count"  # "fold_count" / "auto" or a positive integer
+# Independent benchmark producers keep separate seeds, studies and publication.
+OPTIMIZER_INDEPENDENT_SEED_FOLD_GLOBAL_WORKERS = 6
 # Rolling random-seed ensembles use one global fold x seed work queue.  Keep the
 # current fixed-capacity version explicit; autoscaling is intentionally not enabled.
 # AI: Full-data seed workers hold independent market/preparation state. On

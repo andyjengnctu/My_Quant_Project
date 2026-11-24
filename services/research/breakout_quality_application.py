@@ -2833,6 +2833,7 @@ def _prepare_continuous_research_inputs(
     seed: int | None = None,
     include_seed_dependencies: bool = True,
     execution_observer: Callable[[bool], None] | None = None,
+    seeds: tuple[int, ...] | None = None,
 ) -> int:
     """Prepare deterministic model inputs through the shared Research orchestrator.
 
@@ -2851,20 +2852,74 @@ def _prepare_continuous_research_inputs(
     # may use a seedless settings fixture; the formal label always has one.
     model_seed = int(getattr(settings, 'seed', 0) if seed is None else seed)
 
+    model_seeds = (model_seed,) if seeds is None else tuple(seeds)
+    if (not model_seeds or any(type(value) is not int or value <= 0 for value in model_seeds)
+            or len(set(model_seeds)) != len(model_seeds)) and seeds is not None:
+        raise ValueError("Model input batch requires distinct positive seeds")
+    if seeds is not None and seed is not None:
+        raise ValueError("Model input preparation accepts seed or seeds, not both")
+    action_seeds: dict[str, int] = {}
+
     def _refresh_plan():
-        return _collect_continuous_research_input_plan(
-            settings,
-            dataset_profile=resolved_dataset_profile,
-            max_tickers=resolved_max_tickers,
-            seed=model_seed,
-            include_seed_dependencies=include_seed_dependencies,
-        )
+        from dataclasses import replace
+        from core.research_orchestration import ResearchArtifactPlan
+        actions = []
+        for current_seed in model_seeds:
+            plan = _collect_continuous_research_input_plan(
+                settings,
+                dataset_profile=resolved_dataset_profile,
+                max_tickers=resolved_max_tickers,
+                seed=current_seed,
+                include_seed_dependencies=include_seed_dependencies,
+            )
+            if seeds is None:
+                return plan
+            prefix = f"seed_{current_seed}:"
+            for row in plan.actions:
+                key = prefix + row.artifact_key
+                action_seeds[key] = current_seed
+                actions.append(replace(
+                    row, action_id=prefix + row.action_id, artifact_key=key,
+                    dependencies=tuple(prefix + key for key in row.dependencies),
+                ))
+        return ResearchArtifactPlan.from_actions(actions)
 
     def _execute(action) -> None:
-        from services.breakout_quality.trade_path_target_source import execute_trade_path_dependency
+        from services.breakout_quality.trade_path_target_source import (
+            execute_trade_path_dependency, registered_trade_path_source,
+        )
+        current_seed = action_seeds.get(action.artifact_key, model_seed)
+        if seeds is not None and include_seed_dependencies:
+            source = registered_trade_path_source(str(settings.experiment_profile))
+            requirement = next((row for row in (() if source is None else source.dependencies)
+                                if row.builder_type == action.builder_type), None)
+            if requirement is not None and requirement.execute_many is not None:
+                plan = _refresh_plan()
+                if plan.blocked:
+                    raise RuntimeError("Seed input batch became BLOCKED during execution preflight")
+                # The generic planner runs shared Dataset/current/history writers
+                # first. Batch only after every earlier dependency is verified.
+                from core.research_orchestration import RESEARCH_ARTIFACT_READY_ACTIONS
+                earlier_ready = all(
+                    row.action in RESEARCH_ARTIFACT_READY_ACTIONS for row in plan.actions
+                    if row.execution_priority < action.execution_priority
+                )
+                rows = tuple(row for row in plan.actions
+                             if row.builder_type == action.builder_type and row.runnable_work)
+                dependencies_ready = all(
+                    plan.action_by_key[key].action in RESEARCH_ARTIFACT_READY_ACTIONS
+                    for row in rows for key in row.dependencies
+                )
+                if earlier_ready and dependencies_ready:
+                    pending = {action_seeds[row.artifact_key] for row in rows}
+                    requirement.execute_many(
+                        project_root=PROJECT_ROOT,
+                        seeds=tuple(value for value in model_seeds if value in pending),
+                    )
+                    return
         if include_seed_dependencies and execute_trade_path_dependency(
             builder_type=str(action.builder_type), project_root=PROJECT_ROOT,
-            seed=model_seed, experiment_profile=str(settings.experiment_profile),
+            seed=current_seed, experiment_profile=str(settings.experiment_profile),
         ):
             return
         if action.builder_type == "breakout_quality_dataset":
@@ -5093,9 +5148,9 @@ def _parallel_model_robustness_inputs_reusable(
 ) -> bool:
     """Never parallelize any seed that could publish a shared upstream truth.
 
-    A missing Dataset, Target or Optimizer teacher retains the existing
-    serialized canonical producer protocol. Only already-verified input sets
-    can be processed by isolated model seed workers. Rolling EVIDENCE-only
+    Dataset, Target and Optimizer teachers must be canonically verified
+    before isolated model seed workers run. Independent teachers may have
+    used the shared fold queue during preparation. Rolling EVIDENCE-only
     refreshes need no upstream preparation when SCORE is valid.
     """
     for seed in seeds:
@@ -5110,6 +5165,24 @@ def _parallel_model_robustness_inputs_reusable(
         ):
             return False
     return True
+
+
+def _prepare_model_robustness_seed_batch(
+    program_name: str, settings, *, seeds: tuple[int, ...],
+    execution_observer: Callable[[bool], None],
+) -> int:
+    """Prepare independent teacher seeds after their shared canonical inputs."""
+    if len(seeds) < 2 or not _requires_formal_trade_path_inputs(settings):
+        execution_observer(False)
+        return 0
+    from services.breakout_quality.trade_path_target_source import registered_trade_path_source
+    source = registered_trade_path_source(str(settings.experiment_profile))
+    if source is None or not any(row.execute_many is not None for row in source.dependencies):
+        execution_observer(False)
+        return 0
+    return _prepare_continuous_research_inputs(
+        program_name, settings, seeds=seeds, execution_observer=execution_observer,
+    )
 
 
 def _run_parallel_model_robustness_seeds(
@@ -5350,6 +5423,34 @@ def _run_configured_model_robustness(program_name: str, *, rolling: bool) -> int
                 seed_states, readiness = _plan_model_robustness_snapshot(
                     settings, seeds=seeds, rolling=rolling,
                 )
+        # Audit-only seeds remain read-only. Independent teacher producers may
+        # share fold workers only for seeds whose canonical SCORE needs work.
+        input_seeds = tuple(
+            int(item.seed) for item in readiness.seeds
+            if (force_rebuild or not item.readiness.evidence_ready)
+            and (force_rebuild or not rolling
+                 or item.readiness.plan.action_by_key["SCORE"].action != "REUSE")
+        )
+        batch_inputs_mutated = False
+
+        def _record_seed_input_execution(executed: bool) -> None:
+            nonlocal batch_inputs_mutated
+            batch_inputs_mutated = bool(executed)
+
+        code = _prepare_model_robustness_seed_batch(
+            program_name, settings, seeds=input_seeds,
+            execution_observer=_record_seed_input_execution,
+        )
+        if code != 0:
+            return int(code)
+        if batch_inputs_mutated:
+            affected_completed_models.update(range(len(completed)))
+            preceding_model_mutation = True
+            if rolling:
+                invalidate_rolling_model_source_cache()
+            seed_states, readiness = _plan_model_robustness_snapshot(
+                settings, seeds=seeds, rolling=rolling,
+            )
         parallel_seed_builds: set[int] = set()
         seed_workers = int(BREAKOUT_QUALITY_MODEL_ROBUSTNESS_SEED_WORKERS)
         if seed_workers < 1 or seed_workers > 4:

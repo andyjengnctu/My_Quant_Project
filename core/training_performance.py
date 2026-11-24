@@ -22,6 +22,7 @@ from config.training_performance_policy import (
     OPTIMIZER_RANDOM_SEED_ENSEMBLE_PARALLEL_BACKEND,
     OPTIMIZER_RANDOM_SEED_ENSEMBLE_PARALLEL_WORKERS,
     OPTIMIZER_ROLLING_FOLD_WORKERS,
+    OPTIMIZER_INDEPENDENT_SEED_FOLD_GLOBAL_WORKERS,
     OPTIMIZER_ROLLING_SEED_ENSEMBLE_GLOBAL_WORKERS,
     OPTIMIZER_ROLLING_SEED_ENSEMBLE_MAX_ACTIVE_PER_FOLD,
     OPTIMIZER_ROLLING_SEED_ENSEMBLE_PRIORITY_WARMUP_MAX_SEC,
@@ -112,6 +113,16 @@ def resolve_optimizer_rolling_seed_ensemble_global_workers(environ=None) -> int:
     return _resolve_env_int(
         "OPTIMIZER_ROLLING_SEED_ENSEMBLE_GLOBAL_WORKERS",
         config_default=OPTIMIZER_ROLLING_SEED_ENSEMBLE_GLOBAL_WORKERS,
+        environ=environ,
+        min_value=1,
+        max_value=64,
+    )
+
+
+def resolve_optimizer_independent_seed_fold_global_workers(environ=None) -> int:
+    return _resolve_env_int(
+        "OPTIMIZER_INDEPENDENT_SEED_FOLD_GLOBAL_WORKERS",
+        config_default=OPTIMIZER_INDEPENDENT_SEED_FOLD_GLOBAL_WORKERS,
         environ=environ,
         min_value=1,
         max_value=64,
@@ -537,6 +548,7 @@ def build_optimizer_outer_rolling_env_defaults(fold_count: int, *, timing_mode: 
         "OPTIMIZER_ACTIVE_REPLAY_USE_PREPARED_CACHE": "1" if bool(OPTIMIZER_ACTIVE_REPLAY_USE_PREPARED_CACHE) else "0",
         "OPTIMIZER_ACTIVE_REPLAY_WRITE_PREPARED_CACHE": "1" if bool(OPTIMIZER_ACTIVE_REPLAY_WRITE_PREPARED_CACHE) else "0",
         "OPTIMIZER_ROLLING_FOLD_WORKERS": str(resolve_optimizer_rolling_fold_workers_default(fold_count)),
+        "OPTIMIZER_INDEPENDENT_SEED_FOLD_GLOBAL_WORKERS": str(resolve_optimizer_independent_seed_fold_global_workers()),
         "OPTIMIZER_ROLLING_SEED_ENSEMBLE_GLOBAL_WORKERS": str(resolve_optimizer_rolling_seed_ensemble_global_workers()),
         "OPTIMIZER_ROLLING_SEED_ENSEMBLE_MAX_ACTIVE_PER_FOLD": str(
             resolve_optimizer_rolling_seed_ensemble_max_active_per_fold(64)
@@ -557,6 +569,7 @@ def build_optimizer_outer_rolling_env_defaults(fold_count: int, *, timing_mode: 
 def build_training_performance_policy_snapshot(fold_count=None, seed_ensemble_size=None):
     return {
         "OPTIMIZER_ROLLING_FOLD_WORKERS": OPTIMIZER_ROLLING_FOLD_WORKERS,
+        "OPTIMIZER_INDEPENDENT_SEED_FOLD_GLOBAL_WORKERS": resolve_optimizer_independent_seed_fold_global_workers(),
         "OPTIMIZER_ROLLING_FOLD_WORKERS_RESOLVED": (
             None
             if fold_count is None
