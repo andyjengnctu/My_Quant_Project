@@ -631,45 +631,79 @@ def summarize_test_suite_registry_contract(project_root: Path, formal_step_order
     }
 
 
+def summarize_bundle_orchestration_ast(tree: ast.Module) -> Dict[str, bool]:
+    """Check executable package/test calls, independent of console wording.
+
+The package operation must be an unconditional main statement before the sole
+formal invocation. A call hidden in a nested function or conditional branch
+does not establish the frozen snapshot required by the later test operation.
+"""
+    bindings = {}
+    for node in tree.body:
+        if isinstance(node, ast.ImportFrom) and node.module:
+            for alias in node.names:
+                bindings[alias.asname or alias.name] = f"{node.module}.{alias.name}"
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                bindings[alias.asname or alias.name.split(".")[0]] = alias.name if alias.asname else alias.name.split(".")[0]
+    main = next((node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "main"), None)
+    if main is None:
+        return {"bundle_invokes_test_suite": False, "bundle_packages_before_tests": False}
+
+    def qualified(node):
+        if isinstance(node, ast.Name):
+            return bindings.get(node.id, node.id)
+        if isinstance(node, ast.Attribute):
+            return qualified(node.value) + "." + node.attr
+        return ""
+
+    def operation(node):
+        if not isinstance(node, ast.Call):
+            return None
+        if qualified(node.func) == "apps.package_zip.create_package_snapshot":
+            return "package"
+        if (not isinstance(node.func, ast.Name) or node.func.id != "run_cmd"
+                or not node.args or not isinstance(node.args[0], (ast.List, ast.Tuple))):
+            return None
+        items = node.args[0].elts
+        if (len(items) < 2 or qualified(items[0]) != "sys.executable"
+                or not isinstance(items[1], ast.Constant)):
+            return None
+        return {"apps/package_zip.py": "package", "apps/test_suite.py": "test"}.get(items[1].value)
+
+    def active_calls(node):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+            return
+        if isinstance(node, ast.Call):
+            yield node
+        for child in ast.iter_child_nodes(node):
+            yield from active_calls(child)
+
+    operations = [operation(call) for statement in main.body for call in active_calls(statement)]
+    direct = []
+    for index, statement in enumerate(main.body):
+        if isinstance(statement, (ast.Assign, ast.AnnAssign, ast.Expr)):
+            kind = operation(statement.value)
+            if kind is not None:
+                direct.append((index, kind))
+    packages = [index for index, kind in direct if kind == "package"]
+    tests = [index for index, kind in direct if kind == "test"]
+    invokes = operations.count("test") == 1 and len(tests) == 1
+    return {
+        "bundle_invokes_test_suite": invokes,
+        "bundle_packages_before_tests": bool(invokes and operations.count("package") == 1
+                                             and len(packages) == 1 and packages[0] < tests[0]),
+    }
+
+
 def summarize_single_formal_test_entry_contract(project_root: Path) -> Dict[str, Any]:
     app_dir = project_root / "apps"
     app_py_files = sorted(path.name for path in app_dir.glob("*.py"))
     architecture_text = (project_root / "doc" / "ARCHITECTURE.md").read_text(encoding="utf-8")
     bundle_path = app_dir / "run_bundle.py"
-
-    # AI: The private CMD.md notebook is not a formal contract. Validate the
-    # actual orchestration calls instead of enforcing wording in user notes.
-    bundle_commands: List[Tuple[int, str]] = []
-    if bundle_path.is_file():
-        bundle_tree = read_source_ast(bundle_path)
-        main = next(
-            (node for node in bundle_tree.body if isinstance(node, ast.FunctionDef) and node.name == "main"),
-            None,
-        )
-        if main is not None:
-            for node in ast.walk(main):
-                if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name) or node.func.id != "run_cmd":
-                    continue
-                if not node.args or not isinstance(node.args[0], ast.List):
-                    continue
-                items = node.args[0].elts
-                if (
-                    len(items) >= 2
-                    and isinstance(items[0], ast.Attribute)
-                    and isinstance(items[0].value, ast.Name)
-                    and items[0].value.id == "sys"
-                    and items[0].attr == "executable"
-                    and isinstance(items[1], ast.Constant)
-                    and isinstance(items[1].value, str)
-                ):
-                    bundle_commands.append((node.lineno, items[1].value))
-    package_lines = [line for line, path in bundle_commands if path == "apps/package_zip.py"]
-    test_lines = [line for line, path in bundle_commands if path == "apps/test_suite.py"]
-    bundle_invokes_test_suite = len(test_lines) == 1
-    bundle_packages_before_tests = (
-        bundle_invokes_test_suite
-        and len(package_lines) == 1
-        and package_lines[0] < test_lines[0]
+    # The private CMD.md notebook is not a formal contract.
+    orchestration = summarize_bundle_orchestration_ast(
+        read_source_ast(bundle_path) if bundle_path.is_file() else ast.Module(body=[], type_ignores=[]),
     )
 
     legacy_entry_paths = [path for path in LEGACY_APP_ENTRY_PATHS if (project_root / path).exists()]
@@ -684,8 +718,7 @@ def summarize_single_formal_test_entry_contract(project_root: Path) -> Dict[str,
     return {
         "test_suite_exists": (app_dir / "test_suite.py").exists(),
         "run_bundle_exists": bundle_path.is_file(),
-        "bundle_invokes_test_suite": bundle_invokes_test_suite,
-        "bundle_packages_before_tests": bundle_packages_before_tests,
+        **orchestration,
         "architecture_declares_single_entry": ARCHITECTURE_SINGLE_ENTRY_TEXT in architecture_text,
         "legacy_entry_paths": legacy_entry_paths,
         "suspicious_app_entries": suspicious_app_entries,

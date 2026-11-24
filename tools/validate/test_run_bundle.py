@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from contextlib import ExitStack, redirect_stdout
+import ast
+from copy import deepcopy
 import io
 import json
 from pathlib import Path
@@ -128,6 +130,62 @@ class RunBundleTests(unittest.TestCase):
         self.formal_effect = lambda: self.package.write_bytes(self.package.read_bytes() + b"changed")
         self.assertEqual(self.invoke(), 1)
         self.publish.assert_not_called()
+
+    def orchestration_tree(self):
+        tree = ast.parse(Path(run_bundle.__file__).read_text(encoding="utf-8"))
+        main = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "main")
+        package_index = next(index for index, node in enumerate(main.body)
+                             if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call)
+                             and isinstance(node.value.func, ast.Attribute)
+                             and node.value.func.attr == "create_package_snapshot")
+        test_index = next(index for index, node in enumerate(main.body)
+                          if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call)
+                          and isinstance(node.value.func, ast.Name) and node.value.func.id == "run_cmd"
+                          and any(isinstance(child, ast.Constant) and child.value == "apps/test_suite.py"
+                                  for child in ast.walk(node.value)))
+        return tree, main, package_index, test_index
+
+    def test_shared_entry_checker_accepts_frozen_api_and_ignores_console_text(self):
+        from tools.validate.meta_contracts import summarize_bundle_orchestration_ast
+        tree, main, _, _ = self.orchestration_tree()
+        self.assertTrue(summarize_bundle_orchestration_ast(tree)["bundle_packages_before_tests"])
+        for node in ast.walk(main):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "print":
+                node.args = [ast.Constant(value="A different progress message")]
+        self.assertTrue(summarize_bundle_orchestration_ast(tree)["bundle_packages_before_tests"])
+
+    def test_shared_entry_checker_rejects_reversed_or_missing_package(self):
+        from tools.validate.meta_contracts import summarize_bundle_orchestration_ast
+        tree, main, package, formal = self.orchestration_tree()
+        main.body[package], main.body[formal] = main.body[formal], main.body[package]
+        self.assertFalse(summarize_bundle_orchestration_ast(tree)["bundle_packages_before_tests"])
+        tree, main, package, _ = self.orchestration_tree()
+        del main.body[package]
+        self.assertFalse(summarize_bundle_orchestration_ast(tree)["bundle_packages_before_tests"])
+
+    def test_shared_entry_checker_rejects_conditional_dead_package_and_duplicate_tests(self):
+        from tools.validate.meta_contracts import summarize_bundle_orchestration_ast
+        tree, main, package, _ = self.orchestration_tree()
+        main.body[package] = ast.If(test=ast.Constant(value=False), body=[main.body[package]], orelse=[])
+        self.assertFalse(summarize_bundle_orchestration_ast(tree)["bundle_packages_before_tests"])
+        tree, main, package, _ = self.orchestration_tree()
+        hidden = ast.parse("def never_called():\n    pass\n").body[0]
+        hidden.body = [main.body.pop(package)]
+        main.body.insert(package, hidden)
+        self.assertFalse(summarize_bundle_orchestration_ast(tree)["bundle_packages_before_tests"])
+        tree, main, _, formal = self.orchestration_tree()
+        main.body.insert(0, deepcopy(main.body[formal]))
+        contract = summarize_bundle_orchestration_ast(tree)
+        self.assertFalse(contract["bundle_invokes_test_suite"])
+        self.assertFalse(contract["bundle_packages_before_tests"])
+
+    def test_shared_entry_checker_requires_canonical_package_binding(self):
+        from tools.validate.meta_contracts import summarize_bundle_orchestration_ast
+        tree, _, _, _ = self.orchestration_tree()
+        for node in tree.body:
+            if isinstance(node, ast.ImportFrom) and node.module == "apps" and any(alias.name == "package_zip" for alias in node.names):
+                node.module = "unrelated"
+        self.assertFalse(summarize_bundle_orchestration_ast(tree)["bundle_packages_before_tests"])
 
 
 if __name__ == "__main__":

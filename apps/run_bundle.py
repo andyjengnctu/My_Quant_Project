@@ -16,6 +16,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from apps import package_zip
+from apps.test_suite import REGRESSION_STEP_ORDER
 from services.research.oracle_build_attestation import (
     EVIDENCE_DIRECTORY, OracleBuildBlockedError, prepare_oracle_build_candidate,
     finalize_oracle_build_attestation, publish_oracle_build_attestation,
@@ -163,14 +164,13 @@ def main(argv=None) -> int:
             raise OracleBuildBlockedError("Git HEAD changed during formal verification")
         package_zip.verify_frozen_package(snapshot)
         summary, summary_sha, formal_bundle = _read_formal_summary(previous_bundles)
-        from tools.local_regression.formal_pipeline import FORMAL_STEP_ORDER
         bundle_sha = sha256(formal_bundle.read_bytes()).hexdigest()
         name = f"{EVIDENCE_DIRECTORY}/formal_bundle_{bundle_sha[:16]}.zip"
         candidate["evidence_files"][name] = {"path": str(formal_bundle), "sha256": bundle_sha}
         candidate["evidence_artifacts"][name] = bundle_sha
         attestation = finalize_oracle_build_attestation(
             REPO_ROOT, candidate=candidate, formal_summary=summary,
-            required_steps=FORMAL_STEP_ORDER, formal_summary_sha256=summary_sha, commit=frozen_commit,
+            required_steps=REGRESSION_STEP_ORDER, formal_summary_sha256=summary_sha, commit=frozen_commit,
         )
         package_zip.finalize_frozen_package(snapshot, attestation=attestation,
                                             evidence_files=candidate["evidence_files"])
