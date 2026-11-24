@@ -329,7 +329,10 @@ RESEARCH_SUMMARY_ROWS = (
                 'strategy_arm_id': 'C124'},
      'bindings': ({'arm_id': 'C124',
                    'rank_model': ('MR-13CO',
-                                  'daily_universal_formal_mintrade_fullcycle_netpnl_per_seed_full_list_ndcg_pairwise')},)},
+                                  'daily_universal_formal_mintrade_fullcycle_netpnl_per_seed_full_list_ndcg_pairwise')},
+                  {'arm_id': 'C194',
+                   'rank_model': ('MR-13DN',
+                                  'daily_universal_formal_mintrade_fullcycle_netpnl_per_seed_full_list_ndcg_pairwise_extended_history')})},
     {'oracle': {'target': 'DailyUniversal_MinTrade_NetPnL_Positive',
                 'description': 'Formal perfect dual-output NetPnL rank plus Positive membership under Exact K/R0; '
                                'common model-score admission',

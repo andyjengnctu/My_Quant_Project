@@ -1008,3 +1008,9 @@ The canonical `config/research_summary.py` roster alone determines current Model
 **2026-11-24 實測決策。** 新增 32,013 筆成熟資訊列／4,336 個原始訊號，原資訊列真值與成熟日期完全不變。2018～2020 Top-10 lift 僅 1/3 年改善、平均 Pair −0.6207 個百分點；原 Research Seed42 Rolling 的 C193−C123 ΔRoMD=−1.351416（9.531304−10.882721），MDD −0.285105 個百分點、總報酬 −21.927051 個百分點。依事前條件不續跑四 seed Robustness／Target、不搜尋其他起始年份；研究比較列與完整原始證據保留，沒有 Trading promotion。詳見 Experiment Log 同日條目。
 
 **後續使用者續測指示（2026-11-24）。** 使用者明確要求執行穩定性測試，因此續行原 Research `end_to_end_v1` 四 seed Rolling 模型與策略 Robustness；Seed42 的原始負結果與前置篩選決策保留，不回寫成通過。沿用相同 Target／模型／P16 Exact／時間切分與 benchmark seeds，逐 seed 準備合法早期 teacher，完成後比較同 seed 的 C193−C123。此為續測授權，沒有新增科學身分或 Trading promotion。
+
+### 2026-11-25：DN Direct 使用者授權
+
+`SR-C194` 為 MR-13DN／`DL-CONT13DN_ROLL` 的 **Direct No-K/No-R0** 版本，Replay v1。直接沿用 C124 的 canonical Direct 排序、tie-break、P16、費稅、資金、退出與 information-date 契約，與 C193 共用相同 DN FIT／PIT 分數；不新增模型、Target、Positive gate 或 FIT 版本，不因 Selector 另行訓練。維持原模型訓練清單，新增策略比較列。
+
+`config/research_summary.py` 於原 NetPnL Direct group 綁定 C194／MR-13DN，沿用 C124 的既有 Direct Oracle 真值；原有 Forward／Rolling／Robustness／Target／Summary 同源派生。登錄 `C194−C124`（歷史擴充的 Direct 效果）、`C193−C194`（相同分數的 Selector 效果）、`C194−C118`（同為 Direct 的 CI 參照）、`C194−C96`（原無 DL 對照）。狀態為 CURRENT_RESEARCH_COMPARE／MARKET_COMPARISON_PENDING／NO_PROMOTION／NO_TRADING。依使用者指示，完成正式檢查後直接啟動原本地 Research 訓練／比較流程，合法既有 FIT 與 Replay 由 canonical owner 驗證重用；未取得結果前不宣稱 Direct 改善績效。
