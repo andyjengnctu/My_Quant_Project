@@ -81,6 +81,7 @@ def _materialize_deferred_pit_stats(session, params, prep_result):
             include_trade_logs=False,
             include_pit_stats_index=True,
             profile_enabled=False,
+            prepared_fast_cache=prep_result.get("all_dfs_fast"),
         )
     if full_prep.get("prep_failures") != prep_result.get("prep_failures"):
         raise RuntimeError("deferred PIT stats materialization 與原 trial prep failure set 不一致")

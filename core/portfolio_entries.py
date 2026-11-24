@@ -387,6 +387,9 @@ def cleanup_extended_signals_for_day(
     candidate_rows_by_ticker=None,
     training_fast_path=False,
 ):
+    # Independent first-day shadows share exact sizing inputs.  Keep the cache
+    # local to this cleanup so capital/params updates cannot leak across days.
+    counterfactual_sizing_context_cache = {} if training_fast_path else None
     sorted_tickers = (
         None if extended_day_market_cache is None
         else extended_day_market_cache.get(("__meta__", "sorted_extended_tickers"))
@@ -553,6 +556,7 @@ def cleanup_extended_signals_for_day(
                 y_ind_sell=y_ind_sell, sizing_capital=sizing_capital,
                 current_date=today, params=signal_params, copy_shadow_position=False,
                 counterfactual_anchor_plan=counterfactual_anchor_plan,
+                sizing_context_cache=counterfactual_sizing_context_cache,
             )
         if should_clear:
             del active_extended_signals[ticker]

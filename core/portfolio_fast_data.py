@@ -3,6 +3,7 @@ import time
 from collections import defaultdict
 
 import numpy as np
+from pandas import DatetimeIndex
 
 from core.backtest_core import run_v16_backtest
 from core.history_filters import evaluate_history_candidate_metrics
@@ -90,10 +91,15 @@ def calc_mark_to_market_equity(
 
 
 def pack_static_market_data(df):
+    # AI: the sequence and lookup share immutable Timestamp keys. Iterating the
+    # DatetimeIndex a second time boxes another full set in every seed worker.
+    dates = tuple(df.index.tolist())
     packed = {
         '_packed_market_data': True,
-        'dates': tuple(df.index.tolist()),
-        'date_to_pos': {dt: i for i, dt in enumerate(df.index)},
+        'dates': dates,
+        'date_to_pos': {
+            dt: i for i, dt in enumerate(dates if isinstance(df.index, DatetimeIndex) else df.index)
+        },
         'security_profile': df.attrs.get('security_profile'),
     }
     for field in FAST_STATIC_FLOAT_FIELDS:
@@ -153,7 +159,7 @@ def build_normal_setup_index(all_dfs_fast):
     return dict(setup_index)
 
 
-def prep_optimizer_stock_data_bundle(df, params, profile_stats=None, ticker=None, include_trade_logs=True, include_pit_stats_index=False, feature_bank=None, execution_contract=None):
+def prep_optimizer_stock_data_bundle(df, params, profile_stats=None, ticker=None, include_trade_logs=True, include_pit_stats_index=False, feature_bank=None, execution_contract=None, prepared_dynamic_data=None):
     t_total_start = time.perf_counter() if profile_stats is not None else None
     resolved_ticker = ticker or df.attrs.get('ticker')
 
@@ -162,19 +168,28 @@ def prep_optimizer_stock_data_bundle(df, params, profile_stats=None, ticker=None
         profile_stats['assign_columns_sec'] = 0.0
 
     t0 = time.perf_counter() if profile_stats is not None else None
-    precomputed_signals = generate_signals(
-        df,
-        params,
-        ticker=resolved_ticker,
-        feature_bank=feature_bank,
-        use_compiled_kernels=is_optimizer_compiled_signal_kernels_enabled(),
-        use_native_hotpath=is_optimizer_native_hotpath_kernels_enabled(),
-    )
+    # AI: deferred PIT materialization may reuse this same trial's already
+    # filtered signal arrays. They are neither a cross-trial cache nor raw
+    # breakout signals: the execution contract has already been applied.
+    if prepared_dynamic_data is None:
+        precomputed_signals = generate_signals(
+            df,
+            params,
+            ticker=resolved_ticker,
+            feature_bank=feature_bank,
+            use_compiled_kernels=is_optimizer_compiled_signal_kernels_enabled(),
+            use_native_hotpath=is_optimizer_native_hotpath_kernels_enabled(),
+        )
+    else:
+        precomputed_signals = (
+            prepared_dynamic_data['ATR'], prepared_dynamic_data['is_setup'],
+            prepared_dynamic_data['ind_sell_signal'], prepared_dynamic_data['buy_limit'],
+        )
     from core.portfolio_entry_policy import (
         resolve_portfolio_execution_contract, daily_execution_uses_common_filters,
     )
     execution_contract = resolve_portfolio_execution_contract(execution_contract)
-    if daily_execution_uses_common_filters(execution_contract.daily_execution_contract):
+    if prepared_dynamic_data is None and daily_execution_uses_common_filters(execution_contract.daily_execution_contract):
         from core.daily_common_entry_filters import daily_common_filter_signals
         atr, _old_setup, sell, _old_limits = unpack_precomputed_signals(precomputed_signals)
         setup, limits = daily_common_filter_signals(

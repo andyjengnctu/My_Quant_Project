@@ -25,16 +25,23 @@ def _prep_result_has_pit_index(prep_result) -> bool:
     if not isinstance(prep_result, dict):
         return False
     pit_stats_index = prep_result.get("all_pit_stats_index")
-    return isinstance(pit_stats_index, dict) and bool(pit_stats_index)
+    return (isinstance(pit_stats_index, dict) and bool(pit_stats_index)
+            and not bool(prep_result.get("pit_stats_deferred", False)))
 
-def _get_or_prepare_oos_inputs(*, session, params):
+def _get_or_prepare_oos_inputs(*, session, params, prepared_cache=None):
     # AI註: OOS diagnostics only needs dynamic data + PIT stats index for
     # portfolio replay.  Standalone trade logs are unnecessary when the PIT
     # index is already available, so reuse the normal optimizer prep cache.
-    prep_cache_key = build_prep_cache_key(params)
+    prep_cache_key = build_prep_cache_key(
+        params, runtime_identity=getattr(session, "runtime_cache_identity", None),
+    )
+    if prepared_cache is not None and prep_cache_key in prepared_cache:
+        return prepared_cache[prep_cache_key]
     get_cached_prep = getattr(session, "get_prepared_trial_inputs_from_cache", None)
     prep_result = get_cached_prep(prep_cache_key) if callable(get_cached_prep) else None
     if _prep_result_has_pit_index(prep_result):
+        if prepared_cache is not None:
+            prepared_cache[prep_cache_key] = prep_result
         return prep_result
 
     prep_executor_bundle = session.get_trial_prep_executor_bundle(build_runtime_param_raw_value(params, "optimizer_max_workers"))
@@ -52,12 +59,14 @@ def _get_or_prepare_oos_inputs(*, session, params):
     cache_prep = getattr(session, "cache_prepared_trial_inputs", None)
     if callable(cache_prep):
         cache_prep(prep_cache_key, prep_result)
+    if prepared_cache is not None:
+        prepared_cache[prep_cache_key] = prep_result
     return prep_result
 
-def _evaluate_period_oos(*, session, trial, oos_year: int, include_equity_curve: bool = False, oos_start_date: str | None = None, oos_end_date: str | None = None):
+def _evaluate_period_oos(*, session, trial, oos_year: int, include_equity_curve: bool = False, oos_start_date: str | None = None, oos_end_date: str | None = None, prepared_cache=None):
     payload = build_effective_trial_params_payload(session=session, trial=trial)
     params = build_params_from_mapping(payload)
-    prep_result = _get_or_prepare_oos_inputs(session=session, params=params)
+    prep_result = _get_or_prepare_oos_inputs(session=session, params=params, prepared_cache=prepared_cache)
     all_dates = sorted(prep_result["master_dates"])
     policy = dict(getattr(session, "walk_forward_policy", {}) or {})
     start_text = str(oos_start_date or policy.get("oos_start_date") or f"{int(str(oos_year)[:4])}-01-01")
@@ -113,7 +122,7 @@ def _extract_period_metrics(report: dict) -> dict:
         "equity_curve": list(period.get("equity_curve") or []),
     }
 
-def _evaluate_finalist_ensemble_oos_metrics(*, session, item: dict, policy_name: str, oos_year: int, oos_start_date: str | None = None, oos_end_date: str | None = None) -> dict:
+def _evaluate_finalist_ensemble_oos_metrics(*, session, item: dict, policy_name: str, oos_year: int, oos_start_date: str | None = None, oos_end_date: str | None = None, prepared_cache=None) -> dict:
     from services.portfolio_replay import run_portfolio_simulation_with_param_ensemble
 
     members = _materialize_fixed_strategy_param_overrides_in_members(
@@ -135,6 +144,32 @@ def _evaluate_finalist_ensemble_oos_metrics(*, session, item: dict, policy_name:
         policy_name=str(policy_name),
         raw_universe_required_min_rows=getattr(session, "raw_data_cache_required_min_rows", None),
     )
+    # AI: only this diagnostics invocation owns the prepared contexts. The
+    # canonical ensemble loader supplies its shared universe boundary; filter
+    # the session universe to that same boundary before sharing any arrays.
+    def prepared_context(params, required_min_rows):
+        source_min = getattr(session, "raw_data_cache_required_min_rows", None)
+        if (prepared_cache is None or source_min is None
+                or int(source_min) > int(required_min_rows)):
+            return None
+        prep = _get_or_prepare_oos_inputs(
+            session=session, params=params, prepared_cache=prepared_cache,
+        )
+        eligible = {
+            ticker for ticker, frame in session.raw_data_cache.items()
+            if len(frame) >= int(required_min_rows)
+        }
+        market = {ticker: data for ticker, data in prep['all_dfs_fast'].items()
+                  if ticker in eligible}
+        if not market:
+            return None
+        return {
+            'all_dfs_fast': market, 'all_trade_logs': {},
+            'all_pit_stats_index': {ticker: index for ticker, index in
+                                    prep['all_pit_stats_index'].items() if ticker in market},
+            'sorted_dates': sorted({date for data in market.values() for date in data['dates']}),
+        }
+
     result = run_portfolio_simulation_with_param_ensemble(
         str(data_dir),
         payload,
@@ -148,6 +183,7 @@ def _evaluate_finalist_ensemble_oos_metrics(*, session, item: dict, policy_name:
         verbose=False,
         use_prepared_cache=False,
         write_prepared_cache=False,
+        prepared_context_resolver=prepared_context,
     )
     return _extract_active_replay_metrics(result)
 
@@ -157,6 +193,8 @@ def _evaluate_finalist_oos_diagnostics(*, session, finalists: list[dict], policy
     best_trial = None
     best_metrics: dict = {}
     report_cache: dict[int, dict] = {}
+    # Bounded by the requested finalists/members and released with diagnostics.
+    prepared_cache: dict = {}
     metrics_by_trial: dict[int, dict] = {}
     benchmark_score = 0.0
     benchmark_return_pct = 0.0
@@ -183,6 +221,7 @@ def _evaluate_finalist_oos_diagnostics(*, session, finalists: list[dict], policy
                 include_equity_curve=bool(include_equity_curve),
                 oos_start_date=oos_start_date,
                 oos_end_date=oos_end_date,
+                prepared_cache=prepared_cache,
             )
             report_cache[trial_number] = {
                 "include_equity_curve": bool(include_equity_curve),
@@ -223,6 +262,7 @@ def _evaluate_finalist_oos_diagnostics(*, session, finalists: list[dict], policy
                 oos_year=int(oos_year),
                 oos_start_date=oos_start_date,
                 oos_end_date=oos_end_date,
+                prepared_cache=prepared_cache,
             )
             benchmark_score = float(ensemble_metrics.get("benchmark_oos_score", benchmark_score))
             benchmark_return_pct = float(ensemble_metrics.get("benchmark_return_pct", benchmark_return_pct))

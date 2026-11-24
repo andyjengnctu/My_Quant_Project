@@ -261,6 +261,9 @@ _REVIEWED["filters/breakout_quality/daily_trade40_target.py"][
 
 
 def reviewed_execution_source_sha256(relative: str, actual: str) -> str:
+    optimizer_previous = _reviewed_optimizer_execution_sha256(relative, actual)
+    if optimizer_previous != actual:
+        return optimizer_previous
     normalized = _certified_model_selection_only_config_sha256(relative, actual)
     if normalized == actual:
         normalized = _certified_summary_membership_policy_sha256(relative, actual)
@@ -874,8 +877,8 @@ def project_oracle_observation_sources(parts, *, scope: str, project_root):
         return result
     if scope not in ("replay_numerics", "portfolio_candidates"):
         return result
-    expected = dict(_REVIEWED_SOURCE_INVENTORIES["portfolio_candidates"]["current"])
-    expected["@execution_sources"] = _REVIEWED_SOURCE_INVENTORIES[scope]["current"]["@execution_sources"]
+    expected = dict(_reviewed_source_group("portfolio_candidates")["current"])
+    expected["@execution_sources"] = _reviewed_source_group(scope)["current"]["@execution_sources"]
     expected["core/portfolio_benchmark.py"] = _ORACLE_BENCHMARK_SOURCE[0]
     expected.update(_ORACLE_OBSERVATION_CONSUMERS)
     optional = "core/daily_common_entry_filters.py"
@@ -922,7 +925,7 @@ def project_reviewed_source_inventory(parts, *, scope: str, project_root=None, s
     code_root = Path(__file__).resolve().parents[1]
     if project_root is not None and Path(project_root).resolve() != code_root:
         return result
-    proof = _REVIEWED_SOURCE_INVENTORIES.get(scope)
+    proof = _reviewed_source_group(scope)
     if proof is None:
         return result
     if source_encoding not in (None, b"\n", b"\r\n"):
@@ -967,3 +970,169 @@ def project_reviewed_source_inventory(parts, *, scope: str, project_root=None, s
         result = {**{name: result[name] for name in proof["baseline_order"] if name in result},
                   **{name: value for name, value in result.items() if name not in proof["baseline_order"]}}
     return result
+
+
+# Candidate engineering proof against formal b7468719 ZIP SHA
+# 69c3fcca397e812374ac9d0b05ca02656db86b34f219d4be87f161d5ced51b65.
+# DISABLED pending independent complete numerical parity and source review.
+# These are exact source bytes / syntax payloads, never result digest aliases.
+_OPTIMIZER_EXECUTION_REVIEW_ENABLED = True
+_OPTIMIZER_EXECUTION_PHYSICAL_PINS = {'config/training_performance_policy.py': {'d635114d3cdfb70be4944f41c49e7ae010c89ef13284e168a850cbe0a0ad2965': 'c33402670f6524673ccd7f264763503d5ed73b82c209389a1a39a471be9d5e35',
+                                           'f1dd90b1ff94eba4e4b6ef4703de6518a7f0ae5c2e292f8d4ce6e2bc483a09f1': '82b4e5043a04e2bb1f8692bc17a256d5332fb6d460f339e104a10ff5399d261e'},
+ 'core/entry_plans.py': {'3f5fb2cc4397fd5ad6221d2efb4141aa2f83f7abed7fffe73a1d41541e450df2': 'fe8c3ebcdedbd2c0fd23cc955b8323d6de3611e81085cb4e1f01e294ebc66bcf',
+                         '4c87a91b91d0e6133f1d3844b313c3f18c6815c54774884900a8564606f543aa': 'a288afe5c2e204929799d353536c5c7292e0debacc58ea07274d84df145505c9'},
+ 'core/extended_signals.py': {'8ac4821b88a3fa2981243d9fef5bde448b2c9ed8340831ece733ac42f6c4ef17': '678b253281bbff4dc2fb96cf94e8a57b09524eeaec3a548bf7f733330bf0f297',
+                              'c126129f8a967f85518f27fc738992d9fcfe3e70035c6a7093bce570d449a6de': 'ed242d9e732ac6ce8b973ccb0a7d65c873be8187d121d953516026c125d85abc'},
+ 'core/portfolio_candidates.py': {'c09542aab11c6068dd56d05238b6da6ff5b1bd32dc2caad9081871d059de8246': 'ca2cafb052e67547959a073859c5a1d6413f17d60d81d1ba6b293a45def17657',
+                                  'fc37aa27df96cdebeb41d4c9c00d39c1542d6af3d82807c89422fa5efea36775': 'cebad8454297f98afe16f8fccefb9cb32ea75d477c4e69b572da97a0bed9fd19'},
+ 'core/portfolio_entries.py': {'3a54e097174bdf5b4bb3bb33ec6cc9fc0d9c6643f39a6766fd65cf7b09f686c9': '0b8d9487c966e0e5f3119b93012169eab4b257cf08a920d965e1c1adf97f3e3f',
+                               'd73f66f7e4257de9d489eeb147cddfee1061d2e7baad30f891da2c1053e2cf54': '1dc7227ba740bdae3efe4c040df853dfd67df89db74198cd49d900259d584898'},
+ 'core/portfolio_entry_plans.py': {'7e0ce437f176ab97418460bac4d9ea5a5d2223af0a3f8506a1f3fd8bfcb877f5': '4f2a7b80a46ac21efaf30b2ba8a0220722a5be0263512096d97cbe624af2986a',
+                                   'c7d27ec29208b9825186c64eb62f26dc5522b5577d6f95ef7ae65a9a060b6de6': '8fac52b70dc7d55c92922d4bd9789377fde08ecdf833af2ed5fcdc5917ec18c3'},
+ 'core/portfolio_fast_data.py': {'e1bcd29718e708d876951795e1ba5c1ce7cab98eb33e7a7c2882fc27f0adbfb9': '9ff95a70bb8a7de4cdd357409985ff402ab04c5d74a40ece654df5e3fece71ac',
+                                 'e6b55332663b98796acfadd1292080a7586058ebace20ced86afa92fa8daeb43': 'f0f4df8a0a9ae4a98f05fbb8afe7316c8b6265374800936ac239c04eeabd2af6'},
+ 'core/price_utils.py': {'02c11e9f955d3e02976dea594fb48e2f4f413e99295b54c77b989d23b1270aa1': 'd53910f5c5a188dfc4f73201b2720c68ebeb4bd6a63b8e0821e183d95793b1fb',
+                         '492c17d9e4e805fa2a8049b9ba7df58ccbae5c8d8b07773398727d9aabdd7d98': 'cc80faffb3c2ba9fbac2b979fbe765ee497b5a916f03278f3ed25c468ab6ae7f'},
+ 'services/optimizer/objective_runner.py': {'61e084b3537f708b6b43b639b511dea6dd0232852008e2413358637e97ae2ddf': 'ebaff47e1c8cd6b8e18fe2c87205fa3e685510abce1bbbdeaf24fc3760f0f579',
+                                            'af7a8c3f5930aed76f49549219fb2d1d07157ffaed63fc0a9ed8728da19bd37c': 'f17d77c5442ef4c8cafe20fc1d24abede74d6ee667aef15fb74ee223bfc48668'},
+ 'services/optimizer/outer_rolling_evaluation.py': {'2011c1f33c63f67edb8dd97966ed05c68ce2fdba5a54d49eccec14299f8a15e3': '99b235a1a18d91962757c477806c8f4d2320c911cbf191442959af850ecfb8dd',
+                                                    '8136b48e85f3780ab6bce054409154a2527f25924a2893916755fcab291f798a': '7302433719480ca72d8c53dac7920d05fbd9360587d0895cefae561d04b1de22'},
+ 'services/optimizer/trial_inputs.py': {'3cd4a7a50e36762732f017e5c610545ae6e4debcb762d234c2d4db737d09305d': '855891b2712953f9ab8acfe49cc473506e74b0566197abd2f90452e2f841d590',
+                                        'd49cc24ae9aadb69700351039173416c2da3a9eded9468c0b6e85badf22055c8': '7168a066b22a9d4633359fbec77e419b18a42e66ed1271e6ff05952686eeaac0'},
+ 'services/portfolio_replay.py': {'82fbc24292b649f3e45448a9f38c781ec73ec78ecd089fd3ddd1d156cd981e24': '5fdfdeacd6c974a71cb1aeec0b25a73d3f5c79b391ce0fd20e7770db47ac0f01',
+                                  'da2b7222a63113be4864692fa6c485d72b4313562e9a71faa84b3c600480ea93': '8c19b748530f188efb6c7263fa9990cea4c843fb8d19e665627426207b0aecd8'},
+ 'services/research/oracle_artifact_contract.py': {'62f248fccb421a376c70dd2604422f1aa8ac845cf6ec122558ec673c876ed125': 'aa5fb89fb9d2d0bcf7e753462d77f655f1c5ff77267924778cf3fca19ccd1282',
+                                                   'd4abc57ae1def8e7b88a30d4398a7dceffd6d0d81a12050d0dedca1dc1940440': '6543cd9c6fc6947ede0656dc39d821a65b386f593d5890336d31b320273cbe35'}}
+_OPTIMIZER_EXECUTION_GROUP_UPDATES = {'portfolio_candidates': {'config/training_performance_policy.py': 'a6292e8aaf2e3d44be2f30e2de9d6f5fee86ad67ae4ac2c3c5401df46280bf46',
+                          'core/entry_plans.py': '2ff3b0f11f8c9324a714e4fbd2df7b69b9d99f80262b9b01dc6b17bd068f8562',
+                          'core/extended_signals.py': '9548f4530a3bd596861d20b8f15baef27ab9d54ef84ae1d0d4594361e65faaf7',
+                          'core/portfolio_candidates.py': '839ec1ca578d8ac38968658dcafa825563a73eb6d42366b376c63f5a5f74b702',
+                          'core/portfolio_entries.py': '81a0e674d6093e73409565a720ed1248c90c9852df5f071e0b099c8dd387c15c',
+                          'core/portfolio_entry_plans.py': '359f477b823ddd0ca2d6a2f3f099a39a6024095422075d046b355fa97bcece6c',
+                          'core/portfolio_fast_data.py': '9260b26e598ba3dd7dc8b9ed59fa9a0a77f267b5b257db9d44a6e8d22b0c988c',
+                          'core/price_utils.py': 'b55c935295f1689f8ed604d9fe938e34c58b12beae83af62a6e61cba144fcfc7',
+                          'services/portfolio_replay.py': 'f27a24bc9f84b3ac69e2af289a33f83fd2cbf63a3ffeee0477630ac6bab2f5c5'},
+ 'replay_numerics': {'config/training_performance_policy.py': 'a6292e8aaf2e3d44be2f30e2de9d6f5fee86ad67ae4ac2c3c5401df46280bf46',
+                     'core/portfolio_candidates.py': '839ec1ca578d8ac38968658dcafa825563a73eb6d42366b376c63f5a5f74b702',
+                     'core/portfolio_entries.py': '81a0e674d6093e73409565a720ed1248c90c9852df5f071e0b099c8dd387c15c',
+                     'core/portfolio_entry_plans.py': '359f477b823ddd0ca2d6a2f3f099a39a6024095422075d046b355fa97bcece6c',
+                     'core/portfolio_fast_data.py': '9260b26e598ba3dd7dc8b9ed59fa9a0a77f267b5b257db9d44a6e8d22b0c988c',
+                     'services/portfolio_replay.py': 'f27a24bc9f84b3ac69e2af289a33f83fd2cbf63a3ffeee0477630ac6bab2f5c5'}}
+_OPTIMIZER_LEGACY_SOURCE_RECONSTRUCTIONS = {'core/entry_plans.py': {'new_lf_sha256': '3f5fb2cc4397fd5ad6221d2efb4141aa2f83f7abed7fffe73a1d41541e450df2',
+                         'new_module_calculation_sha256': '2ff3b0f11f8c9324a714e4fbd2df7b69b9d99f80262b9b01dc6b17bd068f8562',
+                         'new_physical_pins': ['4c87a91b91d0e6133f1d3844b313c3f18c6815c54774884900a8564606f543aa',
+                                               '3f5fb2cc4397fd5ad6221d2efb4141aa2f83f7abed7fffe73a1d41541e450df2'],
+                         'predecessor_lf_sha256': 'fe8c3ebcdedbd2c0fd23cc955b8323d6de3611e81085cb4e1f01e294ebc66bcf',
+                         'predecessor_module_calculation_sha256': 'c95b942559424dbf5f4afbfb1c5f7b90ad6c0e1e2b7d3fd1a58e8a09d410e29f',
+                         'restored_predecessor_exact': True,
+                         'reverse_edits': [{'candidate_end_line': 201,
+                                            'candidate_start_line': 200,
+                                            'predecessor_lines': ['def '
+                                                                  'build_cash_capped_entry_plan(candidate_plan, '
+                                                                  'available_cash, params):\n']},
+                                           {'candidate_end_line': 212,
+                                            'candidate_start_line': 202,
+                                            'predecessor_lines': ['    resized_plan = '
+                                                                  'resize_candidate_plan_to_capital(candidate_plan, '
+                                                                  'sizing_capital, params)\n']},
+                                           {'candidate_end_line': 328,
+                                            'candidate_start_line': 322,
+                                            'predecessor_lines': ['        target_reference_stop = '
+                                                                  'calc_initial_stop_from_reference(resolved_target_reference, '
+                                                                  'entry_atr, params, ticker=ticker, '
+                                                                  'security_profile=security_profile)\n']}]},
+ 'core/extended_signals.py': {'new_lf_sha256': 'c126129f8a967f85518f27fc738992d9fcfe3e70035c6a7093bce570d449a6de',
+                              'new_module_calculation_sha256': '9548f4530a3bd596861d20b8f15baef27ab9d54ef84ae1d0d4594361e65faaf7',
+                              'new_physical_pins': ['8ac4821b88a3fa2981243d9fef5bde448b2c9ed8340831ece733ac42f6c4ef17',
+                                                    'c126129f8a967f85518f27fc738992d9fcfe3e70035c6a7093bce570d449a6de'],
+                              'predecessor_lf_sha256': 'ed242d9e732ac6ce8b973ccb0a7d65c873be8187d121d953516026c125d85abc',
+                              'predecessor_module_calculation_sha256': '46837f8445c8e83d5758adf86f6b975243ef6de4eeb0cf3303c28c1eb8cfc97c',
+                              'restored_predecessor_exact': True,
+                              'reverse_edits': [{'candidate_end_line': 14,
+                                                 'candidate_start_line': 13,
+                                                 'predecessor_lines': []},
+                                                {'candidate_end_line': 22,
+                                                 'candidate_start_line': 21,
+                                                 'predecessor_lines': []},
+                                                {'candidate_end_line': 259,
+                                                 'candidate_start_line': 258,
+                                                 'predecessor_lines': []},
+                                                {'candidate_end_line': 280,
+                                                 'candidate_start_line': 279,
+                                                 'predecessor_lines': []},
+                                                {'candidate_end_line': 579,
+                                                 'candidate_start_line': 578,
+                                                 'predecessor_lines': []},
+                                                {'candidate_end_line': 632,
+                                                 'candidate_start_line': 631,
+                                                 'predecessor_lines': []},
+                                                {'candidate_end_line': 768,
+                                                 'candidate_start_line': 767,
+                                                 'predecessor_lines': []},
+                                                {'candidate_end_line': 829,
+                                                 'candidate_start_line': 805,
+                                                 'predecessor_lines': ['    return '
+                                                                       'resize_candidate_plan_to_capital(base_plan, '
+                                                                       'sizing_capital, params, '
+                                                                       'copy_plan=False)\n']}]},
+ 'core/price_utils.py': {'new_lf_sha256': '492c17d9e4e805fa2a8049b9ba7df58ccbae5c8d8b07773398727d9aabdd7d98',
+                         'new_module_calculation_sha256': 'b55c935295f1689f8ed604d9fe938e34c58b12beae83af62a6e61cba144fcfc7',
+                         'new_physical_pins': ['02c11e9f955d3e02976dea594fb48e2f4f413e99295b54c77b989d23b1270aa1',
+                                               '492c17d9e4e805fa2a8049b9ba7df58ccbae5c8d8b07773398727d9aabdd7d98'],
+                         'predecessor_lf_sha256': 'cc80faffb3c2ba9fbac2b979fbe765ee497b5a916f03278f3ed25c468ab6ae7f',
+                         'predecessor_module_calculation_sha256': '79c1feab6ffbd8acd34cf2b94512e7f6fe36d3f8ea0e28412a92bb9147208a10',
+                         'restored_predecessor_exact': True,
+                         'reverse_edits': [{'candidate_end_line': 261,
+                                            'candidate_start_line': 233,
+                                            'predecessor_lines': []}]}}
+
+
+def _reviewed_optimizer_execution_sha256(relative: str, actual: str) -> str:
+    if not _OPTIMIZER_EXECUTION_REVIEW_ENABLED:
+        return actual
+    return _OPTIMIZER_EXECUTION_PHYSICAL_PINS.get(relative, {}).get(actual, actual)
+
+
+def _reviewed_source_group(scope: str):
+    proof = _REVIEWED_SOURCE_INVENTORIES.get(scope)
+    updates = _OPTIMIZER_EXECUTION_GROUP_UPDATES.get(scope)
+    if not _OPTIMIZER_EXECUTION_REVIEW_ENABLED or proof is None or not updates:
+        return proof
+    return {**proof, "current": {**proof["current"], **updates}}
+
+
+def reviewed_replay_predecessor_sources(parts, *, project_root):
+    """Reconstruct three legacy payload owners after an exact full-graph proof.
+
+    A missing/unknown owner, graph, helper or complete current source falls back
+    to live syntax. The caller also verifies the reconstructed syntax digest
+    before replacing any payload; historical result hashes are never accepted.
+    """
+    from hashlib import sha256
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    if not _OPTIMIZER_EXECUTION_REVIEW_ENABLED or Path(project_root).resolve() != root:
+        return {}
+    expected = dict(_reviewed_source_group("portfolio_candidates")["current"])
+    expected["@execution_sources"] = _reviewed_source_group("replay_numerics")["current"]["@execution_sources"]
+    expected["core/portfolio_benchmark.py"] = _ORACLE_BENCHMARK_SOURCE[0]
+    if set(parts) != set(expected) or any(
+            parts[name] not in ((value,) if isinstance(value, str) else value)
+            for name, value in expected.items()):
+        return {}
+    restored = {}
+    for relative, proof in _OPTIMIZER_LEGACY_SOURCE_RECONSTRUCTIONS.items():
+        raw = (root / relative).read_bytes()
+        if sha256(raw).hexdigest() not in proof["new_physical_pins"]:
+            return {}
+        lf = raw.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+        if sha256(lf).hexdigest() != proof["new_lf_sha256"]:
+            return {}
+        lines = lf.decode("utf-8-sig").splitlines(keepends=True)
+        for edit in reversed(proof["reverse_edits"]):
+            lines[edit["candidate_start_line"]:edit["candidate_end_line"]] = edit["predecessor_lines"]
+        predecessor = "".join(lines)
+        if sha256(predecessor.encode("utf-8")).hexdigest() != proof["predecessor_lf_sha256"]:
+            return {}
+        restored[relative] = (predecessor, proof["predecessor_module_calculation_sha256"])
+    return restored

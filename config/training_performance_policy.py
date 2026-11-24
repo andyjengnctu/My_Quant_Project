@@ -9,7 +9,10 @@ scientific semantics. Runtime resolution belongs to ``core.training_performance`
 OPTIMIZER_ROLLING_FOLD_WORKERS = "fold_count"  # "fold_count" / "auto" or a positive integer
 # Rolling random-seed ensembles use one global fold x seed work queue.  Keep the
 # current fixed-capacity version explicit; autoscaling is intentionally not enabled.
-OPTIMIZER_ROLLING_SEED_ENSEMBLE_GLOBAL_WORKERS = 12
+# AI: Full-data seed workers hold independent market/preparation state. On
+# this 32 GiB workstation, twelve workers exhaust RAM and page continuously;
+# six retain fold/seed search order while fitting the measured memory budget.
+OPTIMIZER_ROLLING_SEED_ENSEMBLE_GLOBAL_WORKERS = 6
 OPTIMIZER_ROLLING_SEED_ENSEMBLE_MAX_ACTIVE_PER_FOLD = 3
 OPTIMIZER_ROLLING_SEED_ENSEMBLE_PRIORITY_WARMUP_MAX_SEC = 30.0
 OPTIMIZER_ROLLING_PARALLEL_PREP_CACHE_MAX_ITEMS = 0

@@ -1,3 +1,5 @@
+from math import isfinite
+
 from core.exact_accounting import milli_to_money
 from core.trade_plans import (
     build_cash_capped_entry_plan,
@@ -56,7 +58,7 @@ def _build_candidate_full_entry_plan_if_affordable(candidate_row, available_cash
     return entry_plan
 
 
-def _build_cash_capped_entry_plan_for_candidate(candidate_row, effective_entry_budget, effective_entry_budget_milli, params, sizing_equity, *, copy_shadow_position=True):
+def _build_cash_capped_entry_plan_for_candidate(candidate_row, effective_entry_budget, effective_entry_budget_milli, params, sizing_equity, *, copy_shadow_position=True, reuse_candidate_sizing=False):
     full_entry_plan = _build_candidate_full_entry_plan_if_affordable(
         candidate_row,
         effective_entry_budget_milli,
@@ -76,6 +78,7 @@ def _build_cash_capped_entry_plan_for_candidate(candidate_row, effective_entry_b
         ),
         effective_entry_budget,
         params,
+        _precomputed_qty=(int(candidate_row['qty']) if reuse_candidate_sizing else None),
     )
 
 def _resolve_training_entry_plan(candidate_row, available_cash_milli, params, sizing_equity):
@@ -104,5 +107,17 @@ def _resolve_training_entry_plan(candidate_row, available_cash_milli, params, si
         params,
         sizing_equity,
         copy_shadow_position=False,
+        # AI註: canonical training rows retain the sizing capital and parameter
+        # owner used to calculate qty. Reservation only changes available cash;
+        # the generic path remains for caller-created or ranking/ensemble rows.
+        reuse_candidate_sizing=bool(
+            qty > 0
+            and reserved_cost_milli > 0
+            and candidate_row.get('params_obj') is params
+            and candidate_row.get('sizing_capital') is not None
+            and isfinite(candidate_row['sizing_capital'])
+            and candidate_row.get('use_breakout_quality_ranking') is False
+            and candidate_row.get('_ensemble_context') is None
+        ),
     )
 

@@ -86,7 +86,7 @@ def _feature_bank_profile_delta(before, after):
     }
 
 
-def worker_prep_data(ticker, df, params, include_trade_logs=True, include_pit_stats_index=False, feature_bank=None, profile_enabled=True, daily_execution_contract=None, execution_contract=None):
+def worker_prep_data(ticker, df, params, include_trade_logs=True, include_pit_stats_index=False, feature_bank=None, profile_enabled=True, daily_execution_contract=None, execution_contract=None, prepared_dynamic_data=None):
     worker_start = time.perf_counter() if profile_enabled else None
     profile_stats = {} if profile_enabled else None
     feature_bank_before = _snapshot_feature_bank(feature_bank) if profile_enabled else None
@@ -117,6 +117,7 @@ def worker_prep_data(ticker, df, params, include_trade_logs=True, include_pit_st
             include_pit_stats_index=include_pit_stats_index,
             feature_bank=feature_bank,
             execution_contract=execution_contract,
+            **({"prepared_dynamic_data": prepared_dynamic_data} if prepared_dynamic_data is not None else {}),
         )
         if profile_stats is None:
             worker_profile = _empty_worker_profile(worker_start)
@@ -266,6 +267,7 @@ def _run_prep_inline(
     feature_bank=None,
     daily_execution_contract=None,
     execution_contract=None,
+    prepared_fast_cache=None,
 ):
     if feature_bank is None:
         feature_bank = _build_optimizer_feature_bank()
@@ -282,6 +284,7 @@ def _run_prep_inline(
             profile_enabled=profile_enabled,
             daily_execution_contract=daily_execution_contract,
             execution_contract=execution_contract,
+            **({"prepared_dynamic_data": prepared_fast_cache.get(ticker)} if prepared_fast_cache is not None else {}),
         )
         t_merge = time.perf_counter()
         merge_prep_result(
@@ -386,7 +389,7 @@ def _run_prep_with_executor(executor, tickers, params, all_dfs_fast, all_trade_l
         t_collect = time.perf_counter()
 
 
-def prepare_trial_inputs(raw_data_cache, params, default_max_workers, executor_bundle=None, static_fast_cache=None, static_master_dates=None, include_trade_logs=True, include_pit_stats_index=False, profile_enabled=True, execution_contract=None):
+def prepare_trial_inputs(raw_data_cache, params, default_max_workers, executor_bundle=None, static_fast_cache=None, static_master_dates=None, include_trade_logs=True, include_pit_stats_index=False, profile_enabled=True, execution_contract=None, prepared_fast_cache=None):
     t_static_pack = time.perf_counter()
     if static_fast_cache is None:
         resolved_static_fast_cache = {ticker: pack_static_market_data(df) for ticker, df in raw_data_cache.items()}
@@ -434,6 +437,7 @@ def prepare_trial_inputs(raw_data_cache, params, default_max_workers, executor_b
                 feature_bank=executor_bundle.get("feature_bank"),
                 daily_execution_contract=daily_execution_contract,
                 execution_contract=execution_contract,
+                prepared_fast_cache=prepared_fast_cache,
             )
         elif executor_bundle is not None and int(executor_bundle.get("max_workers", 0)) == max_workers:
             created_executor = executor_bundle["executor"]

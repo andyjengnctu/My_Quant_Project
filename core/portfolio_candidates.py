@@ -46,7 +46,7 @@ from core.price_utils import (
     _NATIVE_BROKER_FEE_PPM,
     _NATIVE_BROKER_MIN_FEE_MILLI,
     build_position_sizing_capital_context,
-    build_position_sizing_fee_context,
+    resolve_position_sizing_fee_context_cached as _resolve_candidate_sizing_fee_context,
 )
 from core.native_optimizer_hotpath import (
     resolve_live_extended_candidate_core as _native_resolve_live_extended_candidate_core,
@@ -80,44 +80,6 @@ def _candidate_profile_add(profile_stats, key, started_at):
         0.0,
         time.perf_counter() - started_at,
     )
-
-
-def _resolve_candidate_sizing_fee_context(
-    cache,
-    *,
-    params,
-    ticker,
-    security_profile,
-    trade_date,
-):
-    profile = security_profile if isinstance(security_profile, dict) else {}
-    family = str(profile.get("family") or "")
-    broad_type = str(profile.get("broad_type") or "")
-    fallback_symbol = "" if profile else str(ticker or "")
-    # Fee/tax semantics are date-independent for every supported family except
-    # bond ETFs.  Keep the cache reusable across the whole replay for stocks and
-    # normal funds, while preserving exact day-specific semantics for bond ETFs.
-    fee_date_key = (
-        str(trade_date)[:10]
-        if family == "etf" and broad_type == "bond"
-        else ""
-    )
-    key = (id(params), family, broad_type, fallback_symbol, fee_date_key)
-    cached = cache.get(key)
-    if cached is not None:
-        cached_params, resolved = cached
-        if cached_params is params:
-            return resolved
-    resolved = build_position_sizing_fee_context(
-        params,
-        ticker=ticker,
-        security_profile=security_profile,
-        trade_date=trade_date,
-    )
-    # Retain the params object alongside the value so an integer id key can never
-    # be accidentally reused by a later short-lived runtime params object.
-    cache[key] = (params, resolved)
-    return resolved
 
 
 def _resolve_candidate_qty_cached(

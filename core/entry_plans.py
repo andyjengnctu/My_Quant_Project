@@ -198,9 +198,18 @@ def resize_candidate_plan_to_capital(
 
 
 # # (AI註: 單一真理來源 - 盤前依當下可用現金重算有效掛單規格與保留資金)
-def build_cash_capped_entry_plan(candidate_plan, available_cash, params):
+def build_cash_capped_entry_plan(candidate_plan, available_cash, params, *, _precomputed_qty=None):
     sizing_capital = _resolve_candidate_sizing_capital(candidate_plan, available_cash)
-    resized_plan = resize_candidate_plan_to_capital(candidate_plan, sizing_capital, params)
+    if _precomputed_qty is None:
+        resized_plan = resize_candidate_plan_to_capital(candidate_plan, sizing_capital, params)
+    else:
+        # AI註: optimizer may already own the canonical quantity for this exact
+        # geometry, capital and parameter object. Only cash affordability changed;
+        # retain the same plan fields and use the common cash/lot owner below.
+        resized_plan = dict(candidate_plan)
+        resized_plan["qty"] = int(_precomputed_qty)
+        resized_plan["is_orderable"] = resized_plan["qty"] > 0
+        resized_plan["sizing_capital"] = float(sizing_capital)
     if resized_plan is None or resized_plan["qty"] <= 0:
         return None
 
@@ -311,7 +320,12 @@ def _resolve_entry_fill_levels(*, buy_price, entry_atr, init_sl, init_trail, tar
         actual_init_sl = calc_initial_stop_from_reference(buy_price, entry_atr, params, ticker=ticker, security_profile=security_profile)
         actual_init_trail = calc_initial_trailing_stop_from_reference(buy_price, entry_atr, params, ticker=ticker, security_profile=security_profile)
         resolved_target_reference = buy_price if target_reference_price is None or pd.isna(target_reference_price) else target_reference_price
-        target_reference_stop = calc_initial_stop_from_reference(resolved_target_reference, entry_atr, params, ticker=ticker, security_profile=security_profile)
+        # The usual target reference is the same fill used for the initial stop.
+        # Reuse that exact result; explicit distinct references keep their owner.
+        target_reference_stop = (
+            actual_init_sl if resolved_target_reference is buy_price
+            else calc_initial_stop_from_reference(resolved_target_reference, entry_atr, params, ticker=ticker, security_profile=security_profile)
+        )
         actual_target_price = calc_frozen_target_price(resolved_target_reference, target_reference_stop, ticker=ticker, security_profile=security_profile)
         return actual_init_sl, actual_init_trail, actual_target_price
 

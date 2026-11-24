@@ -310,12 +310,13 @@ def _load_contexts_for_active_ensemble_schedule(
     raw_universe_required_min_rows=None,
     raw_data_loader=None,
     execution_contract=None,
+    prepared_context_resolver=None,
 ):
     execution_contract = resolve_portfolio_execution_contract(execution_contract)
     use_cache, write_cache = _prepared_cache_requested(use_prepared_cache, write_prepared_cache)
     all_members = [member for record in schedule_records for member in (record.get("members") or [])]
     raw_context_source = None
-    if not (use_cache or write_cache):
+    if not (use_cache or write_cache) and prepared_context_resolver is None:
         raw_context_source = _build_in_memory_raw_context_source(
             data_dir,
             [member.get("params_obj") for member in all_members],
@@ -323,6 +324,10 @@ def _load_contexts_for_active_ensemble_schedule(
             raw_universe_required_min_rows=raw_universe_required_min_rows,
             raw_data_loader=raw_data_loader,
         )
+    required_min_rows = _resolve_required_min_rows_for_raw_universe(
+        [member.get("params_obj") for member in all_members],
+        raw_universe_required_min_rows=raw_universe_required_min_rows,
+    )
     contexts_by_signature = {}
     contexts_by_effective_date = {}
     total_members = len(all_members)
@@ -338,7 +343,18 @@ def _load_contexts_for_active_ensemble_schedule(
                         f"{C_CYAN}📦 建立 ensemble active param 快取 [{loaded_count}/{total_members}] "
                         f"生效日={record['effective_date_text'] or 'static'} member={member.get('member_index')}...{C_RESET}"
                     )
-                if raw_context_source is not None:
+                context = None
+                if prepared_context_resolver is not None and not (use_cache or write_cache or keep_trade_logs):
+                    context = prepared_context_resolver(member["params_obj"], required_min_rows)
+                if context is None and raw_context_source is None and not (use_cache or write_cache):
+                    raw_context_source = _build_in_memory_raw_context_source(
+                        data_dir, [value.get("params_obj") for value in all_members],
+                        verbose=verbose, raw_universe_required_min_rows=raw_universe_required_min_rows,
+                        raw_data_loader=raw_data_loader,
+                    )
+                if context is not None:
+                    pass
+                elif raw_context_source is not None:
                     context = _prepare_portfolio_context_from_in_memory_source(
                         raw_context_source,
                         member["params_obj"],
@@ -1164,6 +1180,7 @@ def run_portfolio_simulation_with_param_ensemble(
     raw_data_loader=None,
     replay_preparation_cache=None,
     execution_contract=None,
+    prepared_context_resolver=None,
 ):
     execution_contract = resolve_portfolio_execution_contract(execution_contract)
     schedule_records = build_active_param_ensemble_objects_from_payload(ensemble_payload, fixed_risk=fixed_risk)
@@ -1212,7 +1229,7 @@ def run_portfolio_simulation_with_param_ensemble(
         execution_contract=execution_contract,
     )
     contexts_by_effective_date = _load_session_replay_preparation(
-        replay_preparation_cache, preparation_key,
+        replay_preparation_cache if prepared_context_resolver is None else None, preparation_key,
         lambda: _load_contexts_for_active_ensemble_schedule(
             data_dir, schedule_records, verbose=verbose,
             keep_trade_logs=return_context,
@@ -1221,6 +1238,7 @@ def run_portfolio_simulation_with_param_ensemble(
             raw_universe_required_min_rows=raw_universe_required_min_rows,
             raw_data_loader=raw_data_loader,
             execution_contract=execution_contract,
+            prepared_context_resolver=prepared_context_resolver,
         ),
     )
     merged_dates = _merge_context_market_dates_from_ensemble(contexts_by_effective_date)

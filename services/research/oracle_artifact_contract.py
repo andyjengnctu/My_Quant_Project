@@ -29,7 +29,10 @@ from core.research_execution_equivalence import (
 from core.file_integrity import (
     canonical_json_sha256, is_sha256_hex, exclusive_file_lock, atomic_replace_with_retry,
 )
-from core.research_execution_equivalence import reviewed_calculation_sha256, project_reviewed_source_inventory
+from core.research_execution_equivalence import (
+    reviewed_calculation_sha256, project_reviewed_source_inventory,
+    reviewed_replay_predecessor_sources,
+)
 
 from core.daily_trade_path_capabilities import DAILY_TRUTH_CAPABILITIES, daily_truth_capability
 from services.research.oracle_result_contract import (
@@ -354,6 +357,7 @@ def replay_implementation_sha256(*, ranking_policy: str | None = None,
     hashes["@execution_sources"] = canonical_json_sha256(parts["@execution_sources"])
     ranking_owner = "core/ranking_policy.py"
     hashes[ranking_owner] = reviewed_ranking_source_sha256(hashes[ranking_owner], project_root=code_root)
+    predecessor_sources = reviewed_replay_predecessor_sources(hashes, project_root=code_root)
     if observation_scope == ORACLE_STRATEGY_OBSERVATION_SCOPE:
         for relative in oracle_observation_consumer_sources():
             payload, digest = _source_owner_attestation(code_root / relative)
@@ -364,7 +368,15 @@ def replay_implementation_sha256(*, ranking_policy: str | None = None,
     projected = project_reviewed_source_inventory(
         hashes, scope="replay_numerics", project_root=code_root,
     )
-    return canonical_json_sha256({relative: parts[relative] for relative in projected})
+    payloads = {relative: parts[relative] for relative in projected}
+    predecessors = {}
+    for relative, (source, expected_digest) in predecessor_sources.items():
+        payload, digest = _source_content_attestation(source, is_python=True)
+        if digest != expected_digest:
+            predecessors = {}
+            break
+        predecessors[relative] = payload
+    return canonical_json_sha256({**payloads, **predecessors})
 
 
 @lru_cache(maxsize=128)

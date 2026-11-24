@@ -11,6 +11,7 @@ from core.entry_plans import (
 from core.position_management import rollforward_position_management_from_completed_bar
 from core.price_utils import (
     adjust_long_stop_price,
+    build_position_sizing_capital_context,
     calc_frozen_target_price,
     calc_initial_stop_from_reference,
     calc_initial_trailing_stop_from_reference,
@@ -18,6 +19,7 @@ from core.price_utils import (
     is_limit_buy_price_milli_reachable_for_day,
     is_limit_buy_price_reachable_for_day,
     price_to_milli,
+    resolve_position_sizing_fee_context_cached,
 )
 
 
@@ -254,6 +256,7 @@ def ensure_extended_signal_counterfactual_anchor(
     current_date=None,
     copy_shadow_position=True,
     counterfactual_anchor_plan=None,
+    sizing_context_cache=None,
 ):
     if signal_state is None or params is None or sizing_capital is None:
         return signal_state
@@ -274,6 +277,7 @@ def ensure_extended_signal_counterfactual_anchor(
             ticker=signal_state.get("ticker"),
             security_profile=signal_state.get("security_profile"),
             trade_date=current_date,
+            sizing_context_cache=sizing_context_cache,
         )
     if candidate_plan is None or candidate_plan.get("qty", 0) <= 0:
         return signal_state
@@ -572,6 +576,7 @@ def should_clear_extended_signal(
     params=None,
     copy_shadow_position=True,
     counterfactual_anchor_plan=None,
+    sizing_context_cache=None,
 ):
     if signal_state is None:
         return False
@@ -624,6 +629,7 @@ def should_clear_extended_signal(
         current_date=current_date,
         copy_shadow_position=copy_shadow_position,
         counterfactual_anchor_plan=counterfactual_anchor_plan,
+        sizing_context_cache=sizing_context_cache,
     )
     shadow_position = _resolve_shadow_position(signal_state)
     if shadow_position is None:
@@ -759,6 +765,7 @@ def build_extended_candidate_plan_from_signal(
     *,
     resize_to_capital=True,
     copy_shadow_position=True,
+    sizing_context_cache=None,
 ):
     geometry = resolve_extended_candidate_plan_geometry(
         signal_state, params, ticker=ticker, security_profile=security_profile
@@ -796,7 +803,30 @@ def build_extended_candidate_plan_from_signal(
         base_plan["shadow_position_state"] = clone_shadow_position(shadow_position)
     if not resize_to_capital:
         return base_plan
-    return resize_candidate_plan_to_capital(base_plan, sizing_capital, params, copy_plan=False)
+    capital_context = fee_context = None
+    if sizing_context_cache is not None and limit_reference > 0 and sizing_stop_ref > 0:
+        # Cleanup owns this cache for one day only: capital and params stay
+        # fixed while independent unanchored signals acquire their shadow.
+        capital_cache = sizing_context_cache.setdefault("capital", {})
+        key = (id(params), sizing_capital)
+        cached = capital_cache.get(key)
+        if cached is None or cached[0] is not params:
+            capital_context = build_position_sizing_capital_context(
+                sizing_capital, params.fixed_risk, params,
+            )
+            capital_cache[key] = (params, capital_context)
+        else:
+            capital_context = cached[1]
+        fee_context = resolve_position_sizing_fee_context_cached(
+            sizing_context_cache.setdefault("fee", {}),
+            params=params, ticker=resolved_ticker,
+            security_profile=resolved_security_profile, trade_date=trade_date,
+        )
+    return resize_candidate_plan_to_capital(
+        base_plan, sizing_capital, params, copy_plan=False,
+        sizing_capital_context=capital_context,
+        sizing_fee_context=fee_context,
+    )
 
 
 # # (AI註: 單一真理來源 - TBD 只是同一份 shadow trade 的顯示視圖，不再另建第二套狀態機)

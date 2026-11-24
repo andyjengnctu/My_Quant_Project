@@ -233,6 +233,34 @@ def build_position_sizing_fee_context(params, *, ticker=None, security_profile=N
     )
 
 
+def resolve_position_sizing_fee_context_cached(
+    cache, *, params, ticker, security_profile, trade_date,
+):
+    """Reuse a canonical sizing context within an immutable-params replay."""
+    profile = security_profile if isinstance(security_profile, dict) else {}
+    family = str(profile.get("family") or "")
+    broad_type = str(profile.get("broad_type") or "")
+    fallback_symbol = "" if profile else str(ticker or "")
+    # Only bond ETF tax semantics depend on the trade date.
+    fee_date_key = (
+        str(trade_date)[:10]
+        if family == "etf" and broad_type == "bond"
+        else ""
+    )
+    key = (id(params), family, broad_type, fallback_symbol, fee_date_key)
+    cached = cache.get(key)
+    if cached is not None:
+        cached_params, resolved = cached
+        if cached_params is params:
+            return resolved
+    resolved = build_position_sizing_fee_context(
+        params, ticker=ticker, security_profile=security_profile, trade_date=trade_date,
+    )
+    # Retain params so a later object can never reuse its integer id.
+    cache[key] = (params, resolved)
+    return resolved
+
+
 def calc_position_size_from_milli_context(
     buy_price_milli,
     stop_price_milli,
