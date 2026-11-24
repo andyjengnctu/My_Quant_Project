@@ -180,7 +180,7 @@ def main(argv=None) -> int:
         detail = str(exc) if isinstance(exc, RuntimeError) else type(exc).__name__
         print(f"[Oracle build] IMPLEMENTATION_UNVERIFIED: {detail}; commit and package retained.")
         return 1
-    print("[Oracle build] VERIFIED; frozen source package includes the certificate and its evidence.")
+    print("[Oracle build] VERIFIED; source ZIP includes the runtime certificate; complete engineering evidence stays in local outputs.")
     return 0
 
 
