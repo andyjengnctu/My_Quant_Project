@@ -152,7 +152,8 @@ class PayoffDecisionCases(TestCase):
                                  {'entry_strategy': 'Breakout'}, {'dl_id': 'different_ranker'}):
                     self.assertFalse(perfect_positive_arms_equivalent(
                         {**arm, **mutation}, STRATEGY_COMPARE_ARMS[reference_id],
-                        sources=STRATEGY_DL_SOURCES, target_id=target))
+                        sources=STRATEGY_DL_SOURCES, target_id=target,
+                        resolve_recipe=get_continuous_ranker_execution_recipe))
 
 
 class PerfectDecisionReplayParityCases(TestCase):

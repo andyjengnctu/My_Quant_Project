@@ -6,7 +6,7 @@ Model-decision admission consumes a dated binary action without threshold fittin
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from core.positive_netpnl_contract import (
@@ -105,7 +105,8 @@ def admit_positive_score_rows(rows):
 
 
 def perfect_positive_arms_equivalent(arm: Mapping[str, Any], reference: Mapping[str, Any], *,
-                                    sources: Mapping[str, Any], target_id: str) -> bool:
+                                    sources: Mapping[str, Any], target_id: str,
+                                    resolve_recipe: Callable[[str], Any]) -> bool:
     """Certify sign-perfect binary actions against sign-perfect probabilities.
 
     This applies ONLY to the user-approved hindsight intervention: mature
@@ -113,9 +114,10 @@ def perfect_positive_arms_equivalent(arm: Mapping[str, Any], reference: Mapping[
     It never equates learned probabilities/payoff mass, FITs or strategy runs.
     All ranking, teacher, entry, allocation and date/source semantics must
     otherwise match the already certified Oracle reference.
+    Callers supply the canonical resolver so admission never imports configured
+    model workflows that themselves depend on this low-level contract.
     """
     from dataclasses import asdict
-    from core.breakout_quality_runtime_resolver import get_continuous_ranker_execution_recipe
 
     presentation = {"name", "description", "robustness_role", "replay_contract_version",
                     "dl_runtime_options"}
@@ -130,7 +132,7 @@ def perfect_positive_arms_equivalent(arm: Mapping[str, Any], reference: Mapping[
         source = sources.get(options.get("positive_dl_id"))
         if not source:
             return False
-        recipe = get_continuous_ranker_execution_recipe(source["experiment_profile"])
+        recipe = resolve_recipe(source["experiment_profile"])
         policy = recipe.training_policy
         if (recipe.continuous_target_id != target_id
                 or policy.target_builder != "netpnl_positive_binary"

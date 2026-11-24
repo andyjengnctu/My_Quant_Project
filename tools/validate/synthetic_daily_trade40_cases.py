@@ -3220,18 +3220,32 @@ class ExecutionAccelerationCases(unittest.TestCase):
 
     def test_summary_membership_policy_proof_preserves_only_reviewed_execution(self):
         import ast
+        from hashlib import sha256
         from core import research_execution_equivalence as proof
         from core.file_integrity import compute_file_sha256
         relative = "core/breakout_quality_policy.py"
-        current = Path(__file__).resolve().parents[2] / relative
-        original = current.read_text(encoding="utf-8")
-        baseline = proof.reviewed_execution_source_sha256(relative, compute_file_sha256(current))
+        current_source = (Path(__file__).resolve().parents[2] / relative).read_text(encoding="utf-8")
+        # Exercise an explicitly reviewed fixture. The current policy may have
+        # evolved beyond the historical proof and must not gain an exemption.
+        original = (
+            "def resolve_breakout_quality_random_seed():\n"
+            "    resolved = int(cfg.BREAKOUT_QUALITY_RANDOM_SEED)\n"
+            "    return resolved\n"
+        )
+        reviewed_ast = ast.dump(proof.canonical_ast_schema(ast.parse(original)),
+                                include_attributes=False)
+        reviewed_sha = sha256(reviewed_ast.encode("utf-8")).hexdigest()
+        baseline = "a" * 64
         with TemporaryDirectory() as directory:
             target = Path(directory) / relative
             target.parent.mkdir(parents=True)
             fake_module = str(Path(directory) / "core/research_execution_equivalence.py")
             target.write_text(original + "\n# comment-only change\n", encoding="utf-8")
-            with patch.object(proof, "__file__", fake_module):
+            with (
+                patch.object(proof, "__file__", fake_module),
+                patch.object(proof, "_SUMMARY_MEMBERSHIP_POLICY_AST_SHA256", reviewed_sha),
+                patch.object(proof, "_SUMMARY_MEMBERSHIP_POLICY_BASELINE_SHA256", baseline),
+            ):
                 self.assertEqual(proof.reviewed_execution_source_sha256(
                     relative, compute_file_sha256(target)), baseline)
                 self.assertEqual(proof.reviewed_execution_source_sha256(relative, "f" * 64), "f" * 64)
@@ -3241,6 +3255,12 @@ class ExecutionAccelerationCases(unittest.TestCase):
                 assignment = next(node for node in resolver.body if isinstance(node, ast.Assign))
                 assignment.value = ast.Constant(value=7)
                 target.write_text(ast.unparse(ast.fix_missing_locations(tree)), encoding="utf-8")
+                actual = compute_file_sha256(target)
+                self.assertEqual(proof.reviewed_execution_source_sha256(relative, actual), actual)
+            # The real current module also remains fail-closed for an unknown
+            # executable edit; the fixture pin must never certify it wholesale.
+            target.write_text(current_source + "\nUNREVIEWED_SOURCE_MUTATION = 7\n", encoding="utf-8")
+            with patch.object(proof, "__file__", fake_module):
                 actual = compute_file_sha256(target)
                 self.assertEqual(proof.reviewed_execution_source_sha256(relative, actual), actual)
 
@@ -3323,7 +3343,7 @@ class ExecutionAccelerationCases(unittest.TestCase):
             fold_training_identity, resource_equivalent_fitting_cache_entry,
         )
         original = {
-            "fold_id": "fixture", "experiment_profile": "daily_universal_no_time_pairwise",
+            "fold_id": "fixture", "experiment_profile": "daily_universal_no_time_full_list_ndcg_pairwise",
             "seed": 42, "model_information_cutoff": "2020-12-31",
             "planned_periods": {"validation_start": "2020-01-01", "validation_end": "2020-12-31",
                                 "score_start": "2021-01-01", "score_end": "2021-12-31"},

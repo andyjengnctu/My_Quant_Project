@@ -1224,7 +1224,8 @@ def collect_target_dl_overview(project_root: Path) -> dict[str, Any]:
                 if (not references[0]["oracle"].get("positive_output")
                         or not perfect_positive_arms_equivalent(
                             arm, STRATEGY_COMPARE_ARMS[reference_id], sources=STRATEGY_DL_SOURCES,
-                            target_id=str(score_targets.get(key) or ""))):
+                            target_id=str(score_targets.get(key) or ""),
+                            resolve_recipe=get_continuous_ranker_execution_recipe)):
                     raise ValueError(f"Summary perfect-output execution differs: {arm_id}/{reference_id}")
                 equivalent_metrics = oracle.get(key) or {}
             append_row(

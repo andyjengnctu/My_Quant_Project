@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from tempfile import TemporaryDirectory
@@ -622,6 +623,29 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
         and get_continuous_ranker_execution_recipe(profile_name).target_policy.materialization_mode
            == CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT
     )
+    # Current profiles need not include a retired predicted-context experiment.
+    # Exercise the shared reader with a local capability override on a distinct
+    # current profile; no executable profile or architecture is registered.
+    from services.breakout_quality import fitting_data_dependencies as fit_dependencies
+    from core.breakout_quality_runtime import CONTINUOUS_RANKER_CONTEXT_ROLE_COVERAGE
+    from filters.breakout_quality.predicted_context_artifact import predicted_context_artifact_specs
+    external_context = next(
+        profile_name for profile_name in SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES
+        if profile_name != no_context_profile
+        and get_breakout_quality_experiment_profile(profile_name).training_sample_scope
+        == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS
+        and get_continuous_ranker_execution_recipe(profile_name).target_policy.materialization_mode
+        == CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT
+    )
+    context_recipe = get_continuous_ranker_execution_recipe(external_context)
+    context_recipe = replace(context_recipe, context_policy=replace(
+        context_recipe.context_policy, source=predicted_context_artifact_specs()[0].source,
+        roles=(CONTINUOUS_RANKER_CONTEXT_ROLE_COVERAGE,),
+    ))
+    def recipe_with_external_context(profile_name):
+        return (context_recipe if profile_name == external_context
+                else get_continuous_ranker_execution_recipe(profile_name))
+
     historical["experiment_profile"] = no_context_profile
     historical["source_contract"] = {
         "dataset_policy": "canonical", "dataset_artifacts": {"feature_bank": "sha-old"},
@@ -637,7 +661,9 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
                owner._first_fold_fit_identity_issues(historical, current))
     with TemporaryDirectory() as td:
         root_dir = Path(td)
-        with patch.object(owner, "source_inventory_matches_current", return_value=True) as proof:
+        with patch.object(owner, "source_inventory_matches_current", return_value=True) as proof, \
+             patch.object(fit_dependencies, "get_continuous_ranker_execution_recipe",
+                          side_effect=recipe_with_external_context):
             check("reverse_bridge_verified_inventory_same_fitting_identity", (),
                   owner._first_fold_fit_identity_issues(
                       historical, current, project_root=root_dir,
@@ -679,13 +705,9 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
                  and get_continuous_ranker_execution_recipe(p).target_policy.materialization_mode
                  == CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_COMPONENT), None
             )
-            external_context = next(
-                (p for p in profiles
-                 if get_continuous_ranker_execution_recipe(p).context_policy.source
-                 != CONTINUOUS_RANKER_CONTEXT_SOURCE_NONE), None
-            )
-            check_true("reverse_bridge_self_contained_and_external_context_profiles_available",
-                       self_contained is not None and external_context is not None)
+            check_true("reverse_bridge_current_profiles_support_context_capability_fixture",
+                       self_contained is not None and external_context in profiles
+                       and context_recipe.context_policy.source != CONTINUOUS_RANKER_CONTEXT_SOURCE_NONE)
             if self_contained is not None and external_context is not None:
                 files = resolve_dataset_paths(Path(".")).artifact_paths()
                 event_records = {
@@ -1029,7 +1051,7 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
                 else:
                     hash_rejected = False
                 check_true("reverse_bridge_native_none_event_checkpoint_hash_still_enforced", hash_rejected)
-            # AI: Generic external-context policy, selected from the registry.
+            # Generic external-context policy uses the local capability fixture.
             # Independently link original PIT aggregate -> Fold SHA -> checkpoint
             # and recorded context bytes. Both outer and embedded native contracts
             # must pass; current context READY alone is explicitly insufficient.
@@ -1037,7 +1059,6 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
                 import json
                 from filters.breakout_quality.paths import SELECTION_POINT_IN_TIME_MANIFEST_FILENAME
                 from filters.breakout_quality.predicted_context_artifact import maybe_predicted_context_artifact_spec
-                context_recipe = get_continuous_ranker_execution_recipe(external_context)
                 context_spec = maybe_predicted_context_artifact_spec(context_recipe.context_policy.source)
                 check_true("ssot_external_context_has_registered_artifact_capability", context_spec is not None)
                 if context_spec is not None:
@@ -2632,25 +2653,24 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
     from services.breakout_quality.fit_origin_repair_plan import (
         FitOriginRepairCandidate, FitOriginRepairBlocker, plan_fit_origin_repairs,
     )
-    from services.breakout_quality.fitting_data_dependencies import context_source_for_profile
-    from filters.breakout_quality.predicted_context_artifact import maybe_predicted_context_artifact_spec
     from services.breakout_quality.fitted_model_artifacts import resolve_rolling_fitted_folds_root
     from filters.breakout_quality.paths import (
         SELECTION_POINT_IN_TIME_MANIFEST_FILENAME, resolve_filter_artifact_paths,
     )
     from services.research import breakout_quality_application as app
 
-    # AI: FIT-origin repair is a reusable capability even when the current
-    # Model Compare list has no predicted-context model. Use a registered
-    # fixture, then isolate it through the existing comparison mock below.
-    external_profiles = [
+    # Resolve current scientific identities dynamically. Only the temporary
+    # legacy-origin fixture needs an external-context capability; comparison
+    # preflight and report refresh apply to every current research profile.
+    from services.breakout_quality import fit_origin_repair_plan as repair_plan
+    repair_profiles = [
         (get_continuous_ranker_research_spec(profile).model_research_id, profile)
         for profile in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES
-        if maybe_predicted_context_artifact_spec(context_source_for_profile(profile)) is not None
     ]
-    check_true("normal_research_repair_profile_registry_driven", bool(external_profiles))
-    if external_profiles:
-        model_id, profile = external_profiles[0]
+    check_true("normal_research_repair_profile_registry_driven", bool(repair_profiles))
+    with patch.object(repair_plan, "context_source_for_profile",
+                      return_value=context_recipe.context_policy.source):
+        model_id, profile = repair_profiles[0]
         settings = configured_settings(experiment_profile=profile)
         score_start = str(configured_rolling_mode("rolling").score_start_date)
         with TemporaryDirectory() as td:
@@ -2787,8 +2807,8 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
 
     # Rolling report refresh is not a FIT-origin defect: the shared entry must
     # not start a GPU rebuild when its published SCORE is already valid.
-    if external_profiles:
-        model_id, profile = external_profiles[0]
+    if repair_profiles:
+        model_id, profile = repair_profiles[0]
         with TemporaryDirectory() as td:
             project = Path(td)
             report_refresh_calls = []

@@ -557,6 +557,7 @@
 | T289 | `validate_breakout_quality_pairwise_ranker_contract_case` | B192 |
 | T290 | `validate_breakout_quality_strategy_readable_report_contract_case`：B193/T290 | B193 |
 | T291 | `validate_breakout_quality_app_simple_report_contract_case`：B194 | B194 |
+| T294 | `validate_breakout_quality_daily_pit_strategy_runtime_contract_case` | B353 |
 | T295 | `validate_breakout_quality_legacy_research_cleanup_contract_case` | B198 |
 | T296 | `validate_breakout_quality_active_legacy_model_isolation_contract_case` | B199 |
 | T297 | `validate_portfolio_core_module_boundary_contract_case` | B200 |
@@ -582,6 +583,7 @@
 | T343 | `validate_breakout_quality_strategy_readable_report_contract_case`：B193/T343 | B193 |
 | T344 | `validate_breakout_quality_full_horizon_target_components_contract_case`：B242 | B242 |
 | T345 | `validate_strategy_compare_config_driven_app_contract_case`：B242 | B242 |
+| T347 | `validate_breakout_quality_low_adverse_target_component_contract_case` | B254 |
 | T357 | `validate_strategy_compare_config_driven_app_contract_case`：B253 | B253 |
 | T360 | `validate_breakout_quality_point_in_time_score_builder_contract_case`：B189 | B189 |
 | T361 | `validate_breakout_quality_strategy_readable_report_contract_case`：B189 | B189 |

@@ -24,6 +24,7 @@ from core.breakout_quality_registry import (
 from core.breakout_quality_policy import (
     BREAKOUT_QUALITY_WORKFLOW_FILTER_ID,
     BREAKOUT_QUALITY_WORKFLOW_MODEL_ARCHITECTURE,
+    get_continuous_ranker_execution_recipe,
 )
 from core.breakout_quality_runtime import (
     DAILY_FULL_HORIZON_LOW_ADVERSE_TARGET_ID,
@@ -589,7 +590,8 @@ def validate_oracle_compare_family_coverage(
             if (row is None or not row.get("positive_output") or arm_id not in arm_registry
                     or not perfect_positive_arms_equivalent(
                         arm_registry[arm_id], arm_registry[reference_id], sources=STRATEGY_DL_SOURCES,
-                        target_id=str(oracle_supervised_target_id(origin) or ""))):
+                        target_id=str(oracle_supervised_target_id(origin) or ""),
+                        resolve_recipe=get_continuous_ranker_execution_recipe)):
                 raise ValueError(f"Uncertified Oracle perfect-output equivalence: {arm_id}/{reference_id}")
             claimed_arms[arm_id] = row
     for family, control_id in baselines.items():

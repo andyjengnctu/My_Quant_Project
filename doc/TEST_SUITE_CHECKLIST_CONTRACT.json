@@ -5762,6 +5762,20 @@
       "b_id": "B351",
       "order": 564,
       "status": "DONE"
+    },
+    {
+      "id": "T294",
+      "description": "`validate_breakout_quality_daily_pit_strategy_runtime_contract_case`",
+      "b_id": "B353",
+      "order": 286,
+      "status": "DONE"
+    },
+    {
+      "id": "T347",
+      "description": "`validate_breakout_quality_low_adverse_target_component_contract_case`",
+      "b_id": "B254",
+      "order": 339,
+      "status": "DONE"
     }
   ]
 }
