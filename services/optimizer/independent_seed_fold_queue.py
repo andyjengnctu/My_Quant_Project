@@ -7,6 +7,7 @@ tasks enter the shared pool, so a study still has exactly one sequential search.
 from __future__ import annotations
 
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, ThreadPoolExecutor, wait
+from concurrent.futures.process import BrokenProcessPool
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime
 import multiprocessing
@@ -27,9 +28,26 @@ _COORDINATOR_BROKER = None
 _COORDINATOR_WORKERS = None
 _COORDINATOR_FINALIZATION_HELD = False
 _FOLD_TASK_ACTIVE = False
+_PROCESS_HEALTH_POLL_SEC = 1.0
 
 
-def _execute_isolated_fold(task: dict) -> dict:
+def _raise_if_owned_worker_exited(executor, *, role: str) -> None:
+    """Catch lost process-sentinel notifications without touching other jobs.
+
+    These pools do not retire workers between tasks. Any worker exit while work
+    remains is therefore a failure, including an abrupt zero exit status.
+    """
+    processes = getattr(executor, "_processes", None)
+    if isinstance(processes, dict):
+        for process in list(processes.values()):
+            exit_code = process.exitcode
+            if exit_code is not None:
+                raise BrokenProcessPool(
+                    f"Independent Optimizer {role} exited unexpectedly (exitcode={exit_code})"
+                )
+
+
+def _execute_isolated_fold(function, task: dict) -> dict:
     global _FOLD_TASK_ACTIVE
     settings = task.get("execution_settings") or OptimizerExecutionSettings.from_environ()
     # ProcessPool workers are reused across seeds. The explicit snapshot must
@@ -37,8 +55,7 @@ def _execute_isolated_fold(task: dict) -> dict:
     _FOLD_TASK_ACTIVE = True
     try:
         with temporary_process_environment({**settings.as_environ(), "V16_PORTFOLIO_MAX_WORKERS": "1"}), optimizer_process_environment(settings):
-            from services.optimizer.outer_rolling_oos import _run_outer_rolling_oos_fold_task
-            return _run_outer_rolling_oos_fold_task(task)
+            return function(task)
     finally:
         _FOLD_TASK_ACTIVE = False
 
@@ -56,7 +73,7 @@ class _FoldBroker:
             max_workers=int(max_workers), mp_context=multiprocessing.get_context("spawn")
         )
 
-    def run_fold(self, task: dict) -> dict:
+    def run_fold(self, function, task: dict) -> dict:
         fields = ("project_root", "output_dir", "log_path", "fold_idx", "fold_count",
                   "oos_year", "oos_period", "selection_period", "selection_start_date",
                   "selection_end_date", "optimizer_seed", "progress_display_contract")
@@ -70,8 +87,22 @@ class _FoldBroker:
                 if self._closed:
                     raise RuntimeError("Independent Optimizer fold queue is closed")
                 observed["queue_status"] = "RUNNING"
-                future = self._pool.submit(_execute_isolated_fold, task)
-            result = future.result()
+                future = self._pool.submit(_execute_isolated_fold, function, task)
+            while True:
+                try:
+                    result = future.result(timeout=_PROCESS_HEALTH_POLL_SEC)
+                    break
+                except TimeoutError:
+                    if future.done():
+                        # Completion can race the waiting timeout. Retrieve the
+                        # settled result; a genuine fold TimeoutError still
+                        # propagates from this second call.
+                        result = future.result()
+                        break
+                    with self._condition:
+                        if self._closed:
+                            raise RuntimeError("Independent Optimizer fold queue is closed")
+                    _raise_if_owned_worker_exited(self._pool, role="fold worker")
             with self._condition:
                 observed["queue_status"] = "DONE"
             return result
@@ -124,15 +155,15 @@ _FoldBrokerManager.register("FoldBroker", _FoldBroker)
 class _SharedFoldExecutor:
     """Local Future adapter; its threads perform IPC and never evaluate trials."""
 
-    def __init__(self, broker, max_workers: int):
+    def __init__(self, broker, max_workers: int, worker):
         self._broker = broker
+        self._worker = worker
         self._calls = ThreadPoolExecutor(max_workers=int(max_workers))
 
     def submit(self, function, task):
-        from services.optimizer.outer_rolling_oos import _run_outer_rolling_oos_fold_task
-        if function is not _run_outer_rolling_oos_fold_task:
+        if function is not self._worker:
             raise ValueError("The shared Optimizer queue accepts canonical fold tasks only")
-        return self._calls.submit(self._broker.run_fold, dict(task))
+        return self._calls.submit(self._broker.run_fold, function, dict(task))
 
     def shutdown(self, wait=True, *, cancel_futures=False):
         self._calls.shutdown(wait=wait, cancel_futures=cancel_futures)
@@ -171,10 +202,10 @@ def release_independent_finalization_slot() -> None:
         _COORDINATOR_FINALIZATION_HELD = False
 
 
-def independent_fold_executor(*, fold_count: int):
+def independent_fold_executor(*, fold_count: int, worker):
     if _COORDINATOR_BROKER is None:
         raise RuntimeError("No independent Optimizer fold queue is active")
-    return _SharedFoldExecutor(_COORDINATOR_BROKER, max(1, int(fold_count)))
+    return _SharedFoldExecutor(_COORDINATOR_BROKER, max(1, int(fold_count)), worker)
 
 
 def _run_producer(producer, request: dict, broker, max_workers: int, environment: dict, log_path: str):
@@ -277,7 +308,8 @@ def run_independent_optimizer_producers_shared_fold_queue(
         pending = set(futures)
         last_render = 0.0
         while pending:
-            done, pending = wait(pending, timeout=1.0, return_when=FIRST_COMPLETED)
+            done, pending = wait(pending, timeout=_PROCESS_HEALTH_POLL_SEC, return_when=FIRST_COMPLETED)
+            _raise_if_owned_worker_exited(coordinators, role="producer coordinator")
             for future in sorted(done, key=futures.get):
                 results[futures[future]] = future.result()
             now = time.perf_counter()

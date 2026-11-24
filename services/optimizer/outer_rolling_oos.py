@@ -2738,7 +2738,7 @@ def run_outer_rolling_oos(
                     priority_warmup_max_sec=float(priority_warmup_max_sec),
                 )
             elif shared_fold_workers is not None:
-                with independent_fold_executor(fold_count=fold_count) as executor:
+                with independent_fold_executor(fold_count=fold_count, worker=_run_outer_rolling_oos_fold_task) as executor:
                     chain_state = _run_parallel_fold_futures(
                         executor=executor,
                         tasks=tasks,

@@ -37,6 +37,9 @@ class OptimizerExecutionEquivalenceTests(unittest.TestCase):
                 raw = (ROOT / name).read_bytes()
                 current = sha256(raw).hexdigest()
                 resource = proof._independent_queue_resource_predecessor(name, raw)
+                syntax_owner = proof._calculation_syntax_owner_certificate(name)
+                if syntax_owner is not None:
+                    resource = syntax_owner[1]
                 predecessor = current if resource is None else resource
                 self.assertIn(predecessor, pins, name)
                 self.assertEqual(proof.reviewed_execution_source_sha256(name, current), pins[predecessor])
@@ -87,6 +90,23 @@ class OptimizerExecutionEquivalenceTests(unittest.TestCase):
                              sha256(mutate).hexdigest())
             self.assertNotEqual(proof._reviewed_source_group('portfolio_candidates')['current'][name],
                                 contracts._source_content_attestation(mutate, is_python=True)[1])
+
+    def test_calculation_owner_extraction_requires_entire_helper_and_provider(self):
+        owner = (ROOT / 'services/research/oracle_artifact_contract.py').read_bytes()
+        helper = (ROOT / 'core/source_calculation_syntax.py').read_bytes()
+        self.assertIsNotNone(proof._calculation_syntax_owner_predecessor(owner, helper))
+        for mutation in (
+            helper + b'\n_UNKNOWN_HELPER_GLOBAL = True\n',
+            helper.replace(b'return payload, canonical_json_sha256(payload)', b'return payload, "0" * 64'),
+        ):
+            self.assertIsNone(proof._calculation_syntax_owner_predecessor(owner, mutation))
+        self.assertIsNone(proof._calculation_syntax_owner_predecessor(
+            owner + b'\n_UNKNOWN_SOURCE_SCOPE = True\n', helper))
+
+    def test_calculation_source_aliases_share_one_low_level_owner(self):
+        from core import source_calculation_syntax as owner
+        self.assertIs(contracts._CalculationSyntax, owner._CalculationSyntax)
+        self.assertIs(contracts._syntax_payload, owner._syntax_payload)
 
     def test_complete_group_reconstructs_formal_zip_predecessor(self):
         with patch.object(proof, '_OPTIMIZER_EXECUTION_REVIEW_ENABLED', True):

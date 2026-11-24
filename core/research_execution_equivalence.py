@@ -379,10 +379,73 @@ def _independent_queue_resource_certificate(relative: str):
     return None if predecessor is None else (sha256(raw).hexdigest(), predecessor, raw)
 
 
+@lru_cache(maxsize=32)
+def _calculation_syntax_owner_predecessor(content: bytes, helper_content: bytes) -> str | None:
+    """Reinsert the unchanged low-level syntax owner into its full predecessor."""
+    import ast
+    from hashlib import sha256
+    def fingerprint(node):
+        return sha256(ast.dump(canonical_ast_schema(node), annotate_fields=True,
+                               include_attributes=False).encode("utf-8")).hexdigest()
+    try:
+        tree, helper = ast.parse(content), ast.parse(helper_content)
+    except (SyntaxError, UnicodeDecodeError):
+        return None
+    if fingerprint(helper) != "7aeb457ca1adfa64fcf7aa9c926650858f607a92670fd4330673927709f49aef":
+        return None
+    imports = [node for node in tree.body if isinstance(node, ast.ImportFrom)
+               and node.module == "core.source_calculation_syntax" and node.level == 0]
+    if (len(imports) != 1 or [(item.name, item.asname) for item in imports[0].names] != [
+            ("_CalculationSyntax", None), ("_syntax_payload", None),
+            ("calculation_syntax_attestation", None)]):
+        return None
+    original_definitions = [node for node in helper.body
+                            if isinstance(node, (ast.ClassDef, ast.FunctionDef))
+                            and node.name in {"_CalculationSyntax", "_syntax_payload"}]
+    if len(original_definitions) != 2:
+        return None
+    position = tree.body.index(imports[0])
+    tree.body[position:position + 1] = original_definitions
+    replaced = 0
+    expected = ast.parse("return calculation_syntax_attestation(parsed)").body[0]
+    for function in tree.body:
+        if isinstance(function, ast.FunctionDef) and function.name == "_source_content_attestation":
+            for statement in function.body:
+                if (isinstance(statement, ast.If) and isinstance(statement.test, ast.Name)
+                        and statement.test.id == "is_python" and statement.body
+                        and fingerprint(statement.body[-1]) == fingerprint(expected)):
+                    statement.body[-1] = ast.parse(
+                        "payload = _syntax_payload(_CalculationSyntax().visit(parsed))"
+                    ).body[0]
+                    replaced += 1
+    if (replaced != 1 or fingerprint(tree) !=
+            "a8b90adf67e9853881d1385ded7ed24eaabdeaccd06aa3e4d79b06261456ae47"):
+        return None
+    return ("d4abc57ae1def8e7b88a30d4398a7dceffd6d0d81a12050d0dedca1dc1940440"
+            if b"\r\n" in content else
+            "62f248fccb421a376c70dd2604422f1aa8ac845cf6ec122558ec673c876ed125")
+
+
+def _calculation_syntax_owner_certificate(relative: str):
+    from hashlib import sha256
+    from pathlib import Path
+    if relative != "services/research/oracle_artifact_contract.py":
+        return None
+    root = Path(__file__).resolve().parents[1]
+    raw = (root / relative).read_bytes()
+    predecessor = _calculation_syntax_owner_predecessor(
+        raw, (root / "core/source_calculation_syntax.py").read_bytes(),
+    )
+    return None if predecessor is None else (sha256(raw).hexdigest(), predecessor)
+
+
 def reviewed_execution_source_sha256(relative: str, actual: str) -> str:
     resource = _independent_queue_resource_certificate(relative)
     if resource is not None and actual == resource[0]:
         actual = resource[1]
+    syntax_owner = _calculation_syntax_owner_certificate(relative)
+    if syntax_owner is not None and actual == syntax_owner[0]:
+        actual = syntax_owner[1]
     optimizer_previous = _reviewed_optimizer_execution_sha256(relative, actual)
     if optimizer_previous != actual:
         return optimizer_previous
@@ -1226,8 +1289,9 @@ def _reviewed_source_group(scope: str):
             continue
         certificate = _independent_queue_resource_certificate(relative)
         if certificate is not None:
-            from services.research.oracle_artifact_contract import _source_content_attestation
-            current[relative] = _source_content_attestation(certificate[2], is_python=True)[1]
+            import ast
+            from core.source_calculation_syntax import calculation_syntax_attestation
+            current[relative] = calculation_syntax_attestation(ast.parse(certificate[2]))[1]
     return {**proof, "current": current}
 
 

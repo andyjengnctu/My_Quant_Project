@@ -1,11 +1,13 @@
 """Execution-only invariants for independent canonical producer scheduling."""
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
 from contextlib import ExitStack
 import io
 import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import Event
+from types import SimpleNamespace
 import time
 import unittest
 from unittest.mock import Mock, patch
@@ -22,7 +24,6 @@ class IndependentSeedFoldQueueTests(unittest.TestCase):
                 "OPTIMIZER_INDEPENDENT_SEED_FOLD_GLOBAL_WORKERS": "2"}), 2)
 
     def test_worker_environment_replaces_and_restores_each_seed_snapshot(self):
-        from services.optimizer import outer_rolling_oos
         keys = ("OPTIMIZER_TEST_SEED", "OPTIMIZER_TEST_STALE", "BREAKOUT_QUALITY_BINARY_PIT_SCORES")
         observations = []
         def observe(task):
@@ -30,18 +31,17 @@ class IndependentSeedFoldQueueTests(unittest.TestCase):
             return {"seed": task["seed"]}
         with patch.dict(os.environ, {keys[0]: "ambient", keys[1]: "stale"}, clear=True):
             before = dict(os.environ)
-            with patch.object(outer_rolling_oos, "_run_outer_rolling_oos_fold_task", side_effect=observe):
-                for seed, extra in ((11, {keys[2]: "first.csv"}), (22, {})):
-                    settings = OptimizerExecutionSettings.from_environ({keys[0]: str(seed), **extra})
-                    self.assertEqual(queue._execute_isolated_fold({"seed": seed, "execution_settings": settings}), {"seed": seed})
-                    self.assertEqual(dict(os.environ), before)
+            for seed, extra in ((11, {keys[2]: "first.csv"}), (22, {})):
+                settings = OptimizerExecutionSettings.from_environ({keys[0]: str(seed), **extra})
+                self.assertEqual(queue._execute_isolated_fold(observe, {"seed": seed, "execution_settings": settings}), {"seed": seed})
+                self.assertEqual(dict(os.environ), before)
         self.assertEqual(observations, [("11", None, "first.csv"), ("22", None, None)])
 
     def test_adapter_uses_canonical_fold_worker_and_preserves_results(self):
         from services.optimizer.outer_rolling_oos import _run_outer_rolling_oos_fold_task
         broker = Mock()
-        broker.run_fold.side_effect = lambda task: {"seed": task["seed"]}
-        with queue._SharedFoldExecutor(broker, 2) as executor:
+        broker.run_fold.side_effect = lambda function, task: {"seed": task["seed"]}
+        with queue._SharedFoldExecutor(broker, 2, _run_outer_rolling_oos_fold_task) as executor:
             results = [executor.submit(_run_outer_rolling_oos_fold_task, {"seed": seed}) for seed in (9, 4)]
             self.assertEqual([future.result() for future in results], [{"seed": 9}, {"seed": 4}])
             with self.assertRaises(ValueError):
@@ -51,7 +51,7 @@ class IndependentSeedFoldQueueTests(unittest.TestCase):
     def test_adapter_failure_aborts_only_its_broker(self):
         broker = Mock()
         with self.assertRaisesRegex(RuntimeError, "fold failed"):
-            with queue._SharedFoldExecutor(broker, 1):
+            with queue._SharedFoldExecutor(broker, 1, str):
                 raise RuntimeError("fold failed")
         broker.shutdown.assert_called_once_with(abort=True)
 
@@ -59,7 +59,7 @@ class IndependentSeedFoldQueueTests(unittest.TestCase):
         entered = Event()
         release = Event()
         seen = []
-        def execute(task):
+        def execute(function, task):
             seen.append(task["seed"])
             entered.set()
             release.wait(2)
@@ -69,8 +69,8 @@ class IndependentSeedFoldQueueTests(unittest.TestCase):
         with patch.object(queue, "_execute_isolated_fold", side_effect=execute):
             broker.acquire_finalization()
             with ThreadPoolExecutor(max_workers=2) as clients:
-                first = clients.submit(broker.run_fold, {"seed": 1})
-                second = clients.submit(broker.run_fold, {"seed": 2})
+                first = clients.submit(broker.run_fold, str, {"seed": 1})
+                second = clients.submit(broker.run_fold, str, {"seed": 2})
                 self.assertFalse(entered.wait(.03), "Finalization must consume the sole heavy slot")
                 broker.release_finalization()
                 self.assertTrue(entered.wait(2))
@@ -85,14 +85,14 @@ class IndependentSeedFoldQueueTests(unittest.TestCase):
             broker = queue._FoldBroker(1)
         broker.acquire_finalization()
         with ThreadPoolExecutor(max_workers=1) as clients:
-            waiting = clients.submit(broker.run_fold, {"seed": 1})
+            waiting = clients.submit(broker.run_fold, str, {"seed": 1})
             with patch("services.optimizer.outer_rolling_parallel_runner._cancel_parallel_fold_executor_after_failure") as cancel:
                 broker.shutdown(abort=True)
                 cancel.assert_called_once_with(broker._pool, set())
             with self.assertRaisesRegex(RuntimeError, "queue is closed"):
                 waiting.result(timeout=2)
         with self.assertRaisesRegex(RuntimeError, "queue is closed"):
-            broker.run_fold({"seed": 2})
+            broker.run_fold(str, {"seed": 2})
 
     def test_progress_counts_same_fold_in_different_seeds_separately(self):
         tasks = [{"optimizer_seed": seed, "fold_idx": 1, "fold_count": 2, "queue_status": "RUNNING"} for seed in (3, 8)]
@@ -139,6 +139,49 @@ class IndependentSeedFoldQueueTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "broker startup"):
                 queue.run_independent_optimizer_producers_shared_fold_queue(str, [{}], max_workers=1)
         manager.shutdown.assert_called_once()
+
+    def test_owned_worker_health_detects_abrupt_zero_and_nonzero_exits(self):
+        for code in (0, 73):
+            owned = SimpleNamespace(_processes={1: SimpleNamespace(exitcode=code)})
+            with self.assertRaisesRegex(BrokenProcessPool, f"exitcode={code}"):
+                queue._raise_if_owned_worker_exited(owned, role="producer coordinator")
+        queue._raise_if_owned_worker_exited(
+            SimpleNamespace(_processes={1: SimpleNamespace(exitcode=None)}), role="producer coordinator")
+
+    def test_unresolved_fold_future_cannot_hide_a_dead_owned_worker(self):
+        pool = Mock()
+        pool._processes = {1: SimpleNamespace(exitcode=73)}
+        pool.submit.return_value = Future()
+        with patch.object(queue, "ProcessPoolExecutor", return_value=pool), patch.object(queue, "_PROCESS_HEALTH_POLL_SEC", .001):
+            broker = queue._FoldBroker(1)
+            with self.assertRaisesRegex(BrokenProcessPool, "fold worker.*exitcode=73"):
+                broker.run_fold(str, {"seed": 1})
+        self.assertEqual(broker.progress()[0]["queue_status"], "FAILED")
+        self.assertEqual(broker._active, 0)
+        broker.shutdown()
+
+    def test_fold_timeout_exception_is_not_mistaken_for_health_poll_timeout(self):
+        pool = Mock()
+        future = Future()
+        future.set_exception(TimeoutError("real fold timeout"))
+        pool.submit.return_value = future
+        with patch.object(queue, "ProcessPoolExecutor", return_value=pool):
+            broker = queue._FoldBroker(1)
+            with self.assertRaisesRegex(TimeoutError, "real fold timeout"):
+                broker.run_fold(str, {"seed": 1})
+        broker.shutdown()
+
+    def test_success_at_health_poll_boundary_is_not_reported_as_fold_timeout(self):
+        pool = Mock()
+        future = Mock()
+        future.result.side_effect = [TimeoutError(), {"seed": 1}]
+        future.done.return_value = True
+        pool.submit.return_value = future
+        with patch.object(queue, "ProcessPoolExecutor", return_value=pool):
+            broker = queue._FoldBroker(1)
+            self.assertEqual(broker.run_fold(str, {"seed": 1}), {"seed": 1})
+        self.assertEqual(broker.progress()[0]["queue_status"], "DONE")
+        broker.shutdown()
 
     def test_coordinator_logs_do_not_interleave_console_and_restores_context(self):
         broker = Mock()
