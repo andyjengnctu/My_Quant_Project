@@ -6,6 +6,7 @@ import ast
 from hashlib import sha256
 import json
 import os
+import tarfile
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -116,6 +117,19 @@ class OracleBuildAttestationTests(unittest.TestCase):
         self.source.write_bytes(b"import new\n" + original)
         (self.root / "new.py").write_text("pass\n")
         self.assertFalse(owner.inspect_oracle_build_attestation(self.root).ready)
+
+    def test_source_capture_cold_and_warm_results_cannot_mutate_cached_inventory(self):
+        with owner._SOURCE_CAPTURE_LOCK:
+            owner._SOURCE_CAPTURE_CACHE.pop(self.root.resolve(), None)
+        original = deepcopy(self.current)
+        cold = owner.capture_oracle_source_inventory(self.root)
+        cold["calculation.py"]["syntax_sha256"] = "f" * 64
+        cold["injected.py"] = dict(cold["calculation.py"])
+        warm = owner.capture_oracle_source_inventory(self.root)
+        self.assertEqual(warm, original)
+        warm["calculation.py"]["sha256"] = "e" * 64
+        warm.clear()
+        self.assertEqual(owner.capture_oracle_source_inventory(self.root), original)
 
     def test_only_comments_docstrings_and_encoding_are_structurally_neutral(self):
         payload = self.publish()
@@ -356,7 +370,18 @@ class OracleBuildAttestationTests(unittest.TestCase):
                 self.assertEqual(published_bytes.count(b"\n"), published_bytes.count(b"\r\n"))
             names = archive.namelist()
             self.assertFalse(any(owner.oracle_evidence_role(name) == "external_baseline" for name in names))
-            self.assertEqual(sum(owner.oracle_evidence_role(name) == "formal_run" for name in names), 1)
+            self.assertFalse(any(name.startswith(owner.EVIDENCE_DIRECTORY + "/") for name in names))
+            delivery = json.loads(archive.read(package_zip.ORACLE_DELIVERY_MANIFEST))
+            self.assertEqual(delivery["certificate_sha256"], sha256(published_bytes).hexdigest())
+            sidecar = package.parent / delivery["archive"]
+            self.assertEqual(sha256(sidecar.read_bytes()).hexdigest(), delivery["sha256"])
+            self.assertEqual(delivery["artifacts"], attestation["evidence_artifacts"])
+            with tarfile.open(sidecar, "r:xz") as evidence:
+                self.assertEqual(set(evidence.getnames()), set(attestation["evidence_artifacts"]))
+                self.assertEqual(sum(owner.oracle_evidence_role(name) == "formal_run" for name in evidence.getnames()), 1)
+                self.assertFalse(set(old_archives).intersection(evidence.getnames()))
+                for name, record in candidate["evidence_files"].items():
+                    self.assertEqual(evidence.extractfile(name).read(), Path(record["path"]).read_bytes())
             self.assertFalse(set(old_archives).intersection(names))
             with TemporaryDirectory(prefix="oracle_unpacked_") as extracted:
                 archive.extractall(extracted)
@@ -364,6 +389,12 @@ class OracleBuildAttestationTests(unittest.TestCase):
                 status = owner.inspect_oracle_build_attestation(extracted)
                 self.assertTrue(status.ready, status.reason)
                 self.assertEqual(status.differences, ())
+                with tarfile.open(sidecar, "r:xz") as evidence:
+                    evidence.extractall(extracted, filter="data")
+                restored_candidate = owner.prepare_oracle_build_candidate(extracted)
+                self.assertEqual(restored_candidate["equivalence_evidence"]["kind"], "unchanged_sources")
+                for name, record in restored_candidate["evidence_files"].items():
+                    self.assertEqual(sha256(Path(record["path"]).read_bytes()).hexdigest(), record["sha256"])
 
 
 if __name__ == "__main__":

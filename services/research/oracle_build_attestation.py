@@ -133,7 +133,7 @@ admission. The small cache saves repeated AST traversal for a Target matrix.
         except FileNotFoundError:
             continue
     with _SOURCE_CAPTURE_LOCK:
-        _SOURCE_CAPTURE_CACHE[root] = (dict(observed), result)
+        _SOURCE_CAPTURE_CACHE[root] = (dict(observed), {name: dict(record) for name, record in result.items()})
         _SOURCE_CAPTURE_CACHE.move_to_end(root)
         while len(_SOURCE_CAPTURE_CACHE) > 8:
             _SOURCE_CAPTURE_CACHE.popitem(last=False)

@@ -72,6 +72,25 @@ class OracleNumericalSourceTests(TestCase):
         sources[helper] = None
         with self.assertRaisesRegex(ValueError, "local import is missing"):
             self.parts(sources)
+        # Reusing cached lexical facts must re-resolve the new reader's
+        # missing/available module, even after a failed lookup at this path.
+        sources[helper] = b"def numerical_value(value):\n    return float(value)\n"
+        self.assertEqual(canonical_json_sha256(projected), canonical_json_sha256(self.parts(sources)))
+
+    def test_cached_reader_bytes_and_returned_projection_remain_isolated(self):
+        owner = "core/order_lot_policy.py"
+        original = self.original[owner]
+        changed = original.replace(b"return price_to_milli(limit_price) * qty_int",
+                                   b"return price_to_milli(limit_price) + qty_int")
+        self.assertEqual(len(original), len(changed))
+        self.assertNotEqual(original, changed)
+        first = self.parts({})
+        first[owner] = "caller-local mutation"
+        del first["core/native_optimizer_hotpath.c"]
+        alternate_reader = self.parts({owner: changed})
+        self.assertNotEqual(canonical_json_sha256(self.baseline), canonical_json_sha256(alternate_reader))
+        restored_reader = self.parts({owner: original})
+        self.assertEqual(canonical_json_sha256(self.baseline), canonical_json_sha256(restored_reader))
 
     def test_real_metrics_wrapper_and_new_reporting_helper_remain_numerical(self):
         owner = "services/audit/target_oracle_romd.py"

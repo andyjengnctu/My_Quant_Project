@@ -11,6 +11,7 @@ outputs/
 *.html
 *.7z
 *.zip
+*.oracle-evidence-*.tar.xz
 *.log
 
 # 忽略 Python 運行暫存檔

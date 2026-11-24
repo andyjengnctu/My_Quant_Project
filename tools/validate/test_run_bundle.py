@@ -4,8 +4,10 @@ from __future__ import annotations
 from contextlib import ExitStack, redirect_stdout
 import ast
 from copy import deepcopy
+from hashlib import sha256
 import io
 import json
+import tarfile
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -85,7 +87,13 @@ class RunBundleTests(unittest.TestCase):
         with zipfile.ZipFile(self.package) as archive:
             self.assertIn(ATTESTATION_RELATIVE_PATH, archive.namelist())
             self.assertEqual(archive.read("module.py"), self.module.read_bytes())
-            self.assertTrue(any("evidence/formal_bundle_" in name for name in archive.namelist()))
+            self.assertFalse(any("evidence/formal_bundle_" in name for name in archive.namelist()))
+            delivery = json.loads(archive.read(package_zip.ORACLE_DELIVERY_MANIFEST))
+            self.assertEqual(delivery["certificate_sha256"], sha256(archive.read(ATTESTATION_RELATIVE_PATH)).hexdigest())
+        sidecar = self.root / delivery["archive"]
+        self.assertEqual(sha256(sidecar.read_bytes()).hexdigest(), delivery["sha256"])
+        with tarfile.open(sidecar, "r:xz") as archive:
+            self.assertTrue(any("evidence/formal_bundle_" in name for name in archive.getnames()))
 
     def test_formal_failure_retains_commit_and_original_package(self):
         self.formal_rc = 3
@@ -113,12 +121,81 @@ class RunBundleTests(unittest.TestCase):
         with zipfile.ZipFile(self.package) as archive:
             self.assertNotIn("late.py", archive.namelist())
 
+    def test_finalization_preserves_level_nine_compression_for_frozen_members(self):
+        content = b"".join(f"# record={index % 193:03d} group={index % 31:02d} value={index % 47:02d}\n".encode()
+                           for index in range(20000))
+        self.module.write_bytes(content)
+        with zipfile.ZipFile(self.package, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
+            archive.write(self.module, "module.py")
+        with zipfile.ZipFile(self.package) as archive:
+            compressed_size = archive.getinfo("module.py").compress_size
+        default_level = io.BytesIO()
+        with zipfile.ZipFile(default_level, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
+            archive.writestr("module.py", content)
+        with zipfile.ZipFile(default_level) as archive:
+            self.assertGreater(archive.getinfo("module.py").compress_size, compressed_size)
+        snapshot = package_zip.freeze_package_snapshot(self.package)
+        package_zip.finalize_frozen_package(snapshot, attestation={"evidence_artifacts": {}})
+        with zipfile.ZipFile(self.package) as archive:
+            self.assertEqual(archive.read("module.py"), content)
+            self.assertEqual(archive.getinfo("module.py").compress_size, compressed_size)
+
     def test_finalization_io_failure_returns_nonzero_without_publishing(self):
         with patch.object(package_zip, "atomic_replace_with_retry", side_effect=OSError("busy")):
             self.assertEqual(self.invoke(), 1)
         self.assertEqual(self.package.read_bytes(), self.original_zip)
         self.publish.assert_not_called()
         self.assertFalse(self.package.with_suffix(".zip.certifying").exists())
+        self.assertFalse(self.package.with_suffix(".oracle-evidence.tar.xz.certifying").exists())
+
+    def test_primary_replace_failure_retains_frozen_package_and_complete_evidence(self):
+        original_replace = package_zip.atomic_replace_with_retry
+        def fail_primary(source, destination, **kwargs):
+            if Path(destination) == self.package:
+                raise OSError("primary package busy")
+            return original_replace(source, destination, **kwargs)
+        with patch.object(package_zip, "atomic_replace_with_retry", side_effect=fail_primary):
+            self.assertEqual(self.invoke(), 1)
+        self.assertEqual(self.package.read_bytes(), self.original_zip)
+        self.publish.assert_not_called()
+        sidecars = list(self.root.glob("*.oracle-evidence-*.tar.xz"))
+        self.assertEqual(len(sidecars), 1)
+        with tarfile.open(sidecars[0], "r:xz") as archive:
+            for name, record in self.candidate["evidence_files"].items():
+                self.assertEqual(archive.extractfile(name).read(), Path(record["path"]).read_bytes())
+        self.assertFalse(self.package.with_suffix(".zip.certifying").exists())
+        self.assertFalse(self.package.with_suffix(".oracle-evidence.tar.xz.certifying").exists())
+
+    def test_solid_evidence_archive_shares_repeated_bytes_without_removing_records(self):
+        payload = b"".join(sha256(str(index).encode()).hexdigest().encode() + b"\n" for index in range(6000))
+        names = [f"{EVIDENCE_DIRECTORY}/baseline_parity.json", f"{EVIDENCE_DIRECTORY}/current_parity.json"]
+        contents = {names[0]: b"baseline\r\n" + payload, names[1]: b"current\n" + payload}
+        archive_path = self.root / "evidence.tar.xz"
+        digest = package_zip._write_oracle_evidence_archive(archive_path, contents)
+        separate = io.BytesIO()
+        with zipfile.ZipFile(separate, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
+            for name, data in contents.items():
+                archive.writestr(name, data)
+        self.assertLess(archive_path.stat().st_size, len(separate.getvalue()) * 0.75)
+        self.assertEqual(digest, sha256(archive_path.read_bytes()).hexdigest())
+        with tarfile.open(archive_path, "r:xz") as archive:
+            self.assertEqual(set(archive.getnames()), set(contents))
+            for name, data in contents.items():
+                self.assertEqual(archive.extractfile(name).read(), data)
+
+    def test_archive_moves_matching_evidence_without_collecting_sidecars_as_source(self):
+        self.package_snapshot()
+        sidecar = self.root / f"source.oracle-evidence-{'a' * 16}.tar.xz"
+        sidecar.write_bytes(b"complete evidence retained")
+        unrelated = self.root / f"other.oracle-evidence-{'b' * 16}.tar.xz"
+        unrelated.write_bytes(b"another delivery")
+        self.assertTrue(package_zip._should_skip(Path(sidecar.name)))
+        self.assertFalse(package_zip._should_skip(Path("user_data.tar.xz")))
+        count, _ = package_zip._archive_existing_root_package_zips()
+        self.assertEqual(count, 1)
+        self.assertEqual((self.root / "arch" / sidecar.name).read_bytes(), b"complete evidence retained")
+        self.assertFalse(sidecar.exists())
+        self.assertTrue(unrelated.exists())
 
     def test_ambiguous_formal_evidence_is_rejected(self):
         self.formal_effect = lambda: (self.root / "to_chatgpt_bundle_other.zip").write_bytes(b"ambiguous")
