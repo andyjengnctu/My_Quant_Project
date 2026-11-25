@@ -19,15 +19,15 @@ def detail_lineage_read_scope():
     """Share parsed provenance within a read-only plan, then verify every marker.
 
     Long REUSE chains are shared by many files and comparison arms. This scope
-    retains only their source strings, never readiness or file-integrity results.
+    retains source strings and path facts, never artifact-readiness decisions.
     No observation survives the operation; changed or redirected markers reject
     the entire plan before its caller receives it.
     """
     if _READ_SCOPE.get() is not None:
         yield
         return
-    observed = {}
-    token = _READ_SCOPE.set(observed)
+    observed, paths = {}, {}
+    token = _READ_SCOPE.set((observed, paths))
     try:
         yield
     finally:
@@ -35,10 +35,14 @@ def detail_lineage_read_scope():
     for marker, (revision, _sources) in observed.items():
         if not clean_path(marker) or file_change_signature(marker) != revision:
             raise ValueError("REUSE 來源紀錄在檢查期間變動；請重新載入")
+    for path, (state, revision) in paths.items():
+        if _source_path_state(path) != state or file_change_signature(path) != revision:
+            raise ValueError("REUSE 明細路徑在檢查期間變動；請重新載入")
 
 
 def _read_recorded_sources(marker):
-    observed = _READ_SCOPE.get()
+    scope = _READ_SCOPE.get()
+    observed = scope[0] if scope is not None else None
     if observed is not None and marker in observed:
         return observed[marker]
     if not clean_path(marker) or not marker.is_file():
@@ -52,6 +56,19 @@ def _read_recorded_sources(marker):
     if observed is not None:
         observed[marker] = result
     return result
+
+
+def _source_path_state(path):
+    scope = _READ_SCOPE.get()
+    if scope is not None and path in scope[1]:
+        return scope[1][path][0]
+    if not clean_path(path):
+        return False, False, False
+    exists = path.is_file()
+    state = (True, exists, plain(path.lstat()) if exists else False)
+    if scope is not None:
+        scope[1][path] = (state, file_change_signature(path))
+    return state
 
 
 def compare_root(path):
@@ -111,10 +128,13 @@ def reused_detail_source(path, *, revisions=None):
             if parent.is_absolute() or PureWindowsPath(source).anchor:
                 raise ValueError("舊 REUSE 紀錄使用絕對來源路徑；保留副本，避免專案搬移後失去來源")
             path = (root / parent / path.name).absolute()
-        if (path in seen or compare_root(path) != root or not clean_path(path)):
+        if path in seen or compare_root(path) != root:
+            raise ValueError("REUSE 明細來源循環或離開正式專案路徑")
+        clean, exists, regular = _source_path_state(path)
+        if not clean:
             raise ValueError("REUSE 明細來源循環或離開正式專案路徑")
         seen.add(path)
-        if path.is_file():
-            if not plain(path.lstat()):
+        if exists:
+            if not regular:
                 raise ValueError("REUSE 明細來源不是一般檔案")
             return path

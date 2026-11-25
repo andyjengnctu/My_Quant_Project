@@ -103,6 +103,7 @@ from services.research.strategy_compare_execution import (
     run_strategy_compare_baseline_arm,
 )
 from filters.breakout_quality.strategy_compare_plan import ResolvedComparisonPlan
+from filters.breakout_quality.source_inventory import source_data_inventory_read_scope
 from filters.breakout_quality.strategy_result_state import (
     RESULT_ACTION_REUSE,
     RESULT_ACTION_WAIT,
@@ -175,6 +176,7 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
 
 
 @detail_lineage_read_scope()
+@source_data_inventory_read_scope()
 def resolve_comparison_plan(
     *,
     project_root: Path = PROJECT_ROOT,

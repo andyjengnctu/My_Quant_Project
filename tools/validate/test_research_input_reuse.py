@@ -288,6 +288,44 @@ class FileObservationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "內容已變更"):
                 source_inventory._source_content_witness(root, "reduced", inventory)
 
+    def test_source_read_scope_scans_boundaries_and_isolates_returned_inventory(self):
+        root = Path(self.tmp.name)
+        inventory = {"csv_inventory_sha256": "a" * 64}
+        with patch.object(source_inventory, "get_dataset_dir", return_value=str(root)), \
+             patch.object(source_inventory, "discover_unique_csv_inputs", return_value=([("0050", self.path)], [])), \
+             patch.object(source_inventory, "_build_source_data_inventory", side_effect=lambda *_: dict(inventory)), \
+             patch.object(source_inventory, "_source_content_witness", wraps=source_inventory._source_content_witness) as witness:
+            with source_inventory.source_data_inventory_read_scope():
+                for _ in range(16):
+                    with source_inventory.source_data_inventory_read_scope():
+                        result = source_inventory.build_source_data_inventory(root, "reduced")
+                        self.assertEqual(result, inventory)
+                        result["csv_inventory_sha256"] = "b" * 64
+            self.assertEqual(witness.call_count, 2)
+            self.assertEqual(source_inventory.build_source_data_inventory(root, "reduced"), inventory)
+            self.assertEqual(witness.call_count, 3)
+
+    def test_source_read_scope_rejects_source_rewrite_and_inventory_change(self):
+        root = Path(self.tmp.name)
+        inventory = {"csv_inventory_sha256": "a" * 64}
+        before = self.path.stat()
+        content = self.path.read_bytes()
+        with patch.object(source_inventory, "get_dataset_dir", return_value=str(root)), \
+             patch.object(source_inventory, "discover_unique_csv_inputs", return_value=([("0050", self.path)], [])), \
+             patch.object(source_inventory, "_build_source_data_inventory", side_effect=lambda *_: dict(inventory)):
+            with self.assertRaisesRegex(ValueError, "內容已變更"):
+                with source_inventory.source_data_inventory_read_scope():
+                    source_inventory.build_source_data_inventory(root, "reduced")
+                    self.path.write_bytes(b"modified")
+                    os.utime(self.path, ns=(before.st_atime_ns, before.st_mtime_ns))
+            self.path.write_bytes(content)
+            with source_inventory.source_data_inventory_read_scope():
+                self.assertEqual(source_inventory.build_source_data_inventory(root, "reduced"), inventory)
+            with self.assertRaisesRegex(ValueError, "前置檢查期間變動"):
+                with source_inventory.source_data_inventory_read_scope():
+                    source_inventory.build_source_data_inventory(root, "reduced")
+                    inventory["csv_inventory_sha256"] = "b" * 64
+
 
 class FuturePathTests(unittest.TestCase):
     def test_available_prefix_nan_and_block_boundaries_preserve_first_bad_row(self):

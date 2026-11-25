@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
+from copy import deepcopy
 import hashlib
 import json
 import logging
@@ -17,6 +20,7 @@ from core.dataset_profiles import DATASET_PROFILE_FULL, get_dataset_dir, normali
 
 SOURCE_DATA_INVENTORY_SCHEMA_VERSION = 1
 SOURCE_DATA_INVENTORY_ALGORITHM = "sha256(ticker,relative_path,size_bytes,mtime_ns)"
+_READ_SCOPE = ContextVar("source_data_inventory_read_scope", default=None)
 # This additional local observation is intentionally NOT part of the historic
 # CSV inventory identity, FIT fingerprint, or serialized research manifests.
 SOURCE_CONTENT_WITNESS_SCHEMA_VERSION = 1
@@ -424,6 +428,23 @@ def certify_existing_dataset_price_generation(project_root: str | Path,
     return published
 
 
+@contextmanager
+def source_data_inventory_read_scope():
+    """Share one source scan across a read-only plan; fully recheck before return."""
+    if _READ_SCOPE.get() is not None:
+        yield
+        return
+    observed = {}
+    token = _READ_SCOPE.set(observed)
+    try:
+        yield
+    finally:
+        _READ_SCOPE.reset(token)
+    for (root, profile), inventory in observed.items():
+        if build_source_data_inventory(root, profile) != inventory:
+            raise ValueError("來源資料在前置檢查期間變動；請重新載入")
+
+
 def build_source_data_inventory(project_root: str | Path, dataset: str, *,
                                 publish_price_manifest: bool = False) -> dict[str, Any]:
     """Preserve the legacy source identity; optionally publish its verified price SHA.
@@ -432,6 +453,10 @@ def build_source_data_inventory(project_root: str | Path, dataset: str, *,
     This source owner is used by the Dataset Producer and by a one-time
     migration of an already published, identity-matched Dataset.
     """
+    scope = _READ_SCOPE.get()
+    key = (Path(project_root).resolve(), normalize_dataset_profile_key(dataset))
+    if not publish_price_manifest and scope is not None and key in scope:
+        return deepcopy(scope[key])
     inventory = _build_source_data_inventory(project_root, dataset)
     # A full-content proof cannot be signed for a different physical source
     # revision, even when an external writer restores the old size/mtime.
@@ -442,6 +467,8 @@ def build_source_data_inventory(project_root: str | Path, dataset: str, *,
     if publish_price_manifest:
         _publish_price_manifest(project_root, dataset, inventory, price_sha,
                                 scanned_revision_sha256=before_revision)
+    elif scope is not None:
+        scope[key] = deepcopy(inventory)
     return inventory
 
 

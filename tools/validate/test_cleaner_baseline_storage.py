@@ -178,6 +178,24 @@ class BaselineStorageTest(unittest.TestCase):
             reads = [call for call in digest.call_args_list if Path(call.args[0]) == original]
             self.assertEqual(len(reads), 2)
 
+    def test_read_scope_rechecks_missing_intermediate_and_retained_source_paths(self):
+        original = self.publish("a", pinned=True)
+        middle = self.publish("b", source=original, pinned=True)
+        copy = self.publish("c", source=middle, pinned=True)
+        middle.unlink()
+        copy.unlink()
+        with self.assertRaisesRegex(ValueError, "明細路徑在檢查期間變動"):
+            with detail_lineage_read_scope():
+                self.assertEqual(reused_detail_source(copy), original)
+                middle.write_bytes(self.payload)
+        self.assertEqual(reused_detail_source(copy), middle)
+        middle.unlink()
+        with self.assertRaisesRegex(ValueError, "明細路徑在檢查期間變動"):
+            with detail_lineage_read_scope():
+                self.assertEqual(reused_detail_source(copy), original)
+                original.unlink()
+        self.assertIsNone(reused_detail_source(copy))
+
     def test_real_baseline_planner_replay_and_audit_use_baseline_lineage(self):
         original_write = self.write
         converted = []
