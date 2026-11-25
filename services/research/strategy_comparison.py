@@ -117,6 +117,7 @@ from filters.breakout_quality.strategy_compare_runtime import (
     _standalone_baseline_arms,
 )
 from services.research.strategy_compare_reuse import (
+    comparison_report_read_scope,
     _apply_completed_pair_dependency_waivers,
     _apply_completed_pair_frozen_score_reuse,
     _artifact_identity_sha,
@@ -180,6 +181,7 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
 @detail_lineage_read_scope()
 @source_data_inventory_read_scope()
 @score_projection_read_scope()
+@comparison_report_read_scope()
 def resolve_comparison_plan(
     *,
     project_root: Path = PROJECT_ROOT,

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
+
 from core.compare_csv_storage import DETAIL_NAMES, detail_exists
 from core.compare_csv_reader import read_detail_csv
 from core.research_orchestration import ResearchArtifactAction, ResearchArtifactPlan
@@ -9,7 +12,8 @@ from core.research_orchestration import ResearchArtifactAction, ResearchArtifact
 from core.file_integrity import (
     canonical_json_sha256,
     compute_file_sha256,
-    load_json_object_or_none as _read_json,
+    file_change_signature,
+    load_json_object_or_none as _load_report_json,
 )
 
 import os
@@ -71,6 +75,43 @@ from filters.breakout_quality.strategy_rule_policies import ALL_RULE_FILTERS_OFF
 
 PAIR_CACHE_LEGACY_SCHEMA_VERSION = 1
 PAIR_CACHE_SCHEMA_VERSION = 2
+_REPORT_READ_SCOPE = ContextVar("comparison_report_read_scope", default=None)
+
+
+@contextmanager
+def comparison_report_read_scope():
+    """Read each historical report once for a plan, then recheck its revision.
+
+    The private reuse readers treat these JSON objects as read-only. Neither
+    parsed reports nor reuse decisions survive this operation or user input.
+    Missing reports are observed too, so publication during a scan rejects it.
+    """
+    if _REPORT_READ_SCOPE.get() is not None:
+        yield
+        return
+    observed = {}
+    token = _REPORT_READ_SCOPE.set(observed)
+    try:
+        yield
+    finally:
+        _REPORT_READ_SCOPE.reset(token)
+    for path, (revision, _payload) in observed.items():
+        if file_change_signature(path) != revision:
+            raise RuntimeError("Strategy comparison report changed during inspection")
+
+
+def _read_json(path):
+    observed = _REPORT_READ_SCOPE.get()
+    if observed is None:
+        return _load_report_json(path)
+    path = Path(path).absolute()
+    if path not in observed:
+        before = file_change_signature(path)
+        payload = _load_report_json(path)
+        if file_change_signature(path) != before:
+            raise RuntimeError("Strategy comparison report changed while reading")
+        observed[path] = (before, payload)
+    return observed[path][1]
 
 def _pair_group_id(
     *,

@@ -274,7 +274,7 @@ class _UnavailableRunReceipt(Exception):
     """A failed read is absent for this call, never a reusable observation."""
 
 
-@lru_cache(maxsize=16)
+@lru_cache(maxsize=256)
 def _run_pair_integrity_record(path: Path, revision: tuple):
     """Retain only the small receipt, never the run's large result tables."""
     payload = load_json_object_or_none(path)

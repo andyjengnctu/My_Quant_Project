@@ -16,9 +16,55 @@ from filters.breakout_quality import source_inventory
 from filters.breakout_quality import strategy_score_projection as projection
 from filters.breakout_quality.ranking_score_store import _normalized_score_dates
 from services.research.oracle_numerical_sources import _Syntax
+from services.research import strategy_compare_reuse as reports
 
 
 class ResearchStatusSpeedTests(unittest.TestCase):
+    def test_report_scope_reads_each_source_once_and_releases_observations(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path=Path(temporary)/'report.json'
+            path.write_text('{"status":"COMPLETED"}',encoding='utf-8')
+            with patch.object(reports,'_load_report_json',wraps=reports._load_report_json) as read:
+                with reports.comparison_report_read_scope():
+                    for _ in range(5):
+                        self.assertEqual(reports._read_json(path),{'status':'COMPLETED'})
+                self.assertEqual(read.call_count,1)
+                self.assertIsNone(reports._REPORT_READ_SCOPE.get())
+                reports._read_json(path)
+                self.assertEqual(read.call_count,2)
+
+    def test_report_scope_rejects_changed_deleted_or_newly_published_sources(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path=Path(temporary)/'report.json'
+            for mutation in ('rewrite','delete','publish'):
+                with self.subTest(mutation=mutation):
+                    if mutation=='publish':
+                        path.unlink(missing_ok=True)
+                    else:
+                        path.write_text('{"value":1}',encoding='utf-8')
+                    with self.assertRaisesRegex(RuntimeError,'report changed during'):
+                        with reports.comparison_report_read_scope():
+                            reports._read_json(path)
+                            if mutation=='delete':
+                                path.unlink()
+                            elif mutation=='publish':
+                                path.write_text('{"value":2}',encoding='utf-8')
+                            else:
+                                stamp=path.stat();time.sleep(0.01)
+                                path.write_text('{"value":2}',encoding='utf-8')
+                                os.utime(path,ns=(stamp.st_atime_ns,stamp.st_mtime_ns))
+                    self.assertIsNone(reports._REPORT_READ_SCOPE.get())
+
+    def test_report_scope_rejects_a_change_during_read_and_clears_after_failure(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path=Path(temporary)/'report.json'
+            def publish(_path):
+                path.write_text('{}',encoding='utf-8');return None
+            with self.assertRaisesRegex(RuntimeError,'report changed while reading'):
+                with reports.comparison_report_read_scope(),patch.object(reports,'_load_report_json',side_effect=publish):
+                    reports._read_json(path)
+            self.assertIsNone(reports._REPORT_READ_SCOPE.get())
+
     def test_date_formatting_preserves_parser_values_order_missing_and_index(self):
         for values in (
             ['2020-01-01','2020-01-02','2020-01-01',None],
