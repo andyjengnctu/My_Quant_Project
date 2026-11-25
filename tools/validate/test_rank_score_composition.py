@@ -176,3 +176,50 @@ class RankScoreCompositionTests(TestCase):
                 result = robust._replay_one_unit(job)
             self.assertEqual(result["return_over_max_drawdown"], 2.0)
             self.assertTrue(all(result[key] is None for key in robust.MODEL_PREDICTION_METRIC_KEYS))
+
+    def test_post_replay_diagnostics_use_full_cohort_fusion_and_reject_raw_score(self):
+        from filters.breakout_quality.rank_score_composition import rank_composition_diagnostic_lookup
+        from filters.breakout_quality.strategy_compare_diagnostics import _strategy_selection_diagnostics
+        lookup = pd.DataFrame([
+            dict(ticker="A", signal_date="2021-01-04", breakout_quality_score=8., target_raw_r=2., target_available=True),
+            dict(ticker="B", signal_date="2021-01-04", breakout_quality_score=9., target_raw_r=np.nan, target_available=False),
+            dict(ticker="Z", signal_date="2021-01-04", breakout_quality_score=7., target_raw_r=1., target_available=True),
+        ])
+        prepared = {"scores": {("A", "2021-01-04"): .75, ("B", "2021-01-04"): .25}}
+        projected = rank_composition_diagnostic_lookup(lookup, prepared)
+        pd.testing.assert_frame_equal(projected.drop(columns="breakout_quality_score"), lookup.drop(columns="breakout_quality_score"))
+        self.assertEqual(projected.loc[0, "breakout_quality_score"], .75)
+        self.assertEqual(projected.loc[1, "breakout_quality_score"], .25)
+        self.assertTrue(pd.isna(projected.loc[2, "breakout_quality_score"]))
+        orderable = pd.DataFrame([dict(ticker="A", signal_date="2020-12-31", trade_date="2021-01-05",
+            breakout_quality_score_date="2021-01-04", breakout_quality_score=.75, breakout_quality_score_available=True)])
+        selected = pd.DataFrame([dict(ticker="A", signal_date="2020-12-31", trade_date="2021-01-05", type="買進")])
+        metrics, joined, _ = _strategy_selection_diagnostics(orderable=orderable, selected=selected, lookup=projected)
+        self.assertEqual(joined.iloc[0]["pit_breakout_quality_score"], .75)
+        self.assertFalse(metrics["future_target_used_for_runtime_sort"])
+        for invalid in (lookup, projected.assign(breakout_quality_score=.7)):
+            with self.assertRaisesRegex(ValueError, "runtime_score"):
+                _strategy_selection_diagnostics(orderable=orderable, selected=selected, lookup=invalid)
+        # The report-only Forward refresh uses the same admitted witness and guard.
+        from tempfile import TemporaryDirectory
+        from unittest.mock import Mock
+        from filters.breakout_quality import strategy_compare_diagnostics as diagnostic
+        with TemporaryDirectory() as folder:
+            root = Path(folder)
+            score_path = root / "scores.csv"
+            score_path.write_text("fixture", encoding="utf-8")
+            payload = {"metadata": dict(comparison_mode=diagnostic.COMPARISON_MODE_SCORE_RANKING,
+                score_source=diagnostic.SCORE_SOURCE_CONTINUOUS_RANKER_OOS, score_path=str(score_path),
+                experiment_profile="fixture", model_architecture="fixture", filter_id="fixture",
+                score_ranking_options={"rank_score_composition": contract()})}
+            loader = Mock(return_value=prepared)
+            with patch.object(diagnostic, "_continuous_forward_target_lookup", return_value=lookup), \
+                 patch.object(diagnostic, "detail_exists", return_value=True), \
+                 patch.object(diagnostic, "read_detail_csv", return_value=orderable), \
+                 patch.object(diagnostic.pd, "read_csv", return_value=selected), \
+                 patch.object(diagnostic, "paired_trade_r_conversion_diagnostic", return_value={}), \
+                 patch.object(diagnostic, "publish_detail_csv"):
+                self.assertTrue(diagnostic.backfill_pair_selection_diagnostics(
+                    payload, pair_dir=root, project_root=root, rank_composition_score_loader=loader))
+                loader.assert_called_once_with()
+                self.assertFalse(payload["selection_diagnostics"]["future_target_used_for_runtime_sort"])

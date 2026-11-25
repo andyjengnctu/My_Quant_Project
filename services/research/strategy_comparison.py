@@ -1283,11 +1283,15 @@ def run_strategy_comparison(
                 ),
             })
             pair_payload["metadata"] = pair_metadata
+            from services.research.strategy_compare_runtime_contract import load_strategy_rank_composition_scores
             backfill_pair_selection_diagnostics(
                 pair_payload,
                 pair_dir=pair_dir,
                 project_root=root,
                 active_trades_filename=runtime_spec["active_trades_filename"],
+                rank_composition_score_loader=lambda: load_strategy_rank_composition_scores(
+                    root=root, options=pair_metadata.get("score_ranking_options") or {},
+                    dataset=pair_metadata.get("dataset") or "full"),
             )
             backfill_pair_r_conversion_diagnostic(
                 pair_payload,

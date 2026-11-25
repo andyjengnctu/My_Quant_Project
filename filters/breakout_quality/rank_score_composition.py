@@ -29,6 +29,21 @@ def current_rank_composition_scores():
     return _ACTIVE_SCORES.get()
 
 
+def rank_composition_diagnostic_lookup(lookup, prepared_scores):
+    """Attach the admitted runtime scores without re-ranking mature target rows."""
+    if not prepared_scores or "scores" not in prepared_scores:
+        raise ValueError("Rank composition diagnostics require admitted runtime scores")
+    result = lookup.copy()
+    keys = pd.MultiIndex.from_arrays([
+        result["ticker"].astype(str),
+        pd.to_datetime(result["signal_date"], errors="raise").dt.strftime("%Y-%m-%d"),
+    ], names=("ticker", "date"))
+    values = pd.Series(prepared_scores["scores"], dtype=float)
+    # Keep the original outcome/availability fields; missing members remain NaN.
+    result["breakout_quality_score"] = values.reindex(keys).to_numpy()
+    return result
+
+
 def compose_rank_score_tables(tables, contract):
     """Intersect feature-eligible stock days, then rank each source on that cohort.
 
