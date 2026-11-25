@@ -2097,106 +2097,6 @@ def _render_robustness_execution_plan(
     if teacher_blockers:
         overall = "BLOCKED"
 
-    for arm in fixed_arms:
-        rows.append((
-            "RUN/REUSE",
-            arm.name,
-            "Legacy fixed reference",
-        ))
-    model_ids = {arm.arm_id for arm in model_arms}
-    for arm in stochastic_arms:
-        arm_states = [
-            robustness_unit_states.get((arm.arm_id, int(seed)))
-            for seed in cfg.resolved_seeds
-        ]
-        reuse_count = sum(
-            1 for state in arm_states
-            if isinstance(state, dict) and state.get("action") == RESULT_ACTION_REUSE
-        )
-        if arm_states and reuse_count == len(arm_states):
-            action = "REUSE"
-            description = f"{reuse_count}/{len(arm_states)} seed scientific results identity一致"
-        elif reuse_count:
-            action = "RESUME"
-            description = (
-                f"{reuse_count}/{len(arm_states)} seed結果REUSE；只執行其餘缺失單元"
-            )
-        elif arm.arm_id in model_ids:
-            source_ids = resolve_arm_runtime_dl_source_ids(settings, arm)
-            pending_seeds = tuple(
-                int(seed) for seed, state in zip(cfg.resolved_seeds, arm_states)
-                if not (isinstance(state, dict) and state.get("action") == RESULT_ACTION_REUSE)
-            )
-            model_reuse_count = sum(
-                all(model_source_reuse.get((str(dl_id), seed), False) for dl_id in source_ids)
-                for seed in pending_seeds
-            )
-            if model_reuse_count == len(pending_seeds):
-                action = "REUSE+REPLAY"
-                description = (
-                    f"{model_reuse_count}/{len(pending_seeds)} seed Research Rolling模型PIT分數已驗證REUSE；"
-                    "沿用同seed P16，只需新策略回放"
-                )
-            elif model_reuse_count:
-                action = "RESUME"
-                description = (
-                    f"{model_reuse_count}/{len(pending_seeds)} seed Research模型REUSE；"
-                    "其餘依fitting identity驗證後訓練／回放"
-                )
-            else:
-                action = "TRAIN+REPLAY"
-                description = (
-                    f"{len(pending_seeds)}個seed目前無合格Research模型PIT score；"
-                    "依共用fitting checkpoint先REUSE、缺失才TRAIN，再作策略回放"
-                )
-        else:
-            arm_bindings = [
-                benchmark_bindings.get((arm.arm_id, int(seed)))
-                for seed in cfg.resolved_seeds
-            ]
-            arm_bindings = [item for item in arm_bindings if isinstance(item, dict)]
-            uses_fitting_bundle = any(
-                int(item.get("fitting_seed_count") or 0) > 1
-                for item in arm_bindings
-            )
-            uses_raw_price_isolated = any(
-                str(item.get("producer_variant") or "") == "raw_price_isolated_v1"
-                for item in arm_bindings
-            )
-            if uses_fitting_bundle:
-                fitting_counts = {
-                    int(item.get("fitting_seed_count") or 0)
-                    for item in arm_bindings
-                    if int(item.get("fitting_seed_count") or 0) > 0
-                }
-                fitting_count = next(iter(fitting_counts)) if len(fitting_counts) == 1 else 0
-                fitting_trials = {
-                    int(item.get("fitting_trials_per_seed") or 0)
-                    for item in arm_bindings
-                    if int(item.get("fitting_trials_per_seed") or 0) > 0
-                }
-                trials_count = next(iter(fitting_trials)) if len(fitting_trials) == 1 else 0
-                fitting_label = (
-                    f"{fitting_count}-seed x {trials_count}-trial fitting bundle"
-                    if fitting_count > 0 and trials_count > 0
-                    else (
-                        f"{fitting_count}-seed fitting bundle"
-                        if fitting_count > 0 else "multi-seed fitting bundle"
-                    )
-                )
-                description = (
-                    f"{cfg.seed_count}個robustness replicates；每個replicate使用{fitting_label} + DL-off replay"
-                )
-            elif uses_raw_price_isolated:
-                description = (
-                    f"{cfg.seed_count}個固定benchmark seeds；同seed raw/unadjusted strategy params + DL-off replay"
-                )
-            else:
-                description = (
-                    f"{cfg.seed_count}個固定benchmark seeds；同seed strategy optimizer params + DL-off replay"
-                )
-            action = "PARAM+REPLAY"
-        rows.append((action, arm.name, description))
     training_sources = _training_source_groups(tuple(model_arms), settings=settings)
     model_source_units = tuple(
         (str(dl_id), int(seed), entries)
@@ -2292,7 +2192,7 @@ def _render_robustness_execution_plan(
     metadata_rows = (
         ("整體狀態", overall),
         ("設定檔", "config/strategy_compare.py"),
-        ("比較階段", f"{settings.profile_label} ({settings.profile_id})"),
+        ("比較階段", settings.profile_label),
         ("共同策略期間", period_text),
         ("Seed數量", cfg.seed_count),
         (
@@ -2333,10 +2233,31 @@ def _render_robustness_execution_plan(
         ),
         *tuple(pit_workload_rows),
     )
+    # AI: Only proven scientific-result states can display REUSE. An absent
+    # state stays pending while prerequisites are unresolved, even if a model
+    # score is reusable. The display does not inspect or modify any artifact.
+    seed_rows = []
+    for arm in stochastic_arms:
+        actions = []
+        for seed in cfg.resolved_seeds:
+            state = robustness_unit_states.get((arm.arm_id, int(seed)))
+            if state is not None:
+                action = str(state["action"])
+            elif overall == "BLOCKED":
+                action = "BLOCKED"
+            else:
+                action = resolve_strategy_result_state(
+                    verified_evidence=None, upstream_dependency_pending=overall != "READY",
+                ).action
+            actions.append(action)
+        seed_rows.append((arm.arm_id, tuple(actions)))
     rendered_plan = render_strategy_execution_plan_surface(
         title=f"{cfg.label} 本次執行計畫",
         metadata_rows=metadata_rows,
         action_rows=rows,
+        strategy_rows=[("RUN/REUSE", arm.arm_id, "Legacy fixed reference") for arm in fixed_arms],
+        seeds=cfg.resolved_seeds,
+        seed_rows=seed_rows,
     )
     work_plan = None
     evidence_pins = ()

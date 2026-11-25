@@ -1347,7 +1347,7 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         and 'print(f"Training Profile：{settings.experiment_profile}")' not in app_source
         and 'def _model_identity_text(value: object, *, target: str = "console")' in app_source
         and 'paint(text, "cyan"' in app_source
-        and 'def _print_model_action_status(rows)' in app_source
+        and 'def _print_model_action_status(' in app_source
         and app_source.count('_print_model_action_status(') >= 5
         and 'paint("工件狀態", "cyan"' in app_source
         and 'paint("Workflow 狀態", "cyan"' not in app_source

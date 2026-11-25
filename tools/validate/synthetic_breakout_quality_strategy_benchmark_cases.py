@@ -7,6 +7,7 @@ it does not register a second test entry or establish scientific identities.
 from __future__ import annotations
 
 from time import perf_counter
+from core.display_common import _strip_ansi
 from .synthetic_breakout_quality_support import Path, SimpleNamespace, patch, pd, tempfile, missing_teacher_artifact_fixture
 
 
@@ -679,17 +680,30 @@ def append_robustness_benchmark_plan_checks(
     }
     expected_pending_search_units = len(rolling_pending_param_truth_paths)
     expected_total_units = len(rolling_robustness.stochastic_arm_ids) * len(rolling_robustness.resolved_seeds)
+    seed_display_rows = {
+        fields[0]: fields[1:]
+        for line in _strip_ansi(rendered_robustness_plan).splitlines()
+        if (fields := line.split())
+        and fields[0] in {arm.arm_id for arm in rolling_stochastic}
+        and len(fields) == len(rolling_robustness.resolved_seeds) + 1
+    }
+    rendered_robustness_plan = "".join(rendered_robustness_plan.splitlines())
     check_true(
         "robustness_plan_surfaces_cross_profile_seed_reuse_before_pending_fixed_multiseed_work",
         len(rendered_robustness_payload.get("registered_scientific_reuse_units") or ()) == expected_reuse_units
         and f"{expected_pending_search_units} pending search units" in rendered_robustness_plan
         and f"scientific result REUSE={expected_reuse_units}/{expected_total_units} arm×replicate" in rendered_robustness_plan
-        and rendered_robustness_plan.count("PARAM+REPLAY") == sum(
-            1 for arm in rolling_stochastic
-            if not arm.dl_enabled
-            and arm.arm_id not in rolling_canonical_reuse_arm_ids
+        and set(seed_display_rows) == {arm.arm_id for arm in rolling_stochastic}
+        and all(
+            seed_display_rows[arm_id] == ["REUSE"] * len(rolling_robustness.resolved_seeds)
+            for arm_id in rolling_canonical_reuse_arm_ids
         )
-        and rendered_robustness_plan.count(" seed scientific results identity一致") == len(rolling_canonical_reuse_arm_ids)
+        and all(
+            action != "REUSE"
+            for arm_id, actions in seed_display_rows.items()
+            if arm_id not in rolling_canonical_reuse_arm_ids
+            for action in actions
+        )
         and "Strategy fitting budgets" in rendered_robustness_plan
         and "4 seeds x 300 trials" in rendered_robustness_plan
         and "8 seeds x 300 trials" not in rendered_robustness_plan

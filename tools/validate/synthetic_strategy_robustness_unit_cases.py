@@ -15,6 +15,7 @@ from tools.validate.synthetic_breakout_quality_support import missing_teacher_ar
 
 import pandas as pd
 
+from core.display_common import _strip_ansi
 from core.file_integrity import canonical_json_sha256
 from core.strategy_compare_policy import (
     get_strategy_comparison_settings, get_strategy_multi_seed_robustness_settings,
@@ -159,6 +160,11 @@ class StrategyRobustnessUnitCases(unittest.TestCase):
                                  'REUSE')
                 self.assertIn('scientific result REUSE=1/', text)
                 self.assertIn('策略結果REUSE略過=1', text)
+                seed_row = next(line.split() for line in _strip_ansi(text).splitlines()
+                                if line.split() and line.split()[0] == old_model.arm_id)
+                self.assertEqual(seed_row, [old_model.arm_id, *(
+                    'REUSE' if int(item) == seed else 'WAIT' for item in cfg.resolved_seeds
+                )])
                 self.assertTrue(contract_builder.called and model_discovery.called)
                 signed_param_identities = contract_builder.call_args.kwargs[
                     'benchmark_parameter_identities'

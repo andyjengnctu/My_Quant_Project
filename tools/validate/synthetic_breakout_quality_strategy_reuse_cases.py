@@ -1641,7 +1641,7 @@ def append_model_robustness_pit_strategy_reuse_contract_checks(*, results, case_
                 robust, "inspect_reusable_model_research_rolling_score",
                 return_value=(None, "score/manifest missing"),
             ):
-                missing_plan, _missing_state = robust._render_robustness_execution_plan(
+                missing_plan, missing_state = robust._render_robustness_execution_plan(
                     cfg=cfg, settings=settings, status=status,
                     fixed_arms=fixed_arms, stochastic_arms=strategy_arms,
                 )
@@ -1667,15 +1667,21 @@ def append_model_robustness_pit_strategy_reuse_contract_checks(*, results, case_
             )
         }
         expected_reused_scores = len(required_source_ids) * len(cfg.resolved_seeds)
+        reused_plan = "".join(reused_plan.splitlines())
+        missing_plan = "".join(missing_plan.splitlines())
         add_check(
             results, "synthetic_breakout_quality", case_id,
             "active_arm_plan_reports_model_reuse_and_only_replays_new_strategy_scientific_units",
             True, reused_state["overall_status"] == "READY"
             and required_source_ids == grouped_source_ids
-            and reused_plan.count("REUSE+REPLAY") == len(model_replay_arms)
+            and len(reused_state["model_source_artifacts"]) == expected_reused_scores
+            and all(
+                state["action"] != "REUSE"
+                for state in reused_state["robustness_unit_states"].values()
+            )
             and "0 待PIT／checkpoint確認" in reused_plan
             and f"Research模型score REUSE={expected_reused_scores}" in reused_plan
-            and missing_plan.count("TRAIN+REPLAY") == len(model_replay_arms)
+            and not missing_state["model_source_artifacts"]
             and f"{expected_reused_scores} 待PIT／checkpoint確認" in missing_plan
             and "Research模型score REUSE=0" in missing_plan,
         )

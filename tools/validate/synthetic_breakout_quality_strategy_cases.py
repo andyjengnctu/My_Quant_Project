@@ -3094,60 +3094,49 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
         == shared_report_style.markdown_signal("INVALID READY", shared_report_style.SIGNAL_NEGATIVE, bold=True),
     )
 
-    # User-approved execution-plan display: one output row per action, with
-    # full-width item and description cells. Neither ellipsis nor wrapping is
-    # permitted; the shared renderer covers single-seed and robustness plans.
+    # User-approved execution-plan display: C IDs first, compact completed
+    # dependencies, and full actionable reasons wrapped to the console width.
     from core.console_report import render_table
     from core.display_common import _display_width, _strip_ansi
     from services.research.strategy_comparison import render_strategy_execution_plan_surface
 
-    full_item = "C99 Min MR-13AO Exact K/R0 / Broker-Cash Rolling 完整項目"
     full_reason = (
         "由canonical Optimizer parameter service解析／建立／接續策略參數工件；"
         "同一個P16參數來源必須合法REUSE；正式測試比較不得加入額外模型校準"
     )
     long_identity = "param-benchmark:seed=693545351:profile=full-horizon:" + "z" * 80
-    very_long_reason = "中文完整文字" * 24
     with patch(
-        "services.research.strategy_comparison.render_table",
-        wraps=render_table,
+        "core.research_status_display.render_table", wraps=render_table,
     ) as render_spy:
         complete_plan = render_strategy_execution_plan_surface(
             title="本次執行計畫",
             metadata_rows=(("整體狀態", "PREPARABLE"),),
+            strategy_rows=[("RUN", "C99", "new replay")],
             action_rows=[
-                ("RUN", full_item, full_reason),
-                ("REUSE", long_identity, very_long_reason),
+                ("BUILD", "P16", full_reason),
+                ("REUSE", long_identity, "已驗證的前置工件"),
                 ("REPORT", "跨\n行項目", "跨\r\n行說明"),
             ],
         )
     render_args = render_spy.call_args
-    table_lines = complete_plan.splitlines()[-5:]
-    expected_rows = (
-        ("RUN", full_item, full_reason),
-        ("REUSE", long_identity, very_long_reason),
-        ("REPORT", "跨 行項目", "跨 行說明"),
-    )
     check_true(
-        "strategy_execution_plan_full_text_single_line_without_truncation_or_wrapping",
+        "strategy_execution_plan_uses_short_ids_and_preserves_full_pending_reasons",
         render_args is not None
-        and render_args.args[0] == ("動作", "項目", "說明")
+        and render_args.args[0] == ("項目", "動作", "原因")
         and tuple(
-            (_strip_ansi(str(action)), item, desc)
-            for action, item, desc in render_args.args[1]
-        ) == expected_rows
-        and "max_column_widths" not in render_args.kwargs
-        and len(table_lines) == len(expected_rows) + 2
-        and "…" not in complete_plan
-        and all("\n" not in cell and "\r" not in cell for row in render_args.args[1] for cell in row[1:])
-        and all(item in line and desc in line for line, (_action, item, desc) in zip(table_lines[2:], expected_rows))
-        and "本次執行計畫" in complete_plan,
+            (item, _strip_ansi(str(action)), desc)
+            for item, action, desc in render_args.args[1]
+        ) == (("P16", "BUILD", full_reason), ("跨 行項目", "REPORT", "跨 行說明"))
+        and long_identity not in complete_plan
+        and "前置／其他工作：BUILD 1 / REUSE 1 / REPORT 1" in _strip_ansi(complete_plan)
+        and any(line.split() == ["C99", "RUN"] for line in _strip_ansi(complete_plan).splitlines()),
     )
     check_true(
-        "strategy_execution_plan_columns_use_natural_full_display_width",
+        "strategy_execution_plan_wraps_actionable_details_to_console_width",
         render_args is not None
-        and _display_width(table_lines[0]) == _display_width(table_lines[1])
-        and all(_display_width(line) == _display_width(table_lines[0]) for line in table_lines[2:]),
+        and render_args.kwargs["max_column_widths"] == (28, 16, 52)
+        and max(_display_width(line) for line in complete_plan.splitlines()) <= 100
+        and "…" not in complete_plan,
     )
 
 

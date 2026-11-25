@@ -28,6 +28,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from core.research_execution_resources import CPU_LANES_ENV, research_cpu_lanes
+from core.research_status_display import render_action_details, render_seed_status_matrix
 from config.breakout_quality import (
     BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_MENU_LABEL,
 )
@@ -2315,22 +2316,55 @@ def _seed_progress_text(seed: int, index: int, total: int) -> str:
     )
 
 
-def _print_model_action_status(rows) -> None:
+def _print_model_action_status(rows, *, seeds=(), seed_readiness=()) -> None:
     """Render one canonical model workflow status table for [1]～[6]."""
 
+    rows = tuple(rows)
+    print(render_section("模型狀態"))
+    if seeds:
+        matrix = []
+        detail_groups = {}
+        for row, readiness in zip(rows, seed_readiness, strict=True):
+            model_id = _model_identity_text(row[0])
+            by_seed = {int(item.seed): item.readiness for item in readiness.seeds}
+            if len(by_seed) != len(readiness.seeds) or set(by_seed) != set(seeds):
+                raise ValueError("Model status display requires the complete benchmark seed plan")
+            matrix.append((model_id, tuple(by_seed[int(seed)].display_action for seed in seeds)))
+            for index, seed in enumerate(seeds, 1):
+                item = by_seed[int(seed)]
+                if item.display_action != "REUSE" or item.display_reason not in {"", "READY"}:
+                    group = detail_groups.setdefault((item.display_action, item.display_reason), {})
+                    group.setdefault(str(row[0]), []).append(f"S{index}")
+        print(render_seed_status_matrix("模型", seeds=seeds, rows=matrix))
+        details = []
+        for (action, reason), models in detail_groups.items():
+            unit_count = sum(len(labels) for labels in models.values())
+            if unit_count == len(rows) * len(seeds):
+                details.append((action, "全部模型／Seed", reason))
+            elif len(models) > 1 and unit_count == sum(
+                decisions.count(action) for _model_id, decisions in matrix
+            ):
+                details.append((action, f"表內 {action}（{unit_count} 格）", reason))
+            else:
+                details.extend((action, f"{model_id} {'/'.join(labels)}", reason)
+                               for model_id, labels in models.items())
+        if details:
+            print(render_action_details(details, title="模型狀態說明"))
+        return
     styled_rows = []
+    details = []
     for model_id, profile_name, action, reason in rows:
         styled_rows.append((
             _model_identity_text(model_id),
-            str(profile_name),
             styled_workflow_status(str(action)),
-            str(reason),
         ))
-    print(render_section("模型狀態"))
+        if action != "REUSE" or reason not in {"", "READY"}:
+            details.append((action, str(model_id), reason))
     print(render_table(
-        ("Model", "Profile", "Action", "Reason"), styled_rows,
-        alignments=("left", "left", "left", "left"),
+        ("模型", "動作"), styled_rows,
     ))
+    if details:
+        print(render_action_details(details, title="模型狀態說明"))
 
 
 def _print_workflow_status(settings=None) -> None:
@@ -5377,13 +5411,6 @@ def _run_configured_model_robustness(
     mode_label = "Rolling OOS" if rolling else "Forward OOS"
     if _show_plan:
         print("\n" + render_title(f"{mode_label} Robustness 模型測試"))
-        print(
-            "Benchmark seeds："
-            + " / ".join(
-                _seed_progress_text(seed, index, len(seeds))
-                for index, seed in enumerate(seeds, start=1)
-            )
-        )
 
     with source_data_inventory_read_scope():
         plans = []
@@ -5398,7 +5425,7 @@ def _run_configured_model_robustness(
             plans.append((str(model_id), settings, seed_states, readiness))
 
     if _show_plan:
-        _print_model_action_status(rows)
+        _print_model_action_status(rows, seeds=seeds, seed_readiness=tuple(plan[3] for plan in plans))
     if confirm:
         if not _confirm_model_test_workflow():
             return 0

@@ -40,7 +40,7 @@ class ResearchMenuConfirmationTests(unittest.TestCase):
                         stack.enter_context(patch.object(model,'_resolve_continuous_model_readiness',return_value=ready))
                         stack.enter_context(patch.object(model,'_plan_model_robustness_snapshot',return_value=((),ready)))
                         stack.enter_context(patch.object(model,'plan_fit_origin_repairs',return_value=((),())))
-                        stack.enter_context(patch.object(model,'_print_model_action_status',side_effect=lambda rows: print('REUSE status')))
+                        stack.enter_context(patch.object(model,'_print_model_action_status',side_effect=lambda rows, **_kwargs: print('REUSE status')))
                         render=stack.enter_context(patch.object(model,'_render_standard_model_comparison'))
                         producer=stack.enter_context(patch.object(model,'_prepare_model_robustness_seed_batch'))
                         def confirm(_prompt):

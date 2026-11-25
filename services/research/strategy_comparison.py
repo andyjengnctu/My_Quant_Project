@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 from core.compare_csv_lineage import detail_lineage_read_scope
+from core.research_status_display import (
+    render_action_details, render_dependency_summary, render_plan_metadata, render_seed_status_matrix,
+)
 from filters.breakout_quality.strategy_score_projection import score_projection_read_scope
 from core.compare_csv_storage import comparison_publication_lock, copy_reused_detail
 from core.research_orchestration import ResearchArtifactAction, ResearchArtifactPlan
@@ -400,44 +403,30 @@ def render_status(
     )
 
 
-def _single_line_execution_plan_cell(value: object) -> str:
-    """Keep all visible cell content on one output line, without abbreviation."""
-
-    return " ".join(str(value).splitlines())
-
-
 def render_strategy_execution_plan_surface(
     *,
     title: str,
     metadata_rows: tuple[tuple[object, object], ...],
     action_rows: list[tuple[object, object, object]],
+    strategy_rows=(),
+    seeds=(),
+    seed_rows=(),
 ) -> str:
-    """Render full execution-plan labels/reasons in one physical line per action."""
-
-    styled_metadata = []
-    for label, value in metadata_rows:
-        rendered = value
-        if str(label) == "整體狀態":
-            rendered = styled_workflow_status(value)
-        styled_metadata.append((label, rendered))
-    styled_actions = [
-        (
-            styled_workflow_status(action),
-            _single_line_execution_plan_cell(item),
-            _single_line_execution_plan_cell(description),
-        )
-        for action, item, description in action_rows
-    ]
-    return "\n\n".join(
-        (
-            render_title(title),
-            render_key_values(tuple(styled_metadata)),
-            render_table(
-                ("動作", "項目", "說明"),
-                styled_actions,
-            ),
-        )
-    )
+    """Show C IDs and seed decisions first; summarize already reused dependencies."""
+    parts = [render_title(title)]
+    if seeds:
+        parts.append(render_seed_status_matrix("策略", seeds=seeds, rows=seed_rows))
+    if strategy_rows:
+        parts.append(render_table(("策略", "動作"), [
+            (identity, styled_workflow_status(action)) for action, identity, _ in strategy_rows
+        ]))
+        details = render_action_details([
+            row for row in strategy_rows if row[0] not in {"REUSE", "RUN"} and row[2]
+        ], title="策略狀態說明")
+        if details:
+            parts.append(details)
+    parts.extend((render_plan_metadata(metadata_rows), render_dependency_summary(action_rows)))
+    return "\n\n".join(part for part in parts if part)
 
 def render_execution_plan(
     *,
@@ -462,21 +451,18 @@ def render_execution_plan(
     replay_cache = dict(status.get("replay_cache") or {})
     cached_pairs = dict(replay_cache.get("pairs") or {})
     arm_states = dict(replay_cache.get("arm_states") or {})
+    strategy_rows = []
     for arm in _display_ordered_strategy_arms(settings):
         if blocked:
-            rows.append(("NOT_RUN", arm.arm_id, f"{arm.name}｜上游前置工件BLOCKED，本次不執行"))
+            strategy_rows.append(("NOT_RUN", arm.arm_id, "上游前置工件BLOCKED，本次不執行"))
             continue
         state = result_state_from_mapping(dict(arm_states[arm.arm_id]))
         action = state.action
         if action == RESULT_ACTION_REUSE:
-            description = (
-                f"{arm.name}｜重用identity一致的completed scientific result"
-            )
-        elif action == RESULT_ACTION_WAIT:
-            description = f"{arm.name}｜{state.reason}"
+            description = "重用已驗證的策略結果"
         else:
-            description = arm.name
-        rows.append((action, arm.arm_id, description))
+            description = state.reason
+        strategy_rows.append((action, arm.arm_id, description))
     stale_diagnostic_arms = [
         arm.arm_id
         for arm in settings.enabled_arms
@@ -513,10 +499,11 @@ def render_execution_plan(
         metadata_rows=(
             ("整體狀態", plan.overall_status),
             ("設定檔", "config/strategy_compare.py"),
-            ("比較階段", f"{settings.profile_label} ({settings.profile_id})"),
+            ("比較階段", settings.profile_label),
             ("Config fingerprint", status["config_fingerprint"]),
         ),
         action_rows=rows,
+        strategy_rows=strategy_rows,
     )
 
 
