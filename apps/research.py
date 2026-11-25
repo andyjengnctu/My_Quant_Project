@@ -188,6 +188,8 @@ def _run_optimizer(args: list[str] | None = None) -> int:
 
 
 def _run_current_comparison(*, profile_id: str, confirm: bool, compact: bool = False) -> dict:
+    if not compact:
+        print("\n[策略比較] 正在檢查資料、模型與既有結果…", flush=True)
     settings, resolved_plan, rendered_plan = resolve_strategy_comparison_execution(profile_id)
     if not compact:
         print("\n" + rendered_plan)
@@ -238,6 +240,8 @@ def _strategy_compare_profile_menu(profile_id: str) -> int:
 
 
 def _run_current_robustness(*, robustness_id: str, confirm: bool, compact: bool = False) -> dict:
+    if not compact:
+        print("\n[策略 Robustness] 正在檢查各 Seed 的資料與既有結果…", flush=True)
     robustness = get_strategy_multi_seed_robustness_settings(robustness_id)
     return run_strategy_multi_seed_robustness(
         robustness_id=robustness_id,
@@ -375,6 +379,8 @@ def _run_reusable_audit_method(module_id: str, method_id: str, *, one_click: boo
             ensure_authorized_oracle_parameters,
             get_formal_oracle_definition,
         )
+        if not one_click:
+            print("\n[Target 驗證] 正在檢查來源與既有結果…", flush=True)
         definition = get_formal_oracle_definition(module_id)
         preview = preview_oracle_replay_plan(definition, project_root=PROJECT_ROOT)
         if one_click:
@@ -471,6 +477,7 @@ def _run_summary_verification() -> int:
 
 
 def _show_research_summary(*, sortable: bool = False) -> int:
+    print("\n[Summary] 正在讀取並驗證研究結果…", flush=True)
     from services.research.target_dl_overview import (
         DEFAULT_SORT_COLUMN, collect_target_dl_overview, render_target_dl_overview,
     )

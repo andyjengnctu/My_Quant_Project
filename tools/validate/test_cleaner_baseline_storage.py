@@ -1,5 +1,6 @@
 """Baseline candidate provenance shares the existing detail storage contract."""
 import json
+import os
 from pathlib import Path
 import unittest
 from unittest.mock import patch
@@ -8,6 +9,7 @@ from core.compare_csv_storage import (
     detail_read_path, inherited_detail_files, reused_detail_source,
 )
 from core.file_integrity import load_json_object_or_none
+from core.compare_csv_lineage import detail_lineage_read_scope
 from services.research.strategy_compare_pair_integrity import (
     build_completed_pair_file_integrity, completed_pair_file_integrity_matches,
 )
@@ -112,6 +114,69 @@ class BaselineStorageTest(unittest.TestCase):
         self.assertEqual(detail_read_path(baseline), original)
         self.assert_published(full_pair)
         self.assert_published(baseline)
+
+    def test_read_scope_shares_chain_parsing_but_preserves_revision_evidence(self):
+        original = self.publish("a", pinned=True)
+        middle = self.publish("b", pinned=True, source=original)
+        copy = self.baseline_copy("c", middle)
+        middle.unlink()
+        copy.unlink()
+        markers = {path.parent / "strategy_comparison.json" for path in (middle, copy)}
+        reads = []
+        read_text = Path.read_text
+
+        def counted_read(path, *args, **kwargs):
+            if path in markers:
+                reads.append(path)
+            return read_text(path, *args, **kwargs)
+
+        with patch.object(Path, "read_text", counted_read):
+            with detail_lineage_read_scope():
+                for _ in range(5):
+                    with detail_lineage_read_scope():
+                        revisions = {}
+                        self.assertEqual(reused_detail_source(copy, revisions=revisions), original)
+                        self.assertEqual(set(revisions), markers)
+            self.assertCountEqual(reads, markers)
+            # Returning to the menu never preserves an earlier lineage snapshot.
+            self.assertEqual(reused_detail_source(copy), original)
+            self.assertEqual(len(reads), 2 * len(markers))
+
+    def test_read_scope_rejects_restored_mtime_change_and_clears_after_failure(self):
+        original = self.publish("source", pinned=True)
+        replacement = self.publish("others", pinned=True)
+        copy = self.baseline_copy("copy", original)
+        marker = copy.parent / "strategy_comparison.json"
+        stamp = marker.stat()
+        before = marker.read_bytes()
+        with self.assertRaisesRegex(ValueError, "檢查期間變動"):
+            with detail_lineage_read_scope():
+                self.assertEqual(reused_detail_source(copy), original)
+                marker.write_bytes(before.replace(b"runs/source/", b"runs/others/"))
+                self.assertEqual(marker.stat().st_size, stamp.st_size)
+                os.utime(marker, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+        self.assertEqual(reused_detail_source(copy), replacement)
+        with detail_lineage_read_scope():
+            self.assertEqual(reused_detail_source(copy), replacement)
+
+    def test_completed_pair_rechecks_same_size_csv_with_restored_mtime(self):
+        from core import file_integrity
+        original = self.publish("source", pinned=True)
+        stamp = original.stat()
+        with patch.object(file_integrity, "compute_file_sha256", wraps=file_integrity.compute_file_sha256) as digest:
+            self.assert_published(original)
+            self.assert_published(original)
+            reads = [call for call in digest.call_args_list if Path(call.args[0]) == original]
+            self.assertEqual(len(reads), 1)
+            original.write_bytes(self.payload.replace(b"123", b"456"))
+            os.utime(original, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+            self.assertFalse(completed_pair_file_integrity_matches(
+                run_dir=original.parents[2],
+                run_payload=load_json_object_or_none(original.parents[2] / "strategy_comparison.json"),
+                pair_id=original.parent.name, pair_dir=original.parent, required_paths=(original,),
+            ))
+            reads = [call for call in digest.call_args_list if Path(call.args[0]) == original]
+            self.assertEqual(len(reads), 2)
 
     def test_real_baseline_planner_replay_and_audit_use_baseline_lineage(self):
         original_write = self.write

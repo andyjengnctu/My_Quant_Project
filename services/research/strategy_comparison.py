@@ -1,6 +1,7 @@
 """Config-driven Breakout Quality strategy performance comparison orchestration."""
 
 from __future__ import annotations
+from core.compare_csv_lineage import detail_lineage_read_scope
 from core.compare_csv_storage import comparison_publication_lock, copy_reused_detail
 from core.research_orchestration import ResearchArtifactAction, ResearchArtifactPlan
 
@@ -173,6 +174,7 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
         atomic_write_json(path, _json_native(payload))
 
 
+@detail_lineage_read_scope()
 def resolve_comparison_plan(
     *,
     project_root: Path = PROJECT_ROOT,

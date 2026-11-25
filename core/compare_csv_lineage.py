@@ -1,13 +1,57 @@
 """Recorded Strategy Compare detail provenance, independent of byte aliases."""
+from contextlib import contextmanager
+from contextvars import ContextVar
 import json
 from pathlib import Path, PureWindowsPath
 
+from core.file_integrity import file_change_signature
 from core.storage_paths import clean_path, plain
 
 DETAIL_NAMES = frozenset(
     f"{side}_{detail}.csv" for side in ("no_filter", "score_ranking")
     for detail in ("orderable_candidates", "orderable_target_diagnostics")
 )
+_READ_SCOPE = ContextVar("compare_detail_lineage_read_scope", default=None)
+
+
+@contextmanager
+def detail_lineage_read_scope():
+    """Share parsed provenance within a read-only plan, then verify every marker.
+
+    Long REUSE chains are shared by many files and comparison arms. This scope
+    retains only their source strings, never readiness or file-integrity results.
+    No observation survives the operation; changed or redirected markers reject
+    the entire plan before its caller receives it.
+    """
+    if _READ_SCOPE.get() is not None:
+        yield
+        return
+    observed = {}
+    token = _READ_SCOPE.set(observed)
+    try:
+        yield
+    finally:
+        _READ_SCOPE.reset(token)
+    for marker, (revision, _sources) in observed.items():
+        if not clean_path(marker) or file_change_signature(marker) != revision:
+            raise ValueError("REUSE 來源紀錄在檢查期間變動；請重新載入")
+
+
+def _read_recorded_sources(marker):
+    observed = _READ_SCOPE.get()
+    if observed is not None and marker in observed:
+        return observed[marker]
+    if not clean_path(marker) or not marker.is_file():
+        return None
+    before = file_change_signature(marker)
+    payload = json.loads(marker.read_text(encoding="utf-8-sig"))
+    if file_change_signature(marker) != before:
+        raise ValueError("讀取 REUSE 來源紀錄時內容變動")
+    metadata = payload.get("metadata") if isinstance(payload, dict) else None
+    result = (before, {name: _recorded_detail_source(metadata, name) for name in DETAIL_NAMES})
+    if observed is not None:
+        observed[marker] = result
+    return result
 
 
 def compare_root(path):
@@ -54,17 +98,13 @@ def reused_detail_source(path, *, revisions=None):
             path = source.absolute()
         else:
             marker = path.parent / "strategy_comparison.json"
-            if not clean_path(marker) or not marker.is_file():
+            recorded = _read_recorded_sources(marker)
+            if recorded is None:
                 return None
-            from core.file_integrity import file_change_signature
-            before = file_change_signature(marker)
-            payload = json.loads(marker.read_text(encoding="utf-8-sig"))
-            if file_change_signature(marker) != before:
-                raise ValueError("讀取 REUSE 來源紀錄時內容變動")
+            before, sources = recorded
             if revisions is not None:
                 revisions[marker] = before
-            metadata = payload.get("metadata") if isinstance(payload, dict) else None
-            source = _recorded_detail_source(metadata, path.name)
+            source = sources[path.name]
             if source is None:
                 return None
             parent = Path(source)

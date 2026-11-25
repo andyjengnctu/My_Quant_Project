@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from core.file_integrity import (
-    compute_file_sha256,
+    compute_observed_file_sha256,
     is_sha256_hex,
     load_json_object_or_none,
 )
@@ -80,7 +80,7 @@ def completed_pair_file_integrity_matches(
     pair_id: str,
     pair_dir: Path,
     required_paths: tuple[Path, ...],
-    file_hasher: Callable[[Path], str] = compute_file_sha256,
+    file_hasher: Callable[[Path], str] = compute_observed_file_sha256,
 ) -> bool:
     """Fail closed on malformed/partial *new* evidence; keep old runs reusable.
 
@@ -133,14 +133,14 @@ def completed_pair_file_integrity_matches(
             if detail_sha256(path, file_hasher=file_hasher) != str(digest).strip().lower():
                 return False
         return True
-    except (OSError, ValueError, TypeError):
+    except (OSError, RuntimeError, ValueError, TypeError):
         # A corrupted or temporarily inaccessible completed artifact is NOT reusable.
         return False
 
 
 def completed_strategy_run_publication_matches(
     *, run_dir: Path, run_payload: Mapping[str, Any], project_root: Path,
-    file_hasher: Callable[[Path], str] = compute_file_sha256,
+    file_hasher: Callable[[Path], str] = compute_observed_file_sha256,
 ) -> bool:
     """Verify a completed run was committed through its manifest-last boundary.
 
@@ -185,7 +185,7 @@ def completed_strategy_run_publication_matches(
                 ):
                     return False
         return True
-    except (OSError, ValueError, TypeError):
+    except (OSError, RuntimeError, ValueError, TypeError):
         return False
 
 

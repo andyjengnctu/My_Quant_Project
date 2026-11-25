@@ -130,6 +130,34 @@ class OracleBuildAttestationTests(unittest.TestCase):
         warm.clear()
         self.assertEqual(owner.capture_oracle_source_inventory(self.root), original)
 
+    def test_read_batch_verifies_boundaries_and_keeps_returned_payloads_independent(self):
+        self.publish()
+        with patch.object(owner, "capture_oracle_source_inventory",
+                          wraps=owner.capture_oracle_source_inventory) as capture:
+            with owner.oracle_build_read_scope(self.root):
+                for _ in range(20):
+                    record = owner.require_oracle_build_attestation(self.root)
+                    record["component_revisions"]["replay"] = 99
+                with owner.oracle_build_read_scope(self.root):
+                    self.assertTrue(owner.inspect_oracle_build_attestation(self.root).ready)
+            self.assertEqual(capture.call_count, 2)
+            self.assertTrue(owner.inspect_oracle_build_attestation(self.root).ready)
+            self.assertEqual(capture.call_count, 3)
+
+    def test_read_batch_rejects_source_or_certificate_change_before_returning(self):
+        self.publish()
+        original = self.source.read_bytes()
+        with self.assertRaises(owner.OracleBuildBlockedError):
+            with owner.oracle_build_read_scope(self.root):
+                owner.require_oracle_build_attestation(self.root)
+                self.source.write_bytes(original.replace(b"x + 1", b"x - 1"))
+        self.assertFalse(owner.inspect_oracle_build_attestation(self.root).ready)
+        self.source.write_bytes(original)
+        with self.assertRaises(owner.OracleBuildBlockedError):
+            with owner.oracle_build_read_scope(self.root):
+                (self.root / owner.ATTESTATION_RELATIVE_PATH).write_text("{}")
+        self.assertFalse(owner.inspect_oracle_build_attestation(self.root).ready)
+
     def test_only_comments_docstrings_and_encoding_are_structurally_neutral(self):
         payload = self.publish()
         self.source.write_bytes(b'# comment\r\n"""module docs"""\r\ndef calculate(x=1):\r\n    """function docs"""\r\n    return x + 1\r\n')

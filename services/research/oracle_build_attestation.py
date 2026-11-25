@@ -7,6 +7,9 @@ The certificate and package are deliberately outside their own source inventory.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from contextlib import contextmanager
+from contextvars import ContextVar
+from copy import deepcopy
 from hashlib import sha256
 import json
 import re
@@ -28,6 +31,7 @@ EVIDENCE_DIRECTORY = "outputs/local_regression/oracle_contract/evidence"
 _OWNER_PATH = "services/research/oracle_build_attestation.py"
 _SOURCE_CAPTURE_CACHE = OrderedDict()
 _SOURCE_CAPTURE_LOCK = RLock()
+_READ_SCOPE = ContextVar("oracle_build_read_scope", default=None)
 
 
 def _is_sha256(value) -> bool:
@@ -187,6 +191,36 @@ def _validate_certificate(payload: Mapping[str, Any]) -> None:
 
 
 def inspect_oracle_build_attestation(project_root: str | Path) -> OracleBuildAttestationStatus:
+    scope = _READ_SCOPE.get()
+    if scope is not None and Path(project_root).resolve() == scope[0]:
+        return deepcopy(scope[1])
+    return _inspect_current_oracle_build(project_root)
+
+
+@contextmanager
+def oracle_build_read_scope(project_root: str | Path):
+    """Verify a read-only batch against one build, then recheck before returning.
+
+    A preview may inspect hundreds of signed receipts for the same checkout.
+    Both boundaries read the complete source closure and certificate. Nothing
+    survives this scope, and a concurrent change rejects the whole preview.
+    """
+    root = Path(project_root).resolve()
+    parent = _READ_SCOPE.get()
+    if parent is not None and parent[0] == root:
+        yield
+        return
+    initial = _inspect_current_oracle_build(root)
+    token = _READ_SCOPE.set((root, initial))
+    try:
+        yield
+    finally:
+        _READ_SCOPE.reset(token)
+    if _inspect_current_oracle_build(root) != initial:
+        raise OracleBuildBlockedError("Oracle build changed during read-only inspection; retry preview")
+
+
+def _inspect_current_oracle_build(project_root: str | Path) -> OracleBuildAttestationStatus:
     root = None
     revisions = {}
     digest = ""
