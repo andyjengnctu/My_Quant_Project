@@ -241,7 +241,7 @@ def _strategy_compare_profile_menu(profile_id: str) -> int:
 
 def _run_current_robustness(*, robustness_id: str, confirm: bool, compact: bool = False) -> dict:
     if not compact:
-        print("\n[策略 Robustness] 正在檢查各 Seed 的資料與既有結果…", flush=True)
+        print("\n[策略 Robustness] 載入執行設定…", flush=True)
     robustness = get_strategy_multi_seed_robustness_settings(robustness_id)
     return run_strategy_multi_seed_robustness(
         robustness_id=robustness_id,

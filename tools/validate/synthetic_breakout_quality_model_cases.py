@@ -1275,7 +1275,7 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
     # and must not be re-gated by that current Training Model.
     with (
         patch.object(research_app, "get_breakout_quality_model_research_settings", return_value=model_gate_settings),
-        patch("builtins.input", side_effect=["4", "0"]),
+        patch("builtins.input", side_effect=["4", "", "0"]),
         patch.object(research_app, "_run_configured_model_comparison", return_value=0) as rolling_compare,
     ):
         rolling_compare_menu_rc = research_app._interactive_model_research("apps/research.py model")

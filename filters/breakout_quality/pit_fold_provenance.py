@@ -10,7 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Mapping
 
-from core.file_integrity import file_change_signature
+from core.file_integrity import compute_observed_file_sha256, file_change_signature
 from filters.breakout_quality.artifacts import build_file_manifest
 from filters.breakout_quality.contract import DEFAULT_MODEL_FILENAME
 from filters.breakout_quality.paths import resolve_filter_point_in_time_fold_dir
@@ -96,7 +96,7 @@ def validate_pit_fold_evidence(
             )
             last_id = fold_id
         try:
-            actual = build_file_manifest(paths[key])
+            actual = build_file_manifest(paths[key], file_hasher=compute_observed_file_sha256)
         except OSError as exc:
             raise error_type(f"Rolling PIT {fold_id} {key}{error_context}遺失或不可讀") from exc
         if actual != expected:

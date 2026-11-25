@@ -327,6 +327,39 @@ class FileObservationTests(unittest.TestCase):
                     inventory["csv_inventory_sha256"] = "b" * 64
 
 
+class FoldEvidenceObservationTests(unittest.TestCase):
+    def test_fold_hash_reuse_preserves_manifest_checks_and_detects_restored_mtime_writes(self):
+        from copy import deepcopy
+        from filters.breakout_quality.artifacts import build_file_manifest
+        from filters.breakout_quality.pit_fold_provenance import pit_fold_evidence_paths, validate_pit_fold_evidence
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            options = dict(filter_id="fixture", model_architecture="fixture", experiment_profile="fixture",
+                           point_in_time_dir_override="pit")
+            paths = pit_fold_evidence_paths(root, fold_id="fold", **options)
+            for path in paths.values():
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"original")
+            records = {key: build_file_manifest(path) for key, path in paths.items()}
+            manifest = {"folds": [{"fold_id": "fold", "fold_manifest": records.pop("fold_manifest"), "artifacts": records}]}
+            with patch.object(integrity, "compute_file_sha256", wraps=integrity.compute_file_sha256) as hashes:
+                validate_pit_fold_evidence(root, manifest=manifest, **options)
+                validate_pit_fold_evidence(root, manifest=manifest, **options)
+                self.assertEqual(hashes.call_count, len(paths))
+                changed_receipt = deepcopy(manifest)
+                changed_receipt["folds"][0]["artifacts"]["checkpoint"]["sha256"] = "0" * 64
+                with self.assertRaisesRegex(ValueError, "雜湊不一致"):
+                    validate_pit_fold_evidence(root, manifest=changed_receipt, **options)
+                self.assertEqual(hashes.call_count, len(paths))
+                checkpoint = paths["checkpoint"]
+                stamp = checkpoint.stat()
+                checkpoint.write_bytes(b"modified")
+                os.utime(checkpoint, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+                with self.assertRaisesRegex(ValueError, "雜湊不一致"):
+                    validate_pit_fold_evidence(root, manifest=manifest, **options)
+                self.assertEqual(hashes.call_count, len(paths) + 1)
+
+
 class FuturePathTests(unittest.TestCase):
     def test_available_prefix_nan_and_block_boundaries_preserve_first_bad_row(self):
         count = 4100

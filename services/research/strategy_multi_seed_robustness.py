@@ -197,7 +197,7 @@ from core.report_style import (
     terminal_signal,
     finite_number as _finite_or_none,
 )
-from filters.breakout_quality.source_inventory import build_source_data_inventory
+from filters.breakout_quality.source_inventory import build_source_data_inventory, source_data_inventory_read_scope
 from services.research.strategy_comparison import (
     _load_direct_selection_r,
     collect_artifact_status,
@@ -5722,10 +5722,22 @@ def run_multi_seed_robustness(
         if cfg.benchmark_id is not None else tuple(stochastic_arms)
     )
     strategy_only_arms = _strategy_only_benchmark_arms(tuple(stochastic_arms), tuple(model_arms))
-    status = collect_artifact_status(settings=settings, include_seed_dependencies=cfg.benchmark_id is None)
-    plan_text, plan = _render_robustness_execution_plan(
-        cfg=cfg, settings=settings, status=status, fixed_arms=fixed_arms, stochastic_arms=stochastic_arms
-    )
+    if confirm:
+        print("\n" + render_title(f"{cfg.label}｜執行確認"))
+        print("策略比較清單：" + " / ".join(arm.arm_id for arm in (*fixed_arms, *stochastic_arms)))
+        print("Benchmark seeds：" + " / ".join(str(seed) for seed in cfg.resolved_seeds))
+        try:
+            raw = input("👉 按 Enter 開始檢查並執行全部前置、訓練與回放；輸入 0 返回：").strip().lower()
+        except EOFError:
+            return {}
+        if raw not in {"", "1"}:
+            return {}
+    print("\n[Robustness] 正在核對來源、各 Seed 與既有結果…", flush=True)
+    with source_data_inventory_read_scope():
+        status = collect_artifact_status(settings=settings, include_seed_dependencies=cfg.benchmark_id is None)
+        plan_text, plan = _render_robustness_execution_plan(
+            cfg=cfg, settings=settings, status=status, fixed_arms=fixed_arms, stochastic_arms=stochastic_arms
+        )
     print("\n" + plan_text)
     if plan["overall_status"] == "BLOCKED":
         reasons = tuple(str(reason) for reason in (plan.get("blockers") or ()))
@@ -5733,17 +5745,6 @@ def run_multi_seed_robustness(
             "Multiple-seed robustness前置BLOCKED: "
             + (reasons[0] if reasons else "無法由正式builder確定性補建的依賴")
         )
-    if confirm:
-        try:
-            raw = input("👉 按 Enter 執行全部前置、訓練與回放；輸入 0 返回：").strip().lower()
-        except EOFError:
-            return {}
-        if raw in {"0", "q", "quit", "exit"}:
-            return {}
-        if raw not in {"", "1"}:
-            print("輸入無效，本次不執行。")
-            return {}
-
     if plan.get("work_plan") is not None:
         return _execute_resolved_robustness_plan(
             cfg=cfg, settings=settings, status=status, plan=plan,

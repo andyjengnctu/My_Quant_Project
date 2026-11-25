@@ -190,7 +190,7 @@ from filters.breakout_quality.paths import (
     resolve_selection_point_in_time_manifest_path,
     resolve_selection_point_in_time_score_path,
 )
-from filters.breakout_quality.source_inventory import build_source_data_inventory
+from filters.breakout_quality.source_inventory import build_source_data_inventory, source_data_inventory_read_scope
 from filters.breakout_quality.risk_normalized_target import (
     DAILY_RISK_NORMALIZED_NET_OPPORTUNITY_TARGET_ID,
     load_min_roos_risk_schedule,
@@ -4467,6 +4467,8 @@ def _run_configured_model_comparison(
 ) -> int:
     """Run Forward/Rolling comparison through one model list and one report pipeline."""
 
+    if summary_output is None:
+        print("\n[模型比較] 正在檢查來源、各 Fold 與既有報表…", flush=True)
     # An external PIT Producer can update Audit after this Research process
     # previously cached a valid source. Re-read it on each comparison entry.
     if rolling:
@@ -4474,59 +4476,60 @@ def _run_configured_model_comparison(
     model_list = get_breakout_quality_model_test_settings().model_profiles
     _recover_pending_model_fit_repairs(model_list)
     rolling_mode = get_breakout_quality_rolling_test_mode("rolling") if rolling else None
-    planned = []
-    display_rows = []
-    blocked_model_ids = []
-    for model_id, profile_name in model_list:
-        settings = get_breakout_quality_workflow_settings(experiment_profile=str(profile_name))
-        readiness = _resolve_continuous_model_readiness(
-            settings, rolling=rolling, mode=rolling_mode,
-        )
-        contract, payload = readiness.source_contract, readiness.evidence_payload
-        reason, action = readiness.display_reason, readiness.display_action
-        ready = readiness.evidence_ready
-        if rolling and not ready:
-            forward_source, _forward_reason = _load_canonical_forward_checkpoint_import_source(settings)
-            reason = _rolling_build_reason(reason, forward_source)
-        if not ready:
-            # Comparison is an atomic, config-defined model suite: resolve all
-            # non-rebuildable source blockers before building *any* model. This
-            # prevents old checkpoints being needlessly refitted ahead of a
-            # later profile that can never pass the canonical data gate.
-            upstream_plan = _collect_continuous_research_input_plan(settings)
-            if upstream_plan.blocked:
-                blocked_model_ids.append(str(model_id))
-                action = "BLOCKED"
-                reason = "；".join(
-                    item.description for item in upstream_plan.actions
-                    if item.action == "BLOCKED"
-                )
-        display_rows.append((str(model_id), str(profile_name), action, reason or "READY"))
-        planned.append((str(model_id), settings, contract, payload, reason))
+    with source_data_inventory_read_scope():
+        planned = []
+        display_rows = []
+        blocked_model_ids = []
+        for model_id, profile_name in model_list:
+            settings = get_breakout_quality_workflow_settings(experiment_profile=str(profile_name))
+            readiness = _resolve_continuous_model_readiness(
+                settings, rolling=rolling, mode=rolling_mode,
+            )
+            contract, payload = readiness.source_contract, readiness.evidence_payload
+            reason, action = readiness.display_reason, readiness.display_action
+            ready = readiness.evidence_ready
+            if rolling and not ready:
+                forward_source, _forward_reason = _load_canonical_forward_checkpoint_import_source(settings)
+                reason = _rolling_build_reason(reason, forward_source)
+            if not ready:
+                # Comparison is an atomic, config-defined model suite: resolve all
+                # non-rebuildable source blockers before building *any* model. This
+                # prevents old checkpoints being needlessly refitted ahead of a
+                # later profile that can never pass the canonical data gate.
+                upstream_plan = _collect_continuous_research_input_plan(settings)
+                if upstream_plan.blocked:
+                    blocked_model_ids.append(str(model_id))
+                    action = "BLOCKED"
+                    reason = "；".join(
+                        item.description for item in upstream_plan.actions
+                        if item.action == "BLOCKED"
+                    )
+            display_rows.append((str(model_id), str(profile_name), action, reason or "READY"))
+            planned.append((str(model_id), settings, contract, payload, reason))
 
-    # Resolve all-model FIT provenance BEFORE running any producer. A legacy
-    # source-attestation gap means the checkpoint needs verification, *not*
-    # a new optimizer run. Neither Forward nor Rolling comparison authorizes
-    # changing a scientific FIT just because an evaluation/report is stale.
-    missing_profiles = tuple(
-        (model_id, str(settings.experiment_profile))
-        for model_id, settings, contract, payload, _reason in planned
-        # A valid Rolling source can refresh its Audit without fitting; only
-        # absent Forward evidence needs the cross-mode provenance preflight.
-        if not rolling and contract is None
-    )
-    repairs, repair_blockers = plan_fit_origin_repairs(
-        project_root=PROJECT_ROOT, model_profiles=missing_profiles,
-    )
-    unverified_ids = {item.model_id for item in repairs}
-    fit_blocker_reason = {item.model_id: item.reason for item in repair_blockers}
-    display_rows = [
-        (model_id, profile,
-         "BLOCKED" if model_id in unverified_ids or model_id in fit_blocker_reason else action,
-         "Historical FIT origin unverified; preserve Rolling/Forward checkpoints, do not refit"
-         if model_id in unverified_ids else fit_blocker_reason.get(model_id, reason))
-        for model_id, profile, action, reason in display_rows
-    ]
+        # Resolve all-model FIT provenance BEFORE running any producer. A legacy
+        # source-attestation gap means the checkpoint needs verification, *not*
+        # a new optimizer run. Neither Forward nor Rolling comparison authorizes
+        # changing a scientific FIT just because an evaluation/report is stale.
+        missing_profiles = tuple(
+            (model_id, str(settings.experiment_profile))
+            for model_id, settings, contract, payload, _reason in planned
+            # A valid Rolling source can refresh its Audit without fitting; only
+            # absent Forward evidence needs the cross-mode provenance preflight.
+            if not rolling and contract is None
+        )
+        repairs, repair_blockers = plan_fit_origin_repairs(
+            project_root=PROJECT_ROOT, model_profiles=missing_profiles,
+        )
+        unverified_ids = {item.model_id for item in repairs}
+        fit_blocker_reason = {item.model_id: item.reason for item in repair_blockers}
+        display_rows = [
+            (model_id, profile,
+             "BLOCKED" if model_id in unverified_ids or model_id in fit_blocker_reason else action,
+             "Historical FIT origin unverified; preserve Rolling/Forward checkpoints, do not refit"
+             if model_id in unverified_ids else fit_blocker_reason.get(model_id, reason))
+            for model_id, profile, action, reason in display_rows
+        ]
     mode_label = "Rolling OOS" if rolling else "Forward OOS"
     print("\n" + render_title(f"{mode_label} 模型比較"))
     _print_model_action_status(display_rows)
@@ -5369,19 +5372,20 @@ def _run_configured_model_robustness(
         )
     )
 
-    plans = []
-    rows = []
-    for model_id, profile_name in model_list:
-        settings = get_breakout_quality_workflow_settings(experiment_profile=str(profile_name))
-        seed_states, readiness = _plan_model_robustness_snapshot(
-            settings, seeds=seeds, rolling=rolling,
-        )
-        rows.append((str(model_id), str(profile_name), readiness.display_action,
-                     readiness.display_reason))
-        plans.append((str(model_id), settings, seed_states, readiness))
+    with source_data_inventory_read_scope():
+        plans = []
+        rows = []
+        for model_id, profile_name in model_list:
+            settings = get_breakout_quality_workflow_settings(experiment_profile=str(profile_name))
+            seed_states, readiness = _plan_model_robustness_snapshot(
+                settings, seeds=seeds, rolling=rolling,
+            )
+            rows.append((str(model_id), str(profile_name), readiness.display_action,
+                         readiness.display_reason))
+            plans.append((str(model_id), settings, seed_states, readiness))
 
     _print_model_action_status(rows)
-    # Keep the historical direct-run menu semantics; REUSE is decided by the canonical producer.
+    # Menu confirmation precedes inspection; canonical producers decide REUSE.
     force_rebuild = False
 
     completed = []
@@ -5656,6 +5660,26 @@ from core.model_research_menu_contract import model_research_menu_items
 _MODEL_RESEARCH_MENU_WORK_ITEMS = model_research_menu_items()
 
 
+def _confirm_model_test_workflow(*, rolling: bool, robustness: bool) -> bool:
+    """Confirm the configured work before expensive inspection or any producer."""
+    label = ("Rolling OOS" if rolling else "Forward OOS") + (" Robustness" if robustness else "")
+    print("\n" + render_title(f"{label} 模型比較｜執行確認"))
+    print("Model Compare/Test List：" + " / ".join(
+        _model_identity_text(model_id)
+        for model_id, _profile in get_breakout_quality_model_test_settings().model_profiles
+    ))
+    if robustness:
+        seeds = get_robustness_benchmark_policy_snapshot(
+            MODEL_STRATEGY_ROBUSTNESS_BENCHMARK_ID,
+        )["resolved_seeds"]
+        print("Benchmark seeds：" + " / ".join(str(seed) for seed in seeds))
+    try:
+        choice = input("👉 按 Enter 開始檢查並執行（含必要前置與補件）；輸入 0 返回：").strip().lower()
+    except EOFError:
+        return False
+    return choice in {"", "1"}
+
+
 def _interactive_model_research(program_name: str) -> int:
     settings = get_breakout_quality_model_research_settings()
     if settings.is_binary_classification:
@@ -5685,6 +5709,10 @@ def _interactive_model_research(program_name: str) -> int:
         choice = "1" if raw_choice == "" else raw_choice
         if choice in {"0", "q", "quit", "exit"}:
             return 0
+        if choice in {"3", "4", "5", "6"} and not _confirm_model_test_workflow(
+            rolling=choice in {"4", "6"}, robustness=choice in {"5", "6"},
+        ):
+            continue
         if choice == "1":
             code = _run_continuous_forward_model_gate(program_name, settings)
             if code != 0:

@@ -96,11 +96,11 @@ class BreakoutQualityRuntimeContract:
     shared_group_score_broadcast: bool
 
 
-def build_file_manifest(path: str | Path) -> dict[str, Any]:
+def build_file_manifest(path: str | Path, *, file_hasher=None) -> dict[str, Any]:
     resolved = Path(path)
     return {
         "filename": resolved.name,
-        "sha256": compute_file_sha256(resolved),
+        "sha256": (file_hasher or compute_file_sha256)(resolved),
         "size_bytes": int(resolved.stat().st_size),
     }
 
