@@ -7,10 +7,12 @@ aggregate SCORE hashes alone.  Keep this read-only and independent of services.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Mapping
 
 from core.file_integrity import compute_observed_file_sha256, file_change_signature
+from core.research_execution_resources import research_cpu_lanes
 from filters.breakout_quality.artifacts import build_file_manifest
 from filters.breakout_quality.contract import DEFAULT_MODEL_FILENAME
 from filters.breakout_quality.paths import resolve_filter_point_in_time_fold_dir
@@ -84,23 +86,33 @@ def validate_pit_fold_evidence(
     error_context: str = "來源",
 ) -> None:
     """Fail closed for *all* Fold files referenced by the aggregate revision."""
-    last_id = None
-    paths: dict[str, Path] = {}
-    for fold_id, key, expected in pit_fold_evidence_records(manifest):
-        if fold_id != last_id:
-            paths = pit_fold_evidence_paths(
-                project_root, filter_id=filter_id,
-                model_architecture=model_architecture,
-                experiment_profile=experiment_profile, fold_id=fold_id,
-                point_in_time_dir_override=point_in_time_dir_override,
-            )
-            last_id = fold_id
+    records = pit_fold_evidence_records(manifest)
+
+    def verify(record):
+        fold_id, key, expected = record
+        paths = pit_fold_evidence_paths(
+            project_root, filter_id=filter_id,
+            model_architecture=model_architecture,
+            experiment_profile=experiment_profile, fold_id=fold_id,
+            point_in_time_dir_override=point_in_time_dir_override,
+        )
         try:
             actual = build_file_manifest(paths[key], file_hasher=compute_observed_file_sha256)
         except OSError as exc:
             raise error_type(f"Rolling PIT {fold_id} {key}{error_context}遺失或不可讀") from exc
         if actual != expected:
             raise error_type(f"Rolling PIT {fold_id} {key}{error_context}雜湊不一致")
+
+    # Hashing releases the GIL. Independent files can share the existing CPU
+    # budget while map preserves manifest order, including the first error.
+    workers = min(research_cpu_lanes(), len(records))
+    if workers == 1:
+        for record in records:
+            verify(record)
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            for _ in executor.map(verify, records):
+                pass
 
 
 def pit_fold_file_signatures(

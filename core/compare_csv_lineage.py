@@ -26,8 +26,8 @@ def detail_lineage_read_scope():
     if _READ_SCOPE.get() is not None:
         yield
         return
-    observed, paths = {}, {}
-    token = _READ_SCOPE.set((observed, paths))
+    observed, paths, resolved = {}, {}, {}
+    token = _READ_SCOPE.set((observed, paths, resolved))
     try:
         yield
     finally:
@@ -38,6 +38,12 @@ def detail_lineage_read_scope():
     for path, (state, revision) in paths.items():
         if _source_path_state(path) != state or file_change_signature(path) != revision:
             raise ValueError("REUSE 明細路徑在檢查期間變動；請重新載入")
+    revisions = {}
+    for _source, recorded in resolved.values():
+        revisions.update(recorded)
+    for marker, revision in revisions.items():
+        if marker not in observed and (not clean_path(marker) or file_change_signature(marker) != revision):
+            raise ValueError("REUSE 來源紀錄在檢查期間變動；請重新載入")
 
 
 def _read_recorded_sources(marker):
@@ -102,6 +108,20 @@ def _recorded_detail_source(metadata, filename):
 def reused_detail_source(path, *, revisions=None):
     """Follow the producer's existing REUSE provenance; create no new storage format."""
     path = Path(path).absolute()
+    scope = _READ_SCOPE.get()
+    if scope is None:
+        return _resolve_reused_detail_source(path, revisions=revisions)
+    if path not in scope[2]:
+        recorded = {}
+        result = _resolve_reused_detail_source(path, revisions=recorded)
+        scope[2][path] = (result, recorded)
+    result, recorded = scope[2][path]
+    if revisions is not None:
+        revisions.update(recorded)
+    return result
+
+
+def _resolve_reused_detail_source(path, *, revisions=None):
     root = compare_root(path)
     if root is None or path.name not in DETAIL_NAMES:
         return None

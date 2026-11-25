@@ -4464,10 +4464,11 @@ def _require_fresh_model_comparison_source(
 
 def _run_configured_model_comparison(
     program_name: str, *, rolling: bool, summary_output: Callable[[str], None] | None = None,
+    confirm: bool = False, _show_plan: bool = True,
 ) -> int:
     """Run Forward/Rolling comparison through one model list and one report pipeline."""
 
-    if summary_output is None:
+    if summary_output is None and _show_plan:
         print("\n[模型比較] 正在檢查來源、各 Fold 與既有報表…", flush=True)
     # An external PIT Producer can update Audit after this Research process
     # previously cached a valid source. Re-read it on each comparison entry.
@@ -4531,8 +4532,9 @@ def _run_configured_model_comparison(
             for model_id, profile, action, reason in display_rows
         ]
     mode_label = "Rolling OOS" if rolling else "Forward OOS"
-    print("\n" + render_title(f"{mode_label} 模型比較"))
-    _print_model_action_status(display_rows)
+    if _show_plan:
+        print("\n" + render_title(f"{mode_label} 模型比較"))
+        _print_model_action_status(display_rows)
     if blocked_model_ids or repair_blockers or repairs:
         for candidate in repairs:
             print(
@@ -4546,6 +4548,15 @@ def _run_configured_model_comparison(
             print("不可自動補建的Research資料依賴：" + "、".join(blocked_model_ids))
         print("全模型前置檢查未通過；不修改模型工件或正式比較報表。")
         return 2
+
+    if confirm:
+        if not _confirm_model_test_workflow():
+            return 0
+        # User input ends the preview. Resolve current dependencies again before
+        # any producer; do not execute source contracts held across that pause.
+        return _run_configured_model_comparison(
+            program_name, rolling=rolling, summary_output=summary_output, _show_plan=False,
+        )
 
     completed = []
     # Previewing the full suite does not freeze shared input lineage. Once a
@@ -5349,6 +5360,7 @@ def _run_parallel_model_robustness_seeds(
 
 def _run_configured_model_robustness(
     program_name: str, *, rolling: bool, summary_output: Callable[[str], None] | None = None,
+    confirm: bool = False, _show_plan: bool = True,
 ) -> int:
     """Run model robustness through the same model list, SOP builder and comparison renderer."""
 
@@ -5363,14 +5375,15 @@ def _run_configured_model_robustness(
         raise ValueError("Model robustness benchmark至少需要兩個seed")
     model_list = get_breakout_quality_model_test_settings().model_profiles
     mode_label = "Rolling OOS" if rolling else "Forward OOS"
-    print("\n" + render_title(f"{mode_label} Robustness 模型測試"))
-    print(
-        "Benchmark seeds："
-        + " / ".join(
-            _seed_progress_text(seed, index, len(seeds))
-            for index, seed in enumerate(seeds, start=1)
+    if _show_plan:
+        print("\n" + render_title(f"{mode_label} Robustness 模型測試"))
+        print(
+            "Benchmark seeds："
+            + " / ".join(
+                _seed_progress_text(seed, index, len(seeds))
+                for index, seed in enumerate(seeds, start=1)
+            )
         )
-    )
 
     with source_data_inventory_read_scope():
         plans = []
@@ -5384,8 +5397,14 @@ def _run_configured_model_robustness(
                          readiness.display_reason))
             plans.append((str(model_id), settings, seed_states, readiness))
 
-    _print_model_action_status(rows)
-    # Menu confirmation precedes inspection; canonical producers decide REUSE.
+    if _show_plan:
+        _print_model_action_status(rows)
+    if confirm:
+        if not _confirm_model_test_workflow():
+            return 0
+        return _run_configured_model_robustness(
+            program_name, rolling=rolling, summary_output=summary_output, _show_plan=False,
+        )
     force_rebuild = False
 
     completed = []
@@ -5660,21 +5679,10 @@ from core.model_research_menu_contract import model_research_menu_items
 _MODEL_RESEARCH_MENU_WORK_ITEMS = model_research_menu_items()
 
 
-def _confirm_model_test_workflow(*, rolling: bool, robustness: bool) -> bool:
-    """Confirm the configured work before expensive inspection or any producer."""
-    label = ("Rolling OOS" if rolling else "Forward OOS") + (" Robustness" if robustness else "")
-    print("\n" + render_title(f"{label} 模型比較｜執行確認"))
-    print("Model Compare/Test List：" + " / ".join(
-        _model_identity_text(model_id)
-        for model_id, _profile in get_breakout_quality_model_test_settings().model_profiles
-    ))
-    if robustness:
-        seeds = get_robustness_benchmark_policy_snapshot(
-            MODEL_STRATEGY_ROBUSTNESS_BENCHMARK_ID,
-        )["resolved_seeds"]
-        print("Benchmark seeds：" + " / ".join(str(seed) for seed in seeds))
+def _confirm_model_test_workflow() -> bool:
+    """Confirm the displayed REUSE/BUILD plan before any producer."""
     try:
-        choice = input("👉 按 Enter 開始檢查並執行（含必要前置與補件）；輸入 0 返回：").strip().lower()
+        choice = input("👉 按 Enter 執行以上計畫（含必要前置與補件）；輸入 0 返回：").strip().lower()
     except EOFError:
         return False
     return choice in {"", "1"}
@@ -5709,10 +5717,6 @@ def _interactive_model_research(program_name: str) -> int:
         choice = "1" if raw_choice == "" else raw_choice
         if choice in {"0", "q", "quit", "exit"}:
             return 0
-        if choice in {"3", "4", "5", "6"} and not _confirm_model_test_workflow(
-            rolling=choice in {"4", "6"}, robustness=choice in {"5", "6"},
-        ):
-            continue
         if choice == "1":
             code = _run_continuous_forward_model_gate(program_name, settings)
             if code != 0:
@@ -5722,16 +5726,16 @@ def _interactive_model_research(program_name: str) -> int:
             _run_continuous_rolling_mode_direct(program_name, settings)
             continue
         if choice == "3":
-            _run_configured_model_comparison(program_name, rolling=False)
+            _run_configured_model_comparison(program_name, rolling=False, confirm=True)
             continue
         if choice == "4":
-            _run_configured_model_comparison(program_name, rolling=True)
+            _run_configured_model_comparison(program_name, rolling=True, confirm=True)
             continue
         if choice == "5":
-            _run_configured_model_robustness(program_name, rolling=False)
+            _run_configured_model_robustness(program_name, rolling=False, confirm=True)
             continue
         if choice == "6":
-            _run_configured_model_robustness(program_name, rolling=True)
+            _run_configured_model_robustness(program_name, rolling=True, confirm=True)
             continue
         if choice == "7":
             timing = get_breakout_quality_rolling_timing_settings()

@@ -1275,7 +1275,7 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
     # and must not be re-gated by that current Training Model.
     with (
         patch.object(research_app, "get_breakout_quality_model_research_settings", return_value=model_gate_settings),
-        patch("builtins.input", side_effect=["4", "", "0"]),
+        patch("builtins.input", side_effect=["4", "0"]),
         patch.object(research_app, "_run_configured_model_comparison", return_value=0) as rolling_compare,
     ):
         rolling_compare_menu_rc = research_app._interactive_model_research("apps/research.py model")
@@ -1535,9 +1535,9 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         "Rolling比較尚未授權" not in app_source
         and "尚未通過單一Seed Gate；Robustness尚未授權" not in app_source
         and "Current Model尚未授權Rolling Robustness" not in app_source
-        and '_run_configured_model_comparison(program_name, rolling=True)' in app_source
-        and '_run_configured_model_robustness(program_name, rolling=False)' in app_source
-        and '_run_configured_model_robustness(program_name, rolling=True)' in app_source,
+        and '_run_configured_model_comparison(program_name, rolling=True, confirm=True)' in app_source
+        and '_run_configured_model_robustness(program_name, rolling=False, confirm=True)' in app_source
+        and '_run_configured_model_robustness(program_name, rolling=True, confirm=True)' in app_source,
     )
     check_true(
         "rolling_report_extension_refresh_reuses_pit_score_core_and_robustness_does_not_reenter_fit_when_only_audit_is_stale",

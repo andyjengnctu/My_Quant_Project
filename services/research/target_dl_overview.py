@@ -729,7 +729,7 @@ def _arm_fit_lineage_current(
     return True
 
 
-def _strategy_rolling_metrics(root: Path, versions: Mapping[str, tuple]):
+def _strategy_rolling_metrics(root: Path, versions: Mapping[str, tuple], *, required_arms=None):
     # The rolling profile is from the official user-facing Strategy Compare work type.
     settings = get_strategy_comparison_settings(STRATEGY_COMPARE_CURRENT_ROLLING_PROFILE)
     base = root / settings.output_root
@@ -737,6 +737,8 @@ def _strategy_rolling_metrics(root: Path, versions: Mapping[str, tuple]):
     files.extend(sorted((base / "runs").glob("*/strategy_comparison.json"), reverse=True))
     selected: dict[str, float] = {}
     for path in files:
+        if required_arms is not None and set(required_arms).issubset(selected):
+            break
         payload = _json(path)
         manifest = _json(path.with_name("manifest.json"))
         if (not payload or not manifest or not path.with_suffix(".md").is_file()
@@ -755,7 +757,8 @@ def _strategy_rolling_metrics(root: Path, versions: Mapping[str, tuple]):
         artifact_identities = dict(payload.get("artifact_identities") or {})
         stored_arms = dict((payload.get("settings") or {}).get("arms") or {})
         for arm_id, row in scenarios.items():
-            if arm_id in selected or arm_id not in expected or arm_id not in STRATEGY_COMPARE_ARMS:
+            if (arm_id in selected or arm_id not in expected or arm_id not in STRATEGY_COMPARE_ARMS
+                    or (required_arms is not None and arm_id not in required_arms)):
                 continue
             if not _replay_policy_current(STRATEGY_COMPARE_ARMS[arm_id], stored_arms.get(arm_id)):
                 continue
@@ -1079,7 +1082,13 @@ def collect_target_dl_overview(project_root: Path) -> dict[str, Any]:
     positive_targets = {
         oracle_comparison_key(item) for item in comparisons if item.get("positive_output")
     }
-    rolling_romd = _strategy_rolling_metrics(root, versions)
+    required_arms = set(bindings.values())
+    for group in groups:
+        if group.get("arm_id"):
+            required_arms.add(str(group["arm_id"]))
+        required_arms.update(str(item["arm_id"]) for item in group.get("bindings", ()) if item.get("arm_id"))
+    required_arms.discard("")
+    rolling_romd = _strategy_rolling_metrics(root, versions, required_arms=required_arms)
     robust_romd = _strategy_robustness_metrics(
         root, versions, oracle_info=oracle_info, oracle_source=definition.source,
     )

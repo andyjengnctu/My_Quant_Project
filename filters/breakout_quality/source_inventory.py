@@ -21,6 +21,7 @@ from core.dataset_profiles import DATASET_PROFILE_FULL, get_dataset_dir, normali
 SOURCE_DATA_INVENTORY_SCHEMA_VERSION = 1
 SOURCE_DATA_INVENTORY_ALGORITHM = "sha256(ticker,relative_path,size_bytes,mtime_ns)"
 _READ_SCOPE = ContextVar("source_data_inventory_read_scope", default=None)
+_PRICE_READ_SCOPE = ContextVar("published_price_inventory_read_scope", default=None)
 # This additional local observation is intentionally NOT part of the historic
 # CSV inventory identity, FIT fingerprint, or serialized research manifests.
 SOURCE_CONTENT_WITNESS_SCHEMA_VERSION = 1
@@ -335,6 +336,18 @@ def _publish_price_manifest(project_root: str | Path, dataset: str,
 
 
 def read_published_price_inventory(project_root: str | Path, dataset: str) -> str | None:
+    """Share a verified price digest within a read-only batch, never readiness."""
+    key = (Path(project_root).resolve(), normalize_dataset_profile_key(dataset))
+    observed = _PRICE_READ_SCOPE.get()
+    if observed is not None and key in observed:
+        return observed[key]
+    result = _read_published_price_inventory(*key)
+    if observed is not None and result is not None:
+        observed[key] = result
+    return result
+
+
+def _read_published_price_inventory(project_root: str | Path, dataset: str) -> str | None:
     """Read only the small published proof and file metadata, NEVER CSV content.
 
     None means legacy Research data was not yet published with this capability;
@@ -434,15 +447,20 @@ def source_data_inventory_read_scope():
     if _READ_SCOPE.get() is not None:
         yield
         return
-    observed = {}
+    observed, prices = {}, {}
     token = _READ_SCOPE.set(observed)
+    price_token = _PRICE_READ_SCOPE.set(prices)
     try:
         yield
     finally:
         _READ_SCOPE.reset(token)
+        _PRICE_READ_SCOPE.reset(price_token)
     for (root, profile), inventory in observed.items():
         if build_source_data_inventory(root, profile) != inventory:
             raise ValueError("來源資料在前置檢查期間變動；請重新載入")
+    for key, digest in prices.items():
+        if _read_published_price_inventory(*key) != digest:
+            raise ValueError("行情內容證據在前置檢查期間變動；請重新載入")
 
 
 def build_source_data_inventory(project_root: str | Path, dataset: str, *,

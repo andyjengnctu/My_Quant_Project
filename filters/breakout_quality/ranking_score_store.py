@@ -31,7 +31,7 @@ from core.breakout_quality_runtime import (
 )
 
 from filters.breakout_quality.continuous_ranker_data import build_same_date_percentile_targets
-from filters.breakout_quality.artifacts import compute_file_sha256
+from core.file_integrity import compute_observed_file_sha256 as compute_file_sha256
 from filters.breakout_quality.pit_fold_provenance import (
     pit_fold_file_signatures, validate_pit_fold_evidence,
 )
@@ -937,6 +937,14 @@ def _selection_pit_file_cache_signature(path: Path) -> tuple:
     return file_change_signature(path)
 
 
+def _normalized_score_dates(values: pd.Series) -> pd.Series:
+    """Preserve pandas parsing while formatting each distinct timestamp once."""
+    parsed = pd.to_datetime(values, errors="raise")
+    unique = parsed.drop_duplicates()
+    formatted = unique.dt.strftime("%Y-%m-%d")
+    return parsed.map(dict(zip(unique, formatted, strict=True))).astype(formatted.dtype)
+
+
 @lru_cache(maxsize=4)
 def _load_selection_point_in_time_score_table_from_path_cached(
     score_path: str,
@@ -989,15 +997,13 @@ def _load_selection_point_in_time_score_table_from_path_cached(
     ]
     table = table[retained_columns].copy()
     table["ticker"] = table["ticker"].fillna("").astype(str).str.strip()
-    table["date"] = pd.to_datetime(table["date"], errors="raise").dt.strftime("%Y-%m-%d")
+    table["date"] = _normalized_score_dates(table["date"])
     table["group_index"] = pd.to_numeric(table["group_index"], errors="raise").astype(np.int64)
     table["breakout_quality_score"] = pd.to_numeric(
         table["breakout_quality_score"], errors="raise"
     ).astype(float)
     table["fold_id"] = table["fold_id"].fillna("").astype(str).str.strip()
-    table["model_information_cutoff"] = pd.to_datetime(
-        table["model_information_cutoff"], errors="raise"
-    ).dt.strftime("%Y-%m-%d")
+    table["model_information_cutoff"] = _normalized_score_dates(table["model_information_cutoff"])
     if bool((table["ticker"] == "").any()) or bool((table["fold_id"] == "").any()):
         raise ValueError("Selection PIT score table含空白ticker或fold_id")
     values = table["breakout_quality_score"].to_numpy(dtype=np.float64, copy=False)

@@ -17,6 +17,7 @@ from core.breakout_quality_policy import (
     get_breakout_quality_workflow_settings,
 )
 from core.console_report import project_relative_display_path
+from core.file_integrity import compute_observed_file_sha256 as compute_file_sha256
 from core.research_orchestration import resolve_research_artifact_action
 from core.strategy_comparison import StrategyComparisonSettings
 from filters.breakout_quality.artifact_dependency_registry import (
@@ -25,7 +26,6 @@ from filters.breakout_quality.artifact_dependency_registry import (
     model_upstream_prerequisite_blockers as _shared_model_upstream_prerequisite_blockers,
 )
 from filters.breakout_quality.artifacts import (
-    compute_file_sha256,
     load_model_artifact_contract,
     load_runtime_artifact_contract,
 )
@@ -34,6 +34,7 @@ from filters.breakout_quality.paths import (
     SELECTION_POINT_IN_TIME_MANIFEST_FILENAME,
     SELECTION_POINT_IN_TIME_SCORE_FILENAME,
     resolve_filter_artifact_paths,
+    resolve_filter_output_dir,
     resolve_filter_model_output_dir,
     resolve_selection_point_in_time_audit_json_path,
 )
@@ -414,6 +415,7 @@ def _collect_selection_pit_source_status(
                     score_source=source.score_source,
                     columns=required_projection_columns,
                     score_file_sha256=sha256,
+                    projection_cache_dir=resolve_filter_output_dir(root, source.filter_id) / "score_projection_cache",
                 )
             except (OSError, ValueError, KeyError, TypeError) as exc:
                 artifact_identity["score_projection_status"] = (

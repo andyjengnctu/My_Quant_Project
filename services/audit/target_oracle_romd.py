@@ -4131,9 +4131,10 @@ def _oracle_scoped_key(
 def _oracle_combined_preview(definition, *, project_root: Path) -> tuple[dict[str, Any], tuple]:
     """One canonical [1][1]/[1][2] preview; no Producer or Portfolio work."""
     from services.research.oracle_build_attestation import oracle_build_read_scope
+    from filters.breakout_quality.source_inventory import source_data_inventory_read_scope
 
     scopes = _oracle_strategy_scopes(definition)
-    with oracle_build_read_scope(project_root):
+    with oracle_build_read_scope(project_root), source_data_inventory_read_scope():
         previews = tuple((scope, scoped, _run_single_stage_oracle(
             scoped, project_root=project_root, quiet=True,
             preflight_approval=None, preview_only=True,

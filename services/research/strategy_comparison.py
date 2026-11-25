@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 from core.compare_csv_lineage import detail_lineage_read_scope
+from filters.breakout_quality.strategy_score_projection import score_projection_read_scope
 from core.compare_csv_storage import comparison_publication_lock, copy_reused_detail
 from core.research_orchestration import ResearchArtifactAction, ResearchArtifactPlan
 
@@ -9,6 +10,7 @@ from core.file_integrity import load_json_object_or_none as _read_json
 
 import json
 import math
+from copy import deepcopy
 from pathlib import Path
 import shutil
 import time
@@ -177,6 +179,7 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
 
 @detail_lineage_read_scope()
 @source_data_inventory_read_scope()
+@score_projection_read_scope()
 def resolve_comparison_plan(
     *,
     project_root: Path = PROJECT_ROOT,
@@ -199,6 +202,7 @@ def resolve_comparison_plan(
         current,
         artifact_identities=status["artifact_identities"],
     )
+    reuse_inputs = deepcopy(status)
     replay_cache = _collect_replay_cache_status(
         root=root,
         settings=current,
@@ -227,9 +231,13 @@ def resolve_comparison_plan(
         comparison_start=str(period.get("start") or "") or None,
         comparison_end=str(period.get("end") or "") or None,
     )
-    replay_cache = _collect_replay_cache_status(
-        root=root, settings=current, status=status
-    )
+    # Re-run only when recovery changed an input to the first pass. The replay
+    # cache itself is its output, not a dependency. Each new menu entry still
+    # performs the canonical physical/source checks; no READY decision is cached.
+    if {key: value for key, value in status.items() if key != "replay_cache"} != reuse_inputs:
+        replay_cache = _collect_replay_cache_status(
+            root=root, settings=current, status=status
+        )
     status = _apply_completed_pair_dependency_waivers(
         settings=current, status=status, replay_cache=replay_cache
     )

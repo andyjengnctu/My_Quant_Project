@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import ast
 from collections import defaultdict
-from copy import deepcopy
+from copy import copy
 from functools import lru_cache
 from pathlib import Path
 from types import MappingProxyType
@@ -56,11 +56,32 @@ def _parse_source(relative: str, raw: bytes):
 
 
 class _Syntax(ast.NodeTransformer):
+    def generic_visit(self, node):
+        # The parsed tree is shared. Copy only ancestors of a removed docstring,
+        # instead of recursively copying every AST field and source location.
+        updates = {}
+        for field, value in ast.iter_fields(node):
+            if isinstance(value, list):
+                changed = [self.visit(item) if isinstance(item, ast.AST) else item for item in value]
+                if any(left is not right for left, right in zip(value, changed, strict=True)):
+                    updates[field] = changed
+            elif isinstance(value, ast.AST):
+                changed = self.visit(value)
+                if changed is not value:
+                    updates[field] = changed
+        if not updates:
+            return node
+        result = copy(node)
+        for field, value in updates.items():
+            setattr(result, field, value)
+        return result
+
     def _owner(self, node):
-        self.generic_visit(node)
+        node = self.generic_visit(node)
         if (node.body and isinstance(node.body[0], ast.Expr)
                 and isinstance(node.body[0].value, ast.Constant)
                 and isinstance(node.body[0].value.value, str)):
+            node = copy(node)
             node.body = node.body[1:]
         return node
 
@@ -204,14 +225,12 @@ def _project_module(relative: str, raw: bytes, selected_names: tuple[str, ...]) 
             node = imports[name][2]
             nodes[positions[id(node)]] = node
     projected = ast.Module(body=[node for _, node in sorted(nodes.items())], type_ignores=[])
-    # The cached parse/analysis remains untouched. Only a first-time selected
-    # projection needs a private mutable copy for docstring normalization.
-    return ast.dump(_Syntax().visit(deepcopy(projected)), include_attributes=False)
+    return ast.dump(_Syntax().visit(projected), include_attributes=False)
 
 
 @lru_cache(maxsize=16)
 def _whole_source_projection(relative: str, raw: bytes) -> str:
-    return ast.dump(_Syntax().visit(deepcopy(_parse_source(relative, raw))), include_attributes=False)
+    return ast.dump(_Syntax().visit(_parse_source(relative, raw)), include_attributes=False)
 
 
 def oracle_build_source_parts_from_reader(read_source: Callable[[str], bytes]) -> dict[str, str]:
