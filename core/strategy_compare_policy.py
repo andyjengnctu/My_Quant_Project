@@ -664,7 +664,8 @@ def get_strategy_compare_model_bindings() -> tuple[dict[str, object], ...]:
         for group in get_research_summary_rows():
             for binding in group.get("bindings", ()):
                 arm_id = str(binding.get("arm_id") or "")
-                profiles = {binding[role][1] for role in ("rank_model", "positive_model") if role in binding}
+                from core.research_summary import summary_binding_models
+                profiles = {pair[1] for pair in summary_binding_models(binding)}
                 if arm_id in active_ids and profile in profiles:
                     bound.append(arm_id)
         rows.append({

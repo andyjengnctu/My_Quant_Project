@@ -288,3 +288,8 @@ project/
 ### Controlled learning studies
 
 `config/breakout_quality_history.py` declares model training-history extensions. `services/breakout_quality/training_history.py` composes canonical early-history and unchanged original-label materializers; parameter preparation remains a registered dependency of the existing Research artifact planner. The current model/strategy bindings live in `config/research_summary.py`, which projects membership into the existing model comparison, Strategy Compare, Robustness, Target and Summary workflows. No separate learning-study menu, orchestration engine or report schema is used. New history bounds and ordered FIT truth participate in model identity; unchanged controls retain their existing FIT/Replay contracts and canonical validation/reuse rules.
+
+
+### Research 同日百分位分數組合
+
+`core/rank_score_composition.py` 持有未擬合的 frozen score composition 契約；`filters/breakout_quality/rank_score_composition.py` 透過原 PIT／Forward admission owner 驗證全部來源、同 Seed 及資訊 cutoff，在共同 feature-eligible 股票日母體上呼叫既有百分位 primitive。原 `strategy_compare_execution` 組裝 mode／seed 路徑，`strategy_compare_runtime_contract` 每次 Replay 準備一次表，原 runtime score lookup 在 unchanged information-date／selector 邊界消費；不另建 Replay、FIT 或資料真理。零權重控制仍保留全部共同母體依賴。來源列舉與 score projection／signature 同步納入所有組成模型，因此任何來源變更會使相關 Replay 失效。`config/research_summary.py` 的 `rank_models` binding 表示既有模型組成，原 Summary 欄位顯示權重，沒有獨立模型 ρ；未核准 perfect-score 合成的 Oracle 明列未解，不借用其他 Target 結果。

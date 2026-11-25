@@ -141,7 +141,7 @@ STRATEGY_COMPARE_SUITES = {
         # A compact connected contrast graph supports each selected model
         # versus C96 plus the matched CK/CJ label contrast. Historical AO/CH
         # contrasts remain registered and filter out with their inactive arms.
-        "contrast_ids": ('C194-C124', 'C193-C194', 'C194-C118', 'C194-C96', 'C193-C123', 'C193-C106', 'C193-C96', 'C189-C96', 'C190-C96', 'C189-C190', 'C189-C106', 'C190-C118', 'C186-C183', 'C97-C96', 'C98-C97', 'C98-C96', 'C103-C96', 'C106-C96', 'C107-C96', 'C109-C96', 'C111-C96', 'C112-C96', 'C118-C96', 'C123-C96', 'C124-C96', 'C125-C96', 'C126-C96', 'C109-C107', 'C111-C112', 'C106-C118', 'C123-C124', 'C125-C126', 'C123-C125', 'C124-C126', 'C147-C107', 'C148-C109', 'C147-C148', 'C153-C97', 'C154-C97', 'C153-C107', 'C154-C109', 'C154-C153', 'C155-C97', 'C156-C97', 'C155-C156', 'C155-C153', 'C156-C154', 'C157-C97', 'C158-C97', 'C157-C158', 'C157-C153', 'C158-C154'),
+        "contrast_ids": ('C195-C106', 'C196-C118', 'C197-C123', 'C198-C124', 'C199-C195', 'C199-C197', 'C200-C196', 'C200-C198', 'C199-C106', 'C199-C123', 'C200-C118', 'C200-C124', 'C199-C200', 'C199-C96', 'C200-C96', 'C194-C124', 'C193-C194', 'C194-C118', 'C194-C96', 'C193-C123', 'C193-C106', 'C193-C96', 'C189-C96', 'C190-C96', 'C189-C190', 'C189-C106', 'C190-C118', 'C186-C183', 'C97-C96', 'C98-C97', 'C98-C96', 'C103-C96', 'C106-C96', 'C107-C96', 'C109-C96', 'C111-C96', 'C112-C96', 'C118-C96', 'C123-C96', 'C124-C96', 'C125-C96', 'C126-C96', 'C109-C107', 'C111-C112', 'C106-C118', 'C123-C124', 'C125-C126', 'C123-C125', 'C124-C126', 'C147-C107', 'C148-C109', 'C147-C148', 'C153-C97', 'C154-C97', 'C153-C107', 'C154-C109', 'C154-C153', 'C155-C97', 'C156-C97', 'C155-C156', 'C155-C153', 'C156-C154', 'C157-C97', 'C158-C97', 'C157-C158', 'C157-C153', 'C158-C154'),
         "display_name_bases": {'C96': 'Min Base-Finalist-Best / Broker-Cash', 'C97': 'Full Base-Finalist-Best / Broker-Cash', 'C98': 'Full Corrected Same-Signal Agree 4x300 / Broker-Cash', 'C103': 'Min MR-13CG Exact K/R0 / Broker-Cash', 'C106': 'Min MR-13CI Exact K/R0 / Broker-Cash', 'C189': 'Min MR-13CI Rank + MR-13DL R40 Positive Exact K/R0 / Broker-Cash', 'C190': 'Min MR-13CI Rank + MR-13DL R40 Positive Direct No-K No-R0 / Broker-Cash', 'C107': 'Min MR-13CJ Exact K/R0 / Broker-Cash', 'C109': 'Min MR-13CJ T40 Direct No-K No-R0 / Broker-Cash', 'C111': 'Min MR-13K Pure-MFE Control Exact K/R0 / Broker-Cash', 'C112': 'Min MR-13K Pure-MFE Direct No-K No-R0 / Broker-Cash', 'C118': 'Min MR-13CI R40 Direct No-K No-R0 / Broker-Cash', 'C123': 'Min MR-13CO Formal MinTrade Full-cycle NetPnL Exact K/R0 / Broker-Cash', 'C124': 'Min MR-13CO Formal MinTrade Full-cycle NetPnL Direct No-K No-R0 / Broker-Cash', 'C125': 'Min MR-13CO Rank + MR-13CP Positive Exact K/R0 / Broker-Cash', 'C126': 'Min MR-13CO Rank + MR-13CP Positive Direct No-K No-R0 / Broker-Cash', 'C147': 'Min MR-13CX T40 Pairwise-Confidence Exact K/R0 / Broker-Cash', 'C148': 'Min MR-13CX T40 Pairwise-Confidence Direct No-K No-R0 / Broker-Cash', 'C153': 'Full MR-13CJ T40 Exact K/R0 / Broker-Cash', 'C154': 'Full MR-13CJ T40 Direct No-K No-R0 / Broker-Cash', 'C155': 'Full MR-13CZ Rank + MR-13DA Positive Exact K/R0 / Broker-Cash', 'C156': 'Full MR-13CZ Rank + MR-13DA Positive Direct No-K No-R0 / Broker-Cash', 'C157': 'Full MR-13CZ NetPnL Rank Exact K/R0 / Broker-Cash', 'C158': 'Full MR-13CZ NetPnL Rank Direct No-K No-R0 / Broker-Cash', 'C179': 'Daily (Min/P21) No DL / Default Selector / Broker-Cash'},
     },
     # Historical Round-10 suite retained unchanged for artifact interpretation/replay.
@@ -1219,6 +1219,30 @@ STRATEGY_COMPARE_ARMS["C194"] = {
     "dl_id": "CONT13DN_ROLL",
 }
 
+# AI: Frozen runtime experiment; every treatment ranks on the same CI/CO cohort.
+for _new_id, _reference_id, _weights, _label in (
+    ("C195", "C106", (1.0, 0.0), "CI Percentile Exact"),
+    ("C196", "C118", (1.0, 0.0), "CI Percentile Direct"),
+    ("C197", "C123", (0.0, 1.0), "CO Percentile Exact"),
+    ("C198", "C124", (0.0, 1.0), "CO Percentile Direct"),
+    ("C199", "C106", (0.5, 0.5), "CI+CO Equal Rank Exact"),
+    ("C200", "C118", (0.5, 0.5), "CI+CO Equal Rank Direct"),
+):
+    STRATEGY_COMPARE_ARMS[_new_id] = {
+        **STRATEGY_COMPARE_ARMS[_reference_id], "replay_contract_version": 1,
+        "name": f"Min {_label} / Broker-Cash",
+        "description": "Fixed daily average-zero-based percentiles on common feature-eligible CI/CO stock days; original same-seed P16 and selector.",
+        "dl_runtime_options": {
+            **STRATEGY_COMPARE_ARMS[_reference_id]["dl_runtime_options"],
+            "rank_score_composition": {
+                "method": "same_day_percentile_weighted_v1",
+                "universe": "common_score_eligible_stock_days", "tie_method": "average_zero_based",
+                "members": tuple({"dl_id": _source, "weight": _weight} for _source, _weight in zip(
+                    ("CONT13CI_ROLL", "CONT13CO_ROLL"), _weights, strict=True)),
+            },
+        },
+    }
+
 # AI: Materialize mode-specific parameter-source overrides from the canonical
 # arm definitions, after those definitions exist. This keeps Full P17 and Min
 # P16 in the same generic Compare Suite without per-arm dispatch exceptions.
@@ -1240,6 +1264,21 @@ for _mode in ("oos", "rolling"):
 # Contrast 是否啟用只由 STRATEGY_COMPARE_PROFILES[*]["contrast_ids"] 決定。
 
 STRATEGY_COMPARE_CONTRASTS = {
+    'C195-C106': {'left': 'C195', 'right': 'C106', 'description': 'CI percentile scale versus raw, Exact'},
+    'C196-C118': {'left': 'C196', 'right': 'C118', 'description': 'CI percentile scale versus raw, Direct'},
+    'C197-C123': {'left': 'C197', 'right': 'C123', 'description': 'CO percentile scale versus raw, Exact'},
+    'C198-C124': {'left': 'C198', 'right': 'C124', 'description': 'CO percentile scale versus raw, Direct'},
+    'C199-C195': {'left': 'C199', 'right': 'C195', 'description': 'Equal rank fusion versus CI percentile, Exact'},
+    'C199-C197': {'left': 'C199', 'right': 'C197', 'description': 'Equal rank fusion versus CO percentile, Exact'},
+    'C200-C196': {'left': 'C200', 'right': 'C196', 'description': 'Equal rank fusion versus CI percentile, Direct'},
+    'C200-C198': {'left': 'C200', 'right': 'C198', 'description': 'Equal rank fusion versus CO percentile, Direct'},
+    'C199-C106': {'left': 'C199', 'right': 'C106', 'description': 'Equal rank fusion versus original CI Exact'},
+    'C199-C123': {'left': 'C199', 'right': 'C123', 'description': 'Equal rank fusion versus original CO Exact'},
+    'C200-C118': {'left': 'C200', 'right': 'C118', 'description': 'Equal rank fusion versus original CI Direct'},
+    'C200-C124': {'left': 'C200', 'right': 'C124', 'description': 'Equal rank fusion versus original CO Direct'},
+    'C199-C200': {'left': 'C199', 'right': 'C200', 'description': 'Same fused scores, Exact versus Direct'},
+    'C199-C96': {'left': 'C199', 'right': 'C96', 'description': 'Equal rank fusion Exact versus no-DL control'},
+    'C200-C96': {'left': 'C200', 'right': 'C96', 'description': 'Equal rank fusion Direct versus no-DL control'},
     "C194-C124": {"left": "C194", "right": "C124", "description": "Same CO/P16 Direct: early-history extension versus original training history"},
     "C193-C194": {"left": "C193", "right": "C194", "description": "Same DN scores and P16: Exact K/R0 versus Direct No-K/No-R0"},
     "C194-C118": {"left": "C194", "right": "C118", "description": "Early-history CO versus CI R40 reference, same P16 Direct"},

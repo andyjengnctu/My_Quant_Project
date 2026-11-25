@@ -155,16 +155,19 @@ def get_research_summary_strategy_arm_ids() -> tuple[str, ...]:
     return tuple(result)
 
 
+def summary_binding_models(binding) -> tuple[tuple[str, str], ...]:
+    """All supervised dependencies, including a replay-only rank composition."""
+    return tuple(tuple(binding[role]) for role in ("rank_model", "positive_model") if role in binding) + tuple(
+        tuple(pair) for pair in binding.get("rank_models", ()))
+
+
 def get_research_summary_model_profiles() -> tuple[tuple[str, str], ...]:
     result = []
     for row in get_research_summary_rows():
         for binding in row.get("bindings", ()):
-            for role in ("rank_model", "positive_model"):
-                if role not in binding:
-                    continue
-                pair = tuple(binding[role])
+            for pair in summary_binding_models(binding):
                 if len(pair) != 2 or any(not isinstance(value, str) or not value for value in pair):
-                    raise ValueError(f"Invalid Summary {role}: {pair!r}")
+                    raise ValueError(f"Invalid Summary model: {pair!r}")
                 if pair not in result:
                     if any(pair[0] == old[0] or pair[1] == old[1] for old in result):
                         raise ValueError(f"Conflicting Summary model identity: {pair!r}")
@@ -268,6 +271,21 @@ def validate_research_summary_strategy_bindings(
         if "arm_id" in row and arm_registry[row["arm_id"]].get("dl_enabled"):
             raise ValueError("Summary DL strategies must declare their model bindings")
         for binding in row.get("bindings", ()):
+            from core.rank_score_composition import rank_composition_source_ids
+            if binding.get("rank_models"):
+                if binding.get("rank_model") or binding.get("positive_model") or not binding.get("arm_id"):
+                    raise ValueError("Summary composition requires one strategy and explicit constituent models")
+                arm = arm_registry[binding["arm_id"]]
+                source_ids = rank_composition_source_ids(arm.get("dl_runtime_options"))
+                pairs = summary_binding_models(binding)
+                if tuple(dl_sources[key]["experiment_profile"] for key in source_ids) != tuple(pair[1] for pair in pairs):
+                    raise ValueError("Summary rank composition differs from its runtime sources")
+                for model_id, profile in pairs:
+                    if model_spec_resolver(profile).model_research_id != model_id:
+                        raise ValueError("Summary composition model identity mismatch")
+                if arm.get("dl_id") not in source_ids:
+                    raise ValueError("Summary composition does not include its primary source")
+                continue
             for role in ("rank_model", "positive_model"):
                 if role in binding:
                     model_id, profile = binding[role]
@@ -292,6 +310,7 @@ def validate_research_summary_strategy_bindings(
 def unresolved_oracle_strategy_contracts(*, arm_registry):
     """Explicitly declare a new model-output composition awaiting Oracle parity."""
     from core.positive_score_admission import uses_model_positive_decision
+    from core.rank_score_composition import rank_composition_source_ids
     result = {}
     for group in get_research_summary_rows():
         if group.get("oracle_contract_status") is None:
@@ -305,7 +324,8 @@ def unresolved_oracle_strategy_contracts(*, arm_registry):
         for binding in bindings:
             arm_id = binding.get("arm_id")
             if (arm_id not in arm_registry or arm_id in result
-                    or not uses_model_positive_decision(arm_registry[arm_id].get("dl_runtime_options"))):
+                    or not (uses_model_positive_decision(arm_registry[arm_id].get("dl_runtime_options"))
+                            or rank_composition_source_ids(arm_registry[arm_id].get("dl_runtime_options")))):
                 raise ValueError("Unresolved Oracle requires a declared model-decision composition")
             result[arm_id] = reason
     return result

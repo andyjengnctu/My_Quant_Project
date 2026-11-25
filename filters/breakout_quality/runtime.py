@@ -399,6 +399,22 @@ def resolve_breakout_quality_candidate_rank(
                 "daily-universal ranking source必須提供最新已完成交易日 information_date"
             ),
         )
+        if options.get("rank_score_composition"):
+            composed = context.rank_composition_scores
+            if composed is None:
+                raise ValueError("Rank composition requires an admitted same-seed score table")
+            date_text = pd.Timestamp(lookup_date).strftime("%Y-%m-%d")
+            value = composed["scores"].get((str(ticker), date_text))
+            reason = ("outside_score_period" if date_text < composed["available_from"]
+                      or date_text > composed["available_through"] else
+                      "missing_ticker_date_score" if value is None else "")
+            return {
+                "score": value if not reason else None, "available": not bool(reason),
+                "unavailable_reason": reason, "score_date": date_text,
+                "shared_group_score": True, "filter_id": str(filter_id),
+                "score_source": context.score_source,
+                "rank_score_composition": options["rank_score_composition"],
+            }
         if context.score_source == SCORE_SOURCE_SELECTION_POINT_IN_TIME:
             payload = lookup_selection_point_in_time_candidate_score(
                 project_root=root,

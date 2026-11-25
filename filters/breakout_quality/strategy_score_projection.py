@@ -123,6 +123,12 @@ def runtime_score_projection_requirements(
         )
 
     safety_dl_id = str(options.get("safety_dl_id") or "").strip()
+    from core.rank_score_composition import rank_composition_source_ids
+    for source_id in rank_composition_source_ids(options):
+        if source_id not in dl_sources:
+            raise ValueError("Rank composition score projection lacks a registered source")
+        requirements.setdefault(source_id, set()).add(primary_score_column_for_source(
+            str(dl_sources[source_id].get("score_source") or "")))
     safety_score_column = str(options.get("safety_score_column") or "").strip()
     if safety_dl_id and safety_score_column:
         requirements.setdefault(safety_dl_id, set()).add(safety_score_column)

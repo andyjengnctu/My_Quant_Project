@@ -5383,3 +5383,24 @@ DN−CO：RoMD **−1.351416**、MDD −0.285105 個百分點、總報酬 **−2
 - 原模型比較：`outputs/filters/breakout_quality/breakout_quality_v1/standard_model_comparison/rolling_oos/standard_model_comparison.json`（同名 Markdown）。
 - 原策略比較：`outputs/strategy_compare/broker_cash_dl_conversion/rolling_2021_forward/runs/20261124_201556_C96-C97-C98-C103-C106-C107-C109-C189-C190-C111-C112-C118-C123-C124-C125-C126-C147-C148-C153-C154-C155-C156-C157-C158-C179-C181-C182-C183-C186-C168-C173-C172-C169-C193_c9c6292b11bb/strategy_comparison.json`（同名 Markdown）；current `latest/` 為此結果投影。
 - 一次性樣本／排序／逐筆歸因：`outputs/filters/breakout_quality/breakout_quality_v1/research_diagnostics/early_history_sample_inventory_seed42.json`、`early_history_paired_ranking_seed42.json`、`early_history_trade_attribution_seed42.json`，各有同名 Markdown；另保留 CO／DN 獨有交易 CSV。
+
+### 2026-11-25 — MR-13DN／C193／C194：四 Seed 續測完成，Exact 與 Direct 均未優於 CO
+
+使用者依續測授權完成原 Research 模型／策略 Robustness，提供 `貼上的文字.txt`（SHA256 `c3516d041430739d8808801d14b96f19dab780d01fc7221db11880133aa084b5`）。本輪將 Console 與本機已發布的 Model SOP、Strategy Robustness JSON／逐 Seed CSV 核對；選取策略的 RoMD、MDD、總報酬均值及兩組配對 ΔRoMD 與原始 CSV 一致。本輪沒有重新 FIT／Replay，亦未獨立重驗全部 Checkpoint 或 Oracle parity。
+
+**共同條件。** 唯一訓練變數仍為 CO 加入 2008～2013 合法成熟事件；模型、NetPnL Target、loss、P16、Selector、費稅與帳務保持原契約。期間 2021-01-01～2026-03-02；`end_to_end_v1` Seeds 依序為 693545351、2014432738、104504529、762252050。下表 Δ 取 DN 減 CO；數值為四 Seed 均值，配對勝數由相同 Seed 直接比較。
+
+| 對照 | CO RoMD | DN RoMD | 配對 ΔRoMD 均值／中位數 | DN 勝數 | CO／DN MDD | CO／DN 總報酬 |
+|---|---:|---:|---:|---:|---:|---:|
+| Exact：C193−C123 | 10.812374 | 9.362810 | −1.449564／−1.110077 | 0/4 | 13.7510%／15.7359% | 146.8761%／148.1615% |
+| Direct：C194−C124 | 4.660625 | 2.900549 | −1.760076／−1.203040 | 0/4 | 18.5574%／19.8784% | 79.4110%／54.6911% |
+
+Exact 的總報酬略增 1.2854 個百分點，但 MDD 增加 1.9849 個百分點、每個 Seed 的 RoMD 均較差；不能將本次負結果一概說成「報酬全面下降」。C193 對 C96 的平均 ΔRoMD 僅 +0.186255、勝數 2/4。C106 為同批較強參照，四 Seed 平均 RoMD 12.170372、MDD 13.2229%，相對 C96（9.176555）4/4 勝。
+
+**模型證據。** 四 Seed SOP 的 Breakout 共同評估群組數為 9,436。CO→DN 的 Daily ρ 為 0.049363→0.048517，Pair 為 51.4845%→51.0785%，前十分位 NetPnL 均值為 5,255.6887→3,043.9206，前後十分位差為 +491.4202→−3,863.6804；此處是前 10%，不是每日前 10 檔。Global Validation ρ 由 0.480694 升至 0.601280，但 OOS ρ 由 0.085887 降至 0.067509，並未形成較好的跨期間泛化。這些指標不足以單獨識別年代差異、樣本相關性或其他退步原因。
+
+**決策。** 續測支持原早期擴充方案 **NO_ADVANCEMENT**；不因 Direct 的 Seed42 單次改善（C194 5.86 vs C124 3.71）改判。原 Seed42 結果、續測授權與此次四 Seed 結果各自保留；不搜尋其他起始年份，不自動移除現行比較列或升格 Trading。法人研究仍暫停；2021 起仍為迭代研究 OOS，四個 Seed 不是四段獨立市場歷史。
+
+**本輪附帶唯讀分數核對。** 為判斷現有 CI／CO 是否只提供相同排序，對四個同 Seed 的 PIT scores 逐 ticker/date 對齊，各有 630,589 個共同可評分股票日、1,243 個日期（2021-01-04～2026-03-02），兩組檔案的 information cutoff 均早於 score date。同日 Spearman 按日等權平均依序為 0.108432、0.020534、0.090324、0.104220；每日前十名平均重疊率為 3.2663%、3.2100%、5.0040%、3.4513%。此母體是完整 score-eligible universe，並非實際 orderable candidates；沒有使用未來 Target。低分數相關不證明誤差或投組收益互補，沒有產生融合績效、調整權重或新增模型／策略身分。歷史 MR-13K／MR-13M 等權融合的負結果維持有效，未被此診斷取代。
+
+**來源。** 模型為 `outputs/filters/breakout_quality/breakout_quality_v1/standard_model_comparison/rolling_oos_robustness/standard_model_comparison.json`；策略為 `outputs/strategy_compare/robustness/broker_cash_dl_conversion/rolling_2021_forward/58e7d91b703f1b72/robustness_summary.json` 及同目錄 `seed_results.csv`／`robustness_report.md`。精確數值、逐 Seed 差、分數診斷定義及來源 SHA256 存於 `outputs/filters/breakout_quality/breakout_quality_v1/research_diagnostics/dn_robustness_review_20261125.json`。Summary 的 `Win Rate` 為 Oracle 交易勝率，不是 DL 策略實際交易勝率。

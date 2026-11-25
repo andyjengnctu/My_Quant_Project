@@ -997,9 +997,9 @@ The canonical `config/research_summary.py` roster alone determines current Model
 
 | 身分 | 定義 | 狀態 |
 |---|---|---|
-| `MR-13DN` / `PROFILE-daily_universal_formal_mintrade_fullcycle_netpnl_per_seed_full_list_ndcg_pairwise_extended_history` | 原 CO Target、300×10 InceptionTime、Adam、full-list Delta-NDCG、epoch selection 不變；僅增加 2008～2013 的合法自然成熟突破事件。 | FIT v1 / SEED42_ROLLING_COMPLETE / NO_ADVANCEMENT / RESEARCH_ONLY / NO_TRADING |
+| `MR-13DN` / `PROFILE-daily_universal_formal_mintrade_fullcycle_netpnl_per_seed_full_list_ndcg_pairwise_extended_history` | 原 CO Target、300×10 InceptionTime、Adam、full-list Delta-NDCG、epoch selection 不變；僅增加 2008～2013 的合法自然成熟突破事件。 | FIT v1 / SEED42_AND_4SEED_ROLLING_COMPLETE / NO_ADVANCEMENT / RESEARCH_ONLY / NO_TRADING |
 | `MINTRADE_P16_EARLY_LABEL_HISTORY_V1` | canonical Min Optimizer 2008～2013 年度有效參數；120M 訓練窗、12M OOS、原 trial 預算、same seed；不借用晚期參數。原 2014～2020/P16 參數與資訊列真值保留，舊列使用原始訊號生命週期。 | OPTIMIZER_SOLE_PRODUCER / BUILD_OR_RESUME |
-| `DL-CONT13DN_ROLL` / `SR-C193` | DN PIT scores × 原 C123 的 P16 Exact K/R0，保持費稅、sizing、帳務、退出；C123 控制、C106 正向參照。 | CURRENT_RESEARCH_COMPARE / REPLAY v1 / NO_PROMOTION |
+| `DL-CONT13DN_ROLL` / `SR-C193` | DN PIT scores × 原 C123 的 P16 Exact K/R0，保持費稅、sizing、帳務、退出；C123 控制、C106 正向參照。 | CURRENT_RESEARCH_COMPARE / REPLAY v1 / FOUR_SEED_RESULT_AVAILABLE / NO_ADVANCEMENT / NO_PROMOTION |
 
 依使用者明確指示，加入 **Research 原有比較功能與架構**。`config/research_summary.py` 的既有 NetPnL Exact group 同時綁定 CO／C123 與 DN／C193，單一清單派生 Forward／Rolling 模型測試、模型比較、策略比較、四 seed Robustness 與 Summary；Training Model 為 DN。策略登錄 `C193−C123`、`C193−C106`、`C193−C96`，不另設比較入口、排程或報表。沿用既有七項模型工作、canonical FIT／Score／Optimizer／Replay、Standard SOP、artifact planner 與 resume／REUSE 契約。先完成模型與策略 Rolling 比較，結果好才進入 Robustness 與 Target，最後 Summary；事前研究門檻沿用核准計畫，不改正式 SOP。
 
@@ -1013,4 +1013,24 @@ The canonical `config/research_summary.py` roster alone determines current Model
 
 `SR-C194` 為 MR-13DN／`DL-CONT13DN_ROLL` 的 **Direct No-K/No-R0** 版本，Replay v1。直接沿用 C124 的 canonical Direct 排序、tie-break、P16、費稅、資金、退出與 information-date 契約，與 C193 共用相同 DN FIT／PIT 分數；不新增模型、Target、Positive gate 或 FIT 版本，不因 Selector 另行訓練。維持原模型訓練清單，新增策略比較列。
 
-`config/research_summary.py` 於原 NetPnL Direct group 綁定 C194／MR-13DN，沿用 C124 的既有 Direct Oracle 真值；原有 Forward／Rolling／Robustness／Target／Summary 同源派生。登錄 `C194−C124`（歷史擴充的 Direct 效果）、`C193−C194`（相同分數的 Selector 效果）、`C194−C118`（同為 Direct 的 CI 參照）、`C194−C96`（原無 DL 對照）。狀態為 CURRENT_RESEARCH_COMPARE／MARKET_COMPARISON_PENDING／NO_PROMOTION／NO_TRADING。依使用者指示，完成正式檢查後直接啟動原本地 Research 訓練／比較流程，合法既有 FIT 與 Replay 由 canonical owner 驗證重用；未取得結果前不宣稱 Direct 改善績效。
+`config/research_summary.py` 於原 NetPnL Direct group 綁定 C194／MR-13DN，沿用 C124 的既有 Direct Oracle 真值；原有 Forward／Rolling／Robustness／Target／Summary 同源派生。登錄 `C194−C124`（歷史擴充的 Direct 效果）、`C193−C194`（相同分數的 Selector 效果）、`C194−C118`（同為 Direct 的 CI 參照）、`C194−C96`（原無 DL 對照）。狀態已更新為 CURRENT_RESEARCH_COMPARE／ROLLING_FOUR_SEED_RESULT_AVAILABLE／NO_ADVANCEMENT／NO_PROMOTION／NO_TRADING。原使用者執行授權及既有 FIT／Replay 的 canonical REUSE 契約保留。
+
+**2026-11-25 四 Seed 結果登錄。** 使用者提供完整 Console，並與本機已發布 Model SOP、Strategy Robustness JSON／逐 Seed CSV 核對。相同 `end_to_end_v1` 的 C193−C123 配對 ΔRoMD 均值／中位數為 −1.449564／−1.110077，C194−C124 為 −1.760076／−1.203040，兩者均 0/4 勝；早期擴充未晉級。此完成狀態取代「待 Robustness 結果」，不改寫前述 Seed42 未晉級及後續使用者續測授權。原研究列、身分與成果保留，未自動退役或切換 Training Model；沒有新模型／融合策略身分。詳細數值、來源及證據限制見 Experiment Log 同日條目。
+
+
+## 2026-11-25：CI＋CO 固定等權排名融合（使用者核准）
+
+此研究只改 Strategy runtime score consumption，不新增 MR／Target／FIT。原 C106／C118（CI raw）、C123／C124（CO raw）與其他現行研究列完整保留。
+
+| 身分 | 每日分數 | Selector | 狀態 |
+|---|---|---|---|
+| SR-C195 | CI 百分位 × 1；CO × 0 | Exact K/R0 | IMPLEMENTED / REPLAY v1 / MARKET_COMPARISON_PENDING |
+| SR-C196 | 同 C195 | Direct No-K/No-R0 | IMPLEMENTED / REPLAY v1 / MARKET_COMPARISON_PENDING |
+| SR-C197 | CI × 0；CO 百分位 × 1 | Exact K/R0 | IMPLEMENTED / REPLAY v1 / MARKET_COMPARISON_PENDING |
+| SR-C198 | 同 C197 | Direct No-K/No-R0 | IMPLEMENTED / REPLAY v1 / MARKET_COMPARISON_PENDING |
+| SR-C199 | CI 百分位 × 0.5 ＋ CO 百分位 × 0.5 | Exact K/R0 | IMPLEMENTED / REPLAY v1 / MARKET_COMPARISON_PENDING |
+| SR-C200 | 同 C199 | Direct No-K/No-R0 | IMPLEMENTED / REPLAY v1 / MARKET_COMPARISON_PENDING |
+
+六組都使用同一 Seed、同一資訊日 CI／CO 完整 feature-history-eligible stock-day 的交集；先取共同母體，再各自用 canonical `average_zero_based` 同日平均名次百分位（單一股票日 0.5），最後按事前固定權重相加。零權重來源仍是母體與 provenance 依賴，禁止缺分數補零、跨 Seed fallback、使用未來成熟標籤或只以 orderable candidates 正規化。保留原資訊日／續掛／0050 缺分數／P16／費稅／Broker-Cash／出場／Selector。無權重搜尋、Positive gate、重訓或法人資料。
+
+既有 Compare Suite 登錄百分位對 raw、融合對兩個百分位控制及原 CI／CO、Exact 對 Direct、融合對 C96 的配對 contrasts；同一 Summary roster 派生 Forward／Rolling／Robustness，原四 benchmark seeds 與 Seed42 Rolling 不變。新組不借用單一模型 ρ 或 Oracle：固定融合沒有新模型 SOP，六組共同母體／分數組合的 perfect-score mapping 尚未完成核准與 parity，Oracle 為 `CONTRACT_UNRESOLVED`，不影響本次真實模型分數的策略回放。2021 起為迭代研究 OOS；結果不自動升格 Trading。

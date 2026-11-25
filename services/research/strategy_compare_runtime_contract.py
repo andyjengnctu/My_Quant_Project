@@ -344,6 +344,24 @@ def resolve_strategy_compare_runtime_contract(
                 project_root=root, **identity, expected_seed=int(workflow.seed), dataset=str(dataset))
             score_bindings[str(binding.contract.score_path.resolve())] = binding
 
+    from core.rank_score_composition import rank_score_composition
+    if rank_score_composition(ranking_options):
+        from services.breakout_quality.forward_model_source import load_forward_score_binding
+        from filters.breakout_quality.rank_score_composition import load_rank_composition_scores
+        for source in ranking_options.get("rank_composition_sources", ()):
+            if source["score_source"] != SCORE_SOURCE_CONTINUOUS_RANKER_OOS:
+                continue
+            path = str(Path(source["score_path"]).resolve())
+            if path not in score_bindings:
+                score_bindings[path] = load_forward_score_binding(
+                    project_root=root, filter_id=source["filter_id"],
+                    model_architecture=source["model_architecture"], experiment_profile=source["experiment_profile"],
+                    expected_seed=int(source["expected_seed"]), dataset=str(dataset))
+        if ranking_source is None:
+            raise ValueError("Rank composition requires a Research ranking source")
+        ranking_source["rank_composition_scores"] = load_rank_composition_scores(
+            project_root=root, options=ranking_options, score_bindings=score_bindings)
+
     if (comparison_start_date is None) != (comparison_end_date is None):
         raise ValueError("comparison_start_date與comparison_end_date必須同時提供")
     if comparison_start_date is not None:
