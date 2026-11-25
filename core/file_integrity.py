@@ -84,9 +84,7 @@ def _windows_file_information_api():
 def _windows_file_change_time_ns(path: str | Path) -> int:
     ctypes, info_type, create, query, close = _windows_file_information_api()
     # Attribute-only access, allowing concurrent readers/writers/atomic rename.
-    # CreateFile follows the same links as stat. An absolute path is sufficient;
-    # resolving it first adds two Windows handle queries for every observation.
-    handle = create(str(Path(path).absolute()), 0x80, 0x7, None, 3, 0x02000000, None)
+    handle = create(str(Path(path).resolve()), 0x80, 0x7, None, 3, 0x02000000, None)
     if handle == ctypes.c_void_p(-1).value:
         raise ctypes.WinError(ctypes.get_last_error())
     try:
