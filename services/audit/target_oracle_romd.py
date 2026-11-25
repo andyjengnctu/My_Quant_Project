@@ -650,8 +650,11 @@ def _contract(definition, *, settings=None) -> tuple[Any, Any, Any]:
     base = settings.arms[str(source["baseline_arm_id"])]
     selected_modes = set(_oracle_comparison_plan(definition)["selectors"].values())
     requires_exact = "exact" in selected_modes
+    from core.research_summary import unresolved_oracle_strategy_contracts
+    from core.strategy_compare_registry import STRATEGY_COMPARE_ARMS
+    unresolved = unresolved_oracle_strategy_contracts(arm_registry=STRATEGY_COMPARE_ARMS)
     exact_candidates = [arm for arm in settings.enabled_arms if (
-        arm.dl_enabled and arm.param_source == base.param_source
+        arm.arm_id not in unresolved and arm.dl_enabled and arm.param_source == base.param_source
         and arm.param_policy == base.param_policy
         and arm.rule_policy == base.rule_policy
         and arm.dl_runtime_mode == "resource-aware-continuous-score-constrained-optimal"
@@ -682,8 +685,11 @@ def _contract(definition, *, settings=None) -> tuple[Any, Any, Any]:
 
 def _direct_arm(definition, settings, base, exact):
     """Read a registered DL Direct arm; never synthesize a new selector."""
+    from core.research_summary import unresolved_oracle_strategy_contracts
+    from core.strategy_compare_registry import STRATEGY_COMPARE_ARMS
+    unresolved = unresolved_oracle_strategy_contracts(arm_registry=STRATEGY_COMPARE_ARMS)
     compatible = [arm for arm in settings.enabled_arms if (
-        arm.dl_enabled and arm.param_source == base.param_source
+        arm.arm_id not in unresolved and arm.dl_enabled and arm.param_source == base.param_source
         and arm.param_policy == base.param_policy and arm.rule_policy == base.rule_policy
         and arm.dl_runtime_mode == "resource-aware-continuous-score-no-k-no-r0"
         and (arm.dl_runtime_options or {}).get("preserve_k") is False

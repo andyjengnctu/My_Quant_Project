@@ -1233,8 +1233,8 @@ for _new_id, _reference_id, _weights, _label in (
             "rank_score_composition": {
                 "method": "same_day_percentile_weighted_v1",
                 "universe": "common_score_eligible_stock_days", "tie_method": "average_zero_based",
-                "members": tuple({"dl_id": _source, "weight": _weight} for _source, _weight in zip(
-                    ("CONT13CI_ROLL", "CONT13CO_ROLL"), _weights, strict=True)),
+                "members": [{"dl_id": _source, "weight": _weight} for _source, _weight in zip(
+                    ("CONT13CI_ROLL", "CONT13CO_ROLL"), _weights, strict=True)],
             },
         },
     }

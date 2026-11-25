@@ -618,6 +618,16 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     registered_rows = tuple(summary_cfg.RESEARCH_SUMMARY_ROWS)
     pairs = get_research_summary_model_profiles()
     arms = set(get_research_summary_strategy_arm_ids())
+    from core.strategy_compare_registry import STRATEGY_COMPARE_ARMS
+    composite_labels = {}
+    for group in original_rows:
+        for binding in group.get("bindings", ()):
+            if binding.get("rank_models"):
+                members = STRATEGY_COMPARE_ARMS[binding["arm_id"]]["dl_runtime_options"]["rank_score_composition"]["members"]
+                composite_labels[binding["arm_id"]] = " + ".join(
+                    f"{pair[0]} pct {member['weight']:.0%}"
+                    for pair, member in zip(binding["rank_models"], members, strict=True)
+                    if member["weight"] > 0)
     selected_profiles = {profile for _name, profile in pairs}
     extra_profile = next(profile for profile in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES
                          if profile not in selected_profiles
@@ -635,10 +645,14 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
                           for field in ("model", "positive_model") if row[field]}
         visible_arms = {row["strategy"] for row in snapshot["rows"] if row["strategy"]}
         check_true("summary_missing_artifacts_keep_all_declared_models_and_strategies",
-                   visible_models == {name for name, _profile in pairs} and visible_arms == arms
+                   visible_models == {name for name, _profile in pairs} | set(composite_labels.values()) and visible_arms == arms
                    and all(row["oracle_romd"] is None and row["rolling_romd"] is None
                            for row in snapshot["rows"])
                    and before == sorted(path.relative_to(root).as_posix() for path in root.rglob("*")))
+        check_true("summary_runtime_compositions_keep_constituents_without_fabricated_model_rho",
+                   all(row["model"] == composite_labels[row["strategy"]]
+                       and row["rolling_rho"] is None and row["robustness_rho"] is None
+                       for row in snapshot["rows"] if row["strategy"] in composite_labels))
         # A single display projection owns independent scientific Target,
         # Daily entry policy, selector, and model. Derive the expected current
         # Daily treatments from the active roster and the independent registry

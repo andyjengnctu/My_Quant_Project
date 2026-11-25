@@ -400,7 +400,7 @@ def resolve_breakout_quality_candidate_rank(
             ),
         )
         if options.get("rank_score_composition"):
-            composed = context.rank_composition_scores
+            composed = options.get("_rank_composition_scores")
             if composed is None:
                 raise ValueError("Rank composition requires an admitted same-seed score table")
             date_text = pd.Timestamp(lookup_date).strftime("%Y-%m-%d")

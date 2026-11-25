@@ -104,6 +104,8 @@ class RankScoreCompositionTests(TestCase):
                 ids = rank_composition_source_ids(arm.dl_runtime_options)
                 if not ids:
                     continue
+                import json
+                self.assertEqual(arm.as_dict(), json.loads(json.dumps(arm.as_dict())))
                 self.assertIn(arm.arm_id, unresolved)
                 self.assertEqual(set(ids), set(resolve_arm_runtime_dl_source_ids(settings, arm)))
                 projections = runtime_score_projection_requirements(settings_payload=settings.as_dict(), on_arm_payload=arm.as_dict())
@@ -130,9 +132,10 @@ class RankScoreCompositionTests(TestCase):
         with breakout_quality_ranking_source_context(**options):
             with self.assertRaisesRegex(ValueError, "admitted"):
                 resolve_breakout_quality_candidate_rank(**lookup)
-        with breakout_quality_ranking_source_context(**options, rank_composition_scores={
-                "scores": {("A", "2021-01-04"): .9, ("A", "2021-01-05"): .2},
-                "available_from": "2021-01-04", "available_through": "2021-12-31"}):
+        options["ranking_options"] = {**options["ranking_options"], "_rank_composition_scores": {
+            "scores": {("A", "2021-01-04"): .9, ("A", "2021-01-05"): .2},
+            "available_from": "2021-01-04", "available_through": "2021-12-31"}}
+        with breakout_quality_ranking_source_context(**options):
             self.assertEqual(resolve_breakout_quality_candidate_rank(**lookup)["score"], .2)
             self.assertFalse(resolve_breakout_quality_candidate_rank(**{**lookup, "ticker": "0050"})["available"])
             self.assertEqual(resolve_breakout_quality_candidate_rank(**{**lookup, "information_date": "2021-01-01"})["unavailable_reason"], "outside_score_period")
