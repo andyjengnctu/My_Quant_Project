@@ -1219,6 +1219,25 @@ STRATEGY_COMPARE_ARMS["C194"] = {
     "dl_id": "CONT13DN_ROLL",
 }
 
+# AI: One EMA-input model supplies the same original CO Exact/Direct selectors.
+from core.breakout_quality_registry import STOCK_EMA_PROFILE as _STOCK_EMA_PROFILE
+STRATEGY_DL_SOURCES["CONT13DO_ROLL"] = {
+    **STRATEGY_DL_SOURCES[STRATEGY_COMPARE_ARMS["C123"]["dl_id"]],
+    "experiment_profile": _STOCK_EMA_PROFILE,
+    "description": "MR-13DO CO plus full-history stock close EMA inputs",
+}
+for _new_id, _reference_id, _selector in (
+    ("C197", "C123", "Exact K/R0"),
+    ("C198", "C124", "Direct No-K/No-R0"),
+):
+    STRATEGY_COMPARE_ARMS[_new_id] = {
+        **STRATEGY_COMPARE_ARMS[_reference_id],
+        "name": f"Min MR-13DO EMA {_selector} / Broker-Cash",
+        "description": "Same CO full-cycle NetPnL and P16; append full-history stock close EMA inputs.",
+        "dl_id": "CONT13DO_ROLL",
+        "replay_contract_version": 1,
+    }
+
 # AI: User-approved fixed equal-rank fusion; keep all original CI/CO references.
 for _new_id, _reference_id, _weights, _label in (
     ("C195", "C106", (0.5, 0.5), "CI+CO Equal Rank Exact"),
@@ -1260,6 +1279,9 @@ for _mode in ("oos", "rolling"):
 # Contrast 是否啟用只由 STRATEGY_COMPARE_PROFILES[*]["contrast_ids"] 決定。
 
 STRATEGY_COMPARE_CONTRASTS = {
+    "C197-C123": {"left": "C197", "right": "C123", "description": "CO full-history EMA inputs versus original CO, same P16 Exact"},
+    "C198-C124": {"left": "C198", "right": "C124", "description": "CO full-history EMA inputs versus original CO, same P16 Direct"},
+    "C197-C198": {"left": "C197", "right": "C198", "description": "Same full-history EMA model score and P16: Exact versus Direct"},
     'C195-C106': {'left': 'C195', 'right': 'C106', 'description': 'Equal rank fusion versus original CI Exact'},
     'C195-C123': {'left': 'C195', 'right': 'C123', 'description': 'Equal rank fusion versus original CO Exact'},
     'C196-C118': {'left': 'C196', 'right': 'C118', 'description': 'Equal rank fusion versus original CI Direct'},

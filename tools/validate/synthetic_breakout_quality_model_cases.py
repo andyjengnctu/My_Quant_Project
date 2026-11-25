@@ -3209,6 +3209,10 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
     case_id = "BREAKOUT_QUALITY_REUSABLE_MODEL_COMPONENTS"
     results, summary, check, check_true = _start_case(case_id)
 
+    from .synthetic_sequence_indicator_cases import check_sequence_indicators
+
+    check_sequence_indicators(check, check_true)
+
     from core.breakout_quality_registry import (
         SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES,
         get_breakout_quality_experiment_profile,
@@ -3606,8 +3610,12 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
     probe_context = np.empty((5, 0), dtype=np.float32)
     order = np.asarray([4, 1, 3, 0], dtype=np.int64)
     for architecture in ACTIVE_MODEL_ARCHITECTURES:
-        model = build_active_model(10, 0, architecture=architecture).eval()
-        heads = (None, "primary") if architecture == INCEPTION_TIME_V1 else (None, "raw_safety", "conditional_mfe", "both")
+        spec = get_model_spec(architecture)
+        feature_count = 10 + len(spec.stock_close_ema_spans)
+        probe_features = np.random.default_rng(42).normal(size=(5, 24, feature_count)).astype(np.float32)
+        model = build_active_model(feature_count, 0, architecture=architecture).eval()
+        shared_heads = get_architecture_descriptor(architecture).has_capability("shared_safety_mfe")
+        heads = (None, "raw_safety", "conditional_mfe", "both") if shared_heads else (None, "primary")
         with torch.no_grad():
             x = torch.from_numpy(probe_features[order])
             context = torch.from_numpy(probe_context[order])
@@ -3622,7 +3630,7 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
                     observed.shape == tuple(expected.shape)
                     and np.allclose(observed, expected.numpy(), rtol=1e-5, atol=1e-6),
                 )
-            if architecture != INCEPTION_TIME_V1:
+            if shared_heads:
                 safety, mfe = model.forward_safety_mfe_heads(x, context)
                 check_true(
                     "current_shared_head_output_order_is_safety_then_mfe",

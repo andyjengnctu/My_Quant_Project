@@ -4,6 +4,14 @@
 
 本文件是 `breakout_quality` 的**實驗 identity、命名、版本語意、namespace、目前基準與 ID 佔用狀態**單一真理來源。
 
+### 2026-11-26 已授權的完整歷史 EMA 輸入研究
+
+`MR-13DO` 使用新輸入表示 `ARCH-inception_time_stock_ema_v1`，profile 為 `daily_universal_formal_mintrade_fullcycle_netpnl_per_seed_full_list_ndcg_pairwise_stock_ema`，FIT v1。以原 CO 為控制，唯一研究變數為在原個股與 0050 的 300×10 價量輸入後，加入個股收盤價 5／20／60 日 EMA，成為 300×13。各股從 canonical 還原價完整歷史首筆收盤初始化，依 `alpha=2/(span+1)`、`adjust=False` 逐日累積，再切取 300 日。EMA 與該樣本個股 OHLC 共用資訊日 Close 作除數並減一。每個日期只依賴當日及過往資料，計算歷史不受 300 日視窗或 Target 訓練起點截斷。共同樣本資格、Target／成熟規則、CO 歷史起點、loss、epoch selection、P16、費稅與資金契約沿用原 CO。
+
+`SR-C197` 為此模型的 Exact K/R0，對照 C123。`SR-C198` 為相同模型分數的 Direct No-K/No-R0，對照 C124。共用 `DL-CONT13DO-ROLL`／`CONT13DO_ROLL`，Replay v1。兩列加入原 Research roster、模型比較、Rolling、四 Seed Robustness、Target 與 Summary。原 C106／C123／C124 與歷史列依原設定保留。使用者已授權實作並於本機執行 Rolling、Robustness、Summary。當前狀態為 REGISTERED / IMPLEMENTATION_IN_PROGRESS / MARKET_RESULT_PENDING，2021 起結果屬迭代研究 OOS，研究結果不自動升格 Trading。
+
+本輪使用者更正 C197～C200 的占用狀態。該四號僅存在於先前撤回的六列暫定配置，未形成市場 Replay 或有效研究成果，依使用者指示解除占號；C197／C198 自本輪起對應上述 EMA 輸入研究，C199／C200 可用。
+
 凡進行 breakout-quality 分析、設計、實作、比較、Audit 或新增實驗名稱，開始前固定依序讀取：
 
 1. `doc/PROJECT_SETTINGS.md`
@@ -1031,7 +1039,7 @@ The canonical `config/research_summary.py` roster alone determines current Model
 
 既有 Compare Suite 登錄融合對原 CI／CO、Exact 對 Direct、融合對 C96 的配對 contrasts；同一 Summary roster 派生 Forward／Rolling／Robustness，原四 benchmark seeds 與 Seed42 Rolling 不變。新組不借用單一模型 ρ 或 Oracle：固定融合沒有新模型 SOP，共同母體／分數組合的 perfect-score mapping 尚未完成核准與 parity，Oracle 為 `CONTRACT_UNRESOLVED`，不影響真實模型分數的策略回放。2021 起為迭代研究 OOS；結果不自動升格 Trading。
 
-**同輪編號更正與研究限制。** 初始配置曾將 C195～C198 設為百分位控制、C199／C200 設為融合，只有工程 commit，尚無市場 Replay 結果。使用者明確要求「不要這麼多控制組」及「用 c195, c196 代號」，因此在第一個市場回放前，以上最終 C195／C196 定義依使用者指示取代暫定配置；舊配置由原 commit 保留追溯。C197～C200 為 `WITHDRAWN_BEFORE_MARKET_REPLAY`，不在 current runtime／Summary／Robustness，編號不再分配其他研究。只跑兩個融合組，以原 CI／CO 策略作對照；結果是「百分位轉換＋等權融合」的組合效果，無法單獨歸因兩者。
+**同輪編號更正與研究限制。** 初始配置曾將 C195～C198 設為百分位控制、C199／C200 設為融合，只有工程 commit，尚無市場 Replay 結果。使用者明確要求「不要這麼多控制組」及「用 c195, c196 代號」，因此在第一個市場回放前，以上最終 C195／C196 定義依使用者指示取代暫定配置；舊配置由原 commit 保留追溯。C197～C200 為 `WITHDRAWN_BEFORE_MARKET_REPLAY`，當時退出 runtime／Summary／Robustness；2026-11-26 使用者明確更正這四號可用，後續分配依本文件本輪 EMA 研究條目。只跑兩個融合組，以原 CI／CO 策略作對照；結果是「百分位轉換＋等權融合」的組合效果，無法單獨歸因兩者。
 
 **2026-11-25 本機結果登錄。** 原 Research Rolling、四 Seed Robustness 與 Summary 均完成，沒有 FIT 或 Optimizer 搜尋。C195 四 Seed 平均 RoMD 9.283712，對 C106／C123 的配對均值差為 −2.886660／−1.528662，均僅 1/4 勝，平均 MDD 亦增加。C196 平均 RoMD 4.935194，對 C118／C124 為 −0.058127／+0.274569，均為 2/4 勝，未達研究晉級條件。兩組皆 `NO_ADVANCEMENT`；保留研究列與 C106／C123 原成果，不自動切換 Trading 或搜尋融合權重。原 35 組 Rolling 結果及原 140 個 Robustness 單元的核心績效逐值一致。完整配對與來源見 Experiment Log 同日固定等權融合條目及 `outputs/filters/breakout_quality/breakout_quality_v1/research_diagnostics/ci_co_rank_fusion_20261125.json`。
 

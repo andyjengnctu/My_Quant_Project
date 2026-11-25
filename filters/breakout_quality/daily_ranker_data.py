@@ -102,6 +102,7 @@ from filters.breakout_quality.features import (
     normalize_ohlcv_array_windows,
 )
 from filters.breakout_quality.models.spec import get_model_spec, validate_model_sequence_length
+from filters.breakout_quality.sequence_indicators import full_history_stock_emas, stock_ema_contract
 from filters.breakout_quality.trade_activity_features import (
     TRADE_COUNT_FEATURE_NAMES,
     normalized_trade_count_windows,
@@ -136,6 +137,7 @@ class LazyDailyFeatureBank:
         feature_quote_mask: bool = False,
         trade_count_source: dict[str, Any] | None = None,
         trade_count_placebo: bool = False,
+        stock_close_ema_spans: tuple[int, ...] = (),
         ticker_ids: np.ndarray,
         source_positions: np.ndarray,
         benchmark_positions: np.ndarray,
@@ -186,10 +188,20 @@ class LazyDailyFeatureBank:
             (*FEATURE_COLUMNS, *TRADE_COUNT_FEATURE_NAMES)
             if self._trade_count_enabled else FEATURE_COLUMNS
         )
+        self._stock_ema_spans = tuple(stock_close_ema_spans)
+        self._stock_emas = ()
+        if self._stock_ema_spans:
+            if feature_frames is not None:
+                raise ValueError("Stock EMA inputs require canonical adjusted-price frames")
+            self.feature_columns += tuple(stock_ema_contract(self._stock_ema_spans)["feature_columns"])
+            self._stock_emas = tuple(
+                full_history_stock_emas(values[:, 3], self._stock_ema_spans)
+                for values in self._frame_arrays
+            )
         # Preserve legacy manifest byte semantics for existing AO/BX artifacts;
         # only the new data capability publishes its additional feature schema.
         self.manifest_feature_columns = (
-            self.feature_columns if self._trade_count_enabled else FEATURE_COLUMNS
+            self.feature_columns if self._trade_count_enabled or self._stock_ema_spans else FEATURE_COLUMNS
         )
         self._stock_trade_counts: tuple[np.ndarray, ...] = ()
         self._stock_trade_masks: tuple[np.ndarray, ...] = ()
@@ -676,6 +688,12 @@ class LazyDailyFeatureBank:
             if len(window) != feature_window:
                 raise RuntimeError("daily feature window長度與policy不一致")
             stock_windows[out_index] = window
+            if self._stock_ema_spans:
+                ema_window = self._stock_emas[int(ticker_id)][start_pos:int(source_pos) + 1]
+                normalized_ema = ema_window / frame[int(source_pos), 3] - 1.0
+                if not np.isfinite(normalized_ema).all():
+                    raise RuntimeError("Stock EMA input contains non-finite values")
+                output[out_index, :, -len(self._stock_ema_spans):] = normalized_ema
             if self._trade_count_enabled:
                 activity_counts[out_index] = self._stock_trade_counts[int(ticker_id)][start_pos:int(source_pos) + 1]
                 activity_masks[out_index] = self._stock_trade_masks[int(ticker_id)][start_pos:int(source_pos) + 1]
@@ -2169,6 +2187,7 @@ def load_daily_universal_ranker_data(
         feature_quote_mask=use_quote_mask,
         trade_count_source=trade_count_input,
         trade_count_placebo=architecture_descriptor.has_capability("lagged_trade_count_placebo"),
+        stock_close_ema_spans=model_spec.stock_close_ema_spans,
         ticker_ids=ticker_ids,
         source_positions=source_positions,
         benchmark_positions=benchmark_positions,

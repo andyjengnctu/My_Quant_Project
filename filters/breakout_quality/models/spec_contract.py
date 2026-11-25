@@ -32,6 +32,7 @@ class BreakoutQualityModelSpec:
     derived_context_lookback_bars: tuple[int, ...] = ()
     derived_context_annualization_bars: int | None = None
     sequence_input_paths: tuple[str, ...] = ()
+    stock_close_ema_spans: tuple[int, ...] = ()
     price_volume_structure_time_bins: int | None = None
     price_volume_structure_price_bins: int | None = None
     price_volume_structure_price_span_atr: float | None = None
@@ -376,6 +377,10 @@ class BreakoutQualityModelSpec:
             )
         if self.sequence_input_paths:
             payload["sequence_input_paths"] = list(self.sequence_input_paths)
+        if self.stock_close_ema_spans:
+            from filters.breakout_quality.sequence_indicators import stock_ema_contract
+
+            payload["stock_close_ema"] = stock_ema_contract(self.stock_close_ema_spans)
         if self.pairwise_temporal_relation_features:
             payload["pairwise_temporal_relation_features"] = list(
                 self.pairwise_temporal_relation_features

@@ -285,6 +285,10 @@ project/
 - `FitDataDependencies` 在新 capability 出現時才增加 context contract 與 ordered FIT values 證據；原模型的 source／FIT payload 不變。Scientific identities、狀態與實驗範圍由 Experiment Registry 持有，績效只由 Experiment Log 持有。
 
 
+### 完整歷史均線輸入
+
+`sequence_indicators.py` 持有 causal stock-close EMA 的公式、初始化、缺值與欄位契約。Architecture descriptor 宣告 spans，model spec 保存完整契約；原 `LazyDailyFeatureBank` 從每股完整 canonical frame 計算一次 EMA，再依原 stock-day 索引切取輸入窗，並使用相同資訊日 Close 正規化。均線計算不依賴 Target 成熟或樣本起點。原訓練、PIT score、模型比較與 artifact identity 消費相同 feature bank／model spec，原 Strategy Compare 讀取其合法分數。研究列與比較由原 Research roster／Compare Suite 派生。
+
 ### Controlled learning studies
 
 `config/breakout_quality_history.py` declares model training-history extensions. `services/breakout_quality/training_history.py` composes canonical early-history and unchanged original-label materializers; parameter preparation remains a registered dependency of the existing Research artifact planner. The current model/strategy bindings live in `config/research_summary.py`, which projects membership into the existing model comparison, Strategy Compare, Robustness, Target and Summary workflows. No separate learning-study menu, orchestration engine or report schema is used. New history bounds and ordered FIT truth participate in model identity; unchanged controls retain their existing FIT/Replay contracts and canonical validation/reuse rules.

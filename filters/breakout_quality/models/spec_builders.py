@@ -75,6 +75,7 @@ def _build_inception_spec(
         head_width=head_width,
         use_dataset_context=use_dataset_context,
         sequence_input_paths=sequence_input_paths,
+        stock_close_ema_spans=tuple(descriptor_options.get("stock_close_ema_spans", ())),
         inception_depth=depth,
         inception_filters=filters,
         inception_bottleneck_channels=bottleneck_channels,
