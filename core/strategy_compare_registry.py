@@ -1220,9 +1220,13 @@ STRATEGY_COMPARE_ARMS["C194"] = {
 }
 
 # AI: One EMA-input model supplies the same original CO Exact/Direct selectors.
-from core.breakout_quality_registry import STOCK_EMA_PROFILE as _STOCK_EMA_PROFILE
+from core.breakout_quality_registry import (
+    STOCK_EMA_PROFILE as _STOCK_EMA_PROFILE,
+    get_breakout_quality_experiment_profile as _get_experiment_profile,
+)
 STRATEGY_DL_SOURCES["CONT13DO_ROLL"] = {
     **STRATEGY_DL_SOURCES[STRATEGY_COMPARE_ARMS["C123"]["dl_id"]],
+    "model_architecture": _get_experiment_profile(_STOCK_EMA_PROFILE).model_architecture,
     "experiment_profile": _STOCK_EMA_PROFILE,
     "description": "MR-13DO CO plus full-history stock close EMA inputs",
 }

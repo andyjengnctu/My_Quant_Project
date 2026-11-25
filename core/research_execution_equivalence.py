@@ -9,6 +9,33 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+# AI: The opt-in EMA representation preserves all 29 pre-existing profiles,
+# both original model specifications and default 300x10 inputs byte-for-byte
+# against ba776a9d. Exact source pins below apply only to the existing Oracle
+# dependency projection. The new model retains its distinct profile/spec and
+# FIT identity. Numerical evidence is in original_input_parity.json.
+_FULL_HISTORY_EMA_MODEL_SOURCES = {
+    "core/breakout_quality_registry.py": (
+        ("1e3a681eef7c5734600b21003fcbefd7bd7a72aa259ff00b7b1d65077cbff840",
+         "bedc93200356fea6d646aed810ed2c694337874849913dada709d6ea5bae31af"),
+        "310db0713692a8a335d8f7514e8026b05e0e921781b5a89412cd5d1d63f4aa5e",
+    ),
+    "filters/breakout_quality/models/architectures.py": (
+        ("17ebb9380a39a077603652bd267020ec05e22d521306b85adb26c520f9b059e2",
+         "90fc7c0bc7897ee46c26f0ec95cf17d5763139dd74a224888b7ecbbfdf9ac99a"),
+        "7759ecf25673d4e1709376f19f1dffb885e00fa8294b3275d718d1dda473f302",
+    ),
+    "filters/breakout_quality/models/spec_builders.py": (
+        ("00f5f445477e44b614fdcadac40bbee48d6253defee33f10dae447e30e7a3128",
+         "7c2c2e0aa5f52ee6d893e91892c28ab99dbf69d0dfc56391450e42d8232a2ece"),
+        "82ffabeea6b096e09370ab2ae871e95f5c4f430ab119984ffd1fad89bbe158ca",
+    ),
+    "filters/breakout_quality/models/spec_contract.py": (
+        ("93980ceec1cdedb792158670c8387b446cf5fa4bb8f74cc0016a6dcfea29c4ce",),
+        "e52a81e42cda0238bb935d6021450d348a825209636188404c81fea6e0bb3b7c",
+    ),
+}
+
 # Baseline ZIP SHA256: 3aae4d710c451d519245c2c1d204ffc235bcc453497f607b4078751659c21c6e
 _REVIEWED = {
     # AI: b0548fab input-read optimization: unchanged SHA bytes, Dataset rows
@@ -1284,6 +1311,25 @@ def _independent_queue_resource_syntax_sha256(content: bytes) -> str:
     import ast
     from core.source_calculation_syntax import calculation_syntax_attestation
     return calculation_syntax_attestation(ast.parse(content))[1]
+
+
+for _relative, (_pins, _previous) in _FULL_HISTORY_EMA_MODEL_SOURCES.items():
+    _proof = _REVIEWED.setdefault(_relative, {
+        "file_sha256": _pins[0], "original_file_sha256": _previous, "calculations": {},
+    })
+    _proof.setdefault("reviewed_model_only_revisions", {}).update(dict.fromkeys(_pins, _previous))
+
+_REVIEWED["filters/breakout_quality/models/spec_contract.py"]["reviewed_model_only_revisions"][
+    "864037bcf6922c134cffdb22d88523068ba3ffb0295ed118d1a7734b56d14803"
+] = "bdc029b4e9a96b52e488aa9c111e16b11308cc69ad611a4846421cf58e72d7d5"
+
+_REVIEWED_SOURCE_INVENTORIES["oracle_daily_provider"]["current"][
+    "filters/breakout_quality/daily_ranker_data.py"
+] = (
+    "89d65faea08df5b3e38387f613e326fbe3b6a17132af3c7dbed8f130cf750128",
+    "89d65faea08df5b3e38387f613e326fbe3b6a17132af3c7dbed8f130cf750128",
+    "50dd72fda048f1b3c1afd87b1e2adf0850230c98e1bb34f82b502df3a70147dd",
+)
 
 
 def _reviewed_source_group(scope: str):
