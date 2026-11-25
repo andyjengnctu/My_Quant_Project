@@ -100,13 +100,15 @@ class RankScoreCompositionTests(TestCase):
         unresolved = unresolved_oracle_strategy_contracts(arm_registry=STRATEGY_COMPARE_ARMS)
         for mode in ("oos", "rolling"):
             settings = get_strategy_comparison_settings("broker_cash_dl_conversion_" + mode)
-            for arm in settings.enabled_arms:
+            # Capability contracts remain testable when their historical arms
+            # leave the current research roster.
+            for arm in settings.arms.values():
                 ids = rank_composition_source_ids(arm.dl_runtime_options)
                 if not ids:
                     continue
                 import json
                 self.assertEqual(arm.as_dict(), json.loads(json.dumps(arm.as_dict())))
-                self.assertIn(arm.arm_id, unresolved)
+                self.assertEqual(arm.arm_id in unresolved, arm.enabled)
                 self.assertEqual(set(ids), set(resolve_arm_runtime_dl_source_ids(settings, arm)))
                 projections = runtime_score_projection_requirements(settings_payload=settings.as_dict(), on_arm_payload=arm.as_dict())
                 self.assertEqual(set(ids), set(projections))
@@ -123,7 +125,7 @@ class RankScoreCompositionTests(TestCase):
         from core.breakout_quality_ranking_context import breakout_quality_ranking_source_context
         from filters.breakout_quality.runtime import resolve_breakout_quality_candidate_rank
         settings = get_strategy_comparison_settings("broker_cash_dl_conversion_rolling")
-        arm = next(arm for arm in settings.enabled_arms if rank_score_composition(arm.dl_runtime_options))
+        arm = next(arm for arm in settings.arms.values() if rank_score_composition(arm.dl_runtime_options))
         source = settings.dl_sources[arm.dl_id]
         options = dict(score_source=source.score_source, model_architecture=source.model_architecture,
                        experiment_profile=source.experiment_profile, ranking_policy=arm.dl_runtime_mode,
@@ -163,7 +165,7 @@ class RankScoreCompositionTests(TestCase):
         from services.research import strategy_multi_seed_robustness as robust
         from core.strategy_compare_policy import get_strategy_comparison_settings
         settings = get_strategy_comparison_settings("broker_cash_dl_conversion_rolling")
-        arm = next(arm for arm in settings.enabled_arms if rank_score_composition(arm.dl_runtime_options))
+        arm = next(arm for arm in settings.arms.values() if rank_score_composition(arm.dl_runtime_options))
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             job = dict(profile_id=settings.profile_id, arm_id=arm.arm_id, seed=17, arm_order=1, seed_order=1,

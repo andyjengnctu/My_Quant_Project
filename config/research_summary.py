@@ -431,7 +431,8 @@ RESEARCH_SUMMARY_ROWS = (
      'bindings': ({'arm_id': 'C103',
                    'rank_model': ('MR-13CG',
                                   'daily_universal_shared_full_d40_safety_hs_conditional_mfe_full_list_ndcg_pairwise')},)},
-    {'oracle_contract_status': 'CONTRACT_UNRESOLVED',
+    # AI: 2026-11-26 user-directed retirement; preserve contracts and result evidence.
+    {'enabled': False, 'oracle_contract_status': 'CONTRACT_UNRESOLVED',
      'oracle_contract_reason': 'Common-universe percentile/composite score replay has no approved matching perfect-score contract or parity.',
      'bindings': tuple({'arm_id': arm_id, 'rank_models': (
          ('MR-13CI', 'daily_universal_terminal_r40_full_list_ndcg_pairwise'),

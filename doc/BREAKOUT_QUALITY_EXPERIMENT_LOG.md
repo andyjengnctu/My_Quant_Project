@@ -5441,3 +5441,22 @@ Exact 的總報酬略增 1.2854 個百分點，但 MDD 增加 1.9849 個百分�
 - Rolling：`outputs/strategy_compare/broker_cash_dl_conversion/rolling_2021_forward/latest/strategy_comparison.json` 與同名 Markdown；本輪 run 為 `20261125_231148`、config fingerprint 尾碼 `17615c47a50b`，舊 35 組對照來自 `20261125_075935` 的完成工件。
 - 四 Seed：`outputs/strategy_compare/robustness/broker_cash_dl_conversion/rolling_2021_forward/7a64a99773aa73b9/robustness_summary.json`、`seed_results.csv`、`robustness_report.md` 及 `attribution_source/`。
 - 一次性唯讀核對：`outputs/filters/breakout_quality/breakout_quality_v1/research_diagnostics/ci_co_rank_fusion_20261125.json`，保存來源 SHA256、逐 Seed 數值、配對差與兩模型的 runtime training identities。Summary 已實際執行並顯示兩組 Seed42／4S 結果。
+
+## 2026-11-26：C195／C196 退役與原 CO 訓練訊號集中度盤點
+
+**退役決策。** 使用者指定退役 C195／C196。兩組及其七個 contrasts 退出現行 Forward／Rolling Strategy Compare、Robustness 與 Summary；原 35 組策略、16 個模型、Training Model 與 Oracle catalog 保持原契約。保留原始研究定義、編號及 2026-11-25 已完成的市場結果，不回寫當日決策；沒有啟動下一輪模型或重跑市場回測。
+
+**本輪新增唯讀證據。** 為核對多日資訊列是否集中於相同原始突破訊號，使用 canonical CO 資料、同 Seed P16 teacher 與 pending-signal lifecycle 的既有 episode 診斷投影。範圍固定為 Seed42、`fold_20210101_20211231` 的原 final refit：資訊日 2013-12-31～2020-12-22，僅納入在 score start 2021-01-01 前已合法成熟的資料。72,630 groups 與實體模型 manifest 完全相符；其記錄的最大 model information cutoff 為 2020-12-25。沒有使用 2021 起 OOS 結果決定任何訓練權重，亦未 FIT 或執行新策略。
+
+| 描述量 | 原 CO 第一折合法 FIT cohort |
+|---|---:|
+| 股票／資訊日 rows | 72,630 |
+| canonical 原始突破訊號 | 7,304 |
+| 每訊號 rows 平均／中位數 | 9.943866／4 |
+| 每訊號 rows 第 90／99 百分位 | 27／68.97 |
+| 單一訊號最大 rows | 165 |
+| rows 最多的前 10% 訊號占全部 rows 比例 | 45.324246% |
+
+**證據邊界。** 此為原始訊號層的跨日集中度，不是已處理過的同 ticker/date 多 high_len rows，也不是金融樣本有效獨立數的估計。不同資訊日的價格、成交條件與後續結果仍可能提供新資訊；相同原始訊號不等於可直接刪除的重複樣本。表中 row 比例亦不等於實際梯度比例：CO 已有同日 pairwise Delta-NDCG 權重與 batch reduction。這次盤點沒有證明重加權可改善 RoMD，沒有分配新 scientific identity 或改變 loss／Target／FIT／選股契約。
+
+**來源。** `outputs/filters/breakout_quality/breakout_quality_v1/research_diagnostics/co_train_signal_concentration_20261126.json` 與同名 Markdown；保存原模型 manifest 路徑及 SHA256。退役原始績效仍以 `ci_co_rank_fusion_20261125.json` 與前一日正式 Rolling／Robustness 工件為準。
