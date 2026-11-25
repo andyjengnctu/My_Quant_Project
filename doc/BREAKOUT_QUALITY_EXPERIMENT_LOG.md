@@ -5404,3 +5404,40 @@ Exact 的總報酬略增 1.2854 個百分點，但 MDD 增加 1.9849 個百分�
 **本輪附帶唯讀分數核對。** 為判斷現有 CI／CO 是否只提供相同排序，對四個同 Seed 的 PIT scores 逐 ticker/date 對齊，各有 630,589 個共同可評分股票日、1,243 個日期（2021-01-04～2026-03-02），兩組檔案的 information cutoff 均早於 score date。同日 Spearman 按日等權平均依序為 0.108432、0.020534、0.090324、0.104220；每日前十名平均重疊率為 3.2663%、3.2100%、5.0040%、3.4513%。此母體是完整 score-eligible universe，並非實際 orderable candidates；沒有使用未來 Target。低分數相關不證明誤差或投組收益互補，沒有產生融合績效、調整權重或新增模型／策略身分。歷史 MR-13K／MR-13M 等權融合的負結果維持有效，未被此診斷取代。
 
 **來源。** 模型為 `outputs/filters/breakout_quality/breakout_quality_v1/standard_model_comparison/rolling_oos_robustness/standard_model_comparison.json`；策略為 `outputs/strategy_compare/robustness/broker_cash_dl_conversion/rolling_2021_forward/58e7d91b703f1b72/robustness_summary.json` 及同目錄 `seed_results.csv`／`robustness_report.md`。精確數值、逐 Seed 差、分數診斷定義及來源 SHA256 存於 `outputs/filters/breakout_quality/breakout_quality_v1/research_diagnostics/dn_robustness_review_20261125.json`。Summary 的 `Win Rate` 為 Oracle 交易勝率，不是 DL 策略實際交易勝率。
+
+## 2026-11-25：CI＋CO 固定等權排名融合，C195／C196 完成本機比較
+
+**授權與固定設計。** 依使用者要求只新增 C195 Exact K/R0 與 C196 Direct No-K/No-R0；取消新增單模型百分位控制組，保留 C106／C118（CI raw）、C123／C124（CO raw）及原有研究列。先以同 Seed、同資訊日 CI／CO 的共同可評分股票日母體各自計算 canonical `average_zero_based` 百分位，再固定 50／50 相加。無權重搜尋、Positive gate、新模型或 Target，沒有 FIT／Optimizer 搜尋，法人資料仍未進行。原 P16、資訊日、續掛、缺分數資格、Broker-Cash 與 Selector 契約不變。
+
+**正式執行與完整性。** 使用原 Research Rolling、Robustness 與 Summary 入口，評估窗為 2021-01-01～2026-03-02。Rolling 包含 37 組；Robustness 為 37 組 × 4 Seed＝148 單元，新增回放僅 C195／C196 的 8 單元。四 Seed 固定為 `693545351 / 2014432738 / 104504529 / 762252050`，同 Seed 共享原 P16 參數。兩組各 Seed 的 CI／CO source SHA、六折身分及 canonical observation VERIFIED 狀態均已核對；兩種 Selector 使用相同來源。原 35 組 Rolling 的完整 scenario 結果逐值一致，原 140 個 Robustness 單元的 RoMD／MDD／總報酬逐值一致。新融合沒有單獨的模型 ρ，亦不借用 CI／CO 的 Oracle，Summary 依既有契約保留未定義欄位。
+
+| 策略 | Seed42 RoMD | 四 Seed 平均 RoMD | 四 Seed 平均 MDD | 四 Seed 平均總報酬 |
+|---|---:|---:|---:|---:|
+| C96：P16 No DL | 8.355970 | 9.176555 | 15.049214% | 137.878115% |
+| C106：CI Exact | 8.039325 | 12.170372 | 13.222912% | 157.112029% |
+| C123：CO Exact | 10.882721 | 10.812374 | 13.750995% | 146.876071% |
+| C195：CI＋CO 等權排名 Exact | 5.518087 | 9.283712 | 16.190825% | 150.207811% |
+| C118：CI Direct | 4.449848 | 4.993320 | 19.860483% | 99.317646% |
+| C124：CO Direct | 3.705003 | 4.660625 | 18.557436% | 79.411014% |
+| C196：CI＋CO 等權排名 Direct | 9.086815 | 4.935194 | 18.927860% | 89.929847% |
+
+**同 Seed 配對。** 下列差值一律是「融合 − 控制」；與原 contrast 工件採用的 right-minus-left 符號分開辨識。RoMD 是逐 Seed RoMD 的平均，並非平均總報酬除以平均 MDD；MDD 與報酬差為百分點。
+
+| 配對 | ΔRoMD 均值 | ΔRoMD 中位數 | 勝出 Seed | 平均 ΔMDD | 平均 Δ總報酬 |
+|---|---:|---:|---:|---:|---:|
+| C195−C106 | −2.886660 | −2.854051 | 1/4 | +2.967912 | −6.904218 |
+| C195−C123 | −1.528662 | −1.089091 | 1/4 | +2.439830 | +3.331740 |
+| C195−C96 | +0.107157 | −0.095301 | 2/4 | +1.141611 | +12.329696 |
+| C196−C118 | −0.058127 | −0.217367 | 2/4 | −0.932623 | −9.387799 |
+| C196−C124 | +0.274569 | +0.561509 | 2/4 | +0.370424 | +10.518833 |
+| C196−C96 | −4.241361 | −3.891991 | 0/4 | +3.878646 | −47.948267 |
+
+**判讀與決策。** C195 對兩個 Exact 控制均退步，對 CO 的平均總報酬雖增加，但回撤增加更多，RoMD 降低。C196 的 Seed42 改善未穩定延續至四 Seed；相對 CI Direct 平均 RoMD 略低，相對 CO Direct 僅 2/4 改善且平均 MDD 增加。兩組均未通過「配對 ΔRoMD 均值／中位數為正、至少 3/4 改善、平均 MDD 不增加」的研究篩選條件，登錄 `NO_ADVANCEMENT`。保留 C195／C196 及 C106／C123 等原比較列供檢視，不自動升格 Trading，不接續搜尋權重或新增控制組。
+
+**限制。** 本輪識別的是「百分位轉換＋固定融合」的組合效果，沒有單模型百分位控制，無法拆分兩者的貢獻。2021 起仍為迭代研究 OOS；四 Seed 共用市場歷史，研究門檻不是統計顯著檢定。融合沒有新訓練 Target，Oracle 保持 `CONTRACT_UNRESOLVED`；這不影響已完成的真實分數策略回放，也不否定所有融合方法。
+
+**正式證據。**
+
+- Rolling：`outputs/strategy_compare/broker_cash_dl_conversion/rolling_2021_forward/latest/strategy_comparison.json` 與同名 Markdown；本輪 run 為 `20261125_231148`、config fingerprint 尾碼 `17615c47a50b`，舊 35 組對照來自 `20261125_075935` 的完成工件。
+- 四 Seed：`outputs/strategy_compare/robustness/broker_cash_dl_conversion/rolling_2021_forward/7a64a99773aa73b9/robustness_summary.json`、`seed_results.csv`、`robustness_report.md` 及 `attribution_source/`。
+- 一次性唯讀核對：`outputs/filters/breakout_quality/breakout_quality_v1/research_diagnostics/ci_co_rank_fusion_20261125.json`，保存來源 SHA256、逐 Seed 數值、配對差與兩模型的 runtime training identities。Summary 已實際執行並顯示兩組 Seed42／4S 結果。

@@ -1024,11 +1024,13 @@ The canonical `config/research_summary.py` roster alone determines current Model
 
 | 身分 | 每日分數 | Selector | 狀態 |
 |---|---|---|---|
-| SR-C195 | CI 百分位 × 0.5 ＋ CO 百分位 × 0.5 | Exact K/R0 | IMPLEMENTED / REPLAY v1 / MARKET_COMPARISON_PENDING |
-| SR-C196 | 同 C195 | Direct No-K/No-R0 | IMPLEMENTED / REPLAY v1 / MARKET_COMPARISON_PENDING |
+| SR-C195 | CI 百分位 × 0.5 ＋ CO 百分位 × 0.5 | Exact K/R0 | COMPLETED / REPLAY v1 / NO_ADVANCEMENT |
+| SR-C196 | 同 C195 | Direct No-K/No-R0 | COMPLETED / REPLAY v1 / NO_ADVANCEMENT |
 
 兩組都使用同一 Seed、同一資訊日 CI／CO 完整 feature-history-eligible stock-day 的交集；先取共同母體，再各自用 canonical `average_zero_based` 同日平均名次百分位（單一股票日 0.5），最後按事前固定 50／50 權重相加。禁止缺分數補零、跨 Seed fallback、使用未來成熟標籤或只以 orderable candidates 正規化。保留原資訊日／續掛／0050 缺分數／P16／費稅／Broker-Cash／出場／Selector。無權重搜尋、Positive gate、重訓或法人資料。
 
 既有 Compare Suite 登錄融合對原 CI／CO、Exact 對 Direct、融合對 C96 的配對 contrasts；同一 Summary roster 派生 Forward／Rolling／Robustness，原四 benchmark seeds 與 Seed42 Rolling 不變。新組不借用單一模型 ρ 或 Oracle：固定融合沒有新模型 SOP，共同母體／分數組合的 perfect-score mapping 尚未完成核准與 parity，Oracle 為 `CONTRACT_UNRESOLVED`，不影響真實模型分數的策略回放。2021 起為迭代研究 OOS；結果不自動升格 Trading。
 
 **同輪編號更正與研究限制。** 初始配置曾將 C195～C198 設為百分位控制、C199／C200 設為融合，只有工程 commit，尚無市場 Replay 結果。使用者明確要求「不要這麼多控制組」及「用 c195, c196 代號」，因此在第一個市場回放前，以上最終 C195／C196 定義依使用者指示取代暫定配置；舊配置由原 commit 保留追溯。C197～C200 為 `WITHDRAWN_BEFORE_MARKET_REPLAY`，不在 current runtime／Summary／Robustness，編號不再分配其他研究。只跑兩個融合組，以原 CI／CO 策略作對照；結果是「百分位轉換＋等權融合」的組合效果，無法單獨歸因兩者。
+
+**2026-11-25 本機結果登錄。** 原 Research Rolling、四 Seed Robustness 與 Summary 均完成，沒有 FIT 或 Optimizer 搜尋。C195 四 Seed 平均 RoMD 9.283712，對 C106／C123 的配對均值差為 −2.886660／−1.528662，均僅 1/4 勝，平均 MDD 亦增加。C196 平均 RoMD 4.935194，對 C118／C124 為 −0.058127／+0.274569，均為 2/4 勝，未達研究晉級條件。兩組皆 `NO_ADVANCEMENT`；保留研究列與 C106／C123 原成果，不自動切換 Trading 或搜尋融合權重。原 35 組 Rolling 結果及原 140 個 Robustness 單元的核心績效逐值一致。完整配對與來源見 Experiment Log 同日固定等權融合條目及 `outputs/filters/breakout_quality/breakout_quality_v1/research_diagnostics/ci_co_rank_fusion_20261125.json`。
