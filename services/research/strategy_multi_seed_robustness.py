@@ -4813,7 +4813,11 @@ def _replay_one_unit(job: dict[str, Any]) -> dict[str, Any]:
         baseline_trade_count=baseline_count,
         active_trade_count=metrics.get("trade_count"),
     )
-    model_prediction = dict(job.get("model_prediction_metrics") or {})
+    from core.rank_score_composition import rank_score_composition
+    # AI: Constituent predictions remain in source artifacts. A frozen runtime
+    # blend has no independently fitted Target/rho/epoch-selection experiment.
+    model_prediction = ({} if rank_score_composition(arm.dl_runtime_options)
+                        else dict(job.get("model_prediction_metrics") or {}))
     result = {
         "arm_id": arm.arm_id, "name": arm.name, "seed": int(job["seed"]),
         "arm_order": int(job["arm_order"]), "seed_order": int(job["seed_order"]),

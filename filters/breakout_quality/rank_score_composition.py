@@ -2,12 +2,31 @@
 from __future__ import annotations
 
 from pathlib import Path
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 import numpy as np
 import pandas as pd
 
 from core.rank_score_composition import rank_score_composition
 from filters.breakout_quality.continuous_ranker_data import build_same_date_percentile_targets
+
+
+_ACTIVE_SCORES = ContextVar("research_rank_composition_scores", default=None)
+
+
+@contextmanager
+def rank_composition_scores_context(scores):
+    """Keep the full table out of candidate options, serialization and reports."""
+    token = _ACTIVE_SCORES.set(scores)
+    try:
+        yield
+    finally:
+        _ACTIVE_SCORES.reset(token)
+
+
+def current_rank_composition_scores():
+    return _ACTIVE_SCORES.get()
 
 
 def compose_rank_score_tables(tables, contract):

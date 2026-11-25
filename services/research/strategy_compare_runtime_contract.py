@@ -359,12 +359,8 @@ def resolve_strategy_compare_runtime_contract(
                     expected_seed=int(source["expected_seed"]), dataset=str(dataset))
         if ranking_source is None:
             raise ValueError("Rank composition requires a Research ranking source")
-        # AI: The prepared map belongs only to the ephemeral lookup context.
-        # Persisted ranking_options retain the declared source/weight provenance.
-        ranking_source["ranking_options"] = {
-            **ranking_options, "_rank_composition_scores": load_rank_composition_scores(
-                project_root=root, options=ranking_options, score_bindings=score_bindings),
-        }
+        ranking_source["rank_composition_scores"] = load_rank_composition_scores(
+            project_root=root, options=ranking_options, score_bindings=score_bindings)
 
     if (comparison_start_date is None) != (comparison_end_date is None):
         raise ValueError("comparison_start_date與comparison_end_date必須同時提供")

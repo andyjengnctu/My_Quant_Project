@@ -320,7 +320,8 @@ def append_strategy_compare_preparation_contract_checks(
                 )
             )
             if composition_loader.called:
-                loader_ok = loader_ok and resolved.ranking_source["ranking_options"]["_rank_composition_scores"] is composed
+                loader_ok = loader_ok and resolved.ranking_source["rank_composition_scores"] is composed
+                loader_ok = loader_ok and resolved.ranking_source["ranking_options"] == kwargs["ranking_options"]
                 loader_ok = loader_ok and composition_loader.call_args.kwargs["options"] == kwargs["ranking_options"]
             recorded.append(paths_ok and loader_ok)
     add_check(

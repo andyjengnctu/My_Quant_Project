@@ -132,10 +132,47 @@ class RankScoreCompositionTests(TestCase):
         with breakout_quality_ranking_source_context(**options):
             with self.assertRaisesRegex(ValueError, "admitted"):
                 resolve_breakout_quality_candidate_rank(**lookup)
-        options["ranking_options"] = {**options["ranking_options"], "_rank_composition_scores": {
+        prepared = {
             "scores": {("A", "2021-01-04"): .9, ("A", "2021-01-05"): .2},
-            "available_from": "2021-01-04", "available_through": "2021-12-31"}}
-        with breakout_quality_ranking_source_context(**options):
+            "available_from": "2021-01-04", "available_through": "2021-12-31"}
+        from filters.breakout_quality.rank_score_composition import rank_composition_scores_context, current_rank_composition_scores
+        with breakout_quality_ranking_source_context(**options), rank_composition_scores_context(prepared):
             self.assertEqual(resolve_breakout_quality_candidate_rank(**lookup)["score"], .2)
             self.assertFalse(resolve_breakout_quality_candidate_rank(**{**lookup, "ticker": "0050"})["available"])
             self.assertEqual(resolve_breakout_quality_candidate_rank(**{**lookup, "information_date": "2021-01-01"})["unavailable_reason"], "outside_score_period")
+        self.assertIsNone(current_rank_composition_scores())
+        # AI: Run the actual service context boundary; only compact declarations
+        # may flow into candidate ranking_options and the detailed CSV.
+        from services.research import strategy_compare_replay as replay
+        from core.breakout_quality_ranking_context import get_breakout_quality_ranking_source_context
+        def observe(**kwargs):
+            self.assertIs(current_rank_composition_scores(), prepared)
+            self.assertEqual(get_breakout_quality_ranking_source_context().ranking_options, arm.dl_runtime_options)
+            self.assertEqual(resolve_breakout_quality_candidate_rank(**lookup)["score"], .2)
+            return {"observed": True}
+        with patch.object(replay, "_run_scenario_inside_source_context", side_effect=observe):
+            self.assertEqual(replay._run_scenario(
+                name="fixture", data_dir="unused", param_source_kind="fixed", params={},
+                start_date="2021-01-01", end_date="2021-12-31", max_positions=10,
+                enable_rotation=False, quiet=True,
+                ranking_source={**options, "rank_composition_scores": prepared}), {"observed": True})
+        self.assertIsNone(current_rank_composition_scores())
+
+    def test_robustness_does_not_attribute_primary_model_diagnostics_to_fusion(self):
+        import tempfile
+        from services.research import strategy_multi_seed_robustness as robust
+        from core.strategy_compare_policy import get_strategy_comparison_settings
+        settings = get_strategy_comparison_settings("broker_cash_dl_conversion_rolling")
+        arm = next(arm for arm in settings.enabled_arms if rank_score_composition(arm.dl_runtime_options))
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            job = dict(profile_id=settings.profile_id, arm_id=arm.arm_id, seed=17, arm_order=1, seed_order=1,
+                       comparison_start="2021-01-01", comparison_end="2021-12-31", pair_dir=str(root/"pair"),
+                       baseline_dir=str(root/"base"), params_path="unused", result_path=str(root/"result.json"),
+                       keep_replay_details=True, model_prediction_metrics={key: .8 for key in robust.MODEL_PREDICTION_METRIC_KEYS})
+            with patch.object(robust, "PROJECT_ROOT", root), \
+                 patch.object(robust, "run_strategy_compare_active_arm", return_value={"score_ranking": {"return_over_max_drawdown": 2.0}}), \
+                 patch.object(robust, "_load_direct_selection_r", return_value=0.0):
+                result = robust._replay_one_unit(job)
+            self.assertEqual(result["return_over_max_drawdown"], 2.0)
+            self.assertTrue(all(result[key] is None for key in robust.MODEL_PREDICTION_METRIC_KEYS))
