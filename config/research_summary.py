@@ -436,5 +436,5 @@ RESEARCH_SUMMARY_ROWS = (
      'bindings': tuple({'arm_id': arm_id, 'rank_models': (
          ('MR-13CI', 'daily_universal_terminal_r40_full_list_ndcg_pairwise'),
          ('MR-13CO', 'daily_universal_formal_mintrade_fullcycle_netpnl_per_seed_full_list_ndcg_pairwise'),
-     )} for arm_id in ('C195', 'C196', 'C197', 'C198', 'C199', 'C200'))},
+     )} for arm_id in ('C195', 'C196'))},
 )
