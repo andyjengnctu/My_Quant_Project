@@ -392,7 +392,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     # to the overview is not authorization to FIT, build P16, or run Replay.
     from services.research import target_dl_overview
     overview_console = io.StringIO()
-    with patch("builtins.input", side_effect=["", "7", "0", "0"]) as overview_input, \
+    with patch("builtins.input", side_effect=["", "7", "9", "0", "0"]) as overview_input, \
          patch.object(target_dl_overview, "collect_target_dl_overview", return_value={"rows": []}) as collector, \
          patch.object(target_dl_overview, "render_target_dl_overview", return_value="SYNTHETIC_OVERVIEW") as renderer, \
          patch.object(research_app, "_run_reusable_audit_method", side_effect=AssertionError("Unexpected Oracle")) as oracle_entry, \
@@ -402,17 +402,18 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
         overview_rc = research_app._interactive_menu()
     check_true(
         "summary_root_is_read_only_and_returns_to_research",
-        overview_rc == 0 and overview_input.call_count == 4
-        and collector.call_count == 1 and renderer.call_count == 2
+        overview_rc == 0 and overview_input.call_count == 5
+        and collector.call_count == 1 and renderer.call_count == 3
         and collector.call_args.args == (research_app.PROJECT_ROOT,)
         and all(call.args == ({"rows": []},) for call in renderer.call_args_list)
         and [call.kwargs.get("sort_by") for call in renderer.call_args_list]
-            == ["oracle_romd", "rolling_robustness_mean_romd"]
-        and overview_console.getvalue().count("SYNTHETIC_OVERVIEW") == 2
+            == ["oracle_romd", "rolling_robustness_mean_romd", "strategy"]
+        and overview_console.getvalue().count("SYNTHETIC_OVERVIEW") == 3
         and len([line for line in overview_console.getvalue().splitlines()
                  if "[1]Strategy [2]Selector [3]DL Target [4]Rank DL" in line
                  and "[5]Positive DL [6]Rolling ρ [7]Mean RoMD [8]Oracle RoMD" in line
-                 and "[0]返回" in line]) == 2
+                 and "[9]策略編號 ↑" in line
+                 and "[0]返回" in line]) == 3
         and "[9]Win Rate" not in overview_console.getvalue()
         and "[8]Oracle RoMD" in overview_console.getvalue()
         and "[7]Mean RoMD" in overview_console.getvalue()
@@ -431,19 +432,20 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
           "Rolling ρ", "Robustness ρ", "Rolling RoMD", "Robustness RoMD", "Mean RoMD",
           "Oracle RoMD", "Win Rate"),
          ("Strategy", "Selector", "DL Target", "Rank DL", "Positive DL",
-          "Rolling ρ", "Mean RoMD", "Oracle RoMD")),
+          "Rolling ρ", "Mean RoMD", "Oracle RoMD", "策略編號")),
         (target_dl_overview.table_contract(
             target_dl_overview.REPORT_ID, "comparison", "target_dl").headers,
          tuple(col.label for col in target_dl_summary_sort_columns())),
     )
     # Oracle RoMD and Win Rate are the last two visible metrics. Win Rate must
-    # remain display-only; the eight existing sort choices do not change.
+    # remain display-only; Strategy ID follows the eight existing sort choices.
     oracle_sort_keys = [column.key for column in target_dl_summary_sort_columns()]
     check_true(
-        "summary_oracle_is_visible_once_and_sort_options_unchanged",
+        "summary_oracle_visible_once_and_strategy_id_is_ninth_sort_choice",
         oracle_sort_keys.count("oracle_romd") == 1
         and "win_rate_pct" not in oracle_sort_keys
-        and len(oracle_sort_keys) == len(set(oracle_sort_keys)) == 8
+        and len(oracle_sort_keys) == len(set(oracle_sort_keys)) == 9
+        and oracle_sort_keys[-1] == "strategy"
         and target_dl_overview.table_contract(
             target_dl_overview.REPORT_ID, "comparison", "target_dl"
         ).headers[-3:] == ("Mean RoMD", "Oracle RoMD", "Win Rate"),
@@ -558,6 +560,27 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
                 target_dl_overview.REPORT_ID, "comparison", "target_dl").columns
         ),
     )
+    strategy_rows = [
+        {"strategy": "C100", "rolling_robustness_mean_romd": 100.0},
+        {"strategy": "C10", "rolling_robustness_mean_romd": 10.0},
+        {"strategy": None, "rolling_robustness_mean_romd": 999.0},
+        {"strategy": "C2", "rolling_robustness_mean_romd": 2.0},
+        {"strategy": "C9", "rolling_robustness_mean_romd": None},
+        {"strategy": "C2", "rolling_robustness_mean_romd": 20.0},
+    ]
+    strategy_order = target_dl_overview.sort_target_dl_overview_rows(
+        strategy_rows, column_key="strategy",
+    )
+    check_true(
+        "summary_strategy_ids_numeric_ascending_then_mean_descending_missing_last",
+        [row["strategy"] for row in strategy_order] == ["C2", "C2", "C9", "C10", "C100", None]
+        and [row["rolling_robustness_mean_romd"] for row in strategy_order[:2]] == [20.0, 2.0],
+    )
+    strategy_rendered = target_dl_overview.render_target_dl_overview({
+        "rows": strategy_rows,
+        "oracle": {"benchmark": "synthetic", "seeds": (), "period": "", "path": "synthetic"},
+    }, sort_by="strategy")
+    check_true("summary_strategy_id_sort_direction_is_visible", "策略編號 ↑" in strategy_rendered)
     selector_rows = [
         {"target": "Exact", "selector": "Exact", "rolling_robustness_mean_romd": 100.0},
         {"target": "DirectA", "selector": "Direct", "rolling_robustness_mean_romd": 1.0},

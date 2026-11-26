@@ -5460,3 +5460,22 @@ Exact 的總報酬略增 1.2854 個百分點，但 MDD 增加 1.9849 個百分�
 **證據邊界。** 此為原始訊號層的跨日集中度，不是已處理過的同 ticker/date 多 high_len rows，也不是金融樣本有效獨立數的估計。不同資訊日的價格、成交條件與後續結果仍可能提供新資訊；相同原始訊號不等於可直接刪除的重複樣本。表中 row 比例亦不等於實際梯度比例：CO 已有同日 pairwise Delta-NDCG 權重與 batch reduction。這次盤點沒有證明重加權可改善 RoMD，沒有分配新 scientific identity 或改變 loss／Target／FIT／選股契約。
 
 **來源。** `outputs/filters/breakout_quality/breakout_quality_v1/research_diagnostics/co_train_signal_concentration_20261126.json` 與同名 Markdown；保存原模型 manifest 路徑及 SHA256。退役原始績效仍以 `ci_co_rank_fusion_20261125.json` 與前一日正式 Rolling／Robustness 工件為準。
+
+## 2026-11-26 — MR-13DO 完整歷史 EMA 輸入結果與 C197／C198 退役
+
+**共同條件與唯一變數。** 原 CO 的 300×10 個股／0050 價量後加入個股 Close 的 5／20／60 日 EMA，為 300×13；均線由完整 canonical 歷史首筆合法 Close 逐日累積，先計算後切窗，與個股 OHLC 共用資訊日 Close 正規化。CO 原訓練歷史、合法成熟完整週期 NetPnL、loss、validation／epoch selection、P16、交易、費稅與資金契約相同。C197／C123 為 Exact，C198／C124 為 Direct。Seed42 首折 final refit 同為 72,630 groups。期間 2021-01-01～2026-03-02；四 Seed 依序為 693545351、2014432738、104504529、762252050。
+
+**使用者完成的本機結果。** 貼上 Console 的 SHA256 為 `a208cc24842a384a6c8d5bf4a35f46c6bc3b34b2af6a036cf70919f19406d48d`。與本機正式 Rolling、Robustness summary、逐 Seed CSV 相符。下表 Δ 為 EMA 減原 CO；RoMD 為逐 Seed 比率的平均，MDD／報酬差為百分點。
+
+| 對照 | 原 CO → EMA 四 Seed 平均 RoMD | 配對 ΔRoMD 均值／中位數 | EMA 勝數 | 平均 ΔMDD | 平均 Δ總報酬 |
+|---|---:|---:|---:|---:|---:|
+| Exact C197／C123 | 10.812374 → 9.292310 | −1.520064／−1.381855 | 1/4 | −0.202639 | −20.415896 |
+| Direct C198／C124 | 4.660625 → 3.992017 | −0.668608／−0.514135 | 1/4 | +1.137163 | +0.027457 |
+
+Seed42 Rolling RoMD 為 C197 7.417388／C123 10.882721、C198 2.723813／C124 3.705003。四 Seed 的 C197 RoMD 依序為 5.074234／12.194302／11.249768／8.650934，C198 為 2.917009／5.018921／2.221687／5.810452。Summary 的五份加權 Mean RoMD 為 C197 8.92／C123 10.83、C198 3.74／C124 4.47。
+
+**模型與交易判讀。** 四 Seed Breakout 共同 9,436 groups，Pair 由 CO 51.48% 降至 EMA 50.37%，前十分位 NetPnL 由 5,255.6887 降至 2,647.8495，前後十分位差由 +491.4202 轉為 −630.4150。Exact 的平均 MDD 略降，但平均總報酬降低約 20.42pp；Direct 平均總報酬近乎相同，平均 MDD 增加約 1.14pp。兩者均未通過原有四 Seed 研究篩選條件，登錄 NO_ADVANCEMENT。這組 5／20／60 日 EMA 表示未形成可採納增益。
+
+**退役決策與證據邊界。** 使用者指定退役 C197／C198。兩列及唯一依賴的 MR-13DO 退出目前 Summary、模型／策略比較、Robustness 與 Target binding，Training Model 選回原 CO。策略編號、定義、模型與既有工件保留。原 Compare Suite 的三個 EMA 配對定義尚未啟用，表中配對差由正式 CSV 同 Seed 逐一相減取得，未宣稱為當時已發布的 contrast 表。2021 起屬迭代研究 OOS，四 Seed 共用市場歷史，研究門檻不代表統計顯著。
+
+**正式來源。** `outputs/strategy_compare/broker_cash_dl_conversion/rolling_2021_forward/latest/strategy_comparison.json`；`outputs/strategy_compare/robustness/broker_cash_dl_conversion/rolling_2021_forward/f7948dafcd95632f/robustness_summary.json`、`seed_results.csv`、`robustness_report.md`；使用者 Console 的模型 Robustness Standard SOP 與 Summary。

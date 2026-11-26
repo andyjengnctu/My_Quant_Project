@@ -3398,7 +3398,27 @@ class ExecutionAccelerationCases(unittest.TestCase):
 
 
 class ModelRobustnessProgressCases(unittest.TestCase):
-    """Parallel Model Robustness must reveal real producer progress, not an ETA guess."""
+    """Parallel Model Robustness reveals real producer progress."""
+
+    def test_parallel_seed_launch_releases_only_initialized_parent_cuda_cache(self):
+        import sys
+        from unittest.mock import Mock
+        from services.research import breakout_quality_application as app
+
+        for initialized in (True, False, None):
+            with self.subTest(initialized=initialized):
+                cuda = SimpleNamespace(is_initialized=Mock(return_value=initialized), empty_cache=Mock())
+                runtime = None if initialized is None else SimpleNamespace(cuda=cuda)
+                with (
+                    patch.dict(sys.modules, {"torch": runtime}),
+                    patch.object(app, "ThreadPoolExecutor", side_effect=RuntimeError("seed launch probe")),
+                    self.assertRaisesRegex(RuntimeError, "seed launch probe"),
+                ):
+                    app._run_parallel_model_robustness_seeds(
+                        SimpleNamespace(experiment_profile="synthetic"),
+                        model_id="MR-SYN", seeds=(11, 22), rolling=True, workers=2,
+                    )
+                self.assertEqual(cuda.empty_cache.call_count, int(initialized is True))
 
     def test_parallel_seed_progress_reads_fold_epoch_and_queue_without_refitting(self):
         from contextlib import redirect_stdout

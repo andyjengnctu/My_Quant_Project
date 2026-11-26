@@ -5265,6 +5265,12 @@ def _run_parallel_model_robustness_seeds(
     progress = FixedProgressBlock()
     last_log_at = float("-inf")
 
+    # Completed in-process training can leave most VRAM in the allocator cache.
+    # Return unused blocks before the independent seed processes start CUDA.
+    torch_module = sys.modules.get("torch")
+    if torch_module is not None and torch_module.cuda.is_initialized():
+        torch_module.cuda.empty_cache()
+
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures: dict[Future, int] = {}
         for seed in seeds:

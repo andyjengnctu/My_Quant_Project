@@ -811,11 +811,10 @@ STRATEGY_CONSISTENCY_METRIC_KEYS = (
     "expected_value_r", "avg_exposure_pct", "high_mfe_high_safety_pct", "high_mfe_total_pct",
 )
 
-# v13: restore certified Oracle Round-Trip Win Rate as the final visible column.
-# Preserve the eight sort choices and all scientific/artifact identities.
+# v15 adds the requested numeric Strategy ID ordering to the Summary menu.
 TARGET_DL_VALIDATION_OVERVIEW_REPORT = PersistentReportContract(
     report_id="research.target_dl_validation_overview",
-    version=14,
+    version=15,
     role="read_only_local_completed_report_summary",
     menu_path=("Research", "Summary"),
     sections=(
@@ -841,8 +840,7 @@ TARGET_DL_VALIDATION_OVERVIEW_REPORT = PersistentReportContract(
 )
 
 
-# The existing four excluded columns remain non-interactive sort choices.
-# The two Oracle metrics are visible; Win Rate is display-only, not a ninth sort choice.
+# Strategy ID is appended after the eight existing interactive sort choices.
 _TARGET_DL_SUMMARY_EXCLUDED_SORT_KEYS = frozenset((
     "strategy", "robustness_rho", "rolling_romd", "robustness_romd",
     "win_rate_pct",
@@ -852,7 +850,8 @@ _TARGET_DL_SUMMARY_EXCLUDED_SORT_KEYS = frozenset((
 def target_dl_summary_sort_columns() -> tuple[ReportColumnContract, ...]:
     visible = TARGET_DL_VALIDATION_OVERVIEW_REPORT.sections[0].tables[0].columns
     return tuple(column for column in visible
-                 if column.key not in _TARGET_DL_SUMMARY_EXCLUDED_SORT_KEYS)
+                 if column.key not in _TARGET_DL_SUMMARY_EXCLUDED_SORT_KEYS) + tuple(
+                     column for column in visible if column.key == "strategy")
 
 
 PERSISTENT_REPORT_CONTRACTS: Mapping[str, PersistentReportContract] = {

@@ -1021,18 +1021,23 @@ def sort_target_dl_overview_rows(
 ) -> list[Mapping[str, Any]]:
     """Read-only, stable sort using the approved report column keys.
 
-    Selector prioritizes Direct before Exact; other text sorts use descending
-    lexical order. Missing/nonfinite values go last without numeric fill.
+    Strategy IDs use ascending numeric order. Selector prioritizes Direct before
+    Exact; other text sorts use descending lexical order. Missing values go last.
     """
 
-    # Programmatic report sorting still accepts every visible column;
-    # only the interactive menu is limited to its unchanged eight choices.
+    # Programmatic report sorting accepts every visible column.
     columns = (*table_contract(REPORT_ID, "comparison", "target_dl").columns,
                *target_dl_summary_sort_columns())
     column = next((item for item in columns if item.key == column_key), None)
     if column is None:
         raise ValueError(f"Summary 不支援的排序欄位: {column_key!r}")
-    if column_key == "selector":
+    if column_key == "strategy":
+        def sort_value(row: Mapping[str, Any]) -> tuple[bool, float, str]:
+            value = str(row.get(column_key) or "").strip().casefold()
+            suffix = value[1:] if value.startswith("c") else ""
+            number = int(suffix) if suffix.isdecimal() else math.inf
+            return (not bool(value), number, value)
+    elif column_key == "selector":
         def sort_value(row: Mapping[str, Any]) -> tuple[int, str]:
             value = str(row.get(column_key) or "").strip().casefold()
             # Selector is a categorical choice, not an alphabetical metric.
@@ -1047,7 +1052,7 @@ def sort_target_dl_overview_rows(
         def sort_value(row: Mapping[str, Any]) -> tuple[bool, float]:
             value = _number(row.get(column_key))
             return (value is not None, value if value is not None else -math.inf)
-    # Stable priorities: selected column DESC, Mean RoMD DESC, Target ASC.
+    # Stable priorities: selected column, Mean RoMD DESC, Target ASC.
     # A missing primary or secondary value always follows a certified value;
     # neither missing metric nor a negative result is converted to zero.
     by_target = sorted(rows, key=lambda row: str(row.get("target") or ""))
@@ -1056,7 +1061,7 @@ def sort_target_dl_overview_rows(
             value = _number(row.get("rolling_robustness_mean_romd"))
             return (value is not None, value if value is not None else -math.inf)
         by_target = sorted(by_target, key=mean_sort_value, reverse=True)
-    return sorted(by_target, key=sort_value, reverse=True)
+    return sorted(by_target, key=sort_value, reverse=column_key != "strategy")
 
 
 def collect_target_dl_overview(project_root: Path) -> dict[str, Any]:
@@ -1282,7 +1287,8 @@ def render_target_dl_overview(
     sort_column = next(column for column in (*table.columns, *target_dl_summary_sort_columns())
                        if column.key == sort_by)
     sort_description = (
-        "Mean RoMD ↓（缺值最後）" if sort_by == "rolling_robustness_mean_romd"
+        "策略編號 ↑ → Mean RoMD ↓（缺值最後）" if sort_by == "strategy"
+        else "Mean RoMD ↓（缺值最後）" if sort_by == "rolling_robustness_mean_romd"
         else "Selector：Direct → Exact → Mean RoMD ↓（缺值最後）" if sort_by == "selector"
         else f"{sort_column.label} ↓ → Mean RoMD ↓（缺值最後）"
     )

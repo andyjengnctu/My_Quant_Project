@@ -4,11 +4,11 @@
 
 本文件是 `breakout_quality` 的**實驗 identity、命名、版本語意、namespace、目前基準與 ID 佔用狀態**單一真理來源。
 
-### 2026-11-26 已授權的完整歷史 EMA 輸入研究
+### 2026-11-26 完整歷史 EMA 輸入研究，C197／C198 已退役
 
 `MR-13DO` 使用新輸入表示 `ARCH-inception_time_stock_ema_v1`，profile 為 `daily_universal_formal_mintrade_fullcycle_netpnl_per_seed_full_list_ndcg_pairwise_stock_ema`，FIT v1。以原 CO 為控制，唯一研究變數為在原個股與 0050 的 300×10 價量輸入後，加入個股收盤價 5／20／60 日 EMA，成為 300×13。各股從 canonical 還原價完整歷史首筆收盤初始化，依 `alpha=2/(span+1)`、`adjust=False` 逐日累積，再切取 300 日。EMA 與該樣本個股 OHLC 共用資訊日 Close 作除數並減一。每個日期只依賴當日及過往資料，計算歷史不受 300 日視窗或 Target 訓練起點截斷。共同樣本資格、Target／成熟規則、CO 歷史起點、loss、epoch selection、P16、費稅與資金契約沿用原 CO。
 
-`SR-C197` 為此模型的 Exact K/R0，對照 C123。`SR-C198` 為相同模型分數的 Direct No-K/No-R0，對照 C124。共用 `DL-CONT13DO-ROLL`／`CONT13DO_ROLL`，Replay v1。兩列加入原 Research roster、模型比較、Rolling、四 Seed Robustness、Target 與 Summary。原 C106／C123／C124 與歷史列依原設定保留。使用者已授權實作並於本機執行 Rolling、Robustness、Summary。當前狀態為 REGISTERED / IMPLEMENTATION_IN_PROGRESS / MARKET_RESULT_PENDING，2021 起結果屬迭代研究 OOS，研究結果不自動升格 Trading。
+`SR-C197` 為此模型的 Exact K/R0，對照 C123。`SR-C198` 為相同模型分數的 Direct No-K/No-R0，對照 C124。共用 `DL-CONT13DO-ROLL`／`CONT13DO_ROLL`，Replay v1。使用者已於本機完成 Rolling、四 Seed Robustness 與 Summary，並於 2026-11-26 指定退役兩列。當前狀態為 RETIRED_FROM_CURRENT_RESEARCH / ROLLING_AND_FOUR_SEED_RESULT_AVAILABLE / NO_ADVANCEMENT / HISTORICAL_ID_RESERVED。C197／C198 與 MR-13DO 退出現行 Research roster、模型與策略比較、Robustness、Target binding 及 Summary，Training Model 選用同 Target 的原 CO。原定義、模型、完整歷史 EMA 輸入契約與工件持續保留供歷史驗證；兩個策略編號永久保留。實測數值與限制登錄於 Experiment Log。2021 起結果屬迭代研究 OOS。
 
 本輪使用者更正 C197～C200 的占用狀態。該四號僅存在於先前撤回的六列暫定配置，未形成市場 Replay 或有效研究成果，依使用者指示解除占號；C197／C198 自本輪起對應上述 EMA 輸入研究，C199／C200 可用。
 
@@ -55,7 +55,7 @@ Registry 回答「**這個 ID 是什麼、屬於哪一層、是否已被占用�
 
 **歷史有效性與版本**：P17 MR-13CZ／DA 為 FIT v2；已退役 P19 MR-13DD／DE 為 FIT v2、Oracle calculation revision 2。修復前缺少 cutoff-visible teacher／有序真值證據的 FIT，以及固定或混合 teacher 的 P20 成果，均不得跨版當作現行證據；原始結果與有效性更正由 Experiment Log 保留。現行 Positive 僅使用獨立二類模型，single-ranker 校準支線不再執行。C168 No-DL、C169 CJ 及其他無依賴的模型／參數契約不隨 P20 teacher 版本變更。2026-11-21 已登錄使用者回報的 P20 Rolling、四 seed 策略與 Oracle 顯示結果，正式工件及 Oracle parity 尚待獨立核實。
 
-現行成果總覽入口為 Research `[1] Summary`。Target 驗證、模型訓練／驗證與策略組合比較的目前集合均從 `config/research_summary.py` 派生，解析與 binding 驗證由 `core/research_summary.py` 持有；本文件以下的歷史選單編號不作現行入口真理。Summary 清單只選擇研究範圍，不改寫既有 Target／Model／Strategy 身分、訓練與 Replay 契約；未有 matching Oracle 的既有研究仍可列示真實績效，但不得借用其他 Oracle 數值。現行總覽報表為 `research.target_dl_validation_overview@v13`：依 2026-11-08 與 2026-11-09 使用者授權，顯示順序為「策略編號、Strategy、Selector、DL Target、Rank DL、Positive DL、Rolling ρ、Robustness ρ、Rolling RoMD、Robustness RoMD、Mean RoMD、Oracle RoMD、Win Rate」共 13 欄。Oracle RoMD 與 Win Rate 均讀取同一份 canonical Oracle evidence，Win Rate 為已完成 Round-Trip 勝率（百分比、小數兩位），僅顯示不新增排序項目；Oracle RoMD 仍為預設及第 8 項排序選項，互動排序維持原 8 個項目。缺少合法 Oracle 證據時該欄留白，不代入 0 或其他策略勝率。Mean RoMD 仍依 Rolling 計 1 份、Robustness 計經驗證 Seed 數份加權（只有 Rolling 則沿用 Rolling，缺 Rolling 留空）；每次主欄位排序以 Mean RoMD 作第二順位。僅屬唯讀顯示，不升版 Model FIT／Strategy Replay；compact ledger 的歷史版本與研究 evidence 保留。
+現行成果總覽入口為 Research `[1] Summary`。Target 驗證、模型訓練／驗證與策略組合比較的目前集合均從 `config/research_summary.py` 派生，解析與 binding 驗證由 `core/research_summary.py` 持有；本文件以下的歷史選單編號不作現行入口真理。Summary 清單只選擇研究範圍，不改寫既有 Target／Model／Strategy 身分、訓練與 Replay 契約；未有 matching Oracle 的既有研究仍可列示真實績效，但不得借用其他 Oracle 數值。現行總覽報表為 `research.target_dl_validation_overview@v15`：依 2026-11-08 與 2026-11-09 使用者授權，顯示順序為「策略編號、Strategy、Selector、DL Target、Rank DL、Positive DL、Rolling ρ、Robustness ρ、Rolling RoMD、Robustness RoMD、Mean RoMD、Oracle RoMD、Win Rate」共 13 欄。Oracle RoMD 與 Win Rate 均讀取同一份 canonical Oracle evidence，Win Rate 為已完成 Round-Trip 勝率（百分比、小數兩位），僅顯示不新增排序項目；Oracle RoMD 仍為預設及第 8 項排序選項，互動排序於 2026-11-26 依使用者授權新增第 9 項「策略編號 ↑」，按 C 編號數值遞增。缺少合法 Oracle 證據時該欄留白，不代入 0 或其他策略勝率。Mean RoMD 仍依 Rolling 計 1 份、Robustness 計經驗證 Seed 數份加權（只有 Rolling 則沿用 Rolling，缺 Rolling 留空）；每次主欄位排序以 Mean RoMD 作第二順位。僅屬唯讀顯示，不升版 Model FIT／Strategy Replay；compact ledger 的歷史版本與研究 evidence 保留。
 
 | 層級 | Canonical identity | 目前語意 | 狀態 |
 |---|---|---|---|

@@ -484,18 +484,17 @@ def _show_research_summary(*, sortable: bool = False) -> int:
     from core.research_report_contract import target_dl_summary_sort_columns
 
     report = collect_target_dl_overview(PROJECT_ROOT)
-    # One canonical presentation contract defines the original eight sort
-    # choices and their order, including visible Oracle RoMD.
+    # The presentation contract owns the sort choices and menu numbering.
     sort_columns = target_dl_summary_sort_columns()
     sort_key = DEFAULT_SORT_COLUMN
     while True:
         print("\n" + render_target_dl_overview(report, sort_by=sort_key))
         if not sortable:
             return 0
-        print("\n=== Summary 排序（主欄位遞減；第二順位 Mean RoMD 遞減）===")
+        print("\n=== Summary 排序 ===")
         # One logical line: do not use the shared width-based wrapping helper.
         choices = [
-            f"[{index}]{column.label}"
+            f"[{index}]{column.label}" + (" ↑" if column.key == "strategy" else "")
             for index, column in enumerate(sort_columns, start=1)
         ]
         print(" ".join((*choices, "[V]一鍵驗證並補齊結果", "[0]返回")))
