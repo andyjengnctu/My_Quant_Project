@@ -295,6 +295,7 @@ def run_strategy_compare_active_arm(
     progress_callback: Callable[[str, dict[str, Any]], None] | None = None,
     capture_execution_diagnostics: bool = False,
     capture_selection_target_diagnostics: bool = True,
+    repetition_baseline_trades_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """Run one DL-on arm through the canonical shared replay argument assembly."""
 
@@ -405,7 +406,7 @@ def run_strategy_compare_active_arm(
             f"Strategy Compare expected one matching DL-off baseline for {arm.arm_id}; found={len(baseline_arms)}"
         )
 
-    return run_comparison(
+    comparison_arguments = dict(
         entry_strategy=arm.entry_strategy,
         baseline_entry_strategy=baseline_arms[0].entry_strategy,
         project_root=root,
@@ -466,6 +467,50 @@ def run_strategy_compare_active_arm(
         capture_selection_target_diagnostics=bool(capture_selection_target_diagnostics),
         verified_real_path_bundle_loader=load_continuous_ranker_data,
         verified_real_path_diagnostic_loader=_load_verified_real_path_diagnostic_projection,
+    )
+    from core.candidate_score_permutation import permutation_spec
+    repetition = permutation_spec(arm.dl_runtime_options)
+    if repetition is None:
+        return run_comparison(**comparison_arguments)
+    from core.file_integrity import compute_observed_file_sha256
+    from filters.breakout_quality.source_inventory import build_source_data_inventory, source_data_inventory_read_scope
+    from services.research.strategy_robustness_units import pin_files, require_pinned_files
+    from services.research.oracle_build_attestation import capture_oracle_source_inventory, source_inventory_digest
+    from services.research.strategy_score_permutation import run_fixed_permutations
+    if dl.score_source != SCORE_SOURCE_SELECTION_POINT_IN_TIME:
+        raise ValueError("Candidate permutation requires verified point-in-time scores")
+    paths = selection_paths or selection_pit_mode_paths(dl, project_root=root)
+    seed = (int(expected_seed_override) if expected_seed_override is not None else
+            int(get_breakout_quality_workflow_settings(experiment_profile=dl.experiment_profile).seed))
+    identity = {
+        "arm": arm.as_dict(), "seed": seed,
+        "period": {"start": comparison_start, "end": comparison_end},
+        "params_sha256": compute_observed_file_sha256(params_path),
+        "source_files": {key: compute_observed_file_sha256(path) for key, path in paths.items()},
+        "dataset": build_source_data_inventory(root, settings.dataset),
+        "execution_sources": source_inventory_digest(capture_oracle_source_inventory(root)),
+        "repeat_owner_sha256": compute_observed_file_sha256(Path(__file__).with_name("strategy_score_permutation.py")),
+        "max_positions": settings.max_positions, "rotation": settings.rotation,
+        "param_evaluation_mode": param_evaluation_mode,
+        "ranking_options": ranking_options,
+        "active_only": bool(replay_active_only),
+        "diagnostic_baseline_sha256": (compute_observed_file_sha256(repetition_baseline_trades_path)
+                                        if repetition_baseline_trades_path is not None else None),
+    }
+    input_pins = pin_files([params_path, *paths.values(),
+                           *([repetition_baseline_trades_path] if repetition_baseline_trades_path else [])])
+    def verify_repeat_inputs():
+        require_pinned_files(input_pins)
+        # Fresh scope at each replay boundary: never mix a republished market
+        # generation into a checkpoint set created with an earlier inventory.
+        with source_data_inventory_read_scope(force_new=True):
+            if build_source_data_inventory(root, settings.dataset) != identity["dataset"]:
+                raise ValueError("Permutation input market inventory changed during replay")
+    return run_fixed_permutations(
+        run_once=run_comparison, arguments=comparison_arguments, root=root,
+        spec=repetition, seed=seed, identity=identity,
+        baseline_trades_path=repetition_baseline_trades_path,
+        verify_inputs=verify_repeat_inputs,
     )
 
 

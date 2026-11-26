@@ -4,6 +4,20 @@
 
 本文件是 `breakout_quality` 的**實驗 identity、命名、版本語意、namespace、目前基準與 ID 佔用狀態**單一真理來源。
 
+### 2026-11-27 同日候選分數置換，C203／C204
+
+使用者核准 Replay-only 研究：`SR-C203` 為原 CO 同日候選分數置換後的 Exact K/R0，`SR-C204` 為同一規則的 Direct No-K/No-R0，Replay v1。兩列沿用 `CONT13CO_ROLL`，不新增 MR／模型、Target、FIT、Optimizer 或 Trading 模型；對照為 C123／C124，保留 C106 與其餘現行對照。C201／C202 繼續退役。當前為 `IMPLEMENTED / MARKET_RESULTS_NOT_RUN / NO_TRADING`；Rolling、Robustness、Summary 由使用者自行執行，這次工程驗證不代表市場實驗已執行。
+
+唯一處理為 `same_day_raw_score_permutation_v1`：在 canonical 正常與續掛合法候選合併完成、任何分數選股與資金預留之前，將當日 available 且有限的原 CO 分數均勻置換到同一有效候選集合。缺分不補零、不參與交換；原分數多重集合、同分、負值及間距原樣保留，不做百分位、縮放、裁切、Positive gate、強制無固定點或候選刪除。每日從原合法 PIT 分數重新開始；只投影當次決策，原 score store、signal、pending 狀態不改。小於兩個有效分數／全部同分仍保留並登錄覆蓋率。
+
+隨機鍵固定包含 policy version、模型／benchmark seed、repeat 1–99、決策日期及排序後有效 ticker 集合，不包含 arm／selector、未來 Target 或未來資料；SHA256 counter 與 rejection-sampling Fisher–Yates 固定演算法。Exact／Direct 候選集合相同時得到相同交換。投組各自沿完整時間軸演進，Exact 的 K/R0 每日由該路徑當下的原 DL-off 選股流程計算，不借用 C123 已完成歷史籃子。另在同狀態以原分數執行純選股影子診斷，記錄實際籃子變更比例，不執行影子掛單／成交。
+
+每個 seed、每個 selector 固定 99 次完整回放；Seed42 Rolling 共 198 次，四個既有 benchmark seeds Robustness 共 792 次。repeat 不是模型 seed，也不是新 C 編號。沿用 Research 的 canonical replay／accounting／metrics，逐次保存原生回放工件與決策日 donor／recipient／raw-score／mapping SHA。持久 checkpoint 在 `outputs/strategy_compare/permutation_observations/`，按來源模型分數／manifest、參數、期間、資料及程式依賴的完整 identity 分區；只有 99/99 且 SHA 完整才可提交 aggregate，部分完成可續跑。標準績效是 99 個各自完整回放指標的算術平均（含 RoMD 的平均，不以平均報酬除平均 MDD）；無虛構平均 equity／交易歷史。四 seed mean 仍以 seed 等權，Summary 保留原 Seed42＋四 seed 的五份等權口徑。
+
+專題附錄保留各 seed 的 99 次 RoMD／MDD／總報酬 mean、P05／P50／P95、有效候選覆蓋與同狀態籃子變更率。主要檢驗為 C123 vs C203：按同 repeat 編號先取四 seed RoMD 均值，產生 99 個 null 均值；其中至少與真實四 seed 均值一樣高者須不超過 4 個（含相等，`(1+count)/100 ≤ 0.05`），至少 3/4 seed 真實 RoMD 高於各自 99 次中位數，真實平均 MDD 不高於四 seed×99 次平均 MDD。三項均通過才 PASS；C124 vs C204 同樣另行判定，不能抵銷主要 Exact 失敗。Seed42 僅補充。2021 起標為迭代研究 OOS；置換亦破壞跨日分數持續性，尾端比例不是正式顯著性或實盤保證。
+
+原 CO 模型驗證證據僅作來源依賴，置換列不繼承 CO 的 ρ 或 perfect-score Oracle。Registry 明列無獨立已核准 Oracle 契約，不將置換列納入 Oracle canonical selector 的候選；既有 CO／C106 Oracle 行為保持不變。尚無 C203／C204 市場數值，不新增 Experiment Log 結果條目。
+
 ### 2026-11-26 原始突破訊號頻率配重，C201／C202 已於 2026-11-27 退役
 
 `MR-13DQ`，profile=`daily_universal_formal_mintrade_fullcycle_netpnl_per_seed_full_list_ndcg_pairwise_signal_frequency`，沿用 `ARCH-inception_time_v1`，FIT v1。唯一研究變數是原 CO 完整交易週期 NetPnL pairwise supervision 的訊號頻率配重；原 300×10 inputs、合法樣本／Target、Adam、日期批次、inner validation／epoch selection、P16、費稅、Broker-Cash 與 selectors 不變。沒有新增模型輸入、Target、Positive gate、權重搜尋或刪除續掛樣本。

@@ -33,6 +33,7 @@ _TRADE_NUMERICS = ('core/position_step.py',
 
 _PORTFOLIO_CANDIDATES = ('core/portfolio_engine.py',
  'core/portfolio_day_candidates.py',
+ 'core/candidate_score_permutation.py',
  'core/portfolio_candidate_admission.py',
  'core/portfolio_candidates.py',
  'core/portfolio_day_context.py',

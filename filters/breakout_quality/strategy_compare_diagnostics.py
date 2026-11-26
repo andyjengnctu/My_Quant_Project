@@ -1411,6 +1411,9 @@ def pair_upside_realization_refresh_required(pair_dir: Path) -> bool:
     payload = _read_json(Path(pair_dir) / "strategy_comparison.json")
     if not isinstance(payload, dict):
         return True
+    from services.research.strategy_score_permutation import is_permutation_payload
+    if is_permutation_payload(payload):
+        return False
     metadata = dict(payload.get("metadata") or {})
     if str(metadata.get("comparison_mode") or "") != COMPARISON_MODE_SCORE_RANKING:
         return False
@@ -1797,6 +1800,9 @@ def _r_analysis_rows(
     for arm in settings.enabled_arms:
         scenario = dict(scenarios.get(arm.arm_id) or {})
         model = dict(model_by_dl.get(str(arm.dl_id or "")) or {})
+        from core.candidate_score_permutation import permutation_spec
+        if permutation_spec(arm.dl_runtime_options) is not None:
+            model = {}
         translation = dict(translation_by_arm.get(arm.arm_id) or {})
         rows.append({
             "arm_id": arm.arm_id,
@@ -1883,6 +1889,7 @@ def _build_mfe_safety_main_report_geometry(
         return {"status": "NOT_APPLICABLE", "profile_id": settings.profile_id}
 
     arm_keys: dict[str, pd.DataFrame] = {}
+    repeated_keys = {}
     periods: set[tuple[str, str]] = set()
     enabled_arm_ids = {item.arm_id for item in settings.enabled_arms}
 
@@ -1900,6 +1907,13 @@ def _build_mfe_safety_main_report_geometry(
         for arm, prefix in ((off_arm, "no_filter"), (on_arm, "score_ranking")):
             if arm is None or arm.arm_id not in enabled_arm_ids:
                 continue
+            from services.research.strategy_score_permutation import is_permutation_payload, validate_bundle
+            if prefix == "score_ranking" and is_permutation_payload(payload):
+                bundle = validate_bundle(payload["score_permutation"], root=root)
+                repeated_keys[arm.arm_id] = [_filled_selection_geometry_keys(
+                    pair_dir=(root / item["receipt"]["path"]).parent, prefix=prefix)
+                    for item in bundle["observations"]]
+                continue
             keys = _filled_selection_geometry_keys(pair_dir=pair_dir, prefix=prefix)
             existing = arm_keys.get(arm.arm_id)
             if existing is None:
@@ -1916,7 +1930,8 @@ def _build_mfe_safety_main_report_geometry(
         raise ValueError(
             "Strategy Compare MFE/Safety geometry period不一致: " + repr(sorted(periods))
         )
-    missing_arms = [arm.arm_id for arm in settings.enabled_arms if arm.arm_id not in arm_keys]
+    missing_arms = [arm.arm_id for arm in settings.enabled_arms
+                    if arm.arm_id not in arm_keys and arm.arm_id not in repeated_keys]
     if missing_arms:
         raise ValueError(f"Strategy Compare MFE/Safety geometry缺少arm Filled selection: {missing_arms}")
 
@@ -1954,6 +1969,12 @@ def _build_mfe_safety_main_report_geometry(
         & breakout_keys["date"].ge(start)
         & breakout_keys["date"].le(end)
     ].drop_duplicates(["ticker", "date"])
+    from services.research.strategy_score_permutation import _mean_records
+    def arm_distribution(arm_id):
+        if arm_id in repeated_keys:
+            return _mean_records([mfe_safety_distribution_for_keys(truth, keys, allow_empty=True)
+                                  for keys in repeated_keys[arm_id]])
+        return mfe_safety_distribution_for_keys(truth, arm_keys[arm_id], allow_empty=True)
     return {
         "schema_version": 1,
         "status": "AVAILABLE",
@@ -1971,9 +1992,7 @@ def _build_mfe_safety_main_report_geometry(
             arm.arm_id: {
                 "arm_id": arm.arm_id,
                 "name": arm.name,
-                **mfe_safety_distribution_for_keys(
-                    truth, arm_keys[arm.arm_id], allow_empty=True
-                ),
+                **arm_distribution(arm.arm_id),
             }
             for arm in settings.enabled_arms
         },

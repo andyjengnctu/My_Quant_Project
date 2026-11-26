@@ -2740,6 +2740,12 @@ def _write_compact_attribution_source(
         "selected_buys": pair_dir / f"{prefix}_selected_buys.csv",
         "execution": pair_dir / f"{prefix}_execution.csv",
     }
+    from core.candidate_score_permutation import permutation_spec
+    repetition = permutation_spec(arm.dl_runtime_options)
+    if repetition is not None:
+        from services.research.strategy_score_permutation import load_bundle
+        load_bundle(pair_dir, root=PROJECT_ROOT)
+        source_files = {"permutations": pair_dir / "score_permutation.json"}
     missing = [path.name for path in source_files.values() if not path.is_file()]
     if missing:
         raise FileNotFoundError(
@@ -2754,14 +2760,14 @@ def _write_compact_attribution_source(
     destination_dir.mkdir(parents=True, exist_ok=True)
     files: dict[str, Any] = {}
     for role, source in source_files.items():
-        destination = destination_dir / f"{role}.csv.gz"
+        destination = destination_dir / f"{role}{source.suffix}.gz"
         _gzip_copy_deterministic(source, destination)
         files[role] = {
             "path": project_relative_display_path(destination, project_root=PROJECT_ROOT),
             "source_filename": source.name,
             "source_sha256": compute_file_sha256(source),
             "sha256": compute_file_sha256(destination),
-            "row_count": _csv_row_count(source),
+            "row_count": repetition["repeats"] if repetition is not None else _csv_row_count(source),
         }
     payload = {
         "schema_version": ATTRIBUTION_SOURCE_SCHEMA_VERSION,
@@ -2804,6 +2810,8 @@ def _write_compact_attribution_source(
         },
         "files": files,
     }
+    if repetition is not None:
+        payload["observation_kind"] = "fixed_candidate_score_permutations_v1"
     _write_json(destination_dir / MANIFEST_FILENAME, payload)
     return payload
 
@@ -2832,7 +2840,7 @@ def _read_attribution_unit_manifest(
         if require_verified and str(validation.get("status") or "") != "VERIFIED":
             return None
         files = dict(payload.get("files") or {})
-        for role in ("trades", "equity", "daily_capacity", "selected_buys", "execution"):
+        for role in _attribution_roles(payload):
             item = dict(files.get(role) or {})
             relative = str(item.get("path") or "")
             if not relative:
@@ -2847,9 +2855,29 @@ def _read_attribution_unit_manifest(
             expected_sha = str(item.get("sha256") or "").strip().lower()
             if expected_sha and compute_file_sha256(file_path).lower() != expected_sha:
                 return None
+        if payload.get("observation_kind") == "fixed_candidate_score_permutations_v1":
+            _read_permutation_attribution(payload)
         return payload
     except (OSError, ValueError, json.JSONDecodeError, KeyError, TypeError):
         return None
+
+
+def _attribution_roles(payload):
+    if payload.get("observation_kind") == "fixed_candidate_score_permutations_v1":
+        return ("permutations",)
+    return ("trades", "equity", "daily_capacity", "selected_buys", "execution")
+
+
+def _read_permutation_attribution(payload):
+    from services.research.strategy_score_permutation import validate_bundle
+    item = payload["files"]["permutations"]
+    path = (PROJECT_ROOT / item["path"]).resolve()
+    path.relative_to(PROJECT_ROOT)
+    with gzip.open(path, "rt", encoding="utf-8") as stream:
+        bundle = json.load(stream)
+    if bundle["seed"] != int(payload["seed"]):
+        raise ValueError("Permutation attribution seed mismatch")
+    return validate_bundle(bundle, root=PROJECT_ROOT)
 
 
 def _mark_attribution_unit_verified(
@@ -3931,7 +3959,7 @@ def _reference_registered_model_attribution(
         }:
             return
         raise RuntimeError("cross-run attribution destination has different or unverified evidence")
-    for role in ("trades", "equity", "daily_capacity", "selected_buys", "execution"):
+    for role in _attribution_roles(source_manifest):
         item = dict(source_files.get(role) or {})
         source_file = (PROJECT_ROOT / str(item.get("path") or "")).resolve()
         source_file.relative_to(PROJECT_ROOT)
@@ -4758,6 +4786,8 @@ def _replay_one_unit(job: dict[str, Any]) -> dict[str, Any]:
     start = str(job["comparison_start"]); end = str(job["comparison_end"])
     pair_dir = Path(str(job["pair_dir"])).resolve()
     baseline_dir = None if job.get("replay_active_only") else Path(str(job["baseline_dir"])).resolve()
+    from core.candidate_score_permutation import permutation_spec
+    repetition = permutation_spec(arm.dl_runtime_options)
     if pair_dir.exists(): shutil.rmtree(pair_dir)
     started = time.perf_counter()
     runtime_spec = _arm_runtime_spec(arm)
@@ -4784,6 +4814,8 @@ def _replay_one_unit(job: dict[str, Any]) -> dict[str, Any]:
         # Selection future-target join是post-replay離線診斷；daily-universal profile
         # 會重建完整daily stock-day target universe，不能在每個seed replay重做。
         capture_selection_target_diagnostics=False,
+        repetition_baseline_trades_path=(job.get("baseline_trade_path")
+                                         if repetition is not None else None),
     )
     metrics = dict(payload.get("score_ranking") or {})
     # Active-only deliberately does not publish no_filter_trades.csv under the
@@ -4816,7 +4848,7 @@ def _replay_one_unit(job: dict[str, Any]) -> dict[str, Any]:
     from core.rank_score_composition import rank_score_composition
     # AI: Constituent predictions remain in source artifacts. A frozen runtime
     # blend has no independently fitted Target/rho/epoch-selection experiment.
-    model_prediction = ({} if rank_score_composition(arm.dl_runtime_options)
+    model_prediction = ({} if rank_score_composition(arm.dl_runtime_options) or repetition is not None
                         else dict(job.get("model_prediction_metrics") or {}))
     result = {
         "arm_id": arm.arm_id, "name": arm.name, "seed": int(job["seed"]),
@@ -5332,6 +5364,27 @@ def _robustness_summary(
         seed_yearly_frame=seed_yearly_frame,
         run_root=run_root,
     )
+    from core.candidate_score_permutation import permutation_spec
+    from services.research.strategy_score_permutation import evaluate_permutation_control
+    repeated = {}
+    for arm in stochastic:
+        spec = permutation_spec(arm.dl_runtime_options)
+        if spec is None:
+            continue
+        bundles = []
+        for seed in contract["resolved_seeds"]:
+            manifest = (_read_attribution_unit_manifest(
+                run_root, arm_id=arm.arm_id, seed=int(seed),
+                expected_fingerprint=str(contract["fingerprint"])) if run_root is not None else None)
+            if manifest is not None:
+                bundles.append(_read_permutation_attribution(manifest))
+        control_rows = seed_frame[seed_frame["arm_id"] == spec["control_arm_id"]]
+        real = {int(row["seed"]): row for row in control_rows.to_dict("records")}
+        repeated[arm.arm_id] = {"control_arm_id": spec["control_arm_id"], "seeds": bundles,
+                                "gate": evaluate_permutation_control(bundles, real),
+                                "primary": arm.dl_runtime_options.get("preserve_k_r0") is True}
+    if repeated:
+        payload["score_permutations"] = repeated
     return payload
 
 

@@ -442,9 +442,9 @@ def certify_existing_dataset_price_generation(project_root: str | Path,
 
 
 @contextmanager
-def source_data_inventory_read_scope():
+def source_data_inventory_read_scope(*, force_new: bool = False):
     """Share one source scan across a read-only plan; fully recheck before return."""
-    if _READ_SCOPE.get() is not None:
+    if _READ_SCOPE.get() is not None and not force_new:
         yield
         return
     observed, prices = {}, {}

@@ -460,6 +460,12 @@ def _pair_cache_required_files(
     on_arm: StrategyComparisonArm,
 ) -> tuple[Path, ...]:
     runtime_spec = _arm_runtime_spec(on_arm)
+    from core.candidate_score_permutation import permutation_spec
+    if permutation_spec(on_arm.dl_runtime_options) is not None:
+        return tuple(pair_dir / name for name in (
+            "strategy_comparison.json", "strategy_comparison.md", "yearly_returns_comparison.csv",
+            "score_permutation.json", "permutation_metrics.csv", "no_filter_equity.csv", "no_filter_trades.csv",
+        ))
     required = [
         pair_dir / "strategy_comparison.json",
         pair_dir / "strategy_comparison.md",

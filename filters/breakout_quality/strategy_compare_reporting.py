@@ -1013,7 +1013,7 @@ def render_strategy_pair_markdown(payload: dict[str, Any]) -> str:
     metadata, baseline, quality, delta, yearly, diagnostics = (
         _strategy_pair_report_components(payload)
     )
-    return _markdown_report(
+    report = _markdown_report(
         metadata,
         baseline,
         quality,
@@ -1021,6 +1021,10 @@ def render_strategy_pair_markdown(payload: dict[str, Any]) -> str:
         yearly,
         diagnostics,
     )
+    from services.research.strategy_score_permutation import is_permutation_payload, render_permutation_appendix
+    if is_permutation_payload(payload):
+        report += render_permutation_appendix(payload["score_permutation"])
+    return report
 
 def materialize_strategy_pair_readable_report(
     payload: dict[str, Any],

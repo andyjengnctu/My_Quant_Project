@@ -298,6 +298,16 @@ def validate_research_summary_strategy_bindings(
             if tuple(binding.get("rank_model", ()))[1:] != (source.get("experiment_profile"),):
                 raise ValueError(f"Summary rank binding differs from strategy: {binding['arm_id']}")
             options = dict(arm.get("dl_runtime_options") or {})
+            from core.candidate_score_permutation import permutation_spec
+            repetition = permutation_spec(options)
+            if repetition is not None:
+                reference = arm_registry.get(repetition["control_arm_id"], {})
+                reference_options = {key: value for key, value in options.items()
+                                     if key != "candidate_score_permutation"}
+                if ("oracle" in row or arm.get("dl_id") != reference.get("dl_id")
+                        or arm.get("dl_runtime_mode") != reference.get("dl_runtime_mode")
+                        or reference_options != reference.get("dl_runtime_options")):
+                    raise ValueError("Permutation must preserve its real score/selector control without Oracle inheritance")
             positive = requires_positive_score(options) and not uses_primary_positive_classifier(options)
             if positive != bool(binding.get("positive_model")):
                 raise ValueError(f"Summary Positive dependency differs from strategy: {binding['arm_id']}")
@@ -311,6 +321,7 @@ def unresolved_oracle_strategy_contracts(*, arm_registry):
     """Explicitly declare a new model-output composition awaiting Oracle parity."""
     from core.positive_score_admission import uses_model_positive_decision
     from core.rank_score_composition import rank_composition_source_ids
+    from core.candidate_score_permutation import permutation_spec
     result = {}
     for group in get_research_summary_rows():
         if group.get("oracle_contract_status") is None:
@@ -325,7 +336,8 @@ def unresolved_oracle_strategy_contracts(*, arm_registry):
             arm_id = binding.get("arm_id")
             if (arm_id not in arm_registry or arm_id in result
                     or not (uses_model_positive_decision(arm_registry[arm_id].get("dl_runtime_options"))
-                            or rank_composition_source_ids(arm_registry[arm_id].get("dl_runtime_options")))):
+                            or rank_composition_source_ids(arm_registry[arm_id].get("dl_runtime_options"))
+                            or permutation_spec(arm_registry[arm_id].get("dl_runtime_options")))):
                 raise ValueError("Unresolved Oracle requires a declared model-decision composition")
             result[arm_id] = reason
     return result

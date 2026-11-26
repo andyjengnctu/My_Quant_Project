@@ -1380,6 +1380,25 @@ _REVIEWED_SOURCE_INVENTORIES["oracle_daily_provider"]["current"][
      "4e8aec6100e7d73ed1cda98a448ea43f968166097f1ab343da2267dec8c5af64")
 
 
+# AI: Optional decision-local score randomization is inactive for all original
+# replay/Oracle paths. Independently executed frozen/current probes preserve 61
+# complete observations (scores, selections, orders, equity, trades and metrics),
+# outputs/validation/score_permutation_20261127/{baseline,current}_receipt.json.
+# Both the caller and the new helper are in the complete dependency certificate:
+# an unknown helper/caller edit cannot retain an earlier observation identity.
+# The new treatment additionally binds its options and unmapped source closure
+# in its 99-repeat receipt; no randomized observation can reuse an original arm.
+for _scope, _graph_sha in (
+    ("portfolio_candidates", "0c0e02f6e25570db147421f7e6eb5898f0b64f592ae669716ea1adf7f40a8389"),
+    ("replay_numerics", "354b24264407536d55db0273f68d5a39ec86141d4643ba8528e668f183e44614"),
+):
+    _REVIEWED_SOURCE_INVENTORIES[_scope]["current"].update({
+        "core/portfolio_day_candidates.py": "f3c5dd74844a293696b27c3c23577aa35b6aeb8268ea504f826afff9cbeb5ecf",
+        "core/candidate_score_permutation.py": "a1a1079cc2eb362ee717ab22c0fa7400cecbfc65c3a5afe9f9533406ca1dce21",
+        "@execution_sources": _graph_sha,
+    })
+
+
 def _reviewed_source_group(scope: str):
     proof = _REVIEWED_SOURCE_INVENTORIES.get(scope)
     updates = _OPTIMIZER_EXECUTION_GROUP_UPDATES.get(scope)

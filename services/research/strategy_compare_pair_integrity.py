@@ -132,6 +132,12 @@ def completed_pair_file_integrity_matches(
                 return False
             if detail_sha256(path, file_hasher=file_hasher) != str(digest).strip().lower():
                 return False
+        if "score_permutation.json" in actual_files:
+            from services.research.strategy_score_permutation import load_bundle
+            bundle = load_bundle(pair_dir, root=Path(__file__).resolve().parents[2])
+            pair = load_json_object_or_none(pair_dir / _PRIMARY_PAIR_JSON)
+            if pair is None or pair.get("score_permutation") != bundle:
+                return False
         return True
     except (OSError, RuntimeError, ValueError, TypeError):
         # A corrupted or temporarily inaccessible completed artifact is NOT reusable.
