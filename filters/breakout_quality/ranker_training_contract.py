@@ -645,6 +645,11 @@ def training_semantics(profile) -> dict[str, Any]:
 
     if semantics_key == CONTINUOUS_RANKER_SEMANTICS_PAIRWISE:
         pairwise_contract = _pairwise_contract_for_recipe(recipe)
+        sample_policy = getattr(profile, "fit_sample_weight_policy", None)
+        if sample_policy is not None:
+            from core.breakout_quality_fit_weighting import fit_sample_weight_contract
+            pairwise_contract = {**pairwise_contract,
+                                 "fit_sample_weighting": fit_sample_weight_contract(sample_policy)}
         return _extended_semantics(
             batching=pairwise_contract["batching"],
             pairwise_contract=pairwise_contract,

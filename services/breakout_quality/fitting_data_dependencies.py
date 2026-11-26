@@ -97,6 +97,11 @@ def mintrade40_fit_sample_sha256(bundle: Any, ordered_group_ids: Any) -> str | N
         digest.update(b"decision_context_ordered_fit_values_v1\n")
         digest.update(json.dumps(context_contract, sort_keys=True).encode("utf-8"))
         digest.update(context.astype("<f4", copy=False).tobytes())
+    policy = getattr(getattr(bundle, "profile", None), "fit_sample_weight_policy", None)
+    if policy is not None:
+        from filters.breakout_quality.fit_sample_weighting import ordered_fit_episode_sha256
+        digest.update(b"fit_sample_weighting\n")
+        digest.update(ordered_fit_episode_sha256(table, ids, policy).encode("ascii"))
     return digest.hexdigest()
 
 

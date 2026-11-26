@@ -661,10 +661,17 @@ class BreakoutQualityExperimentProfile:
     encoder_pretraining_profile: str | None = None
     fit_contract_version: int = 1
     score_calibration: str | None = None
+    fit_sample_weight_policy: str | None = None
     numerical_execution_policy: str = NUMERICAL_EXECUTION_POLICY_ARCHITECTURE_DEFAULT
     bf16_backward_retry_scales: tuple[float, ...] = ()
 
     def __post_init__(self) -> None:
+        if self.fit_sample_weight_policy is not None:
+            from core.breakout_quality_fit_weighting import fit_sample_weight_contract
+            fit_sample_weight_contract(self.fit_sample_weight_policy)
+            if (self.training_objective != TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING
+                    or self.training_sample_scope != TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS):
+                raise ValueError("FIT sample weighting requires daily scalar pairwise supervision")
         normalized_name = str(self.name).strip().lower()
         if not normalized_name or normalized_name != self.name:
             raise ValueError("experiment profile name 必須是非空白小寫名稱")
@@ -856,6 +863,9 @@ class BreakoutQualityExperimentProfile:
             payload["model_architecture"] = str(self.model_architecture)
         if self.score_calibration is not None:
             payload["score_calibration"] = self.score_calibration
+        if self.fit_sample_weight_policy is not None:
+            from core.breakout_quality_fit_weighting import fit_sample_weight_contract
+            payload["fit_sample_weighting"] = fit_sample_weight_contract(self.fit_sample_weight_policy)
         if self.fit_contract_version != 1:
             payload["fit_contract_version"] = int(self.fit_contract_version)
         if self.numerical_execution_policy != NUMERICAL_EXECUTION_POLICY_ARCHITECTURE_DEFAULT:
@@ -1189,6 +1199,7 @@ from dataclasses import replace as _replace_study
 from config.breakout_quality_history import CO_PROFILE, HISTORY_PROFILE
 STOCK_EMA_PROFILE = CO_PROFILE + "_stock_ema"
 CALENDAR_BARS_PROFILE = CO_PROFILE + "_calendar_bars"
+SIGNAL_FREQUENCY_PROFILE = CO_PROFILE + "_signal_frequency"
 for _name, _architecture in (
     (HISTORY_PROFILE, "inception_time_v1"),
     (STOCK_EMA_PROFILE, "inception_time_stock_ema_v1"),
@@ -1197,6 +1208,12 @@ for _name, _architecture in (
     _EXPERIMENT_PROFILES[_name] = _replace_study(
         _EXPERIMENT_PROFILES[CO_PROFILE], name=_name, model_architecture=_architecture,
     )
+
+from core.breakout_quality_fit_weighting import ORIGINAL_SIGNAL_INVERSE_FREQUENCY
+_EXPERIMENT_PROFILES[SIGNAL_FREQUENCY_PROFILE] = _replace_study(
+    _EXPERIMENT_PROFILES[CO_PROFILE], name=SIGNAL_FREQUENCY_PROFILE,
+    fit_sample_weight_policy=ORIGINAL_SIGNAL_INVERSE_FREQUENCY,
+)
 
 SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES = tuple(_EXPERIMENT_PROFILES)
 SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES = tuple(
@@ -1255,6 +1272,9 @@ class ContinuousRankerResearchSpec:
         if self.profile_name not in _EXPERIMENT_PROFILES:
             raise ValueError(f"continuous ranker research spec引用未知profile: {self.profile_name}")
         profile = _EXPERIMENT_PROFILES[self.profile_name]
+        if (profile.fit_sample_weight_policy is not None
+                and self.pairwise_reduction != CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG):
+            raise ValueError("FIT sample weighting requires full-list Delta-NDCG")
         if profile.training_objective not in CONTINUOUS_RANKER_TRAINING_OBJECTIVES:
             raise ValueError(f"continuous ranker research spec只接受continuous profile: {self.profile_name}")
         if self.trainer_family not in {
@@ -1830,6 +1850,7 @@ for _name, _id, _phase, _description in (
     (HISTORY_PROFILE, "MR-13DN", "13DN", "CO controlled early real-event history extension"),
     (STOCK_EMA_PROFILE, "MR-13DO", "13DO", "CO plus full-history stock close EMA inputs"),
     (CALENDAR_BARS_PROFILE, "MR-13DP", "13DP", "CO plus closed weekly and monthly OHLCV branches"),
+    (SIGNAL_FREQUENCY_PROFILE, "MR-13DQ", "13DQ", "CO original-signal FIT frequency weighted pairs"),
 ):
     _CONTINUOUS_RANKER_RESEARCH_SPECS[_name] = _replace_study(
         _CONTINUOUS_RANKER_RESEARCH_SPECS[CO_PROFILE],
@@ -1844,6 +1865,11 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS[STOCK_EMA_PROFILE] = _replace_study(
 
 _CONTINUOUS_RANKER_RESEARCH_SPECS[CALENDAR_BARS_PROFILE] = _replace_study(
     _CONTINUOUS_RANKER_RESEARCH_SPECS[CALENDAR_BARS_PROFILE],
+    model_gate_reference_profile_name=CO_PROFILE,
+)
+
+_CONTINUOUS_RANKER_RESEARCH_SPECS[SIGNAL_FREQUENCY_PROFILE] = _replace_study(
+    _CONTINUOUS_RANKER_RESEARCH_SPECS[SIGNAL_FREQUENCY_PROFILE],
     model_gate_reference_profile_name=CO_PROFILE,
 )
 

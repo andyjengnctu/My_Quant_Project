@@ -1993,6 +1993,13 @@ def load_daily_universal_ranker_data(
             "target_minimum_low_return": minimum_low_return,
         }
     )
+    if profile.fit_sample_weight_policy is not None:
+        from filters.breakout_quality.fit_sample_weighting import attach_fit_episodes
+        attach_fit_episodes(
+            group_table, frames=samples.frames, tickers=samples.tickers,
+            target_valid=target_valid, source=target_teacher,
+            exchange_calendar=exchange_calendar, policy=profile.fit_sample_weight_policy,
+        )
     if trade_diagnostic_r_required:
         # NetPnL is the supervised currency target. Only R-named post-replay
         # diagnostics consume the R value from the very same executed trade.

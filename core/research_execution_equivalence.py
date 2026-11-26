@@ -1360,6 +1360,26 @@ _REVIEWED_SOURCE_INVENTORIES["oracle_daily_provider"]["current"][
  'b5e306380093e8ad858b8c79387e11a112846c064e789a1892691f36b020312e')
 
 
+# AI: Opt-in FIT-only signal-frequency supervision leaves all 31 original
+# profile contracts, four model specs, original daily loader rows/targets/tensors,
+# CO selection/refit losses and fitted weights unchanged against 06bf8ff1.
+# Independent Oracle execution retains the same 61 numerical observations.
+# Evidence: outputs/validation/signal_frequency_20261126/original_source_parity.json.
+# These exact source pins apply only to the existing Oracle provider projection;
+# the new profile and its ordered episode metadata retain a separate FIT identity.
+_REVIEWED["core/breakout_quality_registry.py"]["reviewed_model_only_revisions"].update({
+    "ef9764771c38142e75ab87ab3d8ffec07b4176a204be29b94181d28d36a2f390":
+        "310db0713692a8a335d8f7514e8026b05e0e921781b5a89412cd5d1d63f4aa5e",
+    "75ec06a822cf9bf9dfc9dfedb8bc420d959a6fe7350ab09f1be284c40f68cb2f":
+        "310db0713692a8a335d8f7514e8026b05e0e921781b5a89412cd5d1d63f4aa5e",
+})
+_REVIEWED_SOURCE_INVENTORIES["oracle_daily_provider"]["current"][
+    "filters/breakout_quality/daily_ranker_data.py"
+] = ("4e7bc6bd1b7d084f117276da6259df0f020ed34e2d25957d2848ddac1876e2b9",
+     "4e7bc6bd1b7d084f117276da6259df0f020ed34e2d25957d2848ddac1876e2b9",
+     "4e8aec6100e7d73ed1cda98a448ea43f968166097f1ab343da2267dec8c5af64")
+
+
 def _reviewed_source_group(scope: str):
     proof = _REVIEWED_SOURCE_INVENTORIES.get(scope)
     updates = _OPTIMIZER_EXECUTION_GROUP_UPDATES.get(scope)

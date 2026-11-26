@@ -1730,6 +1730,8 @@ def _train_fold(
         ),
         progress_callback=progress_callback,
         information_cutoff=fold_contract["model_information_cutoff"],
+        **({"fit_cutoff": str(ids["validation_start"])}
+           if getattr(bundle.profile, "fit_sample_weight_policy", None) is not None else {}),
     )
     selected_epoch = int(epoch_selection["best_epoch"])
     model, final_history = fit_final(
@@ -1742,6 +1744,8 @@ def _train_fold(
         plan=plan,
         progress_callback=progress_callback,
         epoch_selection=epoch_selection,
+        **({"fit_cutoff": str(fold["score_start"])}
+           if getattr(bundle.profile, "fit_sample_weight_policy", None) is not None else {}),
     )
     scores, score_extras = _predict_primary_score_payload(
         torch, model, bundle, ids["score_ids"], args=args, plan=plan

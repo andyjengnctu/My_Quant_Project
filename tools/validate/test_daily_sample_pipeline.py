@@ -30,7 +30,7 @@ def _outcomes(*, frame, positions, **kwargs):
 
 
 def build_isolated_daily_bundle(owner=loader, *, workers=1, context=False,
-                                failures=False, profile=None):
+                                failures=False, profile=None, teacher=None):
     """Exercise the real loader with deterministic source/teacher boundaries."""
     from filters.breakout_quality import daily_trade40_target
     days, frame, _params, _period = fixture(count=520, start="2018-01-01")
@@ -50,7 +50,7 @@ def build_isolated_daily_bundle(owner=loader, *, workers=1, context=False,
     recipe_profile = profile or "daily_universal_formal_mintrade_fullcycle_netpnl_per_seed_full_list_ndcg_pairwise"
     recipe = owner.get_continuous_ranker_execution_recipe(recipe_profile)
     real_path = recipe.target_policy.materialization_mode == owner.CONTINUOUS_RANKER_TARGET_MATERIALIZATION_DAILY_TRADE_PATH
-    teacher = object()
+    teacher = object() if teacher is None else teacher
     kwargs = dict(
         filter_id="breakout_quality_v1", preload_feature_bank=False,
         allow_stale_source=False, project_root=Path.cwd(),

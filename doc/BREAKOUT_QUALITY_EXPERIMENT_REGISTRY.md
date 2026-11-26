@@ -4,6 +4,22 @@
 
 本文件是 `breakout_quality` 的**實驗 identity、命名、版本語意、namespace、目前基準與 ID 佔用狀態**單一真理來源。
 
+### 2026-11-26 原始突破訊號頻率配重，C201／C202（使用者核准）
+
+`MR-13DQ`，profile=`daily_universal_formal_mintrade_fullcycle_netpnl_per_seed_full_list_ndcg_pairwise_signal_frequency`，沿用 `ARCH-inception_time_v1`，FIT v1。唯一研究變數是原 CO 完整交易週期 NetPnL pairwise supervision 的訊號頻率配重；原 300×10 inputs、合法樣本／Target、Adam、日期批次、inner validation／epoch selection、P16、費稅、Broker-Cash 與 selectors 不變。沒有新增模型輸入、Target、Positive gate、權重搜尋或刪除續掛樣本。
+
+Episode 由原標籤產生器的 canonical pending-signal lifecycle 提供，key=`(seed, ticker, original_signal_date)`。新正常 setup 取代舊訊號；延伸續掛沿用原訊號日期與原參數，依 canonical 生命週期清除；單純跨年／參數換期不另分組。保留原 teacher 的歷史／OOS reset 邊界，不增加每折 reset。不得按實際組合成交、PnL、持股、Exact／Direct 選股或任意日數間隔認定。每筆合法 FIT row 必須有唯一且一致的 episode，缺漏／歧義直接失敗。
+
+每個 FIT 階段單獨計數 `n_e=該階段同 episode 的合法 unique ticker/information-date rows`，固定 item weight `a_i=1/n_e`。原同日非同分配對的 Delta-NDCG `d_ij` 乘以 `a_i*a_j`，loss=`sum(d_ij*a_i*a_j*softplus(-sign(y_i-y_j)*(m_i-m_j)))/sum(d_ij*a_i*a_j)`，分母仍跨同一 optimizer batch 的所有日期。沒有 sqrt／clipping／額外超參數；權重無梯度，不改 loss 方向、percentile gains、IDCG、predicted order 或 batches。只有單一共同乘數時會因正規化抵銷，屬預期行為。
+
+Inner train 只由 canonical `train_ids` 計數，資訊日與成熟日嚴格早於 validation start；Validation 指標保持原未配重 mean daily Spearman 與 percentile-MSE tie-break。Final refit 從 canonical `final_ids` 重新計數（不是 train+validation 簡單串接），資訊日及成熟日嚴格早於 score start。NULL／未成熟／研究截尾強制平倉排除規則沿用原 CO。可使用該 FIT 截止時已知、但晚於樣本資訊日的歷史續掛筆數；這是訓練配重，並非當日輸入。只用同 seed 經 Optimizer 驗證的歷史 teacher。
+
+Episode 契約與有序 FIT metadata 納入新模型身分及樣本 digest；較晚的非 FIT rows 不參與 digest。原 CO 工件與 FIT 定義不改。每階段保存股票／日期／樣本／episode 數、頻率集中度，以及逐 epoch 同一組當前 margins 下配重前後的「每 batch 正規化 pair endpoint mass」集中度；每對權重的一半歸到各端點再合併 episode。這不是梯度貢獻，亦不保證各 episode 對梯度等權。
+
+`SR-C201` Exact K/R0 對照 C123；`SR-C202` Direct No-K/No-R0 對照 C124，共用 `DL-CONT13DQ-ROLL`／`CONT13DQ_ROLL`，Replay v1。保留原 CO C123／C124、CI C106 與既有 current references。由原 Research Summary roster 派生 Model Compare/Test、Forward／Rolling Strategy Compare、四 seed Robustness 與 Summary；登錄 C201-C123、C202-C124、C201-C202、C201-C106。沿用 CO 的原 Target／Oracle recipes，不增控制組或另寫比較程式。Training Model 選用 DQ。
+
+狀態：IMPLEMENTED / MARKET_RESULTS_PENDING / RESEARCH_ONLY / NO_TRADING。本輪僅工程驗證；rolling、robustness、summary 由使用者自行執行，不能將工程 synthetic fitting 當成市場研究結果。2021 起屬迭代研究 OOS。事前四 seed 晉級規則沿用配對 ΔRoMD 均值與中位數皆正、至少 3/4 勝、平均 MDD 不增加；並檢查突破候選同日配對判對率、Top-10 NetPnL lift 與漏掉大贏家的代價，不宣稱統計顯著。
+
 ### 2026-11-26 日／週／月價量輸入研究，C199／C200 已退役
 
 使用者核准實作 `MR-13DP`，profile=`daily_universal_formal_mintrade_fullcycle_netpnl_per_seed_full_list_ndcg_pairwise_calendar_bars`，`ARCH-inception_time_calendar_bars_v1`，FIT v1。沿用原 CO 的合法成熟完整交易週期 NetPnL、訓練歷史、loss、inner validation／epoch selection、P16、費稅與 Broker-Cash。原 CO 的日線 300×10（個股＋0050）保持原值；新增 104 個曆週及 60 個曆月，各 12 欄（個股與 0050 各 OHLCV＋Valid），各自小型序列分支後融合成單一排序模型。兩個新分支各為 2 層 Conv1d、16 channels、kernel 3、ReLU，逐層遮罩且不使用 BatchNorm，依任一標的有效的位置作 masked mean；與原 CO 日線 latent 串接後經 64 維 Linear／ReLU 與原單 ranker 輸出。模型參數增加屬本輪整體研究變數，未宣稱可單獨分離長歷史與容量效果。

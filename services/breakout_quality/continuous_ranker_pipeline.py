@@ -343,6 +343,7 @@ def select_epoch(
     selection_metrics_only: bool = False,
     progress_callback=None,
     information_cutoff: str | None = None,
+    fit_cutoff: str | None = None,
 ) -> dict[str, Any]:
     evaluate_train_metrics = (
         bundle.profile.training_sample_scope
@@ -363,6 +364,7 @@ def select_epoch(
         selection_metrics_only=bool(selection_metrics_only),
         progress_callback=progress_callback,
         information_cutoff=information_cutoff,
+        **({"fit_cutoff": fit_cutoff} if fit_cutoff is not None else {}),
     )
 
 
@@ -377,6 +379,7 @@ def fit_final(
     plan,
     progress_callback=None,
     epoch_selection: dict | None = None,
+    fit_cutoff: str | None = None,
 ):
     return ranker_api.fit_final(
         torch,
@@ -392,6 +395,7 @@ def fit_final(
         phase_label="Fold歷史資料重訓",
         progress_callback=progress_callback,
         epoch_selection=epoch_selection,
+        **({"fit_cutoff": fit_cutoff} if fit_cutoff is not None else {}),
     )
 
 

@@ -2633,6 +2633,8 @@ def validate_breakout_quality_daily_full_list_ndcg_pairwise_contract_case(_base_
 
     case_id = "BREAKOUT_QUALITY_DAILY_FULL_LIST_NDCG_PAIRWISE"
     results, summary, check, check_true = _start_case(case_id)
+    from .test_fit_sample_weighting import check_fit_sample_weighting
+    check_fit_sample_weighting(check_true)
 
     from filters.breakout_quality.models.factory import require_torch
     from services.breakout_quality.train_continuous_ranker import _pairwise_logistic_loss
