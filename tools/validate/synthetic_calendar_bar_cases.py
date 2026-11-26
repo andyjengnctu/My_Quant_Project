@@ -10,7 +10,7 @@ from filters.breakout_quality.calendar_bars import (
     ClosedCalendarBars, calendar_bar_layout, normalize_masked_calendar_windows,
 )
 from filters.breakout_quality.daily_ranker_data import LazyDailyFeatureBank
-from filters.breakout_quality.features import normalize_ohlcv_array_window
+from filters.breakout_quality.features import normalize_ohlcv_array_window, normalize_ohlcv_array_windows
 from filters.breakout_quality.models.architectures import SUPPORTED_MODEL_ARCHITECTURES
 from filters.breakout_quality.models.spec import get_model_spec, model_spec_from_manifest
 
@@ -59,7 +59,9 @@ def check_calendar_bar_inputs(check, check_true):
             check_true(f"calendar_{freq}_{dates[index]}_strict_prior_period", correct)
     early_values, early_valid = month.take(pd.DatetimeIndex(["2015-01-15"]), 60)
     check_true("calendar_short_history_is_all_masked_without_future_backfill", not early_valid.any() and not early_values.any())
-    normalized = normalize_masked_calendar_windows(values, valid, np.asarray([stock.loc[info[0], "Close"]]))
+    normalized = normalize_masked_calendar_windows(
+        values, valid, np.asarray([stock.loc[info[0], "Close"]]), normalizer=normalize_ohlcv_array_windows,
+    )
     reference = normalize_ohlcv_array_window(values[0, valid[0]], stock.loc[info[0], "Close"])
     check_true("calendar_normalization_uses_only_valid_bars_and_canonical_volume_rule", (
         np.array_equal(normalized[0, valid[0], :5], reference)
@@ -68,8 +70,8 @@ def check_calendar_bar_inputs(check, check_true):
     zeros = values.copy()
     zeros[:, :, 4] = 0
     check_true("calendar_valid_zero_volume_remains_observed_and_finite", (
-        np.isfinite(normalize_masked_calendar_windows(zeros, valid, np.asarray([100.0]))).all()
-        and np.array_equal(normalize_masked_calendar_windows(zeros, valid, np.asarray([100.0]))[:, :, 5], valid)
+        np.isfinite(normalize_masked_calendar_windows(zeros, valid, np.asarray([100.0]), normalizer=normalize_ohlcv_array_windows)).all()
+        and np.array_equal(normalize_masked_calendar_windows(zeros, valid, np.asarray([100.0]), normalizer=normalize_ohlcv_array_windows)[:, :, 5], valid)
     ))
 
     information_dates = pd.DatetimeIndex(["2021-01-04", "2016-08-15", "2020-12-18"])
@@ -117,6 +119,11 @@ def check_calendar_bar_inputs(check, check_true):
         check_true(prefix + "future_value_changes_cannot_change_inputs", np.array_equal(
             current[0], bank(future_source, future_market, windows=spec.calendar_bar_windows)[0],
         ))
+        mutable_source, mutable_market = stock.copy(), benchmark.copy()
+        independent = bank(mutable_source, mutable_market, windows=spec.calendar_bar_windows)
+        mutable_source.loc[:, ["Open", "High", "Low", "Close"]] *= 3
+        mutable_market.loc[:, ["Open", "High", "Low", "Close"]] *= 2
+        check_true(prefix + "source_mutation_cannot_change_owned_input_arrays", np.array_equal(features, independent[:]))
         scaled_source, scaled_market = stock.copy(), benchmark.copy()
         scaled_source.loc[:, ["Open", "High", "Low", "Close"]] *= 8
         scaled_market.loc[:, ["Open", "High", "Low", "Close"]] *= 4

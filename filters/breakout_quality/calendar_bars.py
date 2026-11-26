@@ -10,9 +10,6 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from filters.breakout_quality.features import normalize_ohlcv_array_windows
-
-
 _PERIOD_NAMES = {"W-SUN": "Week", "M": "Month"}
 _FIELDS = ("Open", "High", "Low", "Close", "Volume", "Valid")
 DAILY_CHANNELS = 2 * (len(_FIELDS) - 1)
@@ -98,7 +95,7 @@ class ClosedCalendarBars:
         return values, valid
 
 
-def normalize_masked_calendar_windows(values, valid, anchors) -> np.ndarray:
+def normalize_masked_calendar_windows(values, valid, anchors, *, normalizer) -> np.ndarray:
     """Apply the existing numerical owner to valid bars, then restore slots."""
     values = np.asarray(values, dtype=np.float64)
     valid = np.asarray(valid, dtype=bool)
@@ -116,7 +113,7 @@ def normalize_masked_calendar_windows(values, valid, anchors) -> np.ndarray:
         rows = np.flatnonzero(counts == count)
         masks = valid[rows]
         observed = values[rows][masks].reshape(len(rows), int(count), 5)
-        normalized = normalize_ohlcv_array_windows(observed, anchors[rows])
+        normalized = normalizer(observed, anchors[rows])
         selected = result[rows]
         selected[masks, :5] = normalized.reshape(-1, 5)
         result[rows] = selected
@@ -126,15 +123,17 @@ def normalize_masked_calendar_windows(values, valid, anchors) -> np.ndarray:
 class CalendarBarFeatureBank:
     """Preaggregate per instrument once; materialize only requested batch windows."""
 
-    def __init__(self, *, frames, benchmark, exchange_calendar, windows, sequence_length):
+    def __init__(self, *, frames, benchmark, exchange_calendar, windows, sequence_length, normalizer):
         self.layout = calendar_bar_layout(windows)
         if any(item["length"] > sequence_length for item in self.layout):
             raise ValueError("Calendar branch exceeds the packed sequence length")
         calendar = pd.DatetimeIndex(exchange_calendar).normalize()
         if calendar.empty or calendar.has_duplicates or not calendar.is_monotonic_increasing:
             raise ValueError("Calendar inputs require the canonical sorted exchange calendar")
-        self._frames = frames
-        self._benchmark = benchmark
+        # Own only immutable anchor arrays, not mutable source DataFrames.
+        self._stock_closes = tuple(frame["Close"].to_numpy(dtype=np.float64, copy=True) for frame in frames)
+        self._benchmark_closes = benchmark["Close"].to_numpy(dtype=np.float64, copy=True)
+        self._normalizer = normalizer
         self._dates = tuple(pd.DatetimeIndex(frame.index).normalize() for frame in frames)
         self._benchmark_dates = pd.DatetimeIndex(benchmark.index).normalize()
         self._stock_bars = tuple(
@@ -161,11 +160,13 @@ class CalendarBarFeatureBank:
                 values[rows], valid[rows] = stock_bars[int(ticker_id)].take(
                     self._dates[int(ticker_id)].take(positions), length,
                 )
-                anchors[rows] = self._frames[int(ticker_id)]["Close"].to_numpy()[positions]
-            output[:, -length:, start:start + len(_FIELDS)] = normalize_masked_calendar_windows(values, valid, anchors)
+                anchors[rows] = self._stock_closes[int(ticker_id)][positions]
+            output[:, -length:, start:start + len(_FIELDS)] = normalize_masked_calendar_windows(
+                values, valid, anchors, normalizer=self._normalizer,
+            )
             unique, inverse = np.unique(benchmark_positions, return_inverse=True)
             values, valid = benchmark_bars.take(self._benchmark_dates.take(unique), length)
             normalized = normalize_masked_calendar_windows(
-                values, valid, self._benchmark["Close"].to_numpy()[unique],
+                values, valid, self._benchmark_closes[unique], normalizer=self._normalizer,
             )
             output[:, -length:, start + len(_FIELDS):start + CALENDAR_CHANNELS] = normalized[inverse]

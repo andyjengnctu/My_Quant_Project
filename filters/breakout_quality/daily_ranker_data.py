@@ -212,6 +212,7 @@ class LazyDailyFeatureBank:
             self._calendar_features = CalendarBarFeatureBank(
                 frames=frames, benchmark=benchmark, exchange_calendar=exchange_calendar,
                 windows=calendar_bar_windows, sequence_length=int(policy.feature_window_bars),
+                normalizer=normalize_ohlcv_array_windows,
             )
             self.feature_columns += self._calendar_features.feature_columns
         # Preserve legacy manifest byte semantics for existing AO/BX artifacts;

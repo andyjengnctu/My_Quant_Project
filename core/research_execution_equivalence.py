@@ -1355,9 +1355,9 @@ for _relative, (_pins, _previous) in _CALENDAR_INPUT_MODEL_SOURCES.items():
     )
 _REVIEWED_SOURCE_INVENTORIES["oracle_daily_provider"]["current"][
     "filters/breakout_quality/daily_ranker_data.py"
-] = ('42e0ea21f4100d5cf725c482626ab23e00dc88651979fa439cfe1837fbbff562',
- '42e0ea21f4100d5cf725c482626ab23e00dc88651979fa439cfe1837fbbff562',
- '0f60a8227410ac1d7312962f9e2cf0cc23290ad65dd6b0c7a13d54267f8e6d84')
+] = ('24b4ae95a5643baccfaa49ce7283a467bd32d2f48ac47673af0b904118022a62',
+ '24b4ae95a5643baccfaa49ce7283a467bd32d2f48ac47673af0b904118022a62',
+ 'b5e306380093e8ad858b8c79387e11a112846c064e789a1892691f36b020312e')
 
 
 def _reviewed_source_group(scope: str):
