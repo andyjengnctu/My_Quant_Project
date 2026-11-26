@@ -97,7 +97,8 @@ def completed_pair_file_integrity_matches(
         )
         if result_record is None and manifest_record is None:
             # Historical, explicitly unpinned run; do not invalidate legacy REUSE.
-            return True
+            # Repeated observations are new and always require pinned evidence.
+            return not (Path(pair_dir) / "score_permutation.json").exists()
         if not isinstance(result_record, dict) or result_record != manifest_record:
             return False
         if type(result_record.get("schema_version")) is not int or result_record["schema_version"] != PAIR_FILE_INTEGRITY_SCHEMA_VERSION:

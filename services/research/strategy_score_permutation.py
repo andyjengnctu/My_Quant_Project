@@ -11,6 +11,7 @@ from core.file_integrity import atomic_write_json, canonical_json_sha256, comput
 from core.score_permutation_observation import (
     BUNDLE, KIND, ROMD, MDD, is_permutation_payload, _relative, _pin, _verified_path, _mean_records, _mean_yearly, distribution, validate_bundle, load_bundle, render_permutation_appendix, evaluate_permutation_control
 )
+from core.score_permutation_observation import validate_repeat_files
 
 def run_permutation_comparison(*, run_once, arguments, root, spec, seed, arm,
                                settings, score_paths, baseline_trades_path=None):
@@ -72,8 +73,7 @@ def run_fixed_permutations(*, run_once, arguments, root, spec, seed, identity,
                 if (receipt.get("identity") != identity or receipt.get("seed") != seed
                         or receipt.get("repeat_id") != repeat):
                     raise ValueError("Permutation checkpoint identity mismatch")
-                for pin in receipt["files"]:
-                    _verified_path(root, pin)
+                validate_repeat_files(receipt, root=root, directory=directory)
                 payload = load_json_strict(directory / "permutation_result.json")
                 if payload["score_ranking"] != receipt["metrics"]:
                     raise ValueError("Permutation checkpoint metrics mismatch")
@@ -107,6 +107,7 @@ def run_fixed_permutations(*, run_once, arguments, root, spec, seed, identity,
                            "metrics": payload["score_ranking"], "coverage": coverage,
                            "files": [_pin(root, path) for path in sorted(directory.iterdir())
                                      if path.is_file() and path != receipt_path]}
+                validate_repeat_files(receipt, root=root, directory=directory)
                 # Commit last. A partial run never qualifies as a finished repeat.
                 atomic_write_json(receipt_path, receipt)
             payloads.append(payload)
@@ -117,6 +118,8 @@ def run_fixed_permutations(*, run_once, arguments, root, spec, seed, identity,
                     "repeat_id": repeat, "repeats": REPEATS, "seed": seed, "reused": reused})
             elif arguments.get("quiet"):
                 print(f"[{'REUSE' if reused else 'DONE'}] seed={seed} 同日置換 {repeat}/{REPEATS}", flush=True)
+        if verify_inputs is not None:
+            verify_inputs()
         bundle = {"kind": KIND, "policy": POLICY, "status": "COMPLETED", "seed": seed,
                   "repeats": REPEATS, "completed": len(observations), "identity": identity,
                   "control_arm_id": spec["control_arm_id"], "observations": observations,

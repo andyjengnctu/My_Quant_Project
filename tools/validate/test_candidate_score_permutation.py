@@ -221,6 +221,8 @@ class FixedPermutationObservationTests(TestCase):
                                        "is_complete_year": True}]}
                 for name in ("no_filter_trades.csv", "score_ranking_trades.csv"):
                     (directory / name).write_text("\n", encoding="utf-8")
+                for name in ("score_ranking_equity.csv", "score_ranking_daily_capacity.csv", "score_ranking_selected_buys.csv"):
+                    (directory / name).write_text("Date\n2021-01-01\n", encoding="utf-8")
                 (directory / "strategy_comparison.json").write_text(json.dumps(payload), encoding="utf-8")
                 return payload
             arguments = dict(output_dir_override=root / "pair", replay_active_only=False)
@@ -241,11 +243,31 @@ class FixedPermutationObservationTests(TestCase):
             calls.clear()
             run_fixed_permutations(**call)
             self.assertEqual(calls, [])
+            receipt = next(root.glob("outputs/**/repeat_050/permutation_receipt.json"))
+            original_receipt = receipt.read_text(encoding="utf-8")
+            broken = json.loads(original_receipt)
+            broken["files"] = []
+            receipt.write_text(json.dumps(broken), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "pinned native replay"):
+                run_fixed_permutations(**call)
+            receipt.write_text(original_receipt, encoding="utf-8")
             pinned = next(root.glob("outputs/**/repeat_050/score_ranking_trades.csv"))
             pinned.write_text("changed", encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "SHA mismatch"):
                 run_fixed_permutations(**call)
             self.assertEqual(calls, [])
+
+    def test_permutation_cannot_use_legacy_unpinned_pair_admission(self):
+        from services.research.strategy_compare_pair_integrity import completed_pair_file_integrity_matches
+        with TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            (directory / "manifest.json").write_text("{}", encoding="utf-8")
+            pair = directory / "pairs/test"
+            pair.mkdir(parents=True)
+            args = dict(run_dir=directory, run_payload={}, pair_id="test", pair_dir=pair, required_paths=())
+            self.assertTrue(completed_pair_file_integrity_matches(**args))
+            (pair / "score_permutation.json").write_text("{}", encoding="utf-8")
+            self.assertFalse(completed_pair_file_integrity_matches(**args))
 
     def test_compact_attribution_preserves_complete_distribution_after_pair_cleanup(self):
         import shutil

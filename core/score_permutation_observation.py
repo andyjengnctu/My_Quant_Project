@@ -70,11 +70,13 @@ def distribution(records, key):
 
 
 def validate_bundle(bundle, *, root, verify_children=True):
-    if (bundle.get("kind") != KIND or bundle.get("policy") != POLICY
+    if (not isinstance(bundle, dict) or bundle.get("kind") != KIND or bundle.get("policy") != POLICY
             or bundle.get("status") != "COMPLETED" or bundle.get("repeats") != REPEATS
             or bundle.get("completed") != REPEATS or type(bundle.get("seed")) is not int):
         raise ValueError("Incomplete or incompatible score permutation observation")
     records = bundle.get("observations", [])
+    if not isinstance(records, list) or any(not isinstance(item, dict) for item in records):
+        raise ValueError("Permutation observations must be an ordered record list")
     if [item.get("repeat_id") for item in records] != list(range(1, REPEATS + 1)):
         raise ValueError("Permutation repeats must be exactly 1..99 without duplicates")
     for item in records:
@@ -82,14 +84,14 @@ def validate_bundle(bundle, *, root, verify_children=True):
                or not math.isfinite(item["metrics"][key]) for key in (ROMD, MDD, "total_return_pct")):
             raise ValueError("Permutation repeat missing finite portfolio metrics")
         if verify_children:
-            receipt = load_json_strict(_verified_path(root, item["receipt"]))
+            receipt_path = _verified_path(root, item["receipt"])
+            receipt = load_json_strict(receipt_path)
+            validate_repeat_files(receipt, root=root, directory=receipt_path.parent)
             if (receipt.get("identity") != bundle["identity"] or receipt.get("seed") != bundle["seed"]
                     or receipt.get("repeat_id") != item["repeat_id"]
                     or receipt.get("metrics") != item["metrics"]
                     or receipt.get("coverage") != item["coverage"]):
                 raise ValueError("Permutation child differs from its committed aggregate")
-            for pin in receipt["files"]:
-                _verified_path(root, pin)
     if bundle.get("mean_metrics") != _mean_records([item["metrics"] for item in records]):
         raise ValueError("Permutation aggregate is not the arithmetic mean of 99 observations")
     expected = {key: distribution([item["metrics"] for item in records], key)
@@ -98,6 +100,20 @@ def validate_bundle(bundle, *, root, verify_children=True):
             [item["coverage"] for item in records])):
         raise ValueError("Permutation distribution or coverage differs from its 99 observations")
     return bundle
+
+
+def validate_repeat_files(receipt, *, root, directory):
+    """A commit marker without native replay evidence is never a checkpoint."""
+    required = {"permutation_result.json", "permutation_decisions.jsonl.gz",
+                "score_ranking_trades.csv", "score_ranking_equity.csv",
+                "score_ranking_daily_capacity.csv", "score_ranking_selected_buys.csv"}
+    files = receipt.get("files") if isinstance(receipt, dict) else None
+    if not isinstance(files, list) or not files or any(not isinstance(pin, dict) for pin in files):
+        raise ValueError("Permutation checkpoint lacks pinned native replay files")
+    paths = [_verified_path(root, pin) for pin in files]
+    if (len(paths) != len(set(paths)) or any(path.parent != Path(directory).resolve() for path in paths)
+            or not required.issubset({path.name for path in paths})):
+        raise ValueError("Permutation checkpoint lacks unique complete native replay evidence")
 
 
 def load_bundle(pair_dir, *, root):
