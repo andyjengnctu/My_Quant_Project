@@ -115,6 +115,43 @@ def load_bundle(pair_dir, *, root):
     return validate_bundle(load_json_strict(Path(pair_dir) / BUNDLE), root=root)
 
 
+def run_permutation_comparison(*, run_once, arguments, root, spec, seed, arm,
+                               settings, score_paths, baseline_trades_path=None):
+    """Bind replay inputs before entering the checkpoint/aggregation owner."""
+    from filters.breakout_quality.source_inventory import build_source_data_inventory, source_data_inventory_read_scope
+    from services.research.strategy_robustness_units import pin_files, require_pinned_files
+    from services.research.oracle_build_attestation import capture_oracle_source_inventory, source_inventory_digest
+    params_path = arguments["params_path"]
+    identity = {
+        "arm": arm.as_dict(), "seed": seed,
+        "period": {"start": arguments["comparison_start_date"], "end": arguments["comparison_end_date"]},
+        "params_sha256": compute_observed_file_sha256(params_path),
+        "source_files": {key: compute_observed_file_sha256(path) for key, path in score_paths.items()},
+        "dataset": build_source_data_inventory(root, settings.dataset),
+        "execution_sources": source_inventory_digest(capture_oracle_source_inventory(root)),
+        "repeat_owner_sha256": compute_observed_file_sha256(Path(__file__)),
+        "max_positions": settings.max_positions, "rotation": settings.rotation,
+        "param_evaluation_mode": arguments["param_evaluation_mode"],
+        "ranking_options": arguments["ranking_options"],
+        "active_only": bool(arguments["replay_active_only"]),
+        "diagnostic_baseline_sha256": (compute_observed_file_sha256(baseline_trades_path)
+                                        if baseline_trades_path is not None else None),
+    }
+    input_pins = pin_files([params_path, *score_paths.values(),
+                           *([baseline_trades_path] if baseline_trades_path else [])])
+    def verify_repeat_inputs():
+        require_pinned_files(input_pins)
+        # A nested fresh scope cannot inherit a plan's earlier market witness.
+        with source_data_inventory_read_scope(force_new=True):
+            if build_source_data_inventory(root, settings.dataset) != identity["dataset"]:
+                raise ValueError("Permutation input market inventory changed during replay")
+    return run_fixed_permutations(
+        run_once=run_once, arguments=arguments, root=root, spec=spec, seed=seed,
+        identity=identity, baseline_trades_path=baseline_trades_path,
+        verify_inputs=verify_repeat_inputs,
+    )
+
+
 def run_fixed_permutations(*, run_once, arguments, root, spec, seed, identity,
                            baseline_trades_path=None, verify_inputs=None):
     """Resume immutable children in a stable store, independent of run directories."""

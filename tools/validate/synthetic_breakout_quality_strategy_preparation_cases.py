@@ -248,7 +248,12 @@ def append_strategy_compare_preparation_contract_checks(
             source = active_settings.dl_sources[active_arm.dl_id]
             if str(source.score_source) != "selection_point_in_time":
                 continue
-            with patch.object(execution_module, "run_comparison", return_value={}) as replay:
+            # Replay I/O is replaced at both supported execution boundaries;
+            # fixed-repeat checkpoint/count behavior has its own real fixtures.
+            with patch.object(execution_module, "run_comparison", return_value={}) as replay, patch(
+                "services.research.strategy_score_permutation.run_permutation_comparison",
+                side_effect=lambda **kw: kw["run_once"](**kw["arguments"]),
+            ) as repeat_driver:
                 execution_module.run_strategy_compare_active_arm(
                     settings=active_settings, arm=active_arm,
                     project_root=project_root, params_path="synthetic.json",
@@ -257,6 +262,11 @@ def append_strategy_compare_preparation_contract_checks(
                     param_evaluation_mode="rolling",
                 )
             kwargs = dict(replay.call_args.kwargs)
+            from core.candidate_score_permutation import permutation_spec
+            repetition = permutation_spec(active_arm.dl_runtime_options)
+            repeat_ok = repeat_driver.call_count == int(repetition is not None)
+            if repetition is not None:
+                repeat_ok = repeat_ok and repeat_driver.call_args.kwargs["spec"] == repetition
             expected_override = resolve_strategy_compare_selection_pit_contract_override(
                 root=project_root, source=source,
             )
@@ -323,7 +333,7 @@ def append_strategy_compare_preparation_contract_checks(
                 loader_ok = loader_ok and resolved.ranking_source["rank_composition_scores"] is composed
                 loader_ok = loader_ok and resolved.ranking_source["ranking_options"] == kwargs["ranking_options"]
                 loader_ok = loader_ok and composition_loader.call_args.kwargs["options"] == kwargs["ranking_options"]
-            recorded.append(paths_ok and loader_ok)
+            recorded.append(paths_ok and loader_ok and repeat_ok)
     add_check(
         results, "synthetic_breakout_quality", case_id,
         "current_suite_all_pit_arms_replay_through_matching_ready_audit_contract",
