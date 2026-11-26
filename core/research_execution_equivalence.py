@@ -1389,12 +1389,13 @@ _REVIEWED_SOURCE_INVENTORIES["oracle_daily_provider"]["current"][
 # The new treatment additionally binds its options and unmapped source closure
 # in its 99-repeat receipt; no randomized observation can reuse an original arm.
 for _scope, _graph_sha in (
-    ("portfolio_candidates", "0c0e02f6e25570db147421f7e6eb5898f0b64f592ae669716ea1adf7f40a8389"),
-    ("replay_numerics", "354b24264407536d55db0273f68d5a39ec86141d4643ba8528e668f183e44614"),
+    ("portfolio_candidates", "b442d8c46920d4ed8cab412534d181820461a28230a5b4260ecb267d7dbfcec7"),
+    ("replay_numerics", "30e78e201153bfdd31d793aaa93d5abeec6c24a6e27c2e00db1d1db0a59804cd"),
 ):
     _REVIEWED_SOURCE_INVENTORIES[_scope]["current"].update({
         "core/portfolio_day_candidates.py": "f3c5dd74844a293696b27c3c23577aa35b6aeb8268ea504f826afff9cbeb5ecf",
-        "core/candidate_score_permutation.py": "a1a1079cc2eb362ee717ab22c0fa7400cecbfc65c3a5afe9f9533406ca1dce21",
+        "core/candidate_score_permutation.py": "55eec9a553e4dc6ace62b88483b02b5079b0445d993fa26af1b989c71b0e8566",
+        "core/candidate_score_permutation_contract.py": "860204bb21330224a23d6fc7e24a48ab43ef44d5a893e4f3046a80f56e7fdcf1",
         "@execution_sources": _graph_sha,
     })
 

@@ -2740,10 +2740,10 @@ def _write_compact_attribution_source(
         "selected_buys": pair_dir / f"{prefix}_selected_buys.csv",
         "execution": pair_dir / f"{prefix}_execution.csv",
     }
-    from core.candidate_score_permutation import permutation_spec
+    from core.candidate_score_permutation_contract import permutation_spec
     repetition = permutation_spec(arm.dl_runtime_options)
     if repetition is not None:
-        from services.research.strategy_score_permutation import load_bundle
+        from core.score_permutation_observation import load_bundle
         load_bundle(pair_dir, root=PROJECT_ROOT)
         source_files = {"permutations": pair_dir / "score_permutation.json"}
     missing = [path.name for path in source_files.values() if not path.is_file()]
@@ -2869,7 +2869,7 @@ def _attribution_roles(payload):
 
 
 def _read_permutation_attribution(payload):
-    from services.research.strategy_score_permutation import validate_bundle
+    from core.score_permutation_observation import validate_bundle
     item = payload["files"]["permutations"]
     path = (PROJECT_ROOT / item["path"]).resolve()
     path.relative_to(PROJECT_ROOT)
@@ -4786,7 +4786,7 @@ def _replay_one_unit(job: dict[str, Any]) -> dict[str, Any]:
     start = str(job["comparison_start"]); end = str(job["comparison_end"])
     pair_dir = Path(str(job["pair_dir"])).resolve()
     baseline_dir = None if job.get("replay_active_only") else Path(str(job["baseline_dir"])).resolve()
-    from core.candidate_score_permutation import permutation_spec
+    from core.candidate_score_permutation_contract import permutation_spec
     repetition = permutation_spec(arm.dl_runtime_options)
     if pair_dir.exists(): shutil.rmtree(pair_dir)
     started = time.perf_counter()
@@ -5364,8 +5364,8 @@ def _robustness_summary(
         seed_yearly_frame=seed_yearly_frame,
         run_root=run_root,
     )
-    from core.candidate_score_permutation import permutation_spec
-    from services.research.strategy_score_permutation import evaluate_permutation_control
+    from core.candidate_score_permutation_contract import permutation_spec
+    from core.score_permutation_observation import evaluate_permutation_control
     repeated = {}
     for arm in stochastic:
         spec = permutation_spec(arm.dl_runtime_options)

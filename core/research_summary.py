@@ -298,7 +298,7 @@ def validate_research_summary_strategy_bindings(
             if tuple(binding.get("rank_model", ()))[1:] != (source.get("experiment_profile"),):
                 raise ValueError(f"Summary rank binding differs from strategy: {binding['arm_id']}")
             options = dict(arm.get("dl_runtime_options") or {})
-            from core.candidate_score_permutation import permutation_spec
+            from core.candidate_score_permutation_contract import permutation_spec
             repetition = permutation_spec(options)
             if repetition is not None:
                 reference = arm_registry.get(repetition["control_arm_id"], {})
@@ -321,7 +321,7 @@ def unresolved_oracle_strategy_contracts(*, arm_registry):
     """Explicitly declare a new model-output composition awaiting Oracle parity."""
     from core.positive_score_admission import uses_model_positive_decision
     from core.rank_score_composition import rank_composition_source_ids
-    from core.candidate_score_permutation import permutation_spec
+    from core.candidate_score_permutation_contract import permutation_spec
     result = {}
     for group in get_research_summary_rows():
         if group.get("oracle_contract_status") is None:

@@ -1411,7 +1411,7 @@ def pair_upside_realization_refresh_required(pair_dir: Path) -> bool:
     payload = _read_json(Path(pair_dir) / "strategy_comparison.json")
     if not isinstance(payload, dict):
         return True
-    from services.research.strategy_score_permutation import is_permutation_payload
+    from core.score_permutation_observation import is_permutation_payload
     if is_permutation_payload(payload):
         return False
     metadata = dict(payload.get("metadata") or {})
@@ -1800,7 +1800,7 @@ def _r_analysis_rows(
     for arm in settings.enabled_arms:
         scenario = dict(scenarios.get(arm.arm_id) or {})
         model = dict(model_by_dl.get(str(arm.dl_id or "")) or {})
-        from core.candidate_score_permutation import permutation_spec
+        from core.candidate_score_permutation_contract import permutation_spec
         if permutation_spec(arm.dl_runtime_options) is not None:
             model = {}
         translation = dict(translation_by_arm.get(arm.arm_id) or {})
@@ -1907,7 +1907,7 @@ def _build_mfe_safety_main_report_geometry(
         for arm, prefix in ((off_arm, "no_filter"), (on_arm, "score_ranking")):
             if arm is None or arm.arm_id not in enabled_arm_ids:
                 continue
-            from services.research.strategy_score_permutation import is_permutation_payload, validate_bundle
+            from core.score_permutation_observation import is_permutation_payload, validate_bundle
             if prefix == "score_ranking" and is_permutation_payload(payload):
                 bundle = validate_bundle(payload["score_permutation"], root=root)
                 repeated_keys[arm.arm_id] = [_filled_selection_geometry_keys(
@@ -1969,7 +1969,7 @@ def _build_mfe_safety_main_report_geometry(
         & breakout_keys["date"].ge(start)
         & breakout_keys["date"].le(end)
     ].drop_duplicates(["ticker", "date"])
-    from services.research.strategy_score_permutation import _mean_records
+    from core.score_permutation_observation import _mean_records
     def arm_distribution(arm_id):
         if arm_id in repeated_keys:
             return _mean_records([mfe_safety_distribution_for_keys(truth, keys, allow_empty=True)
@@ -2730,3 +2730,65 @@ def render_strategy_diagnostics_markdown(diagnostics: dict[str, Any]) -> str:
     if joint:
         sections.extend(["", joint])
     return "\n".join(sections).rstrip() + "\n"
+
+
+def exclusive_selection_r_from_trade_files(
+    pair_dir: Path,
+    *,
+    active_trades_filename: str,
+    baseline_trades_path: Path | None = None,
+    baseline_trade_count: int | float | None = None,
+    active_trade_count: int | float | None = None,
+    round_trip_loader=None,
+) -> float:
+    round_trip_loader = round_trip_loader or reconstruct_round_trips
+    # Normal comparisons keep both trades under one pair. Robustness active-only
+    # replay instead consumes a verified same-seed baseline from its own directory.
+    baseline_path = (
+        pair_dir / "no_filter_trades.csv"
+        if baseline_trades_path is None else Path(baseline_trades_path)
+    )
+    active_path = pair_dir / active_trades_filename
+    if not baseline_path.is_file() or not active_path.is_file():
+        raise FileNotFoundError(
+            "缺少直接選擇R所需交易工件: "
+            f"{baseline_path.name}, {active_path.name}"
+        )
+    def verified_round_trips(path: Path, *, scenario: str, expected_count: object) -> pd.DataFrame:
+        try:
+            trades = pd.read_csv(path, encoding="utf-8-sig")
+        except pd.errors.EmptyDataError as exc:
+            # Canonical replay may serialize a legitimately empty trade history
+            # as zero bytes. Require affirmative zero-trade economic evidence;
+            # never silently treat a missing/truncated nonzero result as zero.
+            raw = path.read_bytes()
+            # Pandas .to_csv(encoding="utf-8-sig") emits BOM + a blank line
+            # for an empty DataFrame on some platforms (4-5 bytes).
+            empty_csv = not (raw[3:] if raw.startswith(b"\xef\xbb\xbf") else raw).strip()
+            if (
+                empty_csv
+                and isinstance(expected_count, (int, float))
+                and not isinstance(expected_count, bool)
+                and math.isfinite(float(expected_count))
+                and float(expected_count) == 0.0
+            ):
+                return pd.DataFrame(columns=("match_key", "r_multiple"))
+            raise ValueError(f"交易檔為空但沒有合法的零交易證據: {path.name}") from exc
+        return round_trip_loader(trades, scenario=scenario)
+
+    baseline = verified_round_trips(
+        baseline_path, scenario="no_filter", expected_count=baseline_trade_count,
+    )
+    active = verified_round_trips(
+        active_path, scenario="active", expected_count=active_trade_count,
+    )
+    left = baseline.set_index("match_key", drop=False) if not baseline.empty else baseline
+    right = active.set_index("match_key", drop=False) if not active.empty else active
+    left_keys = set(left.index.astype(str)) if not left.empty else set()
+    right_keys = set(right.index.astype(str)) if not right.empty else set()
+    left_only = left.loc[list(sorted(left_keys - right_keys))] if left_keys - right_keys else baseline.iloc[0:0]
+    right_only = right.loc[list(sorted(right_keys - left_keys))] if right_keys - left_keys else active.iloc[0:0]
+    left_r = pd.to_numeric(left_only.get("r_multiple"), errors="coerce").fillna(0.0).sum() if not left_only.empty else 0.0
+    right_r = pd.to_numeric(right_only.get("r_multiple"), errors="coerce").fillna(0.0).sum() if not right_only.empty else 0.0
+    return float(right_r - left_r)
+

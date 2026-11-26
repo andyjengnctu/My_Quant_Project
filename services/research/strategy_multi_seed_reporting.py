@@ -239,7 +239,7 @@ def render_multi_seed_robustness_report(
             "- Extending-Window Rolling robustness只評估config既定scientific condition；不得依結果回頭調整training semantics或使用future fold結果擬合當下模型。",
         )),
     ])
-    from services.research.strategy_score_permutation import render_permutation_appendix
+    from core.score_permutation_observation import render_permutation_appendix
     for arm_id, item in dict(summary.get("score_permutations") or {}).items():
         gate = item["gate"]
         sections.append(f"同日候選分數置換｜{arm_id} vs {item['control_arm_id']}｜"

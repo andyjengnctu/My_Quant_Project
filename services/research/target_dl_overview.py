@@ -1216,7 +1216,7 @@ def collect_target_dl_overview(project_root: Path) -> dict[str, Any]:
             arm = STRATEGY_COMPARE_ARMS.get(arm_id, {})
             pair = binding.get("rank_model")
             model = model_evidence.get(pair[1], {}) if pair else {}
-            from core.candidate_score_permutation import permutation_spec
+            from core.candidate_score_permutation_contract import permutation_spec
             repetition = permutation_spec(arm.get("dl_runtime_options"))
             if repetition is not None:
                 model = {"model": f"{pair[0]} 同日置換（{repetition['repeats']}次平均）"}

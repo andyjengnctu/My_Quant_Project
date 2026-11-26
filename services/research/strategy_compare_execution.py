@@ -468,7 +468,7 @@ def run_strategy_compare_active_arm(
         verified_real_path_bundle_loader=load_continuous_ranker_data,
         verified_real_path_diagnostic_loader=_load_verified_real_path_diagnostic_projection,
     )
-    from core.candidate_score_permutation import permutation_spec
+    from core.candidate_score_permutation_contract import permutation_spec
     repetition = permutation_spec(arm.dl_runtime_options)
     if repetition is None:
         return run_comparison(**comparison_arguments)

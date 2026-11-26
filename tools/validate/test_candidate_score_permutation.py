@@ -268,8 +268,8 @@ class FixedPermutationObservationTests(TestCase):
             job = dict(scientific_fingerprint="fixture", robustness_id="fixture", profile_id=settings.profile_id,
                        arm_order=1, seed=42, seed_order=1, comparison_start="2021-01-01", comparison_end="2021-12-31")
             with patch.object(robustness, "PROJECT_ROOT", root), \
-                 patch("services.research.strategy_score_permutation.load_bundle", return_value=bundle), \
-                 patch("services.research.strategy_score_permutation.validate_bundle", side_effect=lambda b, **kw: b):
+                 patch("core.score_permutation_observation.load_bundle", return_value=bundle), \
+                 patch("core.score_permutation_observation.validate_bundle", side_effect=lambda b, **kw: b):
                 manifest = robustness._write_compact_attribution_source(
                     pair_dir=pair, destination_dir=destination, job=job, arm=arm, dl=source,
                     runtime_spec=_arm_runtime_spec(arm))
