@@ -5500,3 +5500,63 @@ Seed42 Rolling RoMD 為 C197 7.417388／C123 10.882721、C198 2.723813／C124 3.
 **決策。** 四列均未通過原定四 Seed 晉級條件，登錄 NO_ADVANCEMENT。依使用者本輪指示，C199／C200／C193／C194 及唯一依賴模型 MR-13DP／MR-13DN 退出現行 Summary、Model Test／Compare、策略 Forward／Rolling／Robustness 與 Target binding，相關 contrasts 隨共用 roster 停用；Training Model 選回原 CO，保留 C123／C124 與 C106。原模型、策略定義、FIT／Replay 版本、編號及研究工件永久保留。2021 起為迭代研究 OOS，四 Seed 共用市場歷史，不能據此宣稱統計顯著；本輪未實作或分配下一個研究 identity。
 
 **正式證據。** 策略四 Seed：`outputs/strategy_compare/robustness/broker_cash_dl_conversion/rolling_2021_forward/a921caea4a4a0e31/robustness_summary.json`、`seed_results.csv`、`robustness_report.md`。模型四 Seed：`outputs/filters/breakout_quality/breakout_quality_v1/standard_model_comparison/rolling_oos_robustness/standard_model_comparison.json` 與同名 Markdown。逐 Seed 對照、原 SOP 數值及各來源 SHA256 保存於 `outputs/filters/breakout_quality/breakout_quality_v1/research_diagnostics/retired_dn_dp_results_20261126.json`；使用者 Summary 附件 SHA256 同列其中。既有正式配對欄位為 right−left，本表明確轉為實驗−控制，且與 CSV 逐 Seed 相減一致。
+
+## 2026-11-27 — MR-13DQ／C201／C202：訊號頻率配重結果，Exact 退步、Direct 局部改善但未晉級
+
+**共同條件與證據範圍。** MR-13DQ 沿用原 CO 的 300×10 InceptionTime、合法成熟完整週期 NetPnL、同日 Delta-NDCG pairwise supervision、validation 選 epoch、P16、費稅及 Broker-Cash；唯一變數為每個 FIT 階段按 canonical 原始突破 episode 計數，以 `1/(n_i*n_j)` 乘原 pair weight。C201／C123 同為 Exact K/R0；C202／C124 同為 Direct No-K/No-R0。核對使用者本機已完成的 Research Rolling、四 Seed Robustness、Model SOP 與逐筆交易工件，並呼叫原 `collect_target_dl_overview` 唯讀入口重建當前 Summary，沒有重新 FIT／Optimizer／市場 Replay。期間 2021-01-01～2026-03-02；Rolling Seed42，`end_to_end_v1` 四 Seed 依序為 693545351、2014432738、104504529、762252050。
+
+**完成度與比較身分。** 四 Seed 正式 manifest 為 COMPLETED，35 策略 × 4 Seed＝140/140 單元，scientific observations 為 READY。CO／DQ 的 16 個策略來源記錄為 VERIFIED；Exact／Direct 在同 Seed 使用相同模型 score SHA，而 DQ 與 CO 的 score SHA 不同。這 16 份歸因交易檔的 SHA 與列數均符合 manifest。C96、C106、C118、C123、C124 的原 20 個 Seed 單元之 RoMD／MDD／總報酬／EV／交易數與前批 `a921caea4a4a0e31` 逐值一致；不是以新模型名稱顯示原 CO 結果。本輪未重新載入全部 checkpoint 或獨立回放 Oracle。
+
+| 策略 | Seed42 Rolling RoMD | 四 Seed 平均 RoMD | 四 Seed 平均 MDD | 四 Seed 平均總報酬 | Summary Mean RoMD |
+|---|---:|---:|---:|---:|---:|
+| C96：P16 No DL | 8.355970 | 9.176555 | 15.049214% | 137.878115% | 9.012438 |
+| C106：CI Exact 參照 | 8.039325 | 12.170372 | 13.222912% | 157.112029% | 11.344162 |
+| C123：原 CO Exact | 10.882721 | 10.812374 | 13.750995% | 146.876071% | 10.826444 |
+| C201：DQ 配重 Exact | 4.975024 | 9.698715 | 14.818520% | 142.165552% | 8.753976 |
+| C118：CI Direct 參照 | 4.449848 | 4.993320 | 19.860483% | 99.317646% | 4.884626 |
+| C124：原 CO Direct | 3.705003 | 4.660625 | 18.557436% | 79.411014% | 4.469500 |
+| C202：DQ 配重 Direct | 2.205502 | 5.459367 | 18.881317% | 102.973937% | 4.808594 |
+
+Summary 沿用 `(Seed42 Rolling RoMD + 4 × 四 Seed 平均 RoMD) / 5`，不是新增評估期間，也不是五段獨立市場。Summary 的 Win Rate 為 Oracle 交易勝率，不是上述策略勝率；不得把 Oracle 與模型真實選股績效混用。表中 RoMD 是逐 Seed 比率的平均，不是平均總報酬除以平均 MDD。
+
+**同 Seed 配對。** 差值統一為「DQ 實驗 − 對照」，與原 contrast 的 right−left 欄位方向分開辨識；下表由逐 Seed CSV 重算，MDD／報酬差為百分點。
+
+| 配對 | ΔRoMD 均值 | ΔRoMD 中位數 | DQ 勝數 | 平均 ΔMDD | 平均 Δ總報酬 |
+|---|---:|---:|---:|---:|---:|
+| C201−C123：Exact 主控制 | −1.113660 | −0.484856 | 2/4 | +1.067525 | −4.710519 |
+| C202−C124：Direct 主控制 | +0.798743 | +0.687581 | 3/4 | +0.323881 | +23.562923 |
+| C201−C106：Exact 較強參照 | −2.471657 | −2.461588 | 1/4 | +1.595607 | −14.946477 |
+| C202−C118：同 Direct 補充參照 | +0.466047 | +0.394514 | 3/4 | −0.979166 | +3.656291 |
+
+C201−C123 的逐 Seed ΔRoMD 為 +2.207770／−5.692696／−1.067056／+0.097343；C202−C124 為 −0.067699／+1.089113／+0.286050／+1.887507。C202 對原 CO Direct 的平均／中位數與 3/4 勝條件成立，但平均 MDD 增加，未通過完整晉級條件：Seed 693545351 的 MDD 由 12.690183% 增至 22.290847%，其餘三 Seed 回撤下降，不能刪除該 Seed 或事後放寬平均回撤門檻。相對 CI Direct 的補充比較較好，仍不能用較弱參照取代原定 CO 主控制。C201 對 No DL 為 2/4 勝，C202 為 0/4 勝；四 Seed 原始 RoMD 與各項配對差保存於診斷 JSON。
+
+**配重確實生效。** Seed42 加四 Seed 共 30 個模型 fold 的 CO／DQ group counts、observed periods 與 model information cutoff 相同；DQ inner／final 配重截止均對應原 validation start／score start，四 Seed SOP 的共同 cohort 與獨立價格真值 identity 一致。各 fold 最後一個 final-refit epoch 的前 10% episode pair endpoint mass 均下降，配重前範圍 47.9895%～55.8121%，配重後 30.2309%～34.5273%。例如 Seed42 第一折 final refit 同為 72,630 rows／7,304 episodes，最後 epoch 由 52.2029% 降至 32.0955%。這是同一 DQ 當前 margins 下、每 batch 正規化 pair endpoint mass 的前後對照，不是原 CO 優化軌跡，也不是梯度等權或樣本獨立性的證明。
+
+**模型高分端沒有改善。** 四 Seed Model SOP 的共同 Breakout cohort 為 9,436 groups：
+
+| 指標 | 原 CO | DQ 配重 |
+|---|---:|---:|
+| Breakout Daily rho | 0.049363 | 0.050578 |
+| 同日配對判對率 | 51.484470% | 51.142322% |
+| 前十分位 NetPnL 均值 | 5,255.6887 | 4,189.1864 |
+| 後十分位 NetPnL 均值 | 4,764.2685 | 3,253.0812 |
+| 前後十分位差 | 491.4202 | 936.1052 |
+| Score 與共同 40D MFE 的 Daily rho | −0.194532 | −0.236217 |
+| Score 與共同 Safety 的 Daily rho | +0.177786 | +0.206387 |
+
+前後分差變大主要來自後十分位下降更多，前十分位本身下降約 20.29%；不能解讀成更會挑高收益股票。價差方向顯示 DQ 分數與較低 adverse 的關聯更強、與 MFE 的負相關更強，這是描述證據，不足以單獨識別退步成因。Global Validation rho 0.480694→0.213786、Global OOS rho 0.085887→0.082827；validation／OOS 差距縮小主要伴隨 validation 擬合能力下降，不能稱為泛化改善。此處的前十分位不是每日固定前 10 檔；本輪未另建每日固定 Top-10 lift，不宣稱該項事前檢查已完成。
+
+**贏家取捨與現金損益。** 使用原 `reconstruct_round_trips` 的 canonical 交易身分（ticker＋實際進場日＋進場類型＋occurrence），對照兩組各自已平倉交易。下表為四 Seed 平均；「最大十筆」事後按控制組正報酬交易的 realized R 排序，只作描述，不參與選股或模型選擇。
+
+| 配對 | 漏掉控制組贏家 R | 新增替代贏家 R | 漏掉控制組最大十筆的筆數 | 獨有交易現金損益差 | 共同交易現金損益差 |
+|---|---:|---:|---:|---:|---:|
+| C201−C123 | 279.4452 | 283.0305 | 6.25 / 10 | −36,884.87 | −10,220.32 |
+| C202−C124 | 335.6184 | 357.6840 | 9.25 / 10 | +244,464.42 | −8,835.18 |
+
+C201 的替代贏家總 R 略高，仍因交易金額及投組路徑等差異形成較低現金損益；不能只憑漏掉贏家數把退步歸因於「全部大贏家遭排除」。C202 雖漏掉更多原控制組最大贏家，但替代交易的現金損益較好。每 Seed 的共同＋獨有現金損益差皆與正式總報酬差核對一致（初始資金 1,000,000，誤差小於 0.01）。這是不同持倉路徑的描述歸因，不是可直接相加替換的反事實收益。
+
+**決策。** 兩組依原定 CO 主控制登錄 **NO_ADVANCEMENT**。C201 不支持繼續投入；C202 保留「同 Direct 配重有局部改善」的研究證據，但不取代原 CO、C106，不因較弱補充參照通過而改判。建議本配重方案結案，不接續搜尋權重強度；這是保留價值判斷，並非使用者已下達退役操作。本輪未修改現行 roster、Training Model、Replay 或實驗編號。2021 起仍是迭代研究 OOS，四 Seed 共用市場歷史，不宣稱統計顯著，也不推論所有 episode 配重皆無效。
+
+**正式證據。** 策略四 Seed：`outputs/strategy_compare/robustness/broker_cash_dl_conversion/rolling_2021_forward/dadf43c437332fd6/` 的 `robustness_summary.json`、`seed_results.csv`、`manifest.json`、`scientific_observations_manifest.json` 與 `attribution_source/`。Rolling：原 `broker_cash_dl_conversion/rolling_2021_forward/latest/strategy_comparison.json`，完整 run 名為 `20261126_204244_C96-C97-C98-C103-C106-C107-C109-C189-C190-C111-C112-C118-C123-C124-C125-C126-C147-C148-C153-C154-C155-C156-C157-C158-C179-C181-C182-C183-C186-C168-C173-C172-C169-C201-C202_82e47d38cbd6`。模型：原 `standard_model_comparison/rolling_oos_robustness/standard_model_comparison.json`。數值、逐 Seed 差、30 fold 配重診斷、贏家清單、來源 SHA256 與限制保存於 `outputs/filters/breakout_quality/breakout_quality_v1/research_diagnostics/dq_signal_frequency_results_20261127.json`；同目錄 `dq_summary_snapshot_20261127.json` 為原 Summary 唯讀入口的本次快照。
+
+**2026-11-27 後續退役決策。** 使用者在上述結果登錄後指定退役 C201／C202。兩列與唯一依賴模型 MR-13DQ 退出現行 Research Summary、模型比較／驗證、策略 Forward／Rolling／Robustness 與 Target binding，相關 contrasts 由共用 roster 停用；Training Model 選回原 CO，保留 C123／C124、C106 與其他現行對照。原始績效、研究定義、FIT／Replay 版本、編號及工件保留，前述「尚未退役」為當次結果登錄時的決策，不回寫。未執行新市場比較，未實作或分配同日候選分數置換實驗身分。

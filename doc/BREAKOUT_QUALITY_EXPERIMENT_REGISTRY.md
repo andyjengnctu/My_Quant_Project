@@ -4,7 +4,7 @@
 
 本文件是 `breakout_quality` 的**實驗 identity、命名、版本語意、namespace、目前基準與 ID 佔用狀態**單一真理來源。
 
-### 2026-11-26 原始突破訊號頻率配重，C201／C202（使用者核准）
+### 2026-11-26 原始突破訊號頻率配重，C201／C202 已於 2026-11-27 退役
 
 `MR-13DQ`，profile=`daily_universal_formal_mintrade_fullcycle_netpnl_per_seed_full_list_ndcg_pairwise_signal_frequency`，沿用 `ARCH-inception_time_v1`，FIT v1。唯一研究變數是原 CO 完整交易週期 NetPnL pairwise supervision 的訊號頻率配重；原 300×10 inputs、合法樣本／Target、Adam、日期批次、inner validation／epoch selection、P16、費稅、Broker-Cash 與 selectors 不變。沒有新增模型輸入、Target、Positive gate、權重搜尋或刪除續掛樣本。
 
@@ -18,7 +18,11 @@ Episode 契約與有序 FIT metadata 納入新模型身分及樣本 digest；較
 
 `SR-C201` Exact K/R0 對照 C123；`SR-C202` Direct No-K/No-R0 對照 C124，共用 `DL-CONT13DQ-ROLL`／`CONT13DQ_ROLL`，Replay v1。保留原 CO C123／C124、CI C106 與既有 current references。由原 Research Summary roster 派生 Model Compare/Test、Forward／Rolling Strategy Compare、四 seed Robustness 與 Summary；登錄 C201-C123、C202-C124、C201-C202、C201-C106。沿用 CO 的原 Target／Oracle recipes，不增控制組或另寫比較程式。Training Model 選用 DQ。
 
-狀態：IMPLEMENTED / MARKET_RESULTS_PENDING / RESEARCH_ONLY / NO_TRADING。本輪僅工程驗證；rolling、robustness、summary 由使用者自行執行，不能將工程 synthetic fitting 當成市場研究結果。2021 起屬迭代研究 OOS。事前四 seed 晉級規則沿用配對 ΔRoMD 均值與中位數皆正、至少 3/4 勝、平均 MDD 不增加；並檢查突破候選同日配對判對率、Top-10 NetPnL lift 與漏掉大贏家的代價，不宣稱統計顯著。
+實作交付時僅完成工程驗證；其後使用者在本機完成 Research Rolling／四 Seed Robustness，本輪於 2026-11-27 核對正式工件並由原 Summary 唯讀入口重建當前彙總。狀態：ROLLING_AND_FOUR_SEED_RESULT_AVAILABLE / NO_ADVANCEMENT / RESEARCH_ONLY / NO_TRADING。C201−C123 配對 ΔRoMD 均值／中位數為 −1.113660／−0.484856、2/4 勝，平均 MDD 增加 1.067525pp；C202−C124 為 +0.798743／+0.687581、3/4 勝，但平均 MDD 增加 0.323881pp。兩者均未通過原定「配對 ΔRoMD 均值與中位數皆正、至少 3/4 勝、平均 MDD 不增加」條件；不把 Direct 的局部改善寫成全面失敗。
+
+使用者於結果登錄後明確指定退役 C201／C202；當前狀態為 RETIRED_FROM_CURRENT_RESEARCH / ROLLING_AND_FOUR_SEED_RESULT_AVAILABLE / NO_ADVANCEMENT / HISTORICAL_ID_RESERVED / NO_TRADING。兩列與唯一依賴模型 MR-13DQ 退出現行 Research roster、Model Test／Compare、策略 Forward／Rolling／Robustness、Target binding 及 Summary；相關 contrasts 隨共用 roster 停用。Training Model 選回 MR-13CO，保留 C123／C124、C106 與其他現行對照。歷史模型／策略定義、FIT／Replay 版本、編號與已完成工件保留；不回寫前一輪「尚未退役」的歷史決策。
+
+配重機制、模型突破排序、高分端與逐筆贏家取捨的證據見 Experiment Log 2026-11-27 條目；原約定的每日固定 Top-10 NetPnL lift 未另行重建，不能以 SOP 前十分位代替，也不宣稱完整晉級驗證已通過。2021 起仍屬迭代研究 OOS，不宣稱統計顯著。同日候選分數置換目前僅為待審設計，未配置新身分或實作。
 
 ### 2026-11-26 日／週／月價量輸入研究，C199／C200 已退役
 
