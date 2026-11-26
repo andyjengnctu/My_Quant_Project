@@ -8,7 +8,7 @@
 
 原使用者核准 Replay-only 設計：`SR-C203` 為原 CO 同日候選分數置換後的 Exact K/R0，`SR-C204` 為同一規則的 Direct No-K/No-R0，Replay v1。兩列沿用 `CONT13CO_ROLL`，不新增 MR／模型、Target、FIT、Optimizer 或 Trading 模型；對照為 C123／C124，保留 C106 與其餘現行對照。C201／C202 繼續退役。
 
-使用者隨後更正研究分類：置換只回答「既有 CO 排名是否優於隨機」，不是新模型或正式候選。當前為 `AUDIT_ONLY / REMOVED_FROM_CURRENT_COMPARISON / HISTORICAL_ID_RESERVED / MARKET_RESULTS_NOT_RUN / NO_TRADING`。C203／C204 退出 Research 正式 Rolling、Robustness、Target binding 與 Summary；原歷史 replay 定義和編號保留，只作 Audit 內部回放契約。唯一執行入口為 Research → Audit／診斷 → 一次性專題 Audit → `AUD-co-score-permutation`，不新增頂層工作類型、不依賴先執行正式比較、不另建模型。Audit 只讀並驗證既有 CO/P16，缺件直接 BLOCKED，不訓練／最佳化；由 canonical replay 執行既定 Seed42＋四 benchmark seeds、Exact／Direct 各 99 次，原排名控制也用同引擎及同來源回放。結果發布至 `outputs/audit/breakout_quality/co_score_permutation/`，原生重複回放仍使用既有持久 checkpoint owner。Audit 不寫入正式策略／模型比較、Robustness 或 Summary。工程驗證不代表市場 Audit 已執行；本輪未執行市場回放。此診斷不是下一個主要 DL 研究方向。
+使用者隨後更正研究分類：置換只回答「既有 CO 排名是否優於隨機」，不是新模型或正式候選。當前為 `AUDIT_ONLY / REMOVED_FROM_CURRENT_COMPARISON / HISTORICAL_ID_RESERVED / MARKET_RESULTS_INCOMPLETE / NO_TRADING`。C203／C204 退出 Research 正式 Rolling、Robustness、Target binding 與 Summary；原歷史 replay 定義和編號保留，只作 Audit 內部回放契約。唯一執行入口為 Research → Audit／診斷 → 一次性專題 Audit → `AUD-co-score-permutation`，不新增頂層工作類型、不依賴先執行正式比較、不另建模型。Audit 只讀並驗證既有 CO/P16，缺件直接 BLOCKED，不訓練／最佳化；由 canonical replay 執行既定 Seed42＋四 benchmark seeds、Exact／Direct 各 99 次，原排名控制也用同引擎及同來源回放。結果發布至 `outputs/audit/breakout_quality/co_score_permutation/`，原生重複回放仍使用既有持久 checkpoint owner。Audit 不寫入正式策略／模型比較、Robustness 或 Summary。本機已存在前一來源版本的 C203 Seed42 repeat 1／2 checkpoint（2/99，來源 digest `45b0b644978d7ba79030ef6c80a54fa0507ae58ded1c23394332e76e7caf477e`）；原件保留，不把部分完成當成完整市場結果，亦不未經完整身分驗證跨版本重用。工程驗證不代表市場 Audit 已完成；本輪未執行市場回放。此診斷不是下一個主要 DL 研究方向。
 
 唯一處理為 `same_day_raw_score_permutation_v1`：在 canonical 正常與續掛合法候選合併完成、任何分數選股與資金預留之前，將當日 available 且有限的原 CO 分數均勻置換到同一有效候選集合。缺分不補零、不參與交換；原分數多重集合、同分、負值及間距原樣保留，不做百分位、縮放、裁切、Positive gate、強制無固定點或候選刪除。每日從原合法 PIT 分數重新開始；只投影當次決策，原 score store、signal、pending 狀態不改。小於兩個有效分數／全部同分仍保留並登錄覆蓋率。
 
@@ -18,7 +18,7 @@
 
 專題附錄保留各 seed 的 99 次 RoMD／MDD／總報酬 mean、P05／P50／P95、有效候選覆蓋與同狀態籃子變更率。主要檢驗為 C123 vs C203：按同 repeat 編號先取四 seed RoMD 均值，產生 99 個 null 均值；其中至少與真實四 seed 均值一樣高者須不超過 4 個（含相等，`(1+count)/100 ≤ 0.05`），至少 3/4 seed 真實 RoMD 高於各自 99 次中位數，真實平均 MDD 不高於四 seed×99 次平均 MDD。三項均通過才 PASS；C124 vs C204 同樣另行判定，不能抵銷主要 Exact 失敗。Seed42 僅補充。2021 起標為迭代研究 OOS；置換亦破壞跨日分數持續性，尾端比例不是正式顯著性或實盤保證。
 
-原 CO 模型驗證證據僅作來源依賴，置換列不繼承 CO 的 ρ 或 perfect-score Oracle。Registry 明列無獨立已核准 Oracle 契約，不將置換列納入 Oracle canonical selector 的候選；既有 CO／C106 Oracle 行為保持不變。尚無 C203／C204 市場數值，不新增 Experiment Log 結果條目。
+原 CO 模型驗證證據僅作來源依賴，置換列不繼承 CO 的 ρ 或 perfect-score Oracle。Registry 明列無獨立已核准 Oracle 契約，不將置換列納入 Oracle canonical selector 的候選；既有 CO／C106 Oracle 行為保持不變。尚無 C203／C204 完整 99 次及四 Seed 判定，不新增 Experiment Log 結果條目。
 
 ### 2026-11-26 原始突破訊號頻率配重，C201／C202 已於 2026-11-27 退役
 
