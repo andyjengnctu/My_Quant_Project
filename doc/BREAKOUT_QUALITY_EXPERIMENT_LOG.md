@@ -5479,3 +5479,24 @@ Seed42 Rolling RoMD 為 C197 7.417388／C123 10.882721、C198 2.723813／C124 3.
 **退役決策與證據邊界。** 使用者指定退役 C197／C198。兩列及唯一依賴的 MR-13DO 退出目前 Summary、模型／策略比較、Robustness 與 Target binding，Training Model 選回原 CO。策略編號、定義、模型與既有工件保留。原 Compare Suite 的三個 EMA 配對定義尚未啟用，表中配對差由正式 CSV 同 Seed 逐一相減取得，未宣稱為當時已發布的 contrast 表。2021 起屬迭代研究 OOS，四 Seed 共用市場歷史，研究門檻不代表統計顯著。
 
 **正式來源。** `outputs/strategy_compare/broker_cash_dl_conversion/rolling_2021_forward/latest/strategy_comparison.json`；`outputs/strategy_compare/robustness/broker_cash_dl_conversion/rolling_2021_forward/f7948dafcd95632f/robustness_summary.json`、`seed_results.csv`、`robustness_report.md`；使用者 Console 的模型 Robustness Standard SOP 與 Summary。
+
+## 2026-11-26 — 日週月輸入結果登錄，C199／C200 與 C193／C194 退役
+
+**共同條件與來源。** MR-13DP 在原 CO 日線 300×10 外加入已結束的 104 曆週／60 曆月價量與有效遮罩，依完整 canonical 日線歷史計算，以小型週／月分支融合；原 CO 的成熟完整週期 NetPnL、訓練歷史、loss、validation／epoch selection、P16、費稅與資金契約相同。新增輸入與分支容量是同一實驗變數，無法單獨分離兩者效果。對照為 C199−C123（Exact）、C200−C124（Direct）。核對本機已發布 Rolling、Robustness JSON／逐 Seed CSV 與使用者貼上的 Summary；本輪沒有重新 FIT 或市場 Replay。期間 2021-01-01～2026-03-02，四 Seed 依序為 693545351、2014432738、104504529、762252050。
+
+下表 Δ 為實驗減原 CO；RoMD 為逐 Seed 比率的算術平均，MDD／總報酬差為百分點。DN 的既有負結果於同批正式工件再次一致，原 2026-11-24／25 研究結論保持不變。
+
+| 實驗／對照 | 原 CO → 實驗四 Seed 平均 RoMD | 配對 ΔRoMD 均值／中位數 | RoMD 勝數 | 平均 ΔMDD | 平均 Δ總報酬 |
+|---|---:|---:|---:|---:|---:|
+| 日週月 Exact C199／C123 | 10.812374 → 9.071705 | −1.740670／−0.667684 | 2/4 | +0.303630 | −19.767599 |
+| 日週月 Direct C200／C124 | 4.660625 → 4.122706 | −0.537918／−0.586152 | 1/4 | +0.305394 | −3.255632 |
+| 早期擴充 Exact C193／C123 | 10.812374 → 9.362810 | −1.449564／−1.110077 | 0/4 | +1.984856 | +1.285449 |
+| 早期擴充 Direct C194／C124 | 4.660625 → 2.900549 | −1.760076／−1.203040 | 0/4 | +1.320990 | −24.719950 |
+
+**DP 的穩定性與模型判讀。** C199 四 Seed RoMD 為 7.450879／7.367404／11.906276／9.562260，C200 為 5.888600／4.383438／3.122581／3.096205；Seed42 Rolling 分別為 8.394959／2.284633，原 CO 為 10.882721／3.705003。C199 的負均值受第二個 Seed（ΔRoMD −7.162935）影響，但配對中位數仍負；雖 3/4 Seed 的 MDD 較低，平均 MDD 增加且 3/4 Seed 總報酬下降。不能說所有 Seed 都退步，亦不能因排除最差 Seed 改判晉級。Summary 五份加權 Mean RoMD 為 C199 8.94／C123 10.83、C200 3.76／C124 4.47。
+
+四 Seed 模型 SOP 的共同 Breakout cohort 為 9,436 groups。CO → DP 的 Daily rho 由 0.049363 升至 0.055913、Pair 由 51.484470% 升至 51.916023%；但前十分位 NetPnL 由 5,255.6887 降至 3,170.0206，前後十分位差由 +491.4202 轉為 −833.5804。Summary 顯示的 Global OOS Daily rho 0.085887 → 0.091289 不能代替突破高分尾端或策略效果。此處是正式 SOP 的「前十分位」，不是每日固定 Top-10 名；未另行推算 Top-10 lift。日週月表示改善部分整體排序指標，仍未形成可採納的高分候選與交易增益；結果不證明所有週月線設計皆無資訊。
+
+**決策。** 四列均未通過原定四 Seed 晉級條件，登錄 NO_ADVANCEMENT。依使用者本輪指示，C199／C200／C193／C194 及唯一依賴模型 MR-13DP／MR-13DN 退出現行 Summary、Model Test／Compare、策略 Forward／Rolling／Robustness 與 Target binding，相關 contrasts 隨共用 roster 停用；Training Model 選回原 CO，保留 C123／C124 與 C106。原模型、策略定義、FIT／Replay 版本、編號及研究工件永久保留。2021 起為迭代研究 OOS，四 Seed 共用市場歷史，不能據此宣稱統計顯著；本輪未實作或分配下一個研究 identity。
+
+**正式證據。** 策略四 Seed：`outputs/strategy_compare/robustness/broker_cash_dl_conversion/rolling_2021_forward/a921caea4a4a0e31/robustness_summary.json`、`seed_results.csv`、`robustness_report.md`。模型四 Seed：`outputs/filters/breakout_quality/breakout_quality_v1/standard_model_comparison/rolling_oos_robustness/standard_model_comparison.json` 與同名 Markdown。逐 Seed 對照、原 SOP 數值及各來源 SHA256 保存於 `outputs/filters/breakout_quality/breakout_quality_v1/research_diagnostics/retired_dn_dp_results_20261126.json`；使用者 Summary 附件 SHA256 同列其中。既有正式配對欄位為 right−left，本表明確轉為實驗−控制，且與 CSV 逐 Seed 相減一致。
