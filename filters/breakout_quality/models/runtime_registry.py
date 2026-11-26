@@ -17,8 +17,14 @@ def _build_inception(nn, torch, *, feature_count, context_count, spec, pretraine
     return build_inception_time(nn, torch, feature_count=int(feature_count), context_count=int(context_count), spec=spec)
 
 
+def _build_calendar_inception(nn, torch, *, feature_count, context_count, spec, pretrained_encoder_state=None):
+    from filters.breakout_quality.models.calendar_inception import build_calendar_inception
+    return build_calendar_inception(nn, torch, feature_count=int(feature_count), context_count=int(context_count), spec=spec)
+
+
 _RUNTIME_BUILDERS_BY_KEY: dict[str, RuntimeBuilder] = {
     "inception_time": _build_inception,
+    "calendar_inception": _build_calendar_inception,
 }
 
 

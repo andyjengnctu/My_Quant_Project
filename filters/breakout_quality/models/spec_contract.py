@@ -33,6 +33,11 @@ class BreakoutQualityModelSpec:
     derived_context_annualization_bars: int | None = None
     sequence_input_paths: tuple[str, ...] = ()
     stock_close_ema_spans: tuple[int, ...] = ()
+    calendar_bar_windows: tuple[tuple[str, int], ...] = ()
+    calendar_encoder_channels: int | None = None
+    calendar_encoder_depth: int | None = None
+    calendar_encoder_kernel_size: int | None = None
+    calendar_fusion_width: int | None = None
     price_volume_structure_time_bins: int | None = None
     price_volume_structure_price_bins: int | None = None
     price_volume_structure_price_span_atr: float | None = None
@@ -381,6 +386,19 @@ class BreakoutQualityModelSpec:
             from filters.breakout_quality.sequence_indicators import stock_ema_contract
 
             payload["stock_close_ema"] = stock_ema_contract(self.stock_close_ema_spans)
+        if self.calendar_bar_windows:
+            from filters.breakout_quality.calendar_bars import calendar_bar_contract
+
+            payload["calendar_bars"] = calendar_bar_contract(self.calendar_bar_windows)
+            payload["calendar_encoder"] = {
+                "channels": self.calendar_encoder_channels,
+                "depth": self.calendar_encoder_depth,
+                "kernel_size": self.calendar_encoder_kernel_size,
+                "normalization": "none_mask_after_each_convolution",
+                "pooling": "masked_mean_any_instrument_valid",
+                "fusion_width": self.calendar_fusion_width,
+                "fusion": "concatenate_daily_weekly_monthly_linear_relu_single_ranker",
+            }
         if self.pairwise_temporal_relation_features:
             payload["pairwise_temporal_relation_features"] = list(
                 self.pairwise_temporal_relation_features

@@ -1332,6 +1332,34 @@ _REVIEWED_SOURCE_INVENTORIES["oracle_daily_provider"]["current"][
 )
 
 
+# AI: Opt-in calendar inputs preserve all 30 original profiles, three model
+# manifests, original real-stock daily tensors and CO initialized state/logits
+# against 1aea36e9. The independent Oracle probe preserves 61 observations.
+# Exact current encodings only; unknown later source continues to hash live.
+# Evidence: outputs/validation/calendar_inputs_20261126/original_source_parity.json.
+_CALENDAR_INPUT_MODEL_SOURCES = {'core/breakout_quality_registry.py': (('5400c4f526ef66309175e08153c74db56efb99f39aa684475d0a9fac8de30ee7',
+                                        '5147c502e681bffd13c63942fec247748e292c98e8646ba535c08f21c24f380f'),
+                                       '310db0713692a8a335d8f7514e8026b05e0e921781b5a89412cd5d1d63f4aa5e'),
+ 'filters/breakout_quality/models/architectures.py': (('3abbbb8b4b0890f05c3d68befed6a27eba835f55152644aa16196748516d1297',
+                                                       '0b0862a142d1bdc0ab7fac2b13f910372ee811d3013b61f28d0a33ca613ee9b8'),
+                                                      '7759ecf25673d4e1709376f19f1dffb885e00fa8294b3275d718d1dda473f302'),
+ 'filters/breakout_quality/models/spec_builders.py': (('05e859fef05c2ad685191c3ee07746047b34f96658192bc23a0e05188177448d',
+                                                       '7ab503f1cc8b707237b211c9c6b77c2d22382d93960d182536c0ba468a6c0e04'),
+                                                      '82ffabeea6b096e09370ab2ae871e95f5c4f430ab119984ffd1fad89bbe158ca'),
+ 'filters/breakout_quality/models/spec_contract.py': (('959888aba984643c3245621383976397bfc46a49aa546d8e6682dfd40c503ebe',
+                                                       'fb9acf01688b19cace41de390b97cdaade2a61b465fd2f9bbe1705d073a59af3'),
+                                                      'bdc029b4e9a96b52e488aa9c111e16b11308cc69ad611a4846421cf58e72d7d5')}
+for _relative, (_pins, _previous) in _CALENDAR_INPUT_MODEL_SOURCES.items():
+    _REVIEWED[_relative].setdefault("reviewed_model_only_revisions", {}).update(
+        dict.fromkeys(_pins, _previous)
+    )
+_REVIEWED_SOURCE_INVENTORIES["oracle_daily_provider"]["current"][
+    "filters/breakout_quality/daily_ranker_data.py"
+] = ('42e0ea21f4100d5cf725c482626ab23e00dc88651979fa439cfe1837fbbff562',
+ '42e0ea21f4100d5cf725c482626ab23e00dc88651979fa439cfe1837fbbff562',
+ '0f60a8227410ac1d7312962f9e2cf0cc23290ad65dd6b0c7a13d54267f8e6d84')
+
+
 def _reviewed_source_group(scope: str):
     proof = _REVIEWED_SOURCE_INVENTORIES.get(scope)
     updates = _OPTIMIZER_EXECUTION_GROUP_UPDATES.get(scope)

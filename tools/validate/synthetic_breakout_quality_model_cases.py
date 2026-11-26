@@ -3611,8 +3611,15 @@ def validate_breakout_quality_reusable_model_component_contract_case(_base_param
     order = np.asarray([4, 1, 3, 0], dtype=np.int64)
     for architecture in ACTIVE_MODEL_ARCHITECTURES:
         spec = get_model_spec(architecture)
-        feature_count = 10 + len(spec.stock_close_ema_spans)
-        probe_features = np.random.default_rng(42).normal(size=(5, 24, feature_count)).astype(np.float32)
+        from filters.breakout_quality.calendar_bars import calendar_bar_layout
+
+        layout = calendar_bar_layout(spec.calendar_bar_windows) if spec.calendar_bar_windows else ()
+        feature_count = 10 + len(spec.stock_close_ema_spans) + sum(len(item["feature_columns"]) for item in layout)
+        sequence_length = spec.input_window_bars or 24
+        probe_features = np.random.default_rng(42).normal(size=(5, sequence_length, feature_count)).astype(np.float32)
+        for item in layout:
+            for offset in (5, 11):
+                probe_features[:, :, item["channel_start"] + offset] = 1
         model = build_active_model(feature_count, 0, architecture=architecture).eval()
         shared_heads = get_architecture_descriptor(architecture).has_capability("shared_safety_mfe")
         heads = (None, "raw_safety", "conditional_mfe", "both") if shared_heads else (None, "primary")

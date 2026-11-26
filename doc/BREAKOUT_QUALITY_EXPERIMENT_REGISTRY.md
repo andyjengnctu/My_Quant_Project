@@ -4,13 +4,23 @@
 
 本文件是 `breakout_quality` 的**實驗 identity、命名、版本語意、namespace、目前基準與 ID 佔用狀態**單一真理來源。
 
+### 2026-11-26 日／週／月價量輸入研究，C199／C200
+
+使用者核准實作 `MR-13DP`，profile=`daily_universal_formal_mintrade_fullcycle_netpnl_per_seed_full_list_ndcg_pairwise_calendar_bars`，`ARCH-inception_time_calendar_bars_v1`，FIT v1。沿用原 CO 的合法成熟完整交易週期 NetPnL、訓練歷史、loss、inner validation／epoch selection、P16、費稅與 Broker-Cash。原 CO 的日線 300×10（個股＋0050）保持原值；新增 104 個曆週及 60 個曆月，各 12 欄（個股與 0050 各 OHLCV＋Valid），各自小型序列分支後融合成單一排序模型。兩個新分支各為 2 層 Conv1d、16 channels、kernel 3、ReLU，逐層遮罩且不使用 BatchNorm，依任一標的有效的位置作 masked mean；與原 CO 日線 latent 串接後經 64 維 Linear／ReLU 與原單 ranker 輸出。模型參數增加屬本輪整體研究變數，未宣稱可單獨分離長歷史與容量效果。
+
+輸入契約由 `calendar_bars.py` 持有。週為週一至週日、月為曆月，只取資訊日所屬週／月之前的期間，連資訊日恰為週五／月底也等下一曆期才納入。先由完整 canonical 清洗後日線彙整 first Open／max High／min Low／last Close／sum Volume，再取視窗；沿用 CO 正式合併市場日曆檢查每期是否涵蓋全部應有交易日。缺列、被清洗剔除、空交易週／月、上市前或歷史不足都保留原曆期位置，數值 0／Valid 0，個股與 0050 分別遮罩，不補價格、不壓縮缺期、不額外排除 CO 樣本。市場日曆來源起點落在某期內時，該邊界期亦遮罩。有效零成交量沿用原口徑。OHLC 除以各自資訊日 Close 後減一；Volume 使用原 canonical log1p／median／IQR，只由各視窗有效 bars 計算。週月 mask 在每層處理及 pooling 生效，全缺分支輸出零向量。通用訓練／批次／推論以 300×34 tensor 傳送，前 10 欄為原日線，週／月各 12 欄在最後 104／60 個位置對齊，前方 transport padding 為 0；這是封裝格式，模型按契約還原三個獨立時間軸，不將週月當成每日逐列對齊。
+
+`SR-C199` Exact K/R0 對照 C123，`SR-C200` Direct No-K/No-R0 對照 C124，共用 `DL-CONT13DP-ROLL`／`CONT13DP_ROLL`，Replay v1。兩列接入既有 Summary roster、Model Compare/Test、Forward／Rolling Strategy Compare 與四 seed Robustness；canonical Compare Suite 明確啟用 C199-C123、C200-C124、C199-C200 三項配對。保留原 CO、CI 與其他現行對照，C197／C198 繼續退役。Target／Oracle recipe 沿用原 CO，不新增 Target／Oracle 計算或策略參數真理。Training Model 選用 MR-13DP。
+
+狀態為 CONFIGURED / USER_AUTHORIZED / REAL_MARKET_RESULT_PENDING / RESEARCH_ONLY / NO_TRADING。本輪僅工程驗證，使用者自行執行 rolling、robustness、summary；沒有市場 FIT、Optimizer、Replay 或新績效。維持兩個策略，各自對照原 CO；四 seed 配對 ΔRoMD 均值／中位數為正、至少 3/4 改善、平均 MDD 不增加為既有事前研究篩選條件。2021 起仍為迭代研究 OOS。C199／C200 自本輪起永久保留為上述新研究，未回寫先前未執行的暫定融合配置。
+
 ### 2026-11-26 完整歷史 EMA 輸入研究，C197／C198 已退役
 
 `MR-13DO` 使用新輸入表示 `ARCH-inception_time_stock_ema_v1`，profile 為 `daily_universal_formal_mintrade_fullcycle_netpnl_per_seed_full_list_ndcg_pairwise_stock_ema`，FIT v1。以原 CO 為控制，唯一研究變數為在原個股與 0050 的 300×10 價量輸入後，加入個股收盤價 5／20／60 日 EMA，成為 300×13。各股從 canonical 還原價完整歷史首筆收盤初始化，依 `alpha=2/(span+1)`、`adjust=False` 逐日累積，再切取 300 日。EMA 與該樣本個股 OHLC 共用資訊日 Close 作除數並減一。每個日期只依賴當日及過往資料，計算歷史不受 300 日視窗或 Target 訓練起點截斷。共同樣本資格、Target／成熟規則、CO 歷史起點、loss、epoch selection、P16、費稅與資金契約沿用原 CO。
 
 `SR-C197` 為此模型的 Exact K/R0，對照 C123。`SR-C198` 為相同模型分數的 Direct No-K/No-R0，對照 C124。共用 `DL-CONT13DO-ROLL`／`CONT13DO_ROLL`，Replay v1。使用者已於本機完成 Rolling、四 Seed Robustness 與 Summary，並於 2026-11-26 指定退役兩列。當前狀態為 RETIRED_FROM_CURRENT_RESEARCH / ROLLING_AND_FOUR_SEED_RESULT_AVAILABLE / NO_ADVANCEMENT / HISTORICAL_ID_RESERVED。C197／C198 與 MR-13DO 退出現行 Research roster、模型與策略比較、Robustness、Target binding 及 Summary，Training Model 選用同 Target 的原 CO。原定義、模型、完整歷史 EMA 輸入契約與工件持續保留供歷史驗證；兩個策略編號永久保留。實測數值與限制登錄於 Experiment Log。2021 起結果屬迭代研究 OOS。
 
-本輪使用者更正 C197～C200 的占用狀態。該四號僅存在於先前撤回的六列暫定配置，未形成市場 Replay 或有效研究成果，依使用者指示解除占號；C197／C198 自本輪起對應上述 EMA 輸入研究，C199／C200 可用。
+本輪使用者更正 C197～C200 的占用狀態。該四號僅存在於先前撤回的六列暫定配置，未形成市場 Replay 或有效研究成果，依使用者指示解除占號；C197／C198 對應上述 EMA 輸入研究；C199／C200 當時解除占號，於同日後續授權分配至本文件日／週／月研究。
 
 凡進行 breakout-quality 分析、設計、實作、比較、Audit 或新增實驗名稱，開始前固定依序讀取：
 

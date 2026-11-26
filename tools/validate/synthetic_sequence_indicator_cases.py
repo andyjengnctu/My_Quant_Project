@@ -13,6 +13,9 @@ from filters.breakout_quality.sequence_indicators import full_history_stock_emas
 
 
 def check_sequence_indicators(check, check_true):
+    from .synthetic_calendar_bar_cases import check_calendar_bar_inputs
+
+    check_calendar_bar_inputs(check, check_true)
     spans = (2, 4)
     closes = np.asarray([10.0, 20.0, 14.0, 26.0])
     expected = np.repeat(closes[:1, None], len(spans), axis=1)

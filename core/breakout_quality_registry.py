@@ -1188,9 +1188,11 @@ _EXPERIMENT_PROFILES = {
 from dataclasses import replace as _replace_study
 from config.breakout_quality_history import CO_PROFILE, HISTORY_PROFILE
 STOCK_EMA_PROFILE = CO_PROFILE + "_stock_ema"
+CALENDAR_BARS_PROFILE = CO_PROFILE + "_calendar_bars"
 for _name, _architecture in (
     (HISTORY_PROFILE, "inception_time_v1"),
     (STOCK_EMA_PROFILE, "inception_time_stock_ema_v1"),
+    (CALENDAR_BARS_PROFILE, "inception_time_calendar_bars_v1"),
 ):
     _EXPERIMENT_PROFILES[_name] = _replace_study(
         _EXPERIMENT_PROFILES[CO_PROFILE], name=_name, model_architecture=_architecture,
@@ -1827,6 +1829,7 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
 for _name, _id, _phase, _description in (
     (HISTORY_PROFILE, "MR-13DN", "13DN", "CO controlled early real-event history extension"),
     (STOCK_EMA_PROFILE, "MR-13DO", "13DO", "CO plus full-history stock close EMA inputs"),
+    (CALENDAR_BARS_PROFILE, "MR-13DP", "13DP", "CO plus closed weekly and monthly OHLCV branches"),
 ):
     _CONTINUOUS_RANKER_RESEARCH_SPECS[_name] = _replace_study(
         _CONTINUOUS_RANKER_RESEARCH_SPECS[CO_PROFILE],
@@ -1836,6 +1839,11 @@ for _name, _id, _phase, _description in (
 
 _CONTINUOUS_RANKER_RESEARCH_SPECS[STOCK_EMA_PROFILE] = _replace_study(
     _CONTINUOUS_RANKER_RESEARCH_SPECS[STOCK_EMA_PROFILE],
+    model_gate_reference_profile_name=CO_PROFILE,
+)
+
+_CONTINUOUS_RANKER_RESEARCH_SPECS[CALENDAR_BARS_PROFILE] = _replace_study(
+    _CONTINUOUS_RANKER_RESEARCH_SPECS[CALENDAR_BARS_PROFILE],
     model_gate_reference_profile_name=CO_PROFILE,
 )
 
