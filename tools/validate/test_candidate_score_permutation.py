@@ -23,7 +23,81 @@ def candidate(ticker, score, available=True):
                 signal_date="2021-01-04", price=10, pending={"age": 2})
 
 
+def audit_definition():
+    from core.audit_policy import get_audit_definitions
+    return next(item for item in get_audit_definitions("breakout_quality")
+                if item.audit_type == "candidate_score_permutation")
+
+
+def audit_settings():
+    from services.audit.candidate_score_permutation import resolve_audit_settings
+    return resolve_audit_settings(audit_definition())
+
+
 class CandidateScorePermutationTests(TestCase):
+    def test_audit_menu_checks_presence_without_model_validation_or_replay(self):
+        from services.audit.candidate_score_permutation import collect_status
+        with TemporaryDirectory() as temporary, \
+             patch("services.research.strategy_compare_training.inspect_reusable_model_research_rolling_score") as model, \
+             patch("services.research.strategy_compare_execution.run_strategy_compare_active_arm") as replay:
+            state = collect_status(audit_definition(), project_root=Path(temporary))
+            self.assertEqual(state["status"], "BLOCKED")
+            self.assertIn("缺件", state["reason"])
+            model.assert_not_called()
+            replay.assert_not_called()
+
+    def test_audit_blocks_unverified_sources_before_replay(self):
+        from services.audit import candidate_score_permutation as audit
+        with TemporaryDirectory() as temporary, \
+             patch.object(audit, "_validated_inputs", side_effect=RuntimeError("unverified")), \
+             patch("services.research.strategy_compare_execution.run_strategy_compare_active_arm") as replay:
+            with self.assertRaisesRegex(RuntimeError, "unverified"):
+                audit.run_formal_audit(audit_definition(), project_root=Path(temporary), quiet=True)
+            replay.assert_not_called()
+            self.assertFalse((Path(temporary) / "outputs").exists())
+
+    def test_audit_delegates_paired_seeds_and_keeps_all_publication_outside_formal_roster(self):
+        from services.audit import candidate_score_permutation as audit
+        definition = audit_definition()
+        settings, arms, _, workflow, _, seeds = audit._context(definition)
+        controls = [settings.arms[permutation_spec(a.dl_runtime_options)["control_arm_id"]] for a in arms]
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            jobs = [dict(seed=int(workflow.seed), benchmark=False, params=root / "params", mode="rolling", overrides=None)]
+            jobs += [dict(seed=seed, benchmark=True, params=root / f"params_{seed}", mode="rolling",
+                          overrides={arms[0].dl_id: {"score_path": str(root / f"score_{seed}"), "manifest_path": str(root / f"manifest_{seed}")}})
+                     for seed in seeds]
+            calls = []
+            def replay(**kwargs):
+                calls.append(kwargs)
+                arm = kwargs["arm"]
+                spec = permutation_spec(arm.dl_runtime_options)
+                if spec is None:
+                    return {"score_ranking": {ROMD: 200. if arm.arm_id == controls[0].arm_id else -1., MDD: 1.}}
+                seed = kwargs["expected_seed_override"] or int(workflow.seed)
+                bundle = synthetic_bundle(seed, range(99))
+                bundle["control_arm_id"] = spec["control_arm_id"]
+                return {"score_permutation": bundle}
+            validated = (settings, arms, {"start": "2021-01-01", "end": "2021-12-31"}, jobs, [])
+            with patch.object(audit, "_validated_inputs", return_value=validated), \
+                 patch("filters.breakout_quality.source_inventory.build_source_data_inventory", return_value={}), \
+                 patch("services.research.oracle_build_attestation.capture_oracle_source_inventory", return_value={"fixture.py": {"sha256": "a" * 64, "syntax_sha256": "b" * 64}}), \
+                 patch("services.research.strategy_compare_execution.run_strategy_compare_active_arm", side_effect=replay):
+                result = audit.run_formal_audit(definition, project_root=root, quiet=True)
+            self.assertEqual(len(calls), 20)
+            self.assertEqual(len(result["rows"]), 10)
+            self.assertEqual(result["gates"][arms[0].arm_id]["status"], "PASS")
+            self.assertEqual(result["gates"][arms[1].arm_id]["status"], "FAIL")
+            self.assertTrue((root / "outputs/audit" / definition.output_subdir / "latest/audit.json").is_file())
+            self.assertFalse((root / "outputs/strategy_compare").exists())
+            for job in jobs:
+                seed_calls = [call for call in calls if call["expected_seed_override"] == (job["seed"] if job["benchmark"] else None)]
+                self.assertEqual(len(seed_calls), 4)
+                self.assertTrue(all(call["params_path"] == job["params"] and call["score_overrides"] == job["overrides"] for call in seed_calls))
+                self.assertTrue(all(Path(call["output_dir"]).is_relative_to(root / "outputs/audit") for call in seed_calls))
+                self.assertTrue(all(permutation_spec(call["arm"].dl_runtime_options)["repeats"] == 99
+                                    for call in seed_calls if permutation_spec(call["arm"].dl_runtime_options)))
+
     def test_uniform_multiset_missing_and_input_immutability(self):
         rows = [candidate(str(i), value) for i, value in enumerate((-9., 0., 3., 3., 105.))]
         rows += [candidate("missing", None), candidate("invalid", 8, False), candidate("infinite", float("inf"))]
@@ -105,10 +179,11 @@ class CandidateScorePermutationTests(TestCase):
             self.assertIsNone(active_permutation(SimpleNamespace(use_breakout_quality_ranking=False)))
         self.assertIsNone(active_permutation(SimpleNamespace(use_breakout_quality_ranking=True)))
 
-    def test_registered_capability_keeps_source_control_and_four_seed_membership(self):
+    def test_audit_capability_keeps_sources_without_entering_formal_membership(self):
         from core.strategy_compare_policy import get_strategy_comparison_settings, get_strategy_multi_seed_robustness_settings
         from core.research_summary import get_research_summary_rows
-        settings = get_strategy_comparison_settings("broker_cash_dl_conversion_rolling")
+        settings = audit_settings()
+        formal = get_strategy_comparison_settings(settings.profile_id)
         robust = get_strategy_multi_seed_robustness_settings(settings.profile_id)
         treated = [arm for arm in settings.enabled_arms if permutation_spec(arm.dl_runtime_options)]
         self.assertTrue(treated)
@@ -117,12 +192,13 @@ class CandidateScorePermutationTests(TestCase):
             reference = settings.arms[spec["control_arm_id"]]
             self.assertEqual(arm.dl_id, reference.dl_id)
             self.assertEqual(arm.dl_runtime_mode, reference.dl_runtime_mode)
-            self.assertIn(arm.arm_id, robust.model_seed_sensitive_arm_ids)
+            self.assertNotIn(arm.arm_id, robust.model_seed_sensitive_arm_ids)
+            self.assertFalse(formal.arms[arm.arm_id].enabled)
+            self.assertTrue(formal.arms[reference.arm_id].enabled)
             self.assertEqual(len(robust.resolved_seeds), 4)
             groups = [row for row in get_research_summary_rows()
                       if any(b.get("arm_id") == arm.arm_id for b in row.get("bindings", ()))]
-            self.assertEqual(len(groups), 1)
-            self.assertNotIn("oracle", groups[0])
+            self.assertEqual(groups, [])
 
     def test_canonical_exact_and_direct_replay_accept_projected_candidates(self):
         import pandas as pd
@@ -133,7 +209,7 @@ class CandidateScorePermutationTests(TestCase):
         from filters.breakout_quality.ranking_score_store import SCORE_SOURCE_SELECTION_POINT_IN_TIME
         from tools.validate import synthetic_portfolio_common as synthetic
         from tools.validate.synthetic_frame_utils import write_synthetic_csv_bundle
-        settings = get_strategy_comparison_settings("broker_cash_dl_conversion_rolling")
+        settings = audit_settings()
         case = synthetic.build_synthetic_competing_candidates_case(V16StrategyParams())
         case["params"].use_breakout_quality_ranking = True
         def lookup(*, ticker, signal_date, **kwargs):
@@ -274,7 +350,7 @@ class FixedPermutationObservationTests(TestCase):
         from services.research import strategy_multi_seed_robustness as robustness
         from core.strategy_compare_policy import get_strategy_comparison_settings
         from filters.breakout_quality.strategy_compare_runtime import _arm_runtime_spec
-        settings = get_strategy_comparison_settings("broker_cash_dl_conversion_rolling")
+        settings = audit_settings()
         arm = next(a for a in settings.enabled_arms if permutation_spec(a.dl_runtime_options))
         source = settings.dl_sources[arm.dl_id]
         with TemporaryDirectory() as temporary:

@@ -4,15 +4,17 @@
 
 本文件是 `breakout_quality` 的**實驗 identity、命名、版本語意、namespace、目前基準與 ID 佔用狀態**單一真理來源。
 
-### 2026-11-27 同日候選分數置換，C203／C204
+### 2026-11-27 同日候選分數置換：歸入一次性 Audit，C203／C204 退出正式比較
 
-使用者核准 Replay-only 研究：`SR-C203` 為原 CO 同日候選分數置換後的 Exact K/R0，`SR-C204` 為同一規則的 Direct No-K/No-R0，Replay v1。兩列沿用 `CONT13CO_ROLL`，不新增 MR／模型、Target、FIT、Optimizer 或 Trading 模型；對照為 C123／C124，保留 C106 與其餘現行對照。C201／C202 繼續退役。當前為 `IMPLEMENTED / MARKET_RESULTS_NOT_RUN / NO_TRADING`；Rolling、Robustness、Summary 由使用者自行執行，這次工程驗證不代表市場實驗已執行。
+原使用者核准 Replay-only 設計：`SR-C203` 為原 CO 同日候選分數置換後的 Exact K/R0，`SR-C204` 為同一規則的 Direct No-K/No-R0，Replay v1。兩列沿用 `CONT13CO_ROLL`，不新增 MR／模型、Target、FIT、Optimizer 或 Trading 模型；對照為 C123／C124，保留 C106 與其餘現行對照。C201／C202 繼續退役。
+
+使用者隨後更正研究分類：置換只回答「既有 CO 排名是否優於隨機」，不是新模型或正式候選。當前為 `AUDIT_ONLY / REMOVED_FROM_CURRENT_COMPARISON / HISTORICAL_ID_RESERVED / MARKET_RESULTS_NOT_RUN / NO_TRADING`。C203／C204 退出 Research 正式 Rolling、Robustness、Target binding 與 Summary；原歷史 replay 定義和編號保留，只作 Audit 內部回放契約。唯一執行入口為 Research → Audit／診斷 → 一次性專題 Audit → `AUD-co-score-permutation`，不新增頂層工作類型、不依賴先執行正式比較、不另建模型。Audit 只讀並驗證既有 CO/P16，缺件直接 BLOCKED，不訓練／最佳化；由 canonical replay 執行既定 Seed42＋四 benchmark seeds、Exact／Direct 各 99 次，原排名控制也用同引擎及同來源回放。結果發布至 `outputs/audit/breakout_quality/co_score_permutation/`，原生重複回放仍使用既有持久 checkpoint owner。Audit 不寫入正式策略／模型比較、Robustness 或 Summary。工程驗證不代表市場 Audit 已執行；本輪未執行市場回放。此診斷不是下一個主要 DL 研究方向。
 
 唯一處理為 `same_day_raw_score_permutation_v1`：在 canonical 正常與續掛合法候選合併完成、任何分數選股與資金預留之前，將當日 available 且有限的原 CO 分數均勻置換到同一有效候選集合。缺分不補零、不參與交換；原分數多重集合、同分、負值及間距原樣保留，不做百分位、縮放、裁切、Positive gate、強制無固定點或候選刪除。每日從原合法 PIT 分數重新開始；只投影當次決策，原 score store、signal、pending 狀態不改。小於兩個有效分數／全部同分仍保留並登錄覆蓋率。
 
 隨機鍵固定包含 policy version、模型／benchmark seed、repeat 1–99、決策日期及排序後有效 ticker 集合，不包含 arm／selector、未來 Target 或未來資料；SHA256 counter 與 rejection-sampling Fisher–Yates 固定演算法。Exact／Direct 候選集合相同時得到相同交換。投組各自沿完整時間軸演進，Exact 的 K/R0 每日由該路徑當下的原 DL-off 選股流程計算，不借用 C123 已完成歷史籃子。另在同狀態以原分數執行純選股影子診斷，記錄實際籃子變更比例，不執行影子掛單／成交。
 
-每個 seed、每個 selector 固定 99 次完整回放；Seed42 Rolling 共 198 次，四個既有 benchmark seeds Robustness 共 792 次。repeat 不是模型 seed，也不是新 C 編號。沿用 Research 的 canonical replay／accounting／metrics，逐次保存原生回放工件與決策日 donor／recipient／raw-score／mapping SHA。持久 checkpoint 在 `outputs/strategy_compare/permutation_observations/`，按來源模型分數／manifest、參數、期間、資料及程式依賴的完整 identity 分區；只有 99/99 且 SHA 完整才可提交 aggregate，部分完成可續跑。標準績效是 99 個各自完整回放指標的算術平均（含 RoMD 的平均，不以平均報酬除平均 MDD）；無虛構平均 equity／交易歷史。四 seed mean 仍以 seed 等權，Summary 保留原 Seed42＋四 seed 的五份等權口徑。
+每個 seed、每個 selector 固定 99 次完整回放；Seed42 Rolling 共 198 次，四個既有 benchmark seeds Robustness 共 792 次。repeat 不是模型 seed，也不是新 C 編號。沿用 Research 的 canonical replay／accounting／metrics，逐次保存原生回放工件與決策日 donor／recipient／raw-score／mapping SHA。持久 checkpoint 在 `outputs/strategy_compare/permutation_observations/`，按來源模型分數／manifest、參數、期間、資料及程式依賴的完整 identity 分區；只有 99/99 且 SHA 完整才可提交 aggregate，部分完成可續跑。Audit 的分布均值是 99 個各自完整回放指標的算術平均（含 RoMD 的平均，不以平均報酬除平均 MDD）；無虛構平均 equity／交易歷史。四 seed mean 仍以 seed 等權，Seed42 僅補充；不再輸出正式 Summary 的五份等權績效列。
 
 專題附錄保留各 seed 的 99 次 RoMD／MDD／總報酬 mean、P05／P50／P95、有效候選覆蓋與同狀態籃子變更率。主要檢驗為 C123 vs C203：按同 repeat 編號先取四 seed RoMD 均值，產生 99 個 null 均值；其中至少與真實四 seed 均值一樣高者須不超過 4 個（含相等，`(1+count)/100 ≤ 0.05`），至少 3/4 seed 真實 RoMD 高於各自 99 次中位數，真實平均 MDD 不高於四 seed×99 次平均 MDD。三項均通過才 PASS；C124 vs C204 同樣另行判定，不能抵銷主要 Exact 失敗。Seed42 僅補充。2021 起標為迭代研究 OOS；置換亦破壞跨日分數持續性，尾端比例不是正式顯著性或實盤保證。
 

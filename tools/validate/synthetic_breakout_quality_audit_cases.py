@@ -27,6 +27,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     from services.audit.catalog import (
         AUDIT_CATALOG,
         get_domain_cli_commands,
+        get_audit_method,
         validate_audit_catalog,
     )
     from services.audit.runner import collect_audit_status
@@ -88,6 +89,7 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
     expected_reusable_types = {
         item.audit_type for item in AUDIT_CATALOG.values()
         if item.formal and item.domain == "breakout_quality" and item.method_id
+        and not get_audit_method(item.method_id).one_time_only
     }
     check_true(
         "retired_one_time_studies_do_not_change_reusable_audit_contract",

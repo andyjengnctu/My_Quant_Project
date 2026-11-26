@@ -661,8 +661,9 @@ def _model_seed_sensitive_arms(
 
 
 def _benchmark_param_binding(
-    *, settings, robustness, arm: StrategyComparisonArm, seed: int
+    *, settings, robustness, arm: StrategyComparisonArm, seed: int, project_root: Path | None = None,
 ) -> dict[str, Any]:
+    project_root = PROJECT_ROOT if project_root is None else Path(project_root)
     if robustness.benchmark_id is None:
         raise ValueError("historical robustness沒有benchmark parameter binding")
     source = settings.parameter_sources[str(arm.param_source)]
@@ -684,13 +685,13 @@ def _benchmark_param_binding(
             training_profile.fitting_seed_protocol
         )
         path = raw_price_robustness_strategy_param_artifact_path(
-            PROJECT_ROOT,
+            project_root,
             benchmark_id=str(robustness.benchmark_id),
             seed=int(seed),
             training_profile_id=training_profile_id,
         )
         manifest_path = raw_price_robustness_strategy_param_manifest_path(
-            PROJECT_ROOT,
+            project_root,
             benchmark_id=str(robustness.benchmark_id),
             seed=int(seed),
             training_profile_id=training_profile_id,
@@ -705,13 +706,13 @@ def _benchmark_param_binding(
             None if source.builder is None else source.builder.options
         )
         path = validation_budget_robustness_strategy_param_artifact_path(
-            PROJECT_ROOT, benchmark_id=str(robustness.benchmark_id),
+            project_root, benchmark_id=str(robustness.benchmark_id),
             seed=int(seed), policy=policy,
             parameter_set_identity=parameter_set_identity,
             validation_protocol_id=validation_protocol_id,
         )
         manifest_path = validation_budget_robustness_strategy_param_manifest_path(
-            PROJECT_ROOT, benchmark_id=str(robustness.benchmark_id), seed=int(seed),
+            project_root, benchmark_id=str(robustness.benchmark_id), seed=int(seed),
             parameter_set_identity=parameter_set_identity,
             validation_protocol_id=validation_protocol_id,
         )
@@ -729,14 +730,14 @@ def _benchmark_param_binding(
                 f"fixed multi-seed benchmark source缺少training_profile_id: {arm.arm_id}/{arm.param_source}"
             )
         path = fixed_multiseed_robustness_strategy_param_artifact_path(
-            PROJECT_ROOT,
+            project_root,
             training_profile_id=training_profile_id,
             benchmark_id=str(robustness.benchmark_id),
             replication_seed=int(seed),
             policy=policy,
         )
         manifest_path = fixed_multiseed_robustness_strategy_param_manifest_path(
-            PROJECT_ROOT,
+            project_root,
             training_profile_id=training_profile_id,
             benchmark_id=str(robustness.benchmark_id),
             replication_seed=int(seed),
@@ -760,7 +761,7 @@ def _benchmark_param_binding(
                 f"{arm.arm_id}/{arm.param_source}"
             )
         path = resolve_strategy_param_benchmark_artifact_path(
-            PROJECT_ROOT,
+            project_root,
             benchmark_id=str(robustness.benchmark_id),
             seed=int(seed),
             family=family,
@@ -768,7 +769,7 @@ def _benchmark_param_binding(
             policy=policy,
         )
         manifest_path = resolve_strategy_param_benchmark_manifest_path(
-            PROJECT_ROOT,
+            project_root,
             benchmark_id=str(robustness.benchmark_id),
             seed=int(seed),
             family=family,
@@ -802,6 +803,7 @@ def _benchmark_param_binding(
 def _inspect_benchmark_strategy_parameter_binding(
     *, settings, robustness, binding: dict[str, Any], seed: int,
     comparison_start: str | None, comparison_end: str | None,
+    project_root: Path | None = None,
 ) -> dict[str, Any] | None:
     """Resolve the canonical read-only parameter state for one benchmark binding.
 
@@ -811,6 +813,7 @@ def _inspect_benchmark_strategy_parameter_binding(
     and by cross-profile result discovery.
     """
 
+    project_root = PROJECT_ROOT if project_root is None else Path(project_root)
     required_schedule_end = resolve_strategy_parameter_required_schedule_end_for_mode(
         str(binding["evaluation_mode"]),
         comparison_start=comparison_start,
@@ -820,7 +823,7 @@ def _inspect_benchmark_strategy_parameter_binding(
         return None
     if str(binding["producer_variant"]) == "raw_price_isolated_v1":
         return inspect_raw_price_robustness_strategy_parameter_artifact(
-            PROJECT_ROOT,
+            project_root,
             benchmark_id=str(robustness.benchmark_id),
             seed=int(seed),
             comparison_end_date=str(required_schedule_end),
@@ -828,7 +831,7 @@ def _inspect_benchmark_strategy_parameter_binding(
         )
     if str(binding["producer_variant"]) == "validation_budget_refit_v1":
         return inspect_validation_budget_robustness_strategy_parameter_artifact(
-            PROJECT_ROOT,
+            project_root,
             benchmark_id=str(robustness.benchmark_id),
             seed=int(seed),
             policy=str(binding["param_policy"]),
@@ -843,7 +846,7 @@ def _inspect_benchmark_strategy_parameter_binding(
         )
     if str(binding["producer_variant"]) in {"fixed_multiseed_v1", "fixed_single_seed_v1"}:
         return resolve_fixed_multiseed_robustness_strategy_parameter_artifact(
-            PROJECT_ROOT,
+            project_root,
             training_profile_id=str(binding["training_profile_id"]),
             benchmark_id=str(robustness.benchmark_id),
             replication_seed=int(seed),
@@ -856,7 +859,7 @@ def _inspect_benchmark_strategy_parameter_binding(
             max_position_cap_pct=float(DEFAULT_MAX_POSITION_CAP_PCT),
         )
     return inspect_robustness_benchmark_strategy_parameter_artifact(
-        PROJECT_ROOT,
+        project_root,
         benchmark_id=str(robustness.benchmark_id),
         seed=int(seed),
         family=str(binding["family"]),

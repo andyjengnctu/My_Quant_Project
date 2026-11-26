@@ -248,9 +248,24 @@ AUDIT_MODULES: dict[str, dict[str, Any]] = {
     # Stable module registration survives one-off retirement; reusable Audit remains separate.
     "breakout_quality": {
         "enabled": True,
-        # All completed one-time studies are retired; the generic menu and
-        # reusable Audit definitions remain available without a study handler.
-        "audits": {},
+        "audits": {
+            "AUD-co-score-permutation": {
+                "enabled": True,
+                "audit_type": "candidate_score_permutation",
+                "description": "CO 同日分數置換：原排名是否優於隨機排名（Exact／Direct，各 Seed 99 次）",
+                "source": {
+                    "strategy_profile_id": "broker_cash_dl_conversion_rolling",
+                    "treatment_arm_ids": ("C203", "C204"),
+                    "baseline_arm_id": "C96",
+                },
+                "dimensions": {"repeats": 99, "include_workflow_seed": True},
+                "outcomes": {
+                    "question": "原 CO 排名是否優於同日候選分數置換？",
+                    "stop": "完成既定 99 次後判定；不得以 Direct 抵銷 Exact 失敗或追加次數尋找通過。",
+                },
+                "output_subdir": "breakout_quality/co_score_permutation",
+            },
+        },
     },
 }
 
