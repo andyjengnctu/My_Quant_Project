@@ -1123,11 +1123,11 @@ The canonical `config/research_summary.py` roster alone determines current Model
 
 使用者核准實作及工程驗證，先執行 2018–2020 Seed42，通過後才執行 Research Rolling、四 Seed Robustness、Summary。HV1／C205／C206 維持退役。
 
-| 身分 | 唯一處置／控制 | 初始狀態 |
+| 身分 | 唯一處置／控制 | 目前狀態 |
 |---|---|---|
-| HV2 / FIT v1 | 完整交易淨 R 直接停止決策；個股＋0050 300×10 與 6 個持倉狀態 | IMPLEMENTED / DEVELOPMENT_PENDING / NO_TRADING |
-| C207 / Replay v1 | 原 C123 CO＋P16 Exact 加 HV2 出場 | CONDITIONAL_RESEARCH / DEVELOPMENT_GATE_REQUIRED |
-| C208 / Replay v1 | 原 C124 CO＋P16 Direct 加同一 HV2 出場 | CONDITIONAL_RESEARCH / DEVELOPMENT_GATE_REQUIRED |
+| HV2 / FIT v1 | 完整交易淨 R 直接停止決策；個股＋0050 300×10 與 6 個持倉狀態 | RETIRED / DEVELOPMENT_REJECT / NO_ADVANCEMENT / HISTORICAL_ID_RESERVED |
+| C207 / Replay v1 | 原 C123 CO＋P16 Exact 加 HV2 出場 | RETIRED / DEVELOPMENT_REJECT / HISTORICAL_ID_RESERVED |
+| C208 / Replay v1 | 原 C124 CO＋P16 Direct 加同一 HV2 出場 | RETIRED / DEVELOPMENT_REJECT / HISTORICAL_ID_RESERVED |
 
 - 每個原始 setup 的第一次合法成交為一筆 episode，保留全部持倉收盤狀態，不以 300 日截斷交易。完整自然結算及各合法提前出場 payoff 均來自 canonical observer／execute_bar_step；已實現部分、費稅、原保護退出／半倉義務與下一可成交日一致。無自主出場選擇的狀態仍留在路徑、停止機率遮罩為零；缺特徵同樣續用原規則。自然交易或任一必要反事實分支未成熟者整筆排除，沒有期末強平。風險金額來自 canonical position 初始風險。
 - 每筆交易預期收益為各狀態「此前尚未停止的機率 × 本次停止機率 × 此時退出的完整 Net R」之和，加上全程未停止的原 P16 終點 Net R；FIT 使用相對 P16 的等價增量形式，終點增量為 0。每筆 episode 等權，全部狀態參與，不除以 L、不均勻抽一個持倉日、不使用事後最佳賣點分類。長贏家被提早截短的完整 R 差進入 objective。
@@ -1143,3 +1143,5 @@ The canonical `config/research_summary.py` roster alone determines current Model
 **2026-11-27 第一階段完成：DEVELOPMENT_REJECT／NO_ADVANCEMENT。** 已實際建立完整交易樣本、執行 Seed42 的 2018／2019／2020 三個年度 FIT；DL 與相同輸入線性基線每折各訓練 12 epochs。三折 DL 的內層 validation 均未找到嚴格優於原 P16 的完整交易收益，依事前 fallback 選擇 selected_epochs=0／always_continue，並非漏跑訓練。三年驗證 episodes 為 690／1,106／1,032，DL−P16 平均單筆增量皆為 0R，改善年度 0/3；DL−線性年度等權平均 +0.012549R，不能取代另外兩個未通過的必要條件。
 
 HV2／C207／C208 保留已實作身分、比較綁定與失敗工件，狀態為 **DEVELOPMENT_REJECT / FORMAL_BLOCKED / NO_ADVANCEMENT / NO_TRADING**，未自行退役。依使用者的條件授權與 producer gate，未建立 2021 起正式出場 FIT，未執行 C207／C208 Rolling、四 Seed Robustness 或 Summary。原 CO C123／C124、C106 及其他對照保留。完整數值、未成熟交易限制與實際訓練證據見 Experiment Log 同日 HV2 結果節。
+
+**2026-11-27 後續使用者指定退役。** C207／C208 的共用 Summary group 停用，退出現行 Forward／Rolling、Robustness、Target binding 與 Summary，相關 contrasts 隨共用 roster 排除；現行 33 組策略保留原 CO C123／C124 與 C106。HV2 不再形成現行 Research 訓練／準備依賴。歷史策略／模型定義、版本、原始成果、FIT 與解析它們所需的相容 producer／共用持倉決策 capability 保留；編號永久保留。前段「未退役」屬前次結果登錄時的狀態，不回寫其決策。本次僅進行退役與既有訓練工件／樣本的唯讀分析，未重新訓練或執行市場回放；下一步僅提出設計，未實作或分配身分。

@@ -5664,3 +5664,23 @@ Seed42 中，買進當天續抱優於下一可成交出場的 episodes 占 39.68
 - 樣本：`outputs/research/breakout_quality/holding_episode_samples/seed_42/6b83c05d5b9e3a30613420542263ab76897bd15678574a9ea10bf7143cf98b36/receipt.json` 及逐股票 parquet；receipt SHA256＝`940789362b0933a197f77c282ba12448b6c74c05cc7cef0b566e97377973b045`。
 - FIT：`models/research/breakout_quality/holding_value/HV2/seed_42/fits/` 下三個年度 `fold.json` 與 DL／線性權重；保存每個 epoch 的訓練收益、完整交易 validation、選定 epoch、資料與程式身分及權重 SHA256。
 - 實際執行：`outputs/validation/holding_policy_20261127/development.log` 保存全部 epoch、refit 及最終 `DEVELOPMENT_COMPLETED gate=REJECT`；同目錄 `development_verified.json` 保存逐筆重算、樣本 SHA／日期及 Research gate 核對，`run_bundle_verified.log` 保存訓練前完整工程 PASS。
+
+**2026-11-27 後續退役與三折 fallback 原因補記。** 使用者指定退役 C207／C208；兩列與 HV2 退出現行 Research 依賴，保留原 CO C123／C124、C106 及歷史工件。本次只讀三折完整訓練曲線、結果、原模型程式及 616 份已驗證 SHA 的樣本 parquet，不重訓、不改閾值，也未執行新的策略實驗。
+
+三折並非相同的失敗行為。2018 FIT（內層 validation＝2017）第 2～12 epochs 有出場，出場比例 23.03%～95.14%，完整交易增量全負，最佳仍為 −0.088635R、最差 −0.368870R；訓練中的 online soft 預期增量卻由 −0.018880 升至 +0.116903R。2019／2020 FIT（內層 validation＝2018／2019）則各 12 epochs 全為零出場、零 validation 增量，online soft 訓練值分別由 −0.020577／−0.015924R 趨近 −0.000001060／−0.000001014R。前者出現訓練目標改善而實際驗證決策變差，後兩折則與退向全續抱的行為一致；soft online 訓練值與 hard validation 不同口徑，不能據此單獨識別純過擬合或宣稱梯度實測飽和。
+
+程式先令 best_gain＝0、best_epoch＝0，僅在 hard first-stop validation 平均增量嚴格大於 0 時更新；三折都沒有符合的 DL epoch，故各自重新初始化並發布 p＝0.01 的 always_continue fallback。最終權重並非第 12 epoch 的學習權重，最終零出場不能描述為「訓練後模型證明所有股票都應續抱」。線性基線在 2019／2020 FIT 的 validation 最佳增量為 +0.176704／+0.017375R，至少證明這個資料／評估流程可以產生非平凡政策；它在 2018–2020 的年度等權增量仍為 −0.012549R，並未證明穩健的可交易資訊。
+
+**直接收益目標的初始化誘因。** 使用原初始固定 p＝0.01、全部合法狀態與完整交易收益，分析共同輸出 bias 的初始敏感度；不搜尋其他 p 或用結果選閾值。合法第 k 個出場機會（k 由 0 起）的權重為 `w=p*(1-p)^k`，對 logit bias 的導數為 `w*((1-p)-k*p)`。下表為各 inner train 的每筆 episode 等權平均；前十分位依該 FIT 已成熟的原 P16 Net R 定義，各組導數皆以全 train episode 數為分母。
+
+| 預測年度 FIT | 初始 soft 平均 ΔR | 全部 bias 導數 | 原前十分位贏家貢獻 | 其他交易貢獻 |
+|---|---:|---:|---:|---:|
+| 2018 | −0.021888 | −0.020417 | −0.067376 | +0.046959 |
+| 2019 | −0.064559 | −0.047903 | −0.087222 | +0.039319 |
+| 2020 | −0.101362 | −0.066215 | −0.102014 | +0.035799 |
+
+三折初始目標都偏向下調全域出場機率，長贏家的被截短代價超過其餘交易的提早退出好處。這與「持倉收益直接最大化」的契約一致，不是回到 HV1 的 1/L 抽樣，也不是 reward 正負號錯誤。p 趨近 0 時 sigmoid 導數也趨近 0，故存在退向全續抱且更難學到少數例外的合理機制；但未保存未選中 candidate 的 logits／梯度／權重，不能把解析的初始化敏感度當成後續實測梯度，更不能宣稱已證明唯一因果。
+
+此外 soft 訓練與 hard 部署不同：每天 p＝0.01 在 50 個可決策日累積約 39.50% 的隨機出場機率，但固定 p≥0.5 的實際規則完全不賣。三折 train 在初始 soft 政策下平均至少出場一次的機率為 28.16%／30.82%／32.62%，hard 政策皆為 0。有限訓練下，soft objective 改善不保證 hard 首次出場收益改善。現有選模 fallback 正確擋下沒有增益的政策；這是本版目標鬆弛、模型與資料共同的研究限制，不藉由降閾值或延長 epochs 改寫原 REJECT，也不能由此推論量價完全沒有預測資訊。
+
+新增證據：`outputs/validation/holding_policy_retirement_20261127/diagnosis.json` 保存三折曲線摘要、初始化 objective／bias 導數、來源 SHA、樣本核驗與限制。下一步僅在回覆提出具體設計，未寫入研究排程、建立新模型或預占編號。

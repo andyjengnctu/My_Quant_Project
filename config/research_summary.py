@@ -425,8 +425,8 @@ RESEARCH_SUMMARY_ROWS = (
      'bindings': ({'arm_id': 'C103',
                    'rank_model': ('MR-13CG',
                                   'daily_universal_shared_full_d40_safety_hs_conditional_mfe_full_list_ndcg_pairwise')},)},
-    # AI: Whole-episode stopping policy; formal work requires its development gate.
-    {"display_target": "MinTrade_NetPnL",
+    # AI: 2026-11-27 user-directed retirement; preserve the historical stopping contract.
+    {"enabled": False, "display_target": "MinTrade_NetPnL",
      "oracle_contract_status": "CONTRACT_UNRESOLVED",
      "oracle_contract_reason": "A whole-trade stopping policy has no approved matching holding-policy Oracle; entry CO truth is not an exit policy.",
      "bindings": tuple({"arm_id": arm_id, "rank_model": (
