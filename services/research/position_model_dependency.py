@@ -1,8 +1,7 @@
 """Research adapter for independently fitted position-decision dependencies."""
 from pathlib import Path
 from core.research_orchestration import ResearchArtifactAction, resolve_research_artifact_action
-from filters.breakout_quality.holding_value import MODEL_ID
-from services.breakout_quality.holding_value_model import (
+from services.breakout_quality.position_models import (
     configuration, position_exit_spec, inspect_holding_model, ensure_holding_model,
 )
 
@@ -12,9 +11,10 @@ def position_model_bindings(settings):
     for arm in settings.enabled_arms:
         if position_exit_spec(arm.dl_runtime_options) is not None:
             config = configuration(settings, arm)
-            if MODEL_ID in result and result[MODEL_ID] != config:
+            model_id = config["model_id"]
+            if model_id in result and result[model_id] != config:
                 raise ValueError("One position model cannot have conflicting active time contracts")
-            result[MODEL_ID] = config
+            result[model_id] = config
     return result
 
 
@@ -26,7 +26,7 @@ def append_position_model_actions(*, root, settings, actions, identities, seeds)
             policy = settings.preparation
             action = resolve_research_artifact_action(
                 ready=status["ready"], artifact_exists=Path(status["path"]).exists(),
-                has_builder=True, auto_prepare=policy.auto_prepare,
+                has_builder=bool(status.get("build_allowed", True)), auto_prepare=policy.auto_prepare,
                 reuse_ready_artifacts=policy.reuse_ready_artifacts,
                 rebuild_stale_artifacts=policy.rebuild_stale_artifacts,
                 resume_partial_artifacts=True,
@@ -63,7 +63,8 @@ def position_model_identity(*, root, settings, arm, seed):
     result = inspect_holding_model(root, seed=seed, config=configuration(settings, arm))
     if not result["ready"]:
         return {"status": "NOT_READY", "reason": result["reason"]}
-    return {"model_id": MODEL_ID, "seed": int(seed), "manifest_sha256": result["sha256"]}
+    return {"model_id": position_exit_spec(arm.dl_runtime_options)["model_id"],
+            "seed": int(seed), "manifest_sha256": result["sha256"]}
 
 
 def render_position_model_status(*, root, settings, seeds):

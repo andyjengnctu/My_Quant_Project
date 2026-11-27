@@ -47,7 +47,7 @@ def _registered_fixture():
                  "point_in_time_training_policy": {"fold_months": 12, "seed": "per_replication"}}
                 for dl_id in resolve_arm_runtime_dl_source_ids(settings, arm)
             ] if arm.dl_enabled else [],
-            **({"position_model_sources": {str(s): {"model_id": "HV1", "seed": s,
+            **({"position_model_sources": {str(s): {"model_id": arm.dl_runtime_options["position_exit_model"]["model_id"], "seed": s,
                    "manifest_sha256": canonical_json_sha256({"model": "holding", "seed": s})} for s in seeds}}
                if dict(arm.dl_runtime_options or {}).get("position_exit_model") else {}),
         })

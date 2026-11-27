@@ -6,16 +6,26 @@ Protection obligations retain their original priority and accounting.
 """
 from contextlib import contextmanager
 from contextvars import ContextVar
+from dataclasses import dataclass
 import math
 
 _PROVIDER = ContextVar("position_exit_provider", default=None)
+
+
+@dataclass(frozen=True)
+class PositionExitDecision:
+    requested: bool
+    value: float
+    value_name: str
 
 
 def position_exit_spec(options):
     raw = dict(options or {}).get("position_exit_model")
     if raw is None:
         return None
-    if raw != {"model_id": "HV1", "contract_version": 1}:
+    from core.position_model_registry import position_model_descriptor
+    descriptor = position_model_descriptor(raw.get("model_id"))
+    if raw != {"model_id": raw["model_id"], "contract_version": descriptor["version"]}:
         raise ValueError("Unknown position exit model contract")
     return dict(raw)
 
@@ -52,12 +62,17 @@ def request_position_early_exit(*, ticker, position, information_date,
     )
     if prediction is None:  # explicitly unscorable input: original rules continue
         return False
-    prediction = float(prediction)
-    if not math.isfinite(prediction):
-        raise ValueError("Nonfinite continuation prediction")
-    if prediction < 0.0:
+    decision = (prediction if isinstance(prediction, PositionExitDecision) else
+                PositionExitDecision(float(prediction) < 0.0, float(prediction), "delta_r"))
+    if not math.isfinite(decision.value):
+        raise ValueError("Nonfinite position prediction")
+    if decision.value_name not in ("delta_r", "exit_probability") or type(decision.requested) is not bool:
+        raise ValueError("Invalid position decision output")
+    if decision.value_name == "exit_probability" and not 0 <= decision.value <= 1:
+        raise ValueError("Invalid position exit probability")
+    if decision.requested:
         position["_model_exit_pending"] = True
         position["_model_exit_information_date"] = str(information_date)
-        position["_model_exit_delta_r"] = prediction
+        position["_model_exit_" + decision.value_name] = decision.value
         return True
     return False

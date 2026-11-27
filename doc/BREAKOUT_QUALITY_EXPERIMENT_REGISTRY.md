@@ -1118,3 +1118,24 @@ The canonical `config/research_summary.py` roster alone determines current Model
 **2026-11-27 完成結果。** C205／C206 的 Rolling、四 Seed Robustness、Summary 皆已完成；兩組未通過事前晉級門檻，登錄 NO_ADVANCEMENT，維持 Research-only。完整數值、工程驗證及最終工件見 Experiment Log 同日 HV1 結果節；未將中止或來源不一致的中間工件算入正式結果。
 
 **2026-11-27 後續使用者指定退役。** C205／C206 的共用 Summary group 停用，退出現行 Forward／Rolling、Robustness 與 Summary，四個 contrasts 隨 roster 排除；現行 33 組策略保留原 CO C123／C124 與 C106。HV1 不再構成現行 Research 訓練／準備依賴。原策略定義、FIT／Replay 版本、模型、決策紀錄與科學成果保留，編號永久保留；仍由歷史 replay 相容與共用持倉決策鏈引用的 producer／execution capability 保留。既有結果的「尚未退役」屬當次決策，不回寫。此次僅核對既有工件與退役，未重訓或執行市場回放，未實作或分配下一個研究 identity。新增的持倉抽樣權重與買進當天決策診斷見 Experiment Log 同節補記。
+
+## 2026-11-27：HV2 整筆交易收益出場；C207／C208
+
+使用者核准實作及工程驗證，先執行 2018–2020 Seed42，通過後才執行 Research Rolling、四 Seed Robustness、Summary。HV1／C205／C206 維持退役。
+
+| 身分 | 唯一處置／控制 | 初始狀態 |
+|---|---|---|
+| HV2 / FIT v1 | 完整交易淨 R 直接停止決策；個股＋0050 300×10 與 6 個持倉狀態 | IMPLEMENTED / DEVELOPMENT_PENDING / NO_TRADING |
+| C207 / Replay v1 | 原 C123 CO＋P16 Exact 加 HV2 出場 | CONDITIONAL_RESEARCH / DEVELOPMENT_GATE_REQUIRED |
+| C208 / Replay v1 | 原 C124 CO＋P16 Direct 加同一 HV2 出場 | CONDITIONAL_RESEARCH / DEVELOPMENT_GATE_REQUIRED |
+
+- 每個原始 setup 的第一次合法成交為一筆 episode，保留全部持倉收盤狀態，不以 300 日截斷交易。完整自然結算及各合法提前出場 payoff 均來自 canonical observer／execute_bar_step；已實現部分、費稅、原保護退出／半倉義務與下一可成交日一致。無自主出場選擇的狀態仍留在路徑、停止機率遮罩為零；缺特徵同樣續用原規則。自然交易或任一必要反事實分支未成熟者整筆排除，沒有期末強平。風險金額來自 canonical position 初始風險。
+- 每筆交易預期收益為各狀態「此前尚未停止的機率 × 本次停止機率 × 此時退出的完整 Net R」之和，加上全程未停止的原 P16 終點 Net R；FIT 使用相對 P16 的等價增量形式，終點增量為 0。每筆 episode 等權，全部狀態參與，不除以 L、不均勻抽一個持倉日、不使用事後最佳賣點分類。長贏家被提早截短的完整 R 差進入 objective。
+- 新的停止網路沿用小型 Conv16/k7→Conv32/k5→時間均值＋6 狀態→MLP32，輸出 sigmoid 出場機率。固定 ≥0.5 時請求下一 session 賣出；被阻擋則持續，原保護義務優先。相同 inputs 攤平後的線性 sigmoid 頭，使用相同 objective／時間切分／原子交易，只作內部 DL 必要性基線，不增加正式 C 列。
+- 固定 Adam 0.001、gradient clip 5、每 batch 16 個完整 episodes、12 epochs；所有狀態參與梯度。由於 hard first-stop 的 validation 可長時間持平，不作 plateau early stopping，12 epochs 內按完整交易平均 ΔR 選最佳 epoch，平手取最早。原 P16 的零增量為 fallback：沒有 validation 正增量則 selected_epochs=0，初始固定 p=0.01 的 hard policy 全程續抱；此種結果不會被判為 DL 增益。最後按選定 epoch 在合法成熟前綴 refit。FIT／validation 正規化各自只讀其 FIT subset。
+- 每年度只使用該年開始前成熟的完整 episodes；前一曆年為內層 validation，跨 validation 起點的交易 purge。FIT identity 綁定 seed、cutoff、合法 teacher／行情前綴、成熟完整 rows、模型／loss／訓練與 producer；evaluation mode／end 不產生第二份 physical FIT，Forward／Rolling 依同一 cutoff／identity 共用。新舊模型與不同 seed 不 fallback。
+- **第一階段固定契約**：Seed42，2018／2019／2020 三年度，所有真值截止於 2020-12-31。以進場年分組，僅計截止日前已完整成熟的交易；跨截止日未成熟者另報筆數，避免以 2021 起真值決定這一階段。持倉跨年時逐決策 session 使用該年度合法 PIT FIT；不使用進場後才可得的模型回補早期決策。三年相同資料上的原 P16、DL、線性頭計算完整交易收益、提前出場率、持倉中位數與原前十分位大贏家保留情形。未成熟交易排除造成的 cohort 限制明列，不能解讀為無條件全市場績效。
+- **第一階段 GO 必須同時成立**：三年等權平均 DL−P16 單筆 ΔR＞0；至少 2/3 年 ΔR＞0；三年等權平均 DL−線性 ΔR＞0。不是用 episode 數加權年度、MSE 或單一最好年判定。全三年及 provenance／逐筆工件齊備才有 PASS／REJECT；未通過即禁止正式 FIT／Replay，不能改閾值／窗口後重試同一門檻。
+- Research 原共用 Summary roster 註冊兩列、沿用 Exact／Direct／P16／CO 分數及比較服務，保留 C106；共用 position producer registry 負責路由，consumer 不認 HV2 名稱。新出場模型沒有核准的 matching Oracle，兩列保持 CONTRACT_UNRESOLVED，不借用 CO entry Oracle；Summary 的進場 CO ρ 與持倉 validation 分開。
+- 第一階段通過後才啟動原 2021-01-01～2026-03-02 Rolling、既有四 Seed Robustness、Summary；四 Seed 對各自 CO 的配對 ΔRoMD mean／median 皆正、至少 3/4 改善、平均 MDD 不增加，並報總報酬、大贏家與資金再投入後果。2021 起為迭代研究 OOS；不自動更新 Trading。
+- 前置驗證唯一工件：`outputs/research/breakout_quality/holding_policy/HV2/development_seed42_2018_2020/result.json`／`result.md` 與逐筆 CSV。正式 FIT 在 `models/research/breakout_quality/holding_value/HV2/seed_*/fits/`，各 mode manifest 只引用同一 FIT。研究結果另於取得後登錄，不以工程 PASS 代替。

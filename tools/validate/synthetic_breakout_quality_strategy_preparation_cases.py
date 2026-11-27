@@ -250,7 +250,7 @@ def append_strategy_compare_preparation_contract_checks(
                 continue
             from contextlib import nullcontext
             with patch.object(execution_module, "run_comparison", return_value={}) as replay, patch(
-                "services.breakout_quality.holding_value_model.holding_model_runtime",
+                "services.breakout_quality.position_models.holding_model_runtime",
                 side_effect=lambda *args, **kwargs: nullcontext(),
             ) as holding_runtime:
                 execution_module.run_strategy_compare_active_arm(

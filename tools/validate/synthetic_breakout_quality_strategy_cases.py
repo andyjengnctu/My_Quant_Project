@@ -123,7 +123,8 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
         case_id, "rank_score_composition", [RankScoreCompositionTests])
     results.extend(composition_results)
     from .test_holding_value import HoldingValueTests
-    holding_results, _ = run_unittest_capability_cases(case_id, "holding_value", [HoldingValueTests])
+    from .test_holding_policy import HoldingPolicyTests
+    holding_results, _ = run_unittest_capability_cases(case_id, "holding_value", [HoldingValueTests, HoldingPolicyTests])
     results.extend(holding_results)
     check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
 

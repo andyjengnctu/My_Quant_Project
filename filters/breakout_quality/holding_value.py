@@ -80,7 +80,7 @@ def next_executable_exit(position, *, frame, information_pos, params, signal_cac
     return None
 
 
-def build_ticker_holding_rows(*, ticker, frame, teacher, cutoff):
+def build_ticker_holding_rows(*, ticker, frame, teacher, cutoff, complete_episode=False, diagnostics=None):
     """Observe natural canonical paths; label only fully matured episodes.
 
     Each original setup starts its canonical first-fill path once. It does not
@@ -109,22 +109,24 @@ def build_ticker_holding_rows(*, ticker, frame, teacher, cutoff):
         if period is None or not bool(signals(frame.index[i + 1])[1][i]):
             continue
         observed = []
+        incomplete_alternative = []
         def observe(*, position, information_pos, params, completed_atr, completed_high):
             # Existing natural/protective next-open obligations offer no choice.
-            if position.get("pending_exit_action") == "STOP":
+            unavailable = (position.get("pending_exit_action") == "STOP" or
+                           bool(signals(frame.index[information_pos + 1])[2][information_pos]))
+            if unavailable and not complete_episode:
                 return
-            if bool(signals(frame.index[information_pos + 1])[2][information_pos]):
-                return
-            alternative = next_executable_exit(
+            alternative = (None, None) if unavailable else next_executable_exit(
                 position, frame=frame, information_pos=information_pos,
                 params=params, signal_cache=signals)
             if alternative is None:
+                incomplete_alternative.append(information_pos)
                 return
             context = position_context(
                 position, frame=frame, information_pos=information_pos,
                 completed_atr=completed_atr, completed_high=completed_high, params=params)
             observed.append((information_pos, context, alternative,
-                             int(position["initial_risk_total_milli"]) / 1000.0))
+                             int(position["initial_risk_total_milli"]) / 1000.0, not unavailable))
         outcome = simulate_realized_trade_path_label(
             frame, ticker=ticker, signal_pos=i, params=period.params,
             teacher_effective_date=str(frame.index[i].date()),
@@ -133,20 +135,34 @@ def build_ticker_holding_rows(*, ticker, frame, teacher, cutoff):
             holding_state_observer=observe,
         )
         if outcome.forced_closeout or outcome.realized_net_pnl is None:
+            if diagnostics is not None and outcome.fill_date is not None:
+                year = str(outcome.fill_date)[:4]
+                diagnostics["unmatured_" + year] = diagnostics.get("unmatured_" + year, 0) + 1
             continue
-        maturity = max([pd.Timestamp(outcome.exit_date)] + [row[2][1] for row in observed])
+        if complete_episode and incomplete_alternative:
+            if diagnostics is not None:
+                diagnostics["incomplete_alternative"] = diagnostics.get("incomplete_alternative", 0) + 1
+            continue
+        maturity = max([pd.Timestamp(outcome.exit_date)] + [row[2][1] for row in observed if row[2][1] is not None])
         if maturity > pd.Timestamp(cutoff):
             continue
         episode = f"{ticker}|{frame.index[i].date()}|{outcome.fill_date}"
-        for info, context, (early_pnl, _early_date), risk in observed:
-            result.append({
+        for info, context, (early_pnl, early_date), risk, allowed in observed:
+            if not allowed:
+                early_pnl, early_date = outcome.realized_net_pnl, outcome.exit_date
+            row = {
                 "ticker": str(ticker), "information_date": str(frame.index[info].date()),
                 "episode": episode, "entry_date": outcome.fill_date,
                 "maturity_date": str(maturity.date()),
                 "natural_net_pnl": outcome.realized_net_pnl, "early_net_pnl": early_pnl,
                 "target": (outcome.realized_net_pnl - early_pnl) / risk,
                 "state": context.tolist(),
-            })
+            }
+            if complete_episode:
+                row.update(initial_risk_money=risk, natural_exit_date=str(pd.Timestamp(outcome.exit_date).date()),
+                           early_exit_date=str(pd.Timestamp(early_date).date()), decision_allowed=allowed,
+                           decision_execution_date=str(frame.index[info + 1].date()))
+            result.append(row)
     return result
 
 

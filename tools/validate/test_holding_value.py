@@ -35,7 +35,8 @@ def holding_research_fixture():
     rows = tuple(
         {**row, "enabled": True} if any(
             binding.get("exit_model") == "HV1" for binding in row.get("bindings", ())
-        ) else row for row in research_summary.RESEARCH_SUMMARY_ROWS
+        ) else ({**row, "enabled": False} if any(binding.get("exit_model")
+            for binding in row.get("bindings", ())) else row) for row in research_summary.RESEARCH_SUMMARY_ROWS
     )
     with patch.object(research_summary, "RESEARCH_SUMMARY_ROWS", rows):
         yield

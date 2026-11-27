@@ -141,7 +141,7 @@ STRATEGY_COMPARE_SUITES = {
         # A compact connected contrast graph supports each selected model
         # versus C96 plus the matched CK/CJ label contrast. Historical AO/CH
         # contrasts remain registered and filter out with their inactive arms.
-        "contrast_ids": ('C205-C123', 'C206-C124', 'C205-C206', 'C205-C106', 'C201-C123', 'C202-C124', 'C201-C202', 'C201-C106', 'C199-C123', 'C200-C124', 'C199-C200', 'C195-C106', 'C195-C123', 'C196-C118', 'C196-C124', 'C195-C196', 'C195-C96', 'C196-C96', 'C194-C124', 'C193-C194', 'C194-C118', 'C194-C96', 'C193-C123', 'C193-C106', 'C193-C96', 'C189-C96', 'C190-C96', 'C189-C190', 'C189-C106', 'C190-C118', 'C186-C183', 'C97-C96', 'C98-C97', 'C98-C96', 'C103-C96', 'C106-C96', 'C107-C96', 'C109-C96', 'C111-C96', 'C112-C96', 'C118-C96', 'C123-C96', 'C124-C96', 'C125-C96', 'C126-C96', 'C109-C107', 'C111-C112', 'C106-C118', 'C123-C124', 'C125-C126', 'C123-C125', 'C124-C126', 'C147-C107', 'C148-C109', 'C147-C148', 'C153-C97', 'C154-C97', 'C153-C107', 'C154-C109', 'C154-C153', 'C155-C97', 'C156-C97', 'C155-C156', 'C155-C153', 'C156-C154', 'C157-C97', 'C158-C97', 'C157-C158', 'C157-C153', 'C158-C154'),
+        "contrast_ids": ('C207-C123', 'C208-C124', 'C207-C208', 'C207-C106', 'C205-C123', 'C206-C124', 'C205-C206', 'C205-C106', 'C201-C123', 'C202-C124', 'C201-C202', 'C201-C106', 'C199-C123', 'C200-C124', 'C199-C200', 'C195-C106', 'C195-C123', 'C196-C118', 'C196-C124', 'C195-C196', 'C195-C96', 'C196-C96', 'C194-C124', 'C193-C194', 'C194-C118', 'C194-C96', 'C193-C123', 'C193-C106', 'C193-C96', 'C189-C96', 'C190-C96', 'C189-C190', 'C189-C106', 'C190-C118', 'C186-C183', 'C97-C96', 'C98-C97', 'C98-C96', 'C103-C96', 'C106-C96', 'C107-C96', 'C109-C96', 'C111-C96', 'C112-C96', 'C118-C96', 'C123-C96', 'C124-C96', 'C125-C96', 'C126-C96', 'C109-C107', 'C111-C112', 'C106-C118', 'C123-C124', 'C125-C126', 'C123-C125', 'C124-C126', 'C147-C107', 'C148-C109', 'C147-C148', 'C153-C97', 'C154-C97', 'C153-C107', 'C154-C109', 'C154-C153', 'C155-C97', 'C156-C97', 'C155-C156', 'C155-C153', 'C156-C154', 'C157-C97', 'C158-C97', 'C157-C158', 'C157-C153', 'C158-C154'),
         "display_name_bases": {'C96': 'Min Base-Finalist-Best / Broker-Cash', 'C97': 'Full Base-Finalist-Best / Broker-Cash', 'C98': 'Full Corrected Same-Signal Agree 4x300 / Broker-Cash', 'C103': 'Min MR-13CG Exact K/R0 / Broker-Cash', 'C106': 'Min MR-13CI Exact K/R0 / Broker-Cash', 'C189': 'Min MR-13CI Rank + MR-13DL R40 Positive Exact K/R0 / Broker-Cash', 'C190': 'Min MR-13CI Rank + MR-13DL R40 Positive Direct No-K No-R0 / Broker-Cash', 'C107': 'Min MR-13CJ Exact K/R0 / Broker-Cash', 'C109': 'Min MR-13CJ T40 Direct No-K No-R0 / Broker-Cash', 'C111': 'Min MR-13K Pure-MFE Control Exact K/R0 / Broker-Cash', 'C112': 'Min MR-13K Pure-MFE Direct No-K No-R0 / Broker-Cash', 'C118': 'Min MR-13CI R40 Direct No-K No-R0 / Broker-Cash', 'C123': 'Min MR-13CO Formal MinTrade Full-cycle NetPnL Exact K/R0 / Broker-Cash', 'C124': 'Min MR-13CO Formal MinTrade Full-cycle NetPnL Direct No-K No-R0 / Broker-Cash', 'C125': 'Min MR-13CO Rank + MR-13CP Positive Exact K/R0 / Broker-Cash', 'C126': 'Min MR-13CO Rank + MR-13CP Positive Direct No-K No-R0 / Broker-Cash', 'C147': 'Min MR-13CX T40 Pairwise-Confidence Exact K/R0 / Broker-Cash', 'C148': 'Min MR-13CX T40 Pairwise-Confidence Direct No-K No-R0 / Broker-Cash', 'C153': 'Full MR-13CJ T40 Exact K/R0 / Broker-Cash', 'C154': 'Full MR-13CJ T40 Direct No-K No-R0 / Broker-Cash', 'C155': 'Full MR-13CZ Rank + MR-13DA Positive Exact K/R0 / Broker-Cash', 'C156': 'Full MR-13CZ Rank + MR-13DA Positive Direct No-K No-R0 / Broker-Cash', 'C157': 'Full MR-13CZ NetPnL Rank Exact K/R0 / Broker-Cash', 'C158': 'Full MR-13CZ NetPnL Rank Direct No-K No-R0 / Broker-Cash', 'C179': 'Daily (Min/P21) No DL / Default Selector / Broker-Cash'},
     },
     # Historical Round-10 suite retained unchanged for artifact interpretation/replay.
@@ -1242,6 +1242,19 @@ for _new_id, _reference_id, _selector in (
         "replay_contract_version": 1,
     }
 
+# AI: Same CO/P16 entry controls; only the position policy changes.
+for _new_id, _reference_id, _selector in (
+    ("C207", "C123", "Exact K/R0"), ("C208", "C124", "Direct No-K/No-R0"),
+):
+    STRATEGY_COMPARE_ARMS[_new_id] = {
+        **STRATEGY_COMPARE_ARMS[_reference_id],
+        "name": f"Min CO + HV2 整筆交易收益出場 {_selector} / Broker-Cash",
+        "description": "Original CO/P16 entry; PIT whole-episode net-R stopping policy. Formal execution requires the fixed 2018-2020 Seed42 development gate.",
+        "replay_contract_version": 1,
+        "dl_runtime_options": {**STRATEGY_COMPARE_ARMS[_reference_id]["dl_runtime_options"],
+            "position_exit_model": {"model_id": "HV2", "contract_version": 1}},
+    }
+
 # AI: One calendar-input model supplies the original CO/P16 selectors.
 from core.breakout_quality_registry import CALENDAR_BARS_PROFILE as _CALENDAR_BARS_PROFILE
 STRATEGY_DL_SOURCES["CONT13DP_ROLL"] = {
@@ -1336,6 +1349,10 @@ for _mode in ("oos", "rolling"):
 # Contrast 是否啟用只由 STRATEGY_COMPARE_PROFILES[*]["contrast_ids"] 決定。
 
 STRATEGY_COMPARE_CONTRASTS = {
+    "C207-C123": {"left": "C207", "right": "C123", "description": "Whole-trade stopping versus original CO/P16 Exact exit"},
+    "C208-C124": {"left": "C208", "right": "C124", "description": "Whole-trade stopping versus original CO/P16 Direct exit"},
+    "C207-C208": {"left": "C207", "right": "C208", "description": "Same whole-trade exit policy, Exact versus Direct"},
+    "C207-C106": {"left": "C207", "right": "C106", "description": "Whole-trade stopping versus retained CI Exact reference"},
     "C205-C123": {"left": "C205", "right": "C123", "description": "Same CO Exact entry; holding value early exit versus original P16 exit"},
     "C206-C124": {"left": "C206", "right": "C124", "description": "Same CO Direct entry; holding value early exit versus original P16 exit"},
     "C205-C206": {"left": "C205", "right": "C206", "description": "Same holding model; Exact versus Direct"},

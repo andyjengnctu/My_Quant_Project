@@ -1392,6 +1392,14 @@ for _scope, _graph_sha in (('portfolio_candidates', '3e82b0fdd2d910fa658c62c74ff
 
 _REVIEWED_SOURCE_INVENTORIES["mintrade_source_graph"]["current"]["filters/breakout_quality/trade_path_label.py"] = ('48417c248b092f97d91a51f7049593db44bbd5243d8804f469c36e36f3941ed6', '48417c248b092f97d91a51f7049593db44bbd5243d8804f469c36e36f3941ed6', '95da26f67620e72a6faac4b22734fb24f0496802b6efaba1c01e65eb50a75b82')
 
+# AI: The independently executed 61-case frozen/current observation proof in
+# outputs/validation/holding_policy_20261127/current_receipt.json verifies that
+# typed probability decisions preserve every original no-provider replay path.
+# Active position models still bind their own producer, gate, seed and FIT SHA.
+for _scope in ("portfolio_candidates", "replay_numerics"):
+    _REVIEWED_SOURCE_INVENTORIES[_scope]["current"]["core/position_exit_policy.py"] = (
+        "030051db858a09815563ccc66dd9660d927a5bcff7d90e91ff27b6e756575be6")
+
 
 def _reviewed_source_group(scope: str):
     proof = _REVIEWED_SOURCE_INVENTORIES.get(scope)
