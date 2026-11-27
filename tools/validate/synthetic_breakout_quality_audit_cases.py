@@ -856,19 +856,26 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
                        and {row["strategy"] for row in updated["rows"] if row["strategy"]}
                            == arms - removed_arms)
 
-    # No stale root key may route to another work type after inserting Summary.
-    root_handlers = ("_show_research_summary", "_target_validation_menu", "_run_model_training_menu",
-                     "_run_optimizer", "_strategy_compare_menu", "_audit_menu",
-                     "_strategy_runtime_integration_menu", "_show_research_status",
-                     "_market_data_menu", "_strategy_promotion_menu")
+    # Existing work types retain their menu keys when a retired entry is removed.
+    root_handlers = {
+        "1": "_show_research_summary",
+        "2": "_target_validation_menu",
+        "3": "_run_model_training_menu",
+        "4": "_run_optimizer",
+        "5": "_strategy_compare_menu",
+        "6": "_audit_menu",
+        "8": "_show_research_status",
+        "9": "_market_data_menu",
+        "10": "_strategy_promotion_menu",
+    }
     from contextlib import ExitStack
     with ExitStack() as stack:
         handlers = [stack.enter_context(patch.object(research_app, name, return_value=0))
-                    for name in root_handlers]
-        stack.enter_context(patch("builtins.input", side_effect=[*(str(i) for i in range(1, 11)), "0"]))
+                    for name in root_handlers.values()]
+        stack.enter_context(patch("builtins.input", side_effect=[*root_handlers, "7", "0"]))
         stack.enter_context(redirect_stdout(io.StringIO()))
         menu_rc = research_app._interactive_menu()
-    check_true("summary_insertion_preserves_every_root_work_type_dispatch",
+    check_true("research_root_menu_preserves_current_keys_without_dispatching_removed_key",
                menu_rc == 0 and all(handler.call_count == 1 for handler in handlers))
 
     # Drive the real menu: the Summary displayed after Target must be read anew.

@@ -21,7 +21,6 @@ from config.strategy_compare import (
     STRATEGY_COMPARE_REUSE_COMPLETED_RESULTS,
     STRATEGY_COMPARE_REUSE_SHARED_BASELINE,
     STRATEGY_COMPARE_TRAIN_PROGRESS_INTERVAL_SECONDS,
-    STRATEGY_RUNTIME_INTEGRATION,
 )
 from core.strategy_compare_registry import (
     ROBUSTNESS_BENCHMARK_SEED_COUNT,
@@ -53,7 +52,6 @@ from core.strategy_comparison import (
     StrategyComparisonContrast,
     StrategyComparisonSettings,
     StrategyMultiSeedRobustnessSettings,
-    StrategyRuntimeIntegrationSettings,
     StrategyDLSource,
     StrategyParameterSource,
     StrategyPreparationPolicy,
@@ -61,7 +59,6 @@ from core.strategy_comparison import (
     validate_strategy_comparison_settings,
     validate_strategy_compare_gpu_train_workers,
     validate_strategy_multi_seed_robustness_settings,
-    validate_strategy_runtime_integration_settings,
 )
 
 
@@ -246,46 +243,6 @@ def _derived_stochastic_contrasts(
                 "description": contrast.description,
             })
     return tuple(rows)
-
-
-def get_strategy_runtime_integration_settings() -> StrategyRuntimeIntegrationSettings:
-    raw = dict(STRATEGY_RUNTIME_INTEGRATION)
-    settings = StrategyRuntimeIntegrationSettings(
-        label=str(raw.get("label") or "").strip(),
-        enabled=bool(raw.get("enabled", True)),
-        selection_profile_id=str(raw.get("selection_profile_id") or "").strip(),
-        forward_profile_id=str(raw.get("forward_profile_id") or "").strip(),
-        selection_candidate_arm_id=str(raw.get("selection_candidate_arm_id") or "").strip(),
-        forward_candidate_arm_id=str(raw.get("forward_candidate_arm_id") or "").strip(),
-        selection_robustness_id=str(raw.get("selection_robustness_id") or "").strip(),
-        forward_robustness_id=str(raw.get("forward_robustness_id") or "").strip(),
-        output_root=str(raw.get("output_root") or "").strip(),
-        comparison_anchor_experiment_profile=str(
-            raw.get("comparison_anchor_experiment_profile") or ""
-        ).strip(),
-        require_strict_romd_majority=bool(raw.get("require_strict_romd_majority", True)),
-        max_selector_latency_ms=float(raw.get("max_selector_latency_ms", 10000.0)),
-    )
-    validate_strategy_runtime_integration_settings(settings)
-    if not settings.enabled:
-        return settings
-    profile_ids = set(STRATEGY_COMPARE_PROFILES)
-    robustness_ids = set(STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS_PROFILES)
-    if settings.selection_profile_id not in profile_ids or settings.forward_profile_id not in profile_ids:
-        raise ValueError("runtime integration引用不存在的Strategy Compare profile")
-    candidate_specs = (
-        (settings.selection_profile_id, settings.selection_candidate_arm_id, "Selection"),
-        (settings.forward_profile_id, settings.forward_candidate_arm_id, "Forward"),
-    )
-    for profile_id, arm_id, stage_label in candidate_specs:
-        active_ids = set(_resolved_profile_matrix(dict(STRATEGY_COMPARE_PROFILES[profile_id]))[0])
-        if arm_id not in active_ids:
-            raise ValueError(
-                f"runtime integration {stage_label} candidate不在active profile: {arm_id}"
-            )
-    if settings.selection_robustness_id not in robustness_ids or settings.forward_robustness_id not in robustness_ids:
-        raise ValueError("runtime integration引用不存在的robustness profile")
-    return settings
 
 
 def get_strategy_multi_seed_robustness_profiles() -> tuple[dict[str, str], ...]:
@@ -1172,7 +1129,6 @@ __all__ = [
     "get_strategy_comparison_menu_profiles",
     "get_strategy_multi_seed_robustness_profiles",
     "get_strategy_multi_seed_robustness_settings",
-    "get_strategy_runtime_integration_settings",
     "get_strategy_comparison_settings",
     "resolve_strategy_comparison_result_search_roots",
     "resolve_strategy_robustness_result_search_roots",

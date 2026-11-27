@@ -23,7 +23,6 @@ from core.strategy_compare_policy import (
     get_strategy_multi_seed_robustness_profiles,
     get_strategy_multi_seed_robustness_settings,
     get_strategy_rolling_test_modes,
-    get_strategy_runtime_integration_settings,
 )
 from core.console_report import render_menu_item
 from core.strategy_promotion import (
@@ -32,12 +31,9 @@ from core.strategy_promotion import (
 )
 from core.runtime_utils import is_interactive_console, run_cli_entrypoint
 from services.research.strategy_compare_application import (
-    dispatch_runtime_integration_action,
     execute_strategy_comparison,
     resolve_strategy_comparison_execution,
     run_strategy_multi_seed_robustness,
-    runtime_integration_allowed_actions,
-    runtime_integration_execution_enabled,
     show_latest_strategy_multi_seed_robustness_report,
     show_strategy_comparison_profile_status,
     show_strategy_multi_seed_robustness_status,
@@ -271,44 +267,6 @@ def _current_strategy_mode_rows() -> tuple[dict, dict]:
     if oos is None or rolling is None:
         raise ValueError("current Strategy Compare必須同時定義OOS與Rolling mode")
     return oos, rolling
-
-
-def _strategy_runtime_integration_menu() -> int:
-    cfg = get_strategy_runtime_integration_settings()
-    if not runtime_integration_execution_enabled():
-        raise RuntimeError(
-            f"{cfg.label}目前未綁定可執行的current Strategy Compare profiles；"
-            "請由Framework status檢視historical狀態。"
-        )
-    while True:
-        print(f"\n=== {cfg.label} ===")
-        print(render_menu_item(1, "執行 Gate", default=True))
-        print(render_menu_item(2, "套用／更新正式 Runtime"))
-        print(render_menu_item(3, "查看目前 Gate 狀態"))
-        print(render_menu_item(4, "查看最新 Gate 報表"))
-        print(render_menu_item(0, "返回"))
-        try:
-            raw = input("👉 請選擇：").strip().lower()
-        except EOFError:
-            return 0
-        choice = "1" if raw == "" else raw
-        if choice in {"0", "q", "quit", "exit"}:
-            return 0
-        try:
-            if choice == "1":
-                dispatch_runtime_integration_action("run")
-            elif choice == "2":
-                dispatch_runtime_integration_action("promote")
-            elif choice == "3":
-                dispatch_runtime_integration_action("status")
-            elif choice == "4":
-                dispatch_runtime_integration_action("latest")
-            else:
-                print("選項無效，請按 Enter 或輸入 0～4。")
-        except (FileNotFoundError, RuntimeError, ValueError) as exc:
-            print(f"[錯誤] {type(exc).__name__}: {exc}")
-        except KeyboardInterrupt:
-            print(f"\n目前操作已中止，返回{cfg.label}選單。")
 
 
 def _show_all_strategy_comparison_status() -> None:
@@ -930,11 +888,6 @@ def _print_main_menu() -> None:
     print(render_menu_item(4, "策略參數最佳化"))
     print(render_menu_item(5, "策略組合比較"))
     print(render_menu_item(6, "Audit／診斷"))
-    integration_cfg = get_strategy_runtime_integration_settings()
-    integration_label = integration_cfg.label
-    if not runtime_integration_execution_enabled():
-        integration_label += "  [歷史／唯讀]"
-    print(render_menu_item(7, integration_label))
     print(render_menu_item(8, "查看目前研究狀態與工件"))
     print(render_menu_item(9, "Market Data generation／Research V2 lifecycle"))
     print(render_menu_item(10, "策略升格（Research → Trading）"))
@@ -965,8 +918,6 @@ def _interactive_menu() -> int:
                 _strategy_compare_menu()
             elif choice == "6":
                 _audit_menu()
-            elif choice == "7":
-                _strategy_runtime_integration_menu()
             elif choice == "8":
                 _show_research_status()
             elif choice == "9":
@@ -974,7 +925,7 @@ def _interactive_menu() -> int:
             elif choice == "10":
                 _strategy_promotion_menu()
             else:
-                print("選項無效，請按 Enter 或輸入 0～10。")
+                print("選項無效，請按 Enter 或輸入選單上的編號。")
         except (FileNotFoundError, ImportError, RuntimeError, ValueError) as exc:
             print(f"[錯誤] {type(exc).__name__}: {exc}")
         except KeyboardInterrupt:
@@ -991,11 +942,7 @@ def _print_help(program_name: str) -> None:
     print("             Production-aligned timing：optimizer timing [--trials N] [--seeds N] [--timing-fold-workers N]")
     print("             進階單次 Optimizer：optimizer advanced [options]")
     print("             一次性SSOT migration：optimizer migrate-strategy-params")
-    integration_actions = "/".join(runtime_integration_allowed_actions())
-    print(
-        "  compare    策略組合比較；可接 [profile] run/status、robustness run/status/latest "
-        f"或 integration {integration_actions}"
-    )
+    print("  compare    策略組合比較；可接 [profile] run/status、robustness run/status/latest")
     print("  audit      目前 config 指定 Audit module；可接 run、status 或 latest")
     print("  market-data Research Market Data lifecycle；可接 status/freeze/precheck/promote/verify")
     print("  status     查看目前設定與工件狀態")
@@ -1047,18 +994,9 @@ def main(argv=None) -> int:
         if str(rest[0]).strip().lower() in {"-h", "--help", "help"}:
             print(f"用法: python {program_name} compare [profile] [run|status]")
             print(f"      python {program_name} compare robustness [robustness_id] [run|status|latest]")
-            integration_actions = "|".join(runtime_integration_allowed_actions())
-            print(f"      python {program_name} compare integration [{integration_actions}]")
-            print("說明: profile、robustness與runtime integration設定皆由config/strategy_compare.py定義。")
+            print("說明: profile 與 robustness 設定由 config/strategy_compare.py 定義。")
             return 0
         first = str(rest[0]).strip()
-        if first.lower() in {"integration", "runtime-integration", "runtime_integration"}:
-            action = str(rest[1]).strip().lower() if len(rest) >= 2 else "status"
-            if len(rest) > 2:
-                raise ValueError(f"compare integration不支援額外參數: {' '.join(rest[2:])}")
-            dispatch_runtime_integration_action(action)
-            return 0
-
         if first.lower() in {"robustness", "multi-seed", "multi_seed"}:
             profiles = get_strategy_multi_seed_robustness_profiles()
             profile_ids = {item["robustness_id"] for item in profiles}

@@ -607,13 +607,10 @@ def append_latest_publication_checks(*, check_true):
             and (collision_latest / "foo.backup").read_bytes() == b"new-b",
         )
 
-    # The same core latest publisher must also own presentation-only Audit,
-    # OOS/Rolling consistency, and historical Runtime Promotion Gate copies.
-    # Their old JSON/Markdown bytes must remain unchanged.
+    # Audit and OOS/Rolling consistency use the shared latest-report publisher.
     from core import file_integrity as latest_integrity
     from services.audit import reusable_report as audit_writer
     from services.research import strategy_compare_application as consistency_writer
-    from services.research import runtime_integration_gate as gate_writer
     with tempfile.TemporaryDirectory(prefix="shared_latest_publication_") as temp_dir:
         temp_root = Path(temp_dir)
         audit_def = SimpleNamespace(
@@ -684,72 +681,32 @@ def append_latest_publication_checks(*, check_true):
             and (consistency_dir / "strategy_consistency.json").read_bytes()
             == latest_integrity.json_publication_bytes(consistent_payload),
         )
-        gate_root = temp_root / "gate"
-        gate_cfg = SimpleNamespace(output_root="gate")
-        gate_payload = {"fingerprint": "gate-case", "status": "NO_GO"}
-        gate_latest = gate_root / "latest"
-        gate_latest.mkdir(parents=True)
-        (gate_latest / gate_writer.RESULT_FILENAME).write_text(json.dumps(gate_payload), encoding="utf-8")
-        (gate_latest / gate_writer.REPORT_FILENAME).write_bytes(latest_integrity.text_publication_bytes("gate markdown"))
-        with patch.object(
-            gate_writer, "get_strategy_runtime_integration_settings", return_value=gate_cfg,
-        ), redirect_stdout(io.StringIO()):
-            gate_latest = gate_root / "latest"
-            gate_original = {
-                name: (gate_latest / name).read_bytes()
-                for name in (gate_writer.RESULT_FILENAME, gate_writer.REPORT_FILENAME)
-            }
-            with latest_integrity.exclusive_file_lock(
-                latest_integrity.sibling_publication_lock_path(gate_latest)
-            ):
-                try:
-                    gate_writer.show_latest_runtime_integration_report(project_root=temp_root)
-                except RuntimeError:
-                    gate_reader_rejected = True
-                else:
-                    gate_reader_rejected = False
-            with redirect_stdout(io.StringIO()):
-                restored_gate = gate_writer.show_latest_runtime_integration_report(
-                    project_root=temp_root
-                )
-        check_true(
-            "runtime_gate_latest_reader_obeys_same_publisher_lock_and_legacy_bytes",
-            gate_reader_rejected and restored_gate == gate_payload
-            and all((gate_latest / name).read_bytes() == raw
-                    for name, raw in gate_original.items())
-            and gate_original[gate_writer.REPORT_FILENAME]
-                == latest_integrity.text_publication_bytes("gate markdown"),
-        )
 
-    # The retained Runtime Promotion latest view also uses the canonical
-    # binary publisher. Its completed run artifacts and bytes are immutable.
     from services.audit import strategy_compare_source as audit_compare_reader
-    with tempfile.TemporaryDirectory(prefix="promotion_latest_contract_") as temp_dir:
+    with tempfile.TemporaryDirectory(prefix="latest_report_contract_") as temp_dir:
         synthetic_root = Path(temp_dir)
-        history_parent = synthetic_root / "promotion"
+        history_parent = synthetic_root / "reports"
         timestamp = "20261020_142301"
         first_run = latest_integrity.reserve_immutable_output_dir(history_parent, timestamp)
-        original_record = first_run / "runtime_promotion.json"
+        original_record = first_run / "report.json"
         original_record.write_bytes(b"first\r\n")
         next_run = latest_integrity.reserve_immutable_output_dir(history_parent, timestamp)
         check_true(
-            "runtime_promotion_same_second_history_cannot_overwrite_prior_run",
+            "same_second_report_history_cannot_overwrite_prior_run",
             first_run != next_run and original_record.read_bytes() == b"first\r\n"
             and next_run.parent == history_parent,
         )
-        md = next_run / "runtime_promotion.md"
-        js = next_run / "runtime_promotion.json"
+        md = next_run / "report.md"
+        js = next_run / "report.json"
         md.write_bytes(b"report\r\n")
-        js.write_bytes(b"{\r\n  \"status\": \"PROMOTED\"\r\n}\r\n")
+        js.write_bytes(b"{\r\n  \"status\": \"PASS\"\r\n}\r\n")
         latest = history_parent / "latest"
         latest_integrity.publish_latest_snapshot(latest, (
             (md.name, md.read_bytes()), (js.name, js.read_bytes()),
         ))
         check_true(
-            "runtime_promotion_latest_keeps_original_run_bytes_and_shared_owner",
-            all((latest / file.name).read_bytes() == file.read_bytes()
-                for file in (md, js))
-            ,
+            "latest_report_keeps_original_run_bytes",
+            all((latest / file.name).read_bytes() == file.read_bytes() for file in (md, js)),
         )
         # A canonical Audit reading mutable latest must use the same lock as
         # Strategy Compare's publisher; immutable pinned runs remain unaffected.

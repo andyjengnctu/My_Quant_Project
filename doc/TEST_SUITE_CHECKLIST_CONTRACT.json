@@ -1492,10 +1492,10 @@
       "section": "B2",
       "priority": "P1",
       "order": 177,
-      "item": "`MR-12B / PROFILE-strategy_aligned_no_time_all_event_pairwise`必須固定MR-12A的`strategy_aligned_opportunity_no_time_r_v1`、`all_labels`、`ARCH-inception_time_v1`、optimizer／LR／OOS切分與`mean_daily_spearman` epoch selection，只將learning objective由daily-percentile MSE改為同日RankNet-style pairwise logistic；pair只能在同一交易日且Target不相等的groups間建立，tie不參與，pair等權，model margin固定`PASS logit - REJECT logit`，runtime score仍為單調等價的`softmax PASS probability`。Pairwise training batch必須whole-date coherent，同一date不得跨mini-batch切開；此batching變更只為建立完整同日pair，不得讓OOS進gradient／epoch selection或Target transform。Forward runtime score presence只能由prediction-time feature history與OOS date決定；future target完整性只可決定OOS metric subset，不得截短score universe，inference-only rows的future target欄位必須為NaN。Manifest／report須明確保存objective、loss、whole-date batching、pair scope／weighting／margin／runtime-score contract與Forward score coverage contract，`DL-CONT12B`載入時須依profile嚴格驗證。Strategy Compare不得自動train MR-12B；固定保留MR-12A的C17／C18兩個selector anchor，MR-12B分別以C19/C20套用同一C17/C18 selector，核心contrast固定看C19-C17、C20-C18與C20-C19，以同時驗證純模型改善及改善後DL在較Max selector上的轉化，不得依策略OOS回頭修改loss、pair sampling或selector",
-      "gap": "direct synthetic驗證MR-12B profile／CLI identity、whole-date batching不切日、pairwise logistic正確排序loss較低且gradient有限、pairwise artifact semantics明確、C17/C18與C19/C20雙selector矩陣及三個核心contrast；另保留MR-12A、PIT builder與config-driven strategy compare相關direct regression",
-      "entry": "`config/breakout_quality.py`, `services/breakout_quality/train_continuous_ranker.py`, `services/breakout_quality/continuous_ranker_pipeline.py`, `filters/breakout_quality/ranking_score_store.py`, `config/strategy_compare.py`, `apps/research.py`, `tools/validate/synthetic_cases.py`",
-      "category": "MR-12B all-event within-day pairwise ranker與雙selector策略驗證契約",
+      "item": "`MR-12B / PROFILE-strategy_aligned_no_time_all_event_pairwise`必須固定MR-12A的`strategy_aligned_opportunity_no_time_r_v1`、`all_labels`、`ARCH-inception_time_v1`、optimizer／LR／OOS切分與`mean_daily_spearman` epoch selection，只將learning objective由daily-percentile MSE改為同日RankNet-style pairwise logistic；pair只能在同一交易日且Target不相等的groups間建立，tie不參與，pair等權，model margin固定`PASS logit - REJECT logit`，runtime score仍為單調等價的`softmax PASS probability`。Pairwise training batch必須whole-date coherent，同一date不得跨mini-batch切開；此batching變更只為建立完整同日pair，不得讓OOS進gradient／epoch selection或Target transform。Forward runtime score presence只能由prediction-time feature history與OOS date決定；future target完整性只可決定OOS metric subset，不得截短score universe，inference-only rows的future target欄位必須為NaN。Manifest／report須明確保存objective、loss、whole-date batching、pair scope／weighting／margin／runtime-score contract與Forward score coverage contract，`DL-CONT12B`載入時須依profile嚴格驗證。",
+      "gap": "覆蓋 MR-12B profile／CLI、同日 batching、pairwise loss 與 gradient、工件語意、Top-K 品質指標及路徑顯示。歷史策略對照仍見 Experiment Log。",
+      "entry": "`services/breakout_quality/train_continuous_ranker.py`, `filters/breakout_quality/ranking_score_store.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`",
+      "category": "MR-12B 同日 pairwise 訓練與歷史工件相容契約",
       "status": "DONE"
     },
     {
@@ -1708,17 +1708,6 @@
       "status": "DONE"
     },
     {
-      "id": "B234",
-      "section": "B2",
-      "priority": "P1",
-      "order": 219,
-      "item": "Runtime Promotion Gate 已退役；正式入口只允許 status／latest 讀取歷史證據，任何 run／gate／promote／apply／refresh mutation 必須 fail-closed，不得重新啟用已退役 producer。",
-      "gap": "直接驗證 execution disabled、read-only action set、BLOCKED status，並逐一驗證 mutation action 拒絕。",
-      "entry": "`services/research/strategy_compare_application.py`, `services/research/runtime_integration_gate.py`, `tools/validate/synthetic_breakout_quality_strategy_app_cases.py`",
-      "category": "Retired Runtime Promotion Gate read-only boundary",
-      "status": "DONE"
-    },
-    {
       "id": "B235",
       "section": "B2",
       "priority": "P1",
@@ -1756,7 +1745,7 @@
       "section": "B2",
       "priority": "P1",
       "order": 227,
-      "item": "MR-13K相對MR-13H唯一允許把full-horizon Target中的adverse-to-peak扣分移除；selected peak、favorable、adverse diagnostic、breach diagnostic、40D horizon、固定risk scale、daily universe、architecture、full-list Delta-NDCG pairwise loss與Seed policy必須固定。Target comparison須驗candidate-reference delta與removed adverse penalty一致；Strategy Compare的C53/C54只能作source-only替換並保持K/R0/exact/cash/execution。Production workflow固定MR-13E C42/C44。",
+      "item": "MR-13K相對MR-13H唯一允許把full-horizon Target中的adverse-to-peak扣分移除；selected peak、favorable、adverse diagnostic、breach diagnostic、40D horizon、固定risk scale、daily universe、architecture、full-list Delta-NDCG pairwise loss與Seed policy必須固定。Target comparison須驗candidate-reference delta與removed adverse penalty一致；Strategy Compare的C53/C54只能作source-only替換並保持K/R0/exact/cash/execution。",
       "gap": "Target comparison與Seed42 Forward/PIT已完成；C53 Selection與C54 Forward single-seed translation均低於MR-13E reference。Source-only paired robustness不再是current優先Gate；13K改作C56/C57 full-flow primary source，與13M同seed接受完整dual-model robustness。",
       "entry": "`config/breakout_quality.py`, `config/strategy_compare.py`, `filters/breakout_quality/continuous_target.py`, `services/breakout_quality/daily_target_comparison.py`, `services/breakout_quality/train_daily_ranker.py`, `tools/validate/synthetic_breakout_quality_model_cases.py`, `tools/validate/synthetic_breakout_quality_strategy_app_cases.py`",
       "category": "MR-13K pure-MFE Target / full-flow controlled evaluation contract",
@@ -4718,13 +4707,6 @@
       "description": "`validate_strategy_compare_config_driven_app_contract_case`：B233",
       "b_id": "B233",
       "order": 323,
-      "status": "DONE"
-    },
-    {
-      "id": "T332",
-      "description": "`validate_breakout_quality_runtime_integration_gate_contract_case`",
-      "b_id": "B234",
-      "order": 324,
       "status": "DONE"
     },
     {

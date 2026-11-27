@@ -29,9 +29,6 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from core.research_execution_resources import CPU_LANES_ENV, research_cpu_lanes
 from core.research_status_display import render_action_details, render_seed_status_matrix
-from config.breakout_quality import (
-    BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_MENU_LABEL,
-)
 from filters.breakout_quality.torch_runtime import add_torch_execution_cli_arguments
 from core.breakout_quality_registry import (
     TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
@@ -41,8 +38,6 @@ from core.breakout_quality_registry import (
     get_continuous_ranker_research_spec,
 )
 from core.breakout_quality_policy import (
-    get_breakout_quality_continuous_ranker_comparison_settings,
-    get_breakout_quality_standard_model_comparison_settings,
     get_breakout_quality_model_test_settings,
 )
 from core.breakout_quality_runtime import (
@@ -232,7 +227,6 @@ COMMAND_MODULES = {
     "prepare-continuous-target": "services.breakout_quality.continuous_target_preparation",
     "train-continuous-ranker": "services.breakout_quality.ranker_cli",
     "compare-daily-targets": "services.breakout_quality.daily_target_comparison",
-    "compare-continuous-rankers": "services.breakout_quality.continuous_ranker_comparison",
     "build-point-in-time-scores": "services.breakout_quality.point_in_time_scores",
     "timing-rolling-training": "services.breakout_quality.rolling_timing",
     "build-binary-point-in-time-scores": (
@@ -271,9 +265,6 @@ COMMAND_DESCRIPTIONS = {
     "prepare-continuous-target": "依目前workflow檢查並建立continuous target工件",
     "train-continuous-ranker": "執行目前設定的continuous ranker模型研究；正式選單亦可使用",
     "compare-daily-targets": "比較目前daily target與config指定reference target；只讀、不訓練",
-    "compare-continuous-rankers": (
-        "只讀config設定的continuous-ranker frozen scores，做paired／random baseline／Dynamic-K品質比較"
-    ),
     "build-point-in-time-scores": "建立泛用Selection point-in-time continuous-ranker scores",
     "timing-rolling-training": "以隔離單fold建立Rolling訓練改善前baseline並比較目前實作的wall-clock與exact-result hashes",
     "build-binary-point-in-time-scores": (
@@ -1190,134 +1181,6 @@ def _simple_report_details(
             )
         candidate = output_dir / "continuous_ranker_report.md"
         detail_report = candidate if candidate.is_file() else None
-    elif command == "compare-continuous-rankers":
-        output_dir = (
-            resolve_filter_output_dir(PROJECT_ROOT, filter_id=filter_id)
-            / "continuous_ranker_comparison"
-        )
-        payload = load_json_object_or_none(output_dir / "continuous_ranker_comparison.json") or {}
-        configured = dict(payload.get("comparison_settings") or {})
-        model_ids = tuple(str(value) for value in configured.get("model_ids") or ())
-        summary_pair = tuple(str(value) for value in configured.get("summary_pair") or ())
-        if len(summary_pair) != 2:
-            comparison_settings = get_breakout_quality_continuous_ranker_comparison_settings()
-            summary_pair = comparison_settings.summary_pair
-        summary_left, summary_right = summary_pair
-        if not model_ids:
-            model_ids = tuple(
-                str(item.get("model_id"))
-                for item in payload.get("models") or []
-                if str(item.get("model_id") or "").strip()
-            )
-        fixed_oos = dict(((payload.get("fixed_k") or {}).get("splits") or {}).get("oos") or {})
-        fixed_summary = dict((fixed_oos.get("models") or {}).get(summary_left) or {})
-        fixed_prefix = dict(payload.get("fixed_k_prefix_sweep") or {})
-        prefix_by_k = dict(fixed_prefix.get("by_k") or {})
-        first_prefix_k = min((int(value) for value in prefix_by_k), default=None)
-        first_prefix = dict(prefix_by_k.get(str(first_prefix_k)) or {}) if first_prefix_k is not None else {}
-        first_prefix_contrast = dict(
-            (first_prefix.get("paired_contrasts") or {}).get(f"{summary_left}_minus_{summary_right}") or {}
-        )
-        first_prefix_metrics = dict(first_prefix_contrast.get("metrics") or {})
-        first_prefix_ndcg_delta = dict(first_prefix_metrics.get("ndcg_at_k") or {})
-        first_prefix_boundary_delta = dict(first_prefix_metrics.get("boundary_concordance") or {})
-        dynamic = dict(payload.get("dynamic_k") or {})
-        coverage = dict(dynamic.get("coverage") or {})
-        dynamic_eval = dict(dynamic.get("evaluation") or {})
-        dynamic_summary = dict((dynamic_eval.get("models") or {}).get(summary_left) or {})
-        contrast_id = f"{summary_left}_minus_{summary_right}"
-        dynamic_contrast = dict(
-            (dynamic_eval.get("paired_contrasts") or {}).get(contrast_id) or {}
-        )
-        dynamic_boundary_delta = dict(
-            (dynamic_contrast.get("metrics") or {}).get("boundary_concordance") or {}
-        )
-        reference_attribution = dict(dynamic.get("reference_subset_attribution") or {})
-        score_date_diag = dict(dynamic.get("score_event_date_comparability") or {})
-        score_date_scopes = dict(score_date_diag.get("pair_scopes") or {})
-        cross_scope = dict(score_date_scopes.get("cross_score_event_date_pairs") or {})
-        k1_cross_scope = dict(score_date_scopes.get("k1_cross_score_event_date_pairs") or {})
-        first_reference_k = min((int(value) for value in reference_attribution), default=None)
-        first_reference = (
-            dict(reference_attribution.get(str(first_reference_k)) or {})
-            if first_reference_k is not None
-            else {}
-        )
-        first_reference_event = dict(first_reference.get("event_universe") or {})
-        first_reference_orderable = dict(first_reference.get("orderable_universe") or {})
-
-        def _reference_delta(section: dict, metric: str):
-            contrast = dict(
-                (section.get("paired_contrasts") or {}).get(contrast_id) or {}
-            )
-            return dict((contrast.get("metrics") or {}).get(metric) or {}).get("mean_delta")
-
-        def _score_date_delta(section: dict, metric: str):
-            contrast = dict((section.get("contrasts") or {}).get(contrast_id) or {})
-            return contrast.get(metric)
-
-        rows.extend(
-            [
-                ("Fixed OOS競爭日", fixed_oos.get("competition_date_count")),
-                (f"{summary_left} OOS NDCG", _fmt_simple_metric(fixed_summary.get("ndcg_at_k"))),
-                (f"{summary_left} OOS Boundary", _fmt_simple_metric(fixed_summary.get("boundary_concordance"), percent=True)),
-                *(
-                    [
-                        (
-                            f"Fixed OOS K={first_prefix_k} NDCG Δ ({summary_left}−{summary_right})",
-                            "-" if first_prefix_ndcg_delta.get("mean_delta") is None else f"{float(first_prefix_ndcg_delta.get('mean_delta')):+.4f}",
-                        ),
-                        (
-                            f"Fixed OOS K={first_prefix_k} Boundary Δ ({summary_left}−{summary_right})",
-                            "-" if first_prefix_boundary_delta.get("mean_delta") is None else f"{float(first_prefix_boundary_delta.get('mean_delta')) * 100.0:+.2f}pp",
-                        ),
-                    ]
-                    if first_prefix_k is not None
-                    else []
-                ),
-                ("Dynamic-K common-complete日", coverage.get("full_score_coverage_date_count")),
-                ("Dynamic Target基準", "原始score-event-date（非trade-date剩餘機會）"),
-                (f"{summary_left} Dynamic raw-score Boundary", _fmt_simple_metric(dynamic_summary.get("boundary_concordance"), percent=True)),
-                (
-                    f"{summary_left}−{summary_right} Dynamic raw-score Boundary Δ",
-                    "-"
-                    if dynamic_boundary_delta.get("mean_delta") is None
-                    else f"{float(dynamic_boundary_delta.get('mean_delta')) * 100.0:+.2f}pp",
-                ),
-                *(
-                    [
-                        (
-                            f"Ref K={first_reference_k} Event NDCG Δ ({summary_left}−{summary_right})",
-                            "-"
-                            if _reference_delta(first_reference_event, "ndcg_at_k") is None
-                            else f"{float(_reference_delta(first_reference_event, 'ndcg_at_k')):+.4f}",
-                        ),
-                        (
-                            f"Ref K={first_reference_k} Orderable NDCG Δ ({summary_left}−{summary_right})",
-                            "-"
-                            if _reference_delta(first_reference_orderable, "ndcg_at_k") is None
-                            else f"{float(_reference_delta(first_reference_orderable, 'ndcg_at_k')):+.4f}",
-                        ),
-                    ]
-                    if first_reference_k is not None
-                    else []
-                ),
-                (
-                    f"Cross score-date Pair Δ ({summary_left}−{summary_right})",
-                    "-"
-                    if _score_date_delta(cross_scope, "pairwise_concordance_delta") is None
-                    else f"{float(_score_date_delta(cross_scope, 'pairwise_concordance_delta')) * 100.0:+.2f}pp",
-                ),
-                (
-                    f"K=1 Cross score-date Pair Δ ({summary_left}−{summary_right})",
-                    "-"
-                    if _score_date_delta(k1_cross_scope, "pairwise_concordance_delta") is None
-                    else f"{float(_score_date_delta(k1_cross_scope, 'pairwise_concordance_delta')) * 100.0:+.2f}pp",
-                ),
-            ]
-        )
-        candidate = output_dir / "continuous_ranker_comparison.md"
-        detail_report = candidate if candidate.is_file() else None
     elif command in {"build-point-in-time-scores", "audit-point-in-time-scores"}:
         pit_override_raw = _cli_option_value(args, "--point-in-time-dir-override", None)
         pit_override = (
@@ -1494,22 +1357,6 @@ def _emit_breakout_quality_simple_report(
 ) -> Path:
     filter_id, architecture, profile = _simple_report_context(command, args)
     experiment = get_breakout_quality_experiment_profile(profile)
-    profile_label = profile
-    objective_label = experiment.training_objective
-    if command == "compare-continuous-rankers":
-        output_dir = (
-            resolve_filter_output_dir(PROJECT_ROOT, filter_id=filter_id)
-            / "continuous_ranker_comparison"
-        )
-        comparison_payload = load_json_object_or_none(
-            output_dir / "continuous_ranker_comparison.json"
-        ) or {}
-        configured = dict(comparison_payload.get("comparison_settings") or {})
-        model_ids = tuple(str(value) for value in configured.get("model_ids") or ())
-        if not model_ids:
-            model_ids = get_breakout_quality_continuous_ranker_comparison_settings().model_ids
-        profile_label = " / ".join(model_ids)
-        objective_label = "paired ranking-quality comparison (read-only)"
     detail_rows, detail_report = _simple_report_details(
         command,
         list(args),
@@ -1524,8 +1371,8 @@ def _emit_breakout_quality_simple_report(
         ("狀態", status),
         ("Filter ID", filter_id),
         ("Architecture", architecture),
-        ("Profile", profile_label),
-        ("Objective", objective_label),
+        ("Profile", profile),
+        ("Objective", experiment.training_objective),
         ("耗時", render_elapsed(float(elapsed_sec))),
         *detail_rows,
     ]

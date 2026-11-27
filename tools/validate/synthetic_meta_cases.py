@@ -2426,7 +2426,6 @@ def validate_policy_contract_modules_in_coverage_targets_case(_base_params):
         "config.strategy_compare": {
             "STRATEGY_COMPARE_DEFAULT_PROFILE",
             "STRATEGY_COMPARE_GPU_TRAIN_WORKERS",
-            "STRATEGY_RUNTIME_INTEGRATION",
         },
         "core.strategy_compare_registry": {
             "STRATEGY_COMPARE_SUITES",

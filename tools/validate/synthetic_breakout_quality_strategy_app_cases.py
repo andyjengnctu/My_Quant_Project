@@ -520,9 +520,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         # the four Strategy Compare work types stay [1]..[4] in their submenu.
         and 'render_menu_item(2, get_audit_method("target_ground_truth_strategy_romd").menu_label)' in research_shell_source
         and 'render_menu_item(5, "策略組合比較")' in research_shell_source
-        and 'render_menu_item(7, integration_label)' in research_shell_source
         and 'render_menu_item(8, "查看目前研究狀態與工件")' in research_shell_source
-        and 'elif choice == "7":\n                _strategy_runtime_integration_menu()' in research_shell_source
         and '"OOS + Rolling 一鍵／Consistency"' not in research_shell_source
         and '"OOS + Rolling Multi-seed 一鍵"' not in research_shell_source
         and "_run_strategy_oos_rolling_one_click" not in research_shell_source
@@ -896,9 +894,6 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
     pit_producer_source = read_source_text(
         project_root / "services" / "breakout_quality" / "point_in_time_scores.py"
     )
-    runtime_gate_source = read_source_text(
-        project_root / "services" / "research" / "runtime_integration_gate.py"
-    )
     provider = get_active_model_research_provider()
     check_true(
         "strategy_compare_model_provider_uses_one_scoped_artifact_handler",
@@ -1127,7 +1122,6 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
             for source in (
                 read_source_text(project_root / "core" / "strategy_compare_policy.py"),
                 robustness_source,
-                runtime_gate_source,
             )
         )
     )
@@ -1668,27 +1662,3 @@ def validate_breakout_quality_daily_pit_strategy_runtime_contract_case(_base_par
     summary["stage"] = "selection_strategy_translation"
     summary["future_target_used_for_score_presence"] = False
     return results, summary
-
-
-def validate_breakout_quality_runtime_integration_gate_contract_case(_base_params):
-    """Retired producers stay fail-closed while historical evidence remains readable."""
-    from services.research.strategy_compare_application import (
-        dispatch_runtime_integration_action, runtime_integration_allowed_actions,
-        runtime_integration_execution_enabled,
-    )
-    from services.research.runtime_integration_gate import collect_runtime_integration_status
-    results = []
-    check, check_true = bind_checks(results, "synthetic_breakout_quality", "RETIRED_RUNTIME_GATE")
-    check("retired_gate_never_executes", False, runtime_integration_execution_enabled())
-    check("retired_gate_read_only_actions", ("status", "latest"), runtime_integration_allowed_actions())
-    check("retired_gate_status_is_blocked", "BLOCKED", collect_runtime_integration_status()["status"])
-    for action in ("run", "gate", "promote", "apply", "refresh"):
-        try:
-            dispatch_runtime_integration_action(action)
-        except RuntimeError as exc:
-            denied = "退役" in str(exc)
-        else:
-            denied = False
-        check_true(f"retired_gate_rejects_{action}", denied)
-    return results, {"ticker": "RETIRED_RUNTIME_GATE", "synthetic": True}
-

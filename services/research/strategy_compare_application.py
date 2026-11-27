@@ -2,10 +2,9 @@
 
 User-facing Research entry points call this module rather than importing
 Strategy Compare implementation modules from ``filters/`` directly.  The
-service owns application-level dispatch and the fail-closed boundary for the
-historical runtime-integration gate; scientific settings remain in ``config/``
-and comparison/model/optimizer implementations remain in their canonical
-owners.
+service owns application-level dispatch. Scientific settings remain in
+``config/`` and comparison/model/optimizer implementations remain in their
+canonical owners.
 """
 
 from __future__ import annotations
@@ -23,7 +22,6 @@ from core.strategy_compare_policy import (
     get_strategy_comparison_settings,
     get_strategy_multi_seed_robustness_profiles,
     get_strategy_multi_seed_robustness_settings,
-    get_strategy_runtime_integration_settings,
 )
 from core.console_report import (
     print_artifact_paths,
@@ -43,9 +41,6 @@ from core.report_metrics import (
 )
 from core.runtime_utils import get_taipei_now
 
-
-_RUNTIME_INTEGRATION_MUTATING_ACTIONS = frozenset({"run", "gate", "promote", "apply", "refresh"})
-_RUNTIME_INTEGRATION_READ_ONLY_ACTIONS = frozenset({"status", "show", "latest"})
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -347,45 +342,13 @@ def show_latest_strategy_multi_seed_robustness_report(*, robustness_id: str) -> 
     show_latest_multi_seed_robustness_report(robustness_id=str(robustness_id))
 
 
-def runtime_integration_execution_enabled() -> bool:
-    """The historical promotion producer is retired."""
-    return False
-
-
-def runtime_integration_allowed_actions() -> tuple[str, ...]:
-    """Return the CLI-visible actions allowed by current config and profile reachability."""
-
-    if runtime_integration_execution_enabled():
-        return ("run", "promote", "status", "latest")
-    return ("status", "latest")
-
-
-def dispatch_runtime_integration_action(action: str) -> None:
-    """Retired research can be inspected but cannot execute or publish runtime state."""
-    normalized = str(action).strip().lower()
-    if normalized in _RUNTIME_INTEGRATION_MUTATING_ACTIONS:
-        raise RuntimeError("Runtime Promotion Gate 已退役；只允許 status/latest 歷史唯讀檢視。")
-    if normalized not in _RUNTIME_INTEGRATION_READ_ONLY_ACTIONS:
-        raise ValueError(f"compare integration不支援的命令: {action}")
-    from services.research.runtime_integration_gate import (
-        show_latest_runtime_integration_report, show_runtime_integration_status,
-    )
-    if normalized in {"status", "show"}:
-        show_runtime_integration_status()
-    else:
-        show_latest_runtime_integration_report()
-
-
 __all__ = [
     "build_strategy_oos_rolling_consistency",
-    "dispatch_runtime_integration_action",
     "execute_strategy_comparison",
     "materialize_strategy_oos_rolling_consistency",
     "render_strategy_oos_rolling_consistency",
     "resolve_strategy_comparison_execution",
     "run_strategy_multi_seed_robustness",
-    "runtime_integration_allowed_actions",
-    "runtime_integration_execution_enabled",
     "show_latest_strategy_multi_seed_robustness_report",
     "show_strategy_comparison_profile_status",
     "show_strategy_multi_seed_robustness_status",

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 from typing import Any
 
 import numpy as np
@@ -142,45 +141,4 @@ def daily_top_k_metrics(
     }
 
 
-def exact_random_top_k_baseline(
-    percentile_targets: np.ndarray,
-    raw_targets: np.ndarray,
-    *,
-    top_k: int,
-) -> dict[str, float | None]:
-    """Return the exact expectation under a uniformly random within-day ordering."""
-
-    relevance = np.asarray(percentile_targets, dtype=np.float64)
-    raw = np.asarray(raw_targets, dtype=np.float64)
-    valid = np.isfinite(relevance) & np.isfinite(raw)
-    relevance = relevance[valid]
-    raw = raw[valid]
-    count = int(len(raw))
-    k = int(top_k)
-    if k < 1 or count <= k:
-        return {
-            "ndcg_at_k": None,
-            "top_k_raw_target_mean": None,
-            "candidate_raw_target_mean": None,
-            "top_k_raw_target_lift": None,
-            "oracle_top_k_overlap": None,
-            "boundary_concordance": None,
-            "boundary_raw_target_gap": None,
-        }
-    discounts = 1.0 / np.log2(np.arange(k, dtype=np.float64) + 2.0)
-    ideal_relevance = np.sort(relevance)[::-1][:k]
-    ideal_dcg = float(np.sum(ideal_relevance * discounts))
-    expected_dcg = float(np.mean(relevance) * np.sum(discounts))
-    candidate_mean = float(np.mean(raw))
-    return {
-        "ndcg_at_k": (float(expected_dcg / ideal_dcg) if ideal_dcg > 0.0 else None),
-        "top_k_raw_target_mean": candidate_mean,
-        "candidate_raw_target_mean": candidate_mean,
-        "top_k_raw_target_lift": 0.0,
-        "oracle_top_k_overlap": float(k / count),
-        "boundary_concordance": 0.5,
-        "boundary_raw_target_gap": 0.0,
-    }
-
-
-__all__ = ["daily_top_k_metrics", "exact_random_top_k_baseline"]
+__all__ = ["daily_top_k_metrics"]

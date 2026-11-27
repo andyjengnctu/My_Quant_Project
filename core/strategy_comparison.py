@@ -468,61 +468,6 @@ def validate_strategy_multi_seed_robustness_settings(
 
 
 @dataclass(frozen=True)
-class StrategyRuntimeIntegrationSettings:
-    label: str
-    enabled: bool
-    selection_profile_id: str
-    forward_profile_id: str
-    selection_candidate_arm_id: str
-    forward_candidate_arm_id: str
-    selection_robustness_id: str
-    forward_robustness_id: str
-    output_root: str
-    comparison_anchor_experiment_profile: str
-    require_strict_romd_majority: bool = True
-    max_selector_latency_ms: float = 10000.0
-
-    def as_dict(self) -> dict[str, Any]:
-        return {
-            "label": self.label,
-            "enabled": bool(self.enabled),
-            "selection_profile_id": self.selection_profile_id,
-            "forward_profile_id": self.forward_profile_id,
-            "selection_candidate_arm_id": self.selection_candidate_arm_id,
-            "forward_candidate_arm_id": self.forward_candidate_arm_id,
-            "selection_robustness_id": self.selection_robustness_id,
-            "forward_robustness_id": self.forward_robustness_id,
-            "output_root": self.output_root,
-            "comparison_anchor_experiment_profile": self.comparison_anchor_experiment_profile,
-            "require_strict_romd_majority": bool(self.require_strict_romd_majority),
-            "max_selector_latency_ms": float(self.max_selector_latency_ms),
-        }
-
-
-def validate_strategy_runtime_integration_settings(
-    settings: StrategyRuntimeIntegrationSettings,
-) -> None:
-    for field_name in (
-        "label",
-        "selection_profile_id",
-        "forward_profile_id",
-        "selection_candidate_arm_id",
-        "forward_candidate_arm_id",
-        "selection_robustness_id",
-        "forward_robustness_id",
-    ):
-        if not str(getattr(settings, field_name)).strip():
-            raise ValueError(f"runtime integration {field_name}不可空白")
-    if settings.selection_profile_id == settings.forward_profile_id:
-        raise ValueError("runtime integration Selection/Forward profile不得相同")
-    if settings.selection_robustness_id == settings.forward_robustness_id:
-        raise ValueError("runtime integration Selection/Forward robustness不得相同")
-    _validate_relative_path(settings.output_root, field_name="runtime_integration.output_root")
-    if float(settings.max_selector_latency_ms) <= 0.0:
-        raise ValueError("runtime integration max_selector_latency_ms必須>0")
-
-
-@dataclass(frozen=True)
 class StrategyComparisonContrast:
     contrast_id: str
     enabled: bool
@@ -1589,11 +1534,9 @@ __all__ = [
     "StrategyDLSource",
     "StrategyParameterSource",
     "StrategyPreparationPolicy",
-    "StrategyRuntimeIntegrationSettings",
     "resolve_strategy_comparison_arm_param_policy",
     "strategy_comparison_param_binding_key",
     "strategy_comparison_param_artifact_key",
     "strategy_comparison_fingerprint",
     "validate_strategy_comparison_settings",
-    "validate_strategy_runtime_integration_settings",
 ]

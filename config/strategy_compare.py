@@ -1,6 +1,6 @@
 """Strategy Compare 使用者／執行設定。
 
-本模組只保存可調的 current profile、執行資源、工件保留、診斷與 promotion-gate knobs。
+本模組只保存可調的 current profile、執行資源、工件保留與診斷設定。
 Scientific Compare Suite／arm／contrast／artifact-source catalog 由
 ``core.strategy_compare_registry`` 唯一持有；resolver／validation 由
 ``core.strategy_compare_policy`` 持有。
@@ -63,22 +63,5 @@ STRATEGY_COMPARE_MFE_SAFETY_GEOMETRY_PROFILE_IDS = (
 STRATEGY_COMPARE_MFE_SAFETY_GEOMETRY_PROFILE = STRATEGY_COMPARE_PURE_MFE_REFERENCE_PROFILE
 STRATEGY_COMPARE_MFE_SAFETY_GEOMETRY_PERCENTILE_CUTOFF = 0.50
 STRATEGY_COMPARE_MFE_SAFETY_GEOMETRY_PERCENTILE_METHOD = "average_zero_based"
-
-# Runtime promotion reads existing formal artifacts only; it never trains, replays,
-# or changes the production default automatically.
-STRATEGY_RUNTIME_INTEGRATION = {
-    "label": "Runtime Promotion Gate",
-    "enabled": False,
-    "selection_profile_id": "selection_pit",
-    "forward_profile_id": "forward_oos",
-    "selection_candidate_arm_id": "C42",
-    "forward_candidate_arm_id": "C44",
-    "selection_robustness_id": "selection_pit",
-    "forward_robustness_id": "forward_oos",
-    "output_root": "outputs/strategy_compare/runtime_integration",
-    "comparison_anchor_experiment_profile": "strategy_aligned_no_time_all_event_pairwise",
-    "max_selector_latency_ms": 10000.0,
-    "require_strict_romd_majority": True,
-}
 
 __all__ = [name for name in globals() if name.startswith("STRATEGY_")]

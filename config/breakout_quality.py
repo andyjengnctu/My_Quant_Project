@@ -321,21 +321,6 @@ BREAKOUT_QUALITY_CONTINUOUS_RANKER_REPORT_BOUNDARY_WIDTH = 3
 BREAKOUT_QUALITY_TARGET_COMPARISON_BARRIER_BAND_RETURN = 0.01
 BREAKOUT_QUALITY_STRATEGY_ROTATION = DEFAULT_PORTFOLIO_ROTATION
 
-# Continuous-ranker read-only comparison is config-driven.  The interactive menu must
-# never hard-code experiment/model/arm IDs; it only renders this configured work item.
-BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_ENABLED = True
-BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_MENU_LABEL = "比較設定中的 Continuous Rankers"
-BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_PROFILES = (
-    ("MR-12A", "strategy_aligned_no_time_all_event_mse"),
-    ("MR-12B", "strategy_aligned_no_time_all_event_pairwise"),
-    ("MR-12C", "strategy_aligned_no_time_all_event_listwise"),
-)
-# Dynamic-K candidate universe / daily K source.
-BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_REFERENCE_ARM = "C17"
-# Short console summary compares left minus right.  The pair must be adjacent in the model order above.
-BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_SUMMARY_PAIR = ("MR-12B", "MR-12A")
-# Forward-OOS top-prefix diagnostic. Values are descriptive only and never enter training.
-BREAKOUT_QUALITY_CONTINUOUS_RANKER_COMPARISON_FIXED_K_VALUES = (1, 2, 3, 5, 10)
 # AI: Compatibility projections; current membership is owned by Summary.
 from core.research_summary import get_research_summary_model_profiles
 

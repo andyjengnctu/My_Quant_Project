@@ -224,7 +224,6 @@ from .synthetic_breakout_quality_strategy_app_cases import (
     validate_breakout_quality_single_seed_single_entry_contract_case,
     validate_strategy_compare_config_driven_app_contract_case,
     validate_breakout_quality_daily_pit_strategy_runtime_contract_case,
-    validate_breakout_quality_runtime_integration_gate_contract_case,
 )
 from .synthetic_breakout_quality_strategy_plan_cases import (
     validate_strategy_compare_resolved_plan_transition_contract_case,
@@ -480,7 +479,6 @@ def get_synthetic_validator_entries():
         _entry(validate_strategy_compare_resolved_plan_transition_contract_case, layer="strategy_contract", cost_class="fast"),
         _entry(validate_strategy_compare_settings_validation_stages_contract_case, layer="strategy_contract", cost_class="medium"),
         _entry(validate_breakout_quality_daily_pit_strategy_runtime_contract_case, layer="strategy_contract", cost_class="fast"),
-        _entry(validate_breakout_quality_runtime_integration_gate_contract_case, layer="strategy_contract", cost_class="fast"),
         _entry(validate_breakout_quality_audit_framework_contract_case, layer="strategy_contract", cost_class="heavy"),
         _entry(validate_breakout_quality_runtime_artifact_contract_case, layer="output_contract", cost_class="heavy"),
         _entry(validate_breakout_quality_strategy_comparison_contract_case, layer="strategy_contract", cost_class="fast"),

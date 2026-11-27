@@ -11,6 +11,7 @@
 <!-- implementation-lifecycle -->
 | Identities | Research status | Implementation status |
 | --- | --- | --- |
+| SR-C17, SR-C42, SR-C44 | RETIRED | REMOVED |
 | SR-C193, SR-C194, MR-13DN | RETIRED | REMOVED |
 | SR-C195, SR-C196 | RETIRED | REMOVED |
 | SR-C197, SR-C198, MR-13DO | RETIRED | REMOVED |
@@ -23,6 +24,8 @@
 <!-- /implementation-lifecycle -->
 
 以上原始研究定義、結果、決策、FIT／Replay 版本與必要模型／驗證工件保留；下文歷史實作說明不代表現行可執行能力，ID 不回收。CI／CO 與其他現行模型、一般 EMA／排名／配重、canonical 教師資料及 Oracle 對照繼續由共用 owner 提供；原始 Experiment Log 不回寫。
+
+SR-C17 的舊排名品質比較命令與 Dynamic-K 專屬診斷、SR-C42／SR-C44 的歷史 Runtime Promotion Gate 入口與設定均已移除。歷史結果仍見 Experiment Log 與原工件。現行 Standard SOP、Research → Trading 升格及 Oracle 繼續由各自的正式入口提供，共用 Exact K／R0 求解器亦保留。
 
 Market Set 原 REJECTED 研究決策不變，現行實作生命週期為 RETIRED／REMOVED。專屬資料建置、載入、microbatch、訓練／推論與 CUDA 測試已退出現行程式；歷史 dataset 工件定位、簽章／內容驗證與報表讀取保留。舊 encoder pretraining 的無效傳遞、Positive calibration 的空轉接及未被註冊／呼叫的舊實驗名稱常數同步移除；既有模型／策略清單、合法 FIT／Replay 身分與研究證據不變。
 

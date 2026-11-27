@@ -26,7 +26,6 @@ from core.breakout_quality_policy import (
 )
 from core.strategy_compare_policy import (
     get_strategy_comparison_settings,
-    get_strategy_runtime_integration_settings,
 )
 from core.runtime_utils import get_taipei_now
 from core.file_integrity import atomic_write_json, publish_latest_snapshot, reserve_immutable_output_dir
@@ -667,17 +666,6 @@ def _scenario_payloads(
                 "direct_selection_delta_r": float(direct_r[group_id]),
             }
     return output
-
-
-def _report_reference_arm_id(settings: StrategyComparisonSettings) -> str | None:
-    integration = get_strategy_runtime_integration_settings()
-    if settings.profile_id == integration.selection_profile_id:
-        arm_id = integration.selection_candidate_arm_id
-    elif settings.profile_id == integration.forward_profile_id:
-        arm_id = integration.forward_candidate_arm_id
-    else:
-        return None
-    return arm_id if arm_id in {arm.arm_id for arm in settings.enabled_arms} else None
 
 
 def _value_with_signal(text: str, signal: str, *, target: str) -> str:

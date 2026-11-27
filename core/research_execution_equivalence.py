@@ -155,7 +155,12 @@ _RESEARCH_SELECTION_ONLY_CONFIG_BASELINE_SHA256 = (
 # AI: Frozen 6d565314 config minus 19 unused Market Set/pretraining literals
 # reproduces this complete AST; active declarations and numerical evidence
 # remain identical. See retirement_followup_20261128/config_ast_equivalence.json.
-_SUMMARY_MEMBERSHIP_CONFIG_AST_SHA256 = "e6283803efda637063c8f88130ce4a0143dda30cf26c440c8948b2ec88998f6b"
+_SUMMARY_MEMBERSHIP_CONFIG_AST_SHAS = (
+    "e6283803efda637063c8f88130ce4a0143dda30cf26c440c8948b2ec88998f6b",
+    # AI: Only the six C17 comparison declarations were removed from 64f9cc62.
+    # The retained config AST is identical. See pre_c193_retirement_20261128/source_equivalence.json.
+    "773792542f547d63fa38a8c344b6afb3232e23aba164cd90063a4f99d9d21036",
+)
 _SUMMARY_MEMBERSHIP_CONFIG_BASELINE_SHA256 = _RESEARCH_SELECTION_ONLY_CONFIG_BASELINE_SHA256
 _SUMMARY_MEMBERSHIP_POLICY_AST_SHA256 = "200baddc2fedeb3f88cf5c755c43891e5302a3f2e5ed4f86419daf69e961b7e2"
 _SUMMARY_MEMBERSHIP_POLICY_BASELINE_SHA256 = "8c6a1d59c13d87efca83b10587b0d23027f36af9c2403b9ff165fcd1e2fd943f"
@@ -228,7 +233,7 @@ def _certified_model_selection_only_config_sha256(relative: str, actual: str) ->
         return actual
     selection_free_ast = ast.dump(canonical_ast_schema(tree), annotate_fields=True, include_attributes=False)
     syntax_sha = sha256(selection_free_ast.encode("utf-8")).hexdigest()
-    if syntax_sha == _SUMMARY_MEMBERSHIP_CONFIG_AST_SHA256:
+    if syntax_sha in _SUMMARY_MEMBERSHIP_CONFIG_AST_SHAS:
         return _SUMMARY_MEMBERSHIP_CONFIG_BASELINE_SHA256
     if syntax_sha in (
         _RESEARCH_SELECTION_ONLY_CONFIG_AST_SHA256,

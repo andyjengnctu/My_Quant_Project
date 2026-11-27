@@ -151,6 +151,10 @@ _RETIRED_MODEL_SPEC_SOURCES = {
     'core/breakout_quality_policy.py': (
         'ea0eaf68463884eb8b4ff8ce02da4ce0b11ac0f3e50ed21b287d1cdfe8f2db7a',
         '5accc376790cedd0a46c132030489f45b98dd0c7e820a8d50e88b89291434b29',
+        # AI: Removed the C17 comparison settings class/getter only; all
+        # remaining policy AST nodes match 64f9cc62, in either encoding.
+        '2c318484f899fc642d9b2d6c058cfb311f1e602890a3a1664b35e9ab31167a59',
+        '375e982e105450849056e79d7d9dc69d98f5f251f628a259a552e5583a51eb72',
         '8c6a1d59c13d87efca83b10587b0d23027f36af9c2403b9ff165fcd1e2fd943f',
     ),
 }
@@ -269,8 +273,8 @@ def _oracle_daily_source_fingerprints(
     def project_source(relative: str, physical_sha: str) -> str:
         retired = _RETIRED_MODEL_SPEC_SOURCES.get(relative)
         if ((attested or pre_p20_attested) and retired
-                and physical_sha in retired[:2]):
-            return retired[2]
+                and physical_sha in retired[:-1]):
+            return retired[-1]
         if current_root:
             # Independently byte-pinned, model-registration-only revisions
             # do not alter any existing Oracle producer. Other edits remain
