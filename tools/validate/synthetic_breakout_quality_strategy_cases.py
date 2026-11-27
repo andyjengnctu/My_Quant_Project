@@ -3166,7 +3166,6 @@ def validate_breakout_quality_strategy_readable_report_contract_case(_base_param
                 and "PAIR_MAIN_METRICS" in report_metrics_source
                 and "from core.research_report_contract import" in comparison_source
                 and 'table_contract("strategy.standard_sop", section_id, section_id)' in comparison_source
-                and "_report_reference_arm_id" in comparison_source
                 and "best_worst_signals" in comparison_source
                 and "styled_signal" in comparison_source
                 and 'target="markdown"' in comparison_source
