@@ -5560,3 +5560,54 @@ C201 的替代贏家總 R 略高，仍因交易金額及投組路徑等差異形
 **正式證據。** 策略四 Seed：`outputs/strategy_compare/robustness/broker_cash_dl_conversion/rolling_2021_forward/dadf43c437332fd6/` 的 `robustness_summary.json`、`seed_results.csv`、`manifest.json`、`scientific_observations_manifest.json` 與 `attribution_source/`。Rolling：原 `broker_cash_dl_conversion/rolling_2021_forward/latest/strategy_comparison.json`，完整 run 名為 `20261126_204244_C96-C97-C98-C103-C106-C107-C109-C189-C190-C111-C112-C118-C123-C124-C125-C126-C147-C148-C153-C154-C155-C156-C157-C158-C179-C181-C182-C183-C186-C168-C173-C172-C169-C201-C202_82e47d38cbd6`。模型：原 `standard_model_comparison/rolling_oos_robustness/standard_model_comparison.json`。數值、逐 Seed 差、30 fold 配重診斷、贏家清單、來源 SHA256 與限制保存於 `outputs/filters/breakout_quality/breakout_quality_v1/research_diagnostics/dq_signal_frequency_results_20261127.json`；同目錄 `dq_summary_snapshot_20261127.json` 為原 Summary 唯讀入口的本次快照。
 
 **2026-11-27 後續退役決策。** 使用者在上述結果登錄後指定退役 C201／C202。兩列與唯一依賴模型 MR-13DQ 退出現行 Research Summary、模型比較／驗證、策略 Forward／Rolling／Robustness 與 Target binding，相關 contrasts 由共用 roster 停用；Training Model 選回原 CO，保留 C123／C124、C106 與其他現行對照。原始績效、研究定義、FIT／Replay 版本、編號及工件保留，前述「尚未退役」為當次結果登錄時的決策，不回寫。未執行新市場比較，未實作或分配同日候選分數置換實驗身分。
+
+## 2026-11-27 — HV1／C205／C206：持倉續抱／提前出場完成四 Seed，NO_ADVANCEMENT
+
+**設計與授權。** 使用者指定移除一次性分數置換 Audit，實作持倉續抱／出場模型，並明確要求工程驗證、Rolling、四 Seed Robustness、Summary 全部在本機執行。新增 C205 Exact、C206 Direct；分別以原 C123／C124 為控制，保留 C106。進場仍為 CO＋P16，只新增 HV1 請求的提前出場，沒有另寫策略比較引擎。
+
+**固定科學契約。** Target 為自然 P16 完整交易 NetPnL 減去下一可成交出場的 NetPnL，再除原始風險金額；由 canonical trade-path observer／execute_bar_step 產生。輸入為已完成個股＋0050 各 300 日 OHLCV 及 6 個已知持倉狀態，小型 CNN＋狀態 head，episode 等權 MSE、每 epoch 每 episode 均勻抽一個持倉日。逐年以前一年 validation 選 epoch，再 refit 全部合法成熟 episode；FIT 正規化、完整 episode purge、成熟截止、停牌／跌停及原保護出場優先均維持既定契約。預測 ΔR＜0 才請求下一 session 出場；沒有按 OOS 調閾值、增設最短持倉期或改進場。
+
+**工程驗證。** 15 項持倉任務測試通過；完整工程檢查 10,384 項，0 失敗、30 skip，Oracle build VERIFIED。獨立 canonical parity 的 61 個觀察與修改前一致。修正 Windows 短暫檔案鎖的發布重試，以及舊快取替代路徑忽略持倉模型換版的漏洞；一般、legacy projection 與 archived fallback 都必須核對模型來源，決策 sidecar 也必須綁定相同模型。實際計畫確認 C205／C206 RUN，C106／C123／C124 REUSE。中途失敗或來源不一致的工件不列為最終證據；最終 Rolling 兩組均確實重播。寫入修正前後 Seed42 六折數學權重逐值相同。
+
+**正式執行與完整性。** 沿用 Research Rolling、Robustness、Summary 原入口；期間 2021-01-01～2026-03-02。Robustness Seeds 固定為 693545351、2014432738、104504529、762252050；35 組 × 4 Seed＝140 單元，原 132 單元重用、新增 8 單元實際回放。每 Seed 的 Exact／Direct 共用 HV1，無跨 Seed fallback。共完成 Seed42＋四 Seed 的 30 個年度模型；8 份新策略決策紀錄均核對模型 SHA、Seed、FIT 來源及 information_date＜execution_date。原 33 組 Rolling、132 個 Robustness 單元的 RoMD／MDD／總報酬／交易數／曝險均逐值一致。
+
+| 策略 | Seed42 RoMD | 四 Seed 平均 RoMD | 四 Seed 平均 MDD | 四 Seed 平均總報酬 |
+|---|---:|---:|---:|---:|
+| C106：CI Exact | 8.039325 | 12.170372 | 13.222912% | 157.112029% |
+| C123：原 CO Exact | 10.882721 | 10.812374 | 13.750995% | 146.876071% |
+| C205：CO＋HV1 Exact | -0.995540 | -0.990579 | 68.898968% | -68.250359% |
+| C124：原 CO Direct | 3.705003 | 4.660625 | 18.557436% | 79.411014% |
+| C206：CO＋HV1 Direct | -0.994926 | -0.990037 | 73.078611% | -72.351054% |
+
+**同 Seed 配對。** 下列差值明確為實驗減控制；MDD／報酬差為百分點。RoMD 是逐 Seed 比率的平均，不是平均報酬除以平均 MDD。C205−C123、C206−C124 是只增加 HV1 的主要控制；C205−C106 是不同進場模型的較強策略參照。
+
+| 配對 | ΔRoMD 均值 | ΔRoMD 中位數 | 勝數 | 平均 ΔMDD | 平均 Δ總報酬 |
+|---|---:|---:|---:|---:|---:|
+| C205-C123 | -11.802953 | -10.814372 | 0/4 | +55.147973 | -215.126430 |
+| C206-C124 | -5.650662 | -5.312117 | 0/4 | +54.521175 | -151.762068 |
+| C205-C106 | -13.160951 | -12.812137 | 0/4 | +55.676056 | -225.362388 |
+
+**持倉與交易行為。**
+
+| 策略 | 四 Seed 平均交易數 | 各 Seed 持倉中位數（曆日） | 平均模型提前出場占已結算交易 | 平均決策請求出場比例 |
+|---|---:|---|---:|---:|
+| C123 | 308.50 | 31.5／37／34／35.5 | 0.0000% | — |
+| C205 | 2076.75 | 1／1／1／1 | 97.2391% | 94.0414% |
+| C124 | 357.00 | 33／39／30／33.5 | 0.0000% | — |
+| C206 | 2301.25 | 1／1／1／1 | 97.9646% | 95.2986% |
+
+Seed42 的 Exact 持倉中位數由 28 日降至 1 日，Direct 由 29 日降至 1 日。以 canonical 實際進場 ticker／日期／類型／occurrence 配對，Exact 的原 CO 前十分位贏家有 4 筆同進場交易，其原合計 51.773877R 降至 2.681714R，4 筆皆由模型提前賣出；Direct 有 2 筆，7.257977R 降至 0.308881R。其餘沒有同進場的交易不能直接當成出場模型造成的損失；出場也會改變後續資金、候選及部位大小。四 Seed 的同一歸因口徑逐筆摘要保存在 result_review.json，這是描述性歸因，不是隔離出場效果的因果估計。Target 只評估該筆持倉的退出與自然續抱，並未包含釋放資金後重新進場的機會與成本；這是本設計的限制，尚未藉由另外的對照拆分影響。
+
+**訓練指標與策略失敗的區別。** 30 折內層 validation 中，DL 的 MSE 有 24 折小於同切分 ridge，但這沒有轉成可採納的策略改善。Seed42 第一折 final refit 為 7,288 episodes／323,057 states；第一個可觀察持倉狀態平均 Target 為 +0.263206R，全部持倉日按 episode 等權後為 −0.187402R。模型偏向提早出場，交易次數增加、趨勢贏家被截短；上述分布只是解釋線索，尚未分離樣本權重、狀態分布、模型容量或目標選擇各自的原因。簡單 ridge 未做新的策略控制列，不能由 MSE 勝數宣稱 DL 已證明必要。
+
+**決策。** C205／C206 均未通過事前「配對 ΔRoMD 均值／中位數為正、至少 3/4 改善、平均 MDD 不增加」門檻，登錄 **NO_ADVANCEMENT**；這一版 HV1 不晉級，維持事前設計與失敗結果，不在本輪追加閾值搜尋。保留研究結果與現行比較列供檢視，未升格 Trading，未自行退役新編號。2021 起為迭代研究 OOS，四 Seed 共用市場歷史；本輪不等於否定所有持倉模型。C205／C206 的 Oracle 仍為 CONTRACT_UNRESOLVED，不能借用進場 CO Oracle。
+
+**Summary。** 已實際執行原 Summary 並依策略編號排序。原 RankDL／ρ 代表進場 CO，HV1 validation 另存年度模型工件，Summary 有註記。原 Summary 的五份加權口徑包含 Seed42；上表只列四個 Robustness Seed，兩者不可混用。
+
+**最終證據。**
+
+- Rolling：`outputs/strategy_compare/broker_cash_dl_conversion/rolling_2021_forward/runs/20261127_163127_C96-C97-C98-C103-C106-C107-C109-C189-C190-C111-C112-C118-C123-C124-C125-C126-C147-C148-C153-C154-C155-C156-C157-C158-C179-C181-C182-C183-C186-C168-C173-C172-C169-C205-C206_fb1dfcdef8f8/strategy_comparison.json` 與同名 Markdown。
+- Robustness：`outputs/strategy_compare/robustness/broker_cash_dl_conversion/rolling_2021_forward/42a8cc6580125e1b/robustness_summary.json`、同目錄 `seed_results.csv`／`robustness_report.md`／`attribution_source/`。
+- Summary：`outputs/validation/holding_value_20261127/summary.txt`／`summary.json`。
+- 核對：`outputs/validation/holding_value_20261127/result_review.json` 保存逐 Seed 配對、交易歸因、模型 validation、來源 SHA256 與不變性驗證；同目錄 `reuse_guard_check.json`、`io_retry_weight_parity.json`、`research_final.log`、`run_bundle_7.log` 保存工程與執行證據。
+- Audit：AUD-co-score-permutation 入口與專屬執行程式已移除；C203／C204 歷史編號及未完成工件保留，不將部分置換結果列為實驗結論。

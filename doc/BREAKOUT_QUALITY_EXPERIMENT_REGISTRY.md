@@ -1100,12 +1100,12 @@ The canonical `config/research_summary.py` roster alone determines current Model
 
 | 身分 | 定義 | 狀態 |
 |---|---|---|
-| HV1 | 獨立持倉續抱價值 CNN；不是 CO 排名 head，不產生 ticker/date 選股分數 | REGISTERED / FIT v1 / RESEARCH_ONLY |
-| C205 | 原 C123 CO＋P16 Exact，加 HV1 提前出場 | REGISTERED / REPLAY v1 |
-| C206 | 原 C124 CO＋P16 Direct，加同一 HV1 提前出場 | REGISTERED / REPLAY v1 |
+| HV1 | 獨立持倉續抱價值 CNN；不是 CO 排名 head，不產生 ticker/date 選股分數 | COMPLETED / FIT v1 / NO_ADVANCEMENT / RESEARCH_ONLY |
+| C205 | 原 C123 CO＋P16 Exact，加 HV1 提前出場 | COMPLETED / REPLAY v1 / NO_ADVANCEMENT |
+| C206 | 原 C124 CO＋P16 Direct，加同一 HV1 提前出場 | COMPLETED / REPLAY v1 / NO_ADVANCEMENT |
 
 - 唯一處置：原進場分數、P16、部位規模、Exact／Direct、停損、自然出場、費稅不變，只增加持倉模型請求的提前出場。保留 C123／C124 配對控制及 C106 參照，不新增六組控制。
-- 資料：同 seed canonical Optimizer 歷史 Min＋P16；每個原始 setup 的第一次合法成交路徑，收集每天收盤後的持倉狀態。經 canonical trade-path observer 取得，沒有另造回測引擎。無自然完成或任一反事實出場仍未成交的 episode 不可 FIT；沒有期末強平標籤。
+- 資料：同 seed canonical Optimizer 歷史 Min＋P16；每個原始 setup 的第一次合法成交路徑，收集每天收盤後的持倉狀態。經 canonical trade-path observer 取得，沒有另造回測引擎。未自然完成的 episode 或反事實出場仍未成交的持倉狀態不納入 FIT；沒有期末強平標籤。
 - Target：原 P16 自然出場完整 NetPnL 減去當日收盤後提出賣出、下一可成交時點執行的 NetPnL，再除原始交易 risk money，得到 continuation ΔR。已實現部分損益相消；正值偏續抱、預測負值才提前出場，閾值固定 0。不是事後最高價或最佳賣點。
 - Input：canonical adjusted 個股＋0050 各 300 根已完成日 OHLCV，沿用原正規化；另 6 個當時已知狀態：log1p(持倉 session)、未實現價差/R、收盤距 trailing stop/R、持倉最高價距 entry/R、已半倉旗標、剩餘股數比例。保留 300 日暖機；缺足夠行情不預測而沿原規則，不補未來資料。尚無法人、週月 K、EMA 或 Positive gate。
 - FIT：Conv1d(10→16,k7)→ELU→Conv1d(16→32,k5)→ELU→時間均值，串接 6 狀態後 MLP32→1。episode 等權 MSE；每 epoch 對每 episode 均勻抽一個持倉日，為該 objective 的無偏 SGD，沒有刪除其他日。Adam 0.001，batch512，最多12 epoch、patience3。各年度只用以前自然成熟 episode；前一曆年為 validation，跨 validation 起點的 episode 從內層 train/validation purge；按 validation MSE 選 epoch 後以全部該年度以前成熟 episode refit。normalization 只在各自 FIT subset 計算。
@@ -1113,3 +1113,6 @@ The canonical `config/research_summary.py` roster alone determines current Model
 - 執行：收盤已知狀態、次 session 開盤；跌停／零量的賣出請求持續，原 pending stop／half-exit 優先；實際成交與費稅完全經 canonical execute_bar_step。模型每 seed／每 fold 的 weights、FIT cutoff、自然 maturity、資料前綴與 teacher／程式 SHA、validation、決策 sidecar 皆保留；Exact／Direct 共用 FIT，禁止跨 seed fallback。
 - Research：Strategy preparation 的持倉模型依賴與既有 Rolling／Robustness 正式 replay／paired contrasts 整合；七項 Model Research 選單不新增專用入口。原 RankDL／ρ 仍代表進場 CO，HV1 的持倉 validation 獨立保存並在 Summary 註明。原 CO 的 entry-rank Oracle 不能代表持倉決策；C205／C206 明列 CONTRACT_UNRESOLVED，沒有假造出場 Oracle 或 stock-day rho。
 - 判定：2021-01-01～2026-03-02 為迭代研究 OOS；四 seed 對控制的 ΔRoMD mean／median 均正、至少3/4改善、平均 MDD 不增加，並檢查總報酬與大贏家被提前賣掉的代價。未達成不晉級；不自動取代正式 Trading 模型。市場結果另據實登錄。
+
+
+**2026-11-27 完成結果。** C205／C206 的 Rolling、四 Seed Robustness、Summary 皆已完成；兩組未通過事前晉級門檻，登錄 NO_ADVANCEMENT，維持 Research-only。完整數值、工程驗證及最終工件見 Experiment Log 同日 HV1 結果節；未將中止或來源不一致的中間工件算入正式結果。
