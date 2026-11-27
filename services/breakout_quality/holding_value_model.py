@@ -17,7 +17,7 @@ import numpy as np
 import pandas as pd
 
 from core.dataset_profiles import build_dataset_generation_identity
-from core.file_integrity import canonical_json_sha256, compute_observed_file_sha256
+from core.file_integrity import atomic_replace_with_retry, canonical_json_sha256, compute_observed_file_sha256
 from core.position_exit_policy import bind_position_exit_provider, position_exit_spec
 from filters.breakout_quality.holding_value import (
     CONTRACT, MODEL_ID, HoldingFeatures, build_network, build_ticker_holding_rows,
@@ -74,7 +74,7 @@ def _write_json(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False), encoding="utf-8")
-    os.replace(temporary, path)
+    atomic_replace_with_retry(temporary, path)
 
 
 def inspect_holding_model(root, *, seed, config):
@@ -111,7 +111,7 @@ def _ticker_worker(arguments):
     temporary = target.with_suffix(".tmp.parquet")
     pd.DataFrame(records, columns=["ticker", "information_date", "episode", "entry_date", "maturity_date",
                                    "natural_net_pnl", "early_net_pnl", "target", "state"]).to_parquet(temporary, index=False)
-    os.replace(temporary, target)
+    atomic_replace_with_retry(temporary, target)
     return {"ticker": ticker, "rows": len(records), "sha256": compute_observed_file_sha256(target)}
 
 
@@ -278,7 +278,7 @@ def _fit_fold(rows, features, *, start, end, seed, directory, fit_identity):
     torch.save({"state_dict": {k: v.cpu() for k, v in model.state_dict().items()},
                 "state_mean": torch.tensor(final_norm[0]), "state_scale": torch.tensor(final_norm[1]),
                 "target_scale": float(final_norm[2]), "seed": seed, "fit_identity": fit_identity}, temporary)
-    os.replace(temporary, weights_path)
+    atomic_replace_with_retry(temporary, weights_path)
     result = {"fit_identity": fit_identity, "start": str(start.date()), "end": str(end.date()),
               "fit_max_maturity": str(rows.iloc[final].maturity_date.max()),
               "train_states": len(train), "validation_states": len(validation), "refit_states": len(final),

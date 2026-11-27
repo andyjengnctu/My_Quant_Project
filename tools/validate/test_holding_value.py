@@ -28,6 +28,26 @@ def position_fixture():
 
 
 class HoldingValueTests(TestCase):
+    def test_artifact_publication_recovers_from_transient_windows_lock(self):
+        import json
+        import os
+        from services.breakout_quality.holding_value_model import _write_json
+        original_replace = os.replace
+        attempts = []
+        def temporarily_locked(source, target):
+            attempts.append((source, target))
+            if len(attempts) <= 2:
+                raise PermissionError("temporary scanner lock")
+            return original_replace(source, target)
+        with TemporaryDirectory() as folder:
+            path = Path(folder) / "receipt.json"
+            _write_json(path, {"completed": 1})
+            with patch("core.file_integrity.os.replace", side_effect=temporarily_locked), patch("core.file_integrity.time.sleep"):
+                _write_json(path, {"completed": 2})
+            self.assertEqual(len(attempts), 3)
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8")), {"completed": 2})
+            self.assertFalse(path.with_suffix(".json.tmp").exists())
+
     def test_counterfactual_uses_canonical_fees_and_next_open(self):
         days, frame, params, pos = position_fixture()
         frame.loc[days[302], ["Open", "High", "Low", "Close"]] = [103., 105., 102., 104.]
