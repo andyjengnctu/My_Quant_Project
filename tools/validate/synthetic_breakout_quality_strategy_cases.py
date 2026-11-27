@@ -122,10 +122,9 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
     composition_results, _ = run_unittest_capability_cases(
         case_id, "rank_score_composition", [RankScoreCompositionTests])
     results.extend(composition_results)
-    from .test_candidate_score_permutation import CandidateScorePermutationTests, FixedPermutationObservationTests
-    permutation_results, _ = run_unittest_capability_cases(
-        case_id, "candidate_score_permutation", [CandidateScorePermutationTests, FixedPermutationObservationTests])
-    results.extend(permutation_results)
+    from .test_holding_value import HoldingValueTests
+    holding_results, _ = run_unittest_capability_cases(case_id, "holding_value", [HoldingValueTests])
+    results.extend(holding_results)
     check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
 
     # Summary needs dormant selector witnesses as well as enabled Replay arms.

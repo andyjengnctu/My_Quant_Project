@@ -319,6 +319,10 @@ def _pair_cache_fingerprint_from_payload(
             )
     positive_dl_id = str(dict(on_arm_payload.get("dl_runtime_options") or {}).get("positive_dl_id") or "").strip()
     positive_dl_payload = dict(dl_sources.get(positive_dl_id) or {})
+    position_spec = dict(on_arm_payload.get("dl_runtime_options") or {}).get("position_exit_model")
+    if position_spec:
+        from config.research import RESEARCH_SINGLE_SEED
+        artifact_keys.append(f"position_model:{position_spec['model_id']}:{RESEARCH_SINGLE_SEED}")
     if positive_dl_id:
         if not positive_dl_payload or positive_dl_id == dl_id:
             raise ValueError("Invalid two-stage Positive DL source in replay fingerprint")
@@ -474,6 +478,8 @@ def _pair_cache_required_files(
         pair_dir / "no_filter_trades.csv",
         pair_dir / runtime_spec["active_trades_filename"],
     ]
+    if dict(on_arm.dl_runtime_options or {}).get("position_exit_model"):
+        required.append(pair_dir / "position_model_decisions.json")
     if runtime_spec["comparison_mode"] == COMPARISON_MODE_SCORE_RANKING:
         required.extend([
             pair_dir / "score_ranking_equity.csv",

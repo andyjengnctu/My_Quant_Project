@@ -454,6 +454,7 @@ def simulate_realized_trade_path_label(
     decision_pos: int | None = None,
     starting_signal_state: dict[str, Any] | None = None,
     prepared_inputs: PreparedTradePathInputs | None = None,
+    holding_state_observer: Callable[..., None] | None = None,
 ) -> TradePathLabelResult:
     """A2 canonical execution path; an optional ex-post deadline is isolated.
 
@@ -580,6 +581,14 @@ def simulate_realized_trade_path_label(
                 pd.Timestamp(dates[current_pos]).normalize()
             )
         if int(position.get("qty", 0) or 0) > 0:
+            if holding_state_observer is not None:
+                # Observe the state AFTER the previous completed bar, before
+                # this session's transition. Never share a mutable position.
+                holding_state_observer(
+                    position=deepcopy(position), information_pos=current_pos - 1,
+                    params=params, completed_atr=atr[current_pos - 1],
+                    completed_high=high_values[current_pos - 1],
+                )
             position, _freed_cash, _pnl, events = execute_bar_step(
                 position,
                 atr[current_pos - 1],

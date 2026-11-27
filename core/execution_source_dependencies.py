@@ -33,8 +33,6 @@ _TRADE_NUMERICS = ('core/position_step.py',
 
 _PORTFOLIO_CANDIDATES = ('core/portfolio_engine.py',
  'core/portfolio_day_candidates.py',
- 'core/candidate_score_permutation.py',
- 'core/candidate_score_permutation_contract.py',
  'core/portfolio_candidate_admission.py',
  'core/portfolio_candidates.py',
  'core/portfolio_day_context.py',
@@ -120,6 +118,7 @@ _PARAMETER_RUNTIME = (
     "core/file_integrity.py", "core/scientific_runtime_context.py",
 )
 _PORTFOLIO_SUPPORT = (
+    "core/position_exit_policy.py",
     "core/breakout_reentry.py", "core/breakout_quality_ranking_context.py",
     "core/positive_score_admission.py", "core/positive_netpnl_contract.py",
     "core/config.py", "core/training_policy.py", "config/training_policy.py",

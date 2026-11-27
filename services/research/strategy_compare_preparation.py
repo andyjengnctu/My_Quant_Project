@@ -54,6 +54,10 @@ def _execute_preparation_action(
     comparison_start_date: str | None = None,
     comparison_end_date: str | None = None,
 ) -> None:
+    if action.builder_type == "position_value_training":
+        from services.research.position_model_dependency import execute_position_model_action
+        execute_position_model_action(root=root, settings=settings, action=action)
+        return
     if action.builder_type == "forward_oos_scores":
         _kind, dl_id, _name = action.artifact_key.split(":", 2)
         source = settings.dl_sources[dl_id]

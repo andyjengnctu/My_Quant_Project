@@ -60,13 +60,6 @@ class AuditMethodEntry:
 
 
 AUDIT_METHOD_CATALOG: dict[str, AuditMethodEntry] = {
-    "candidate_score_permutation": AuditMethodEntry(
-        method_id="candidate_score_permutation",
-        menu_label="CO 同日候選分數置換",
-        description="一次性排名貢獻診斷；只讀既有模型與參數，回放結果隔離於 Audit",
-        order=50,
-        one_time_only=True,
-    ),
     "opportunity_selection_attribution": AuditMethodEntry(
         method_id="opportunity_selection_attribution",
         menu_label="Opportunity／Selection Attribution",
@@ -117,17 +110,6 @@ def get_audit_method(method_id: str) -> AuditMethodEntry:
 
 
 AUDIT_CATALOG: dict[str, AuditCatalogEntry] = {
-    "candidate_score_permutation": AuditCatalogEntry(
-        audit_type="candidate_score_permutation",
-        domain="breakout_quality",
-        module="services.audit.candidate_score_permutation",
-        mode="formal",
-        description="One-time same-day score randomization; canonical replay, no upstream production",
-        read_only=True,
-        method_id="candidate_score_permutation",
-        status_function="collect_status",
-        run_function="run_formal_audit",
-    ),
     # Only genuinely supported diagnostic commands belong here.  Canonical
     # Dataset/Target/PIT builders live in services/ and are not research Audits.
     "point_in_time_scores": AuditCatalogEntry(

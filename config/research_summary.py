@@ -425,13 +425,13 @@ RESEARCH_SUMMARY_ROWS = (
      'bindings': ({'arm_id': 'C103',
                    'rank_model': ('MR-13CG',
                                   'daily_universal_shared_full_d40_safety_hs_conditional_mfe_full_list_ndcg_pairwise')},)},
-    # Diagnostic only: historical replay IDs are reserved; execution lives in
-    # the one-time Audit, never in the formal comparison/model/Summary roster.
-    {'enabled': False, 'oracle_contract_status': 'CONTRACT_UNRESOLVED',
-     'oracle_contract_reason': 'Randomized score assignment has no independent fitted Target/rho or approved perfect-score replay; original CO Oracle is not inherited.',
-     'bindings': tuple({'arm_id': arm_id, 'rank_model': (
-        'MR-13CO', 'daily_universal_formal_mintrade_fullcycle_netpnl_per_seed_full_list_ndcg_pairwise',
-    )} for arm_id in ('C203', 'C204'))},
+    # Independent position decisions have no approved holding-policy Oracle.
+    {"display_target": "Formal MinTrade Full-cycle NetPnL",
+     "oracle_contract_status": "CONTRACT_UNRESOLVED",
+     "oracle_contract_reason": "HV1 conditions on actual holding state; entry-rank CO Oracle cannot represent a discretionary exit policy.",
+     "bindings": tuple({"arm_id": arm_id, "rank_model": (
+         "MR-13CO", "daily_universal_formal_mintrade_fullcycle_netpnl_per_seed_full_list_ndcg_pairwise"),
+         "exit_model": "HV1"} for arm_id in ("C205", "C206"))},
     # AI: 2026-11-26 user-directed retirement; preserve contracts and result evidence.
     {'enabled': False, 'oracle_contract_status': 'CONTRACT_UNRESOLVED',
      'oracle_contract_reason': 'Common-universe percentile/composite score replay has no approved matching perfect-score contract or parity.',

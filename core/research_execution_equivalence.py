@@ -1380,24 +1380,17 @@ _REVIEWED_SOURCE_INVENTORIES["oracle_daily_provider"]["current"][
      "4e8aec6100e7d73ed1cda98a448ea43f968166097f1ab343da2267dec8c5af64")
 
 
-# AI: Optional decision-local score randomization is inactive for all original
-# replay/Oracle paths. Independently executed frozen/current probes preserve 61
-# complete observations (scores, selections, orders, equity, trades and metrics),
-# outputs/validation/score_permutation_20261127/{baseline,current}_receipt.json.
-# Both the caller and the new helper are in the complete dependency certificate:
-# an unknown helper/caller edit cannot retain an earlier observation identity.
-# The new treatment additionally binds its options and unmapped source closure
-# in its 99-repeat receipt; no randomized observation can reuse an original arm.
-for _scope, _graph_sha in (
-    ("portfolio_candidates", "b442d8c46920d4ed8cab412534d181820461a28230a5b4260ecb267d7dbfcec7"),
-    ("replay_numerics", "30e78e201153bfdd31d793aaa93d5abeec6c24a6e27c2e00db1d1db0a59804cd"),
-):
-    _REVIEWED_SOURCE_INVENTORIES[_scope]["current"].update({
-        "core/portfolio_day_candidates.py": "f3c5dd74844a293696b27c3c23577aa35b6aeb8268ea504f826afff9cbeb5ecf",
-        "core/candidate_score_permutation.py": "55eec9a553e4dc6ace62b88483b02b5079b0445d993fa26af1b989c71b0e8566",
-        "core/candidate_score_permutation_contract.py": "860204bb21330224a23d6fc7e24a48ab43ef44d5a893e4f3046a80f56e7fdcf1",
-        "@execution_sources": _graph_sha,
-    })
+# AI: 2026-11-27 independent frozen/current probes preserve all 61 original
+# score/selection/order/equity/trade observations after removing the retired
+# permutation hook and adding an optional completed-bar holding observer.
+# Evidence: outputs/validation/holding_value_20261127/*_receipt.json.
+# This exact full closure is a no-provider equivalence proof; HV1 observations
+# separately bind the position-model manifest/weights, seed and runtime option.
+for _scope, _graph_sha in (('portfolio_candidates', '3e82b0fdd2d910fa658c62c74ff1717be0be6360198360b2e954e5f452e1305e'), ('replay_numerics', '59e7cd37ef27d7bd7b1abe827715208509453e271630da9fad08f5829d787683')):
+    _REVIEWED_SOURCE_INVENTORIES[_scope]["current"].update({'core/portfolio_day_candidates.py': '2052e3d64568b26721483e4b7855b37cc5d8f484b0235a7c7658b97e517a3d37', 'core/portfolio_exits.py': '9103c6f0cb28ce050f1abb36212144f55b49fecd48d1288bc63e0c2bf9db594c', 'core/position_exit_policy.py': 'cc6334b97f354a973c45df579db641d33cb39fc340e7563adebcd603f539d735'})
+    _REVIEWED_SOURCE_INVENTORIES[_scope]["current"]["@execution_sources"] = _graph_sha
+
+_REVIEWED_SOURCE_INVENTORIES["mintrade_source_graph"]["current"]["filters/breakout_quality/trade_path_label.py"] = ('48417c248b092f97d91a51f7049593db44bbd5243d8804f469c36e36f3941ed6', '48417c248b092f97d91a51f7049593db44bbd5243d8804f469c36e36f3941ed6', '95da26f67620e72a6faac4b22734fb24f0496802b6efaba1c01e65eb50a75b82')
 
 
 def _reviewed_source_group(scope: str):

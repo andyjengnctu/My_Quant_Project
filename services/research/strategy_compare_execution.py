@@ -468,21 +468,19 @@ def run_strategy_compare_active_arm(
         verified_real_path_bundle_loader=load_continuous_ranker_data,
         verified_real_path_diagnostic_loader=_load_verified_real_path_diagnostic_projection,
     )
-    from core.candidate_score_permutation_contract import permutation_spec
-    repetition = permutation_spec(arm.dl_runtime_options)
-    if repetition is None:
+    from services.breakout_quality.holding_value_model import (
+        position_exit_spec, configuration, holding_model_runtime,
+    )
+    if position_exit_spec(arm.dl_runtime_options) is None:
         return run_comparison(**comparison_arguments)
-    from services.research.strategy_score_permutation import run_permutation_comparison
-    if dl.score_source != SCORE_SOURCE_SELECTION_POINT_IN_TIME:
-        raise ValueError("Candidate permutation requires verified point-in-time scores")
-    paths = selection_paths or selection_pit_mode_paths(dl, project_root=root)
     seed = (int(expected_seed_override) if expected_seed_override is not None else
             int(get_breakout_quality_workflow_settings(experiment_profile=dl.experiment_profile).seed))
-    return run_permutation_comparison(
-        run_once=run_comparison, arguments=comparison_arguments, root=root,
-        spec=repetition, seed=seed, arm=arm, settings=settings, score_paths=paths,
-        baseline_trades_path=repetition_baseline_trades_path,
-    )
+    with holding_model_runtime(
+        root, seed=seed, config=configuration(settings, arm),
+        evidence_path=Path(output_dir) / "position_model_decisions.json",
+    ):
+        return run_comparison(**comparison_arguments)
+
 
 
 __all__ = [

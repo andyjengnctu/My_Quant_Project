@@ -298,6 +298,12 @@ def validate_research_summary_strategy_bindings(
             if tuple(binding.get("rank_model", ()))[1:] != (source.get("experiment_profile"),):
                 raise ValueError(f"Summary rank binding differs from strategy: {binding['arm_id']}")
             options = dict(arm.get("dl_runtime_options") or {})
+            from core.position_exit_policy import position_exit_spec
+            holding = position_exit_spec(options)
+            if binding.get("exit_model") != (None if holding is None else holding["model_id"]):
+                raise ValueError("Summary holding-model dependency differs from strategy")
+            if holding is not None and "oracle" in row:
+                raise ValueError("Holding policy cannot inherit an entry-rank Oracle")
             from core.candidate_score_permutation_contract import permutation_spec
             repetition = permutation_spec(options)
             if repetition is not None:
@@ -337,7 +343,8 @@ def unresolved_oracle_strategy_contracts(*, arm_registry):
             if (arm_id not in arm_registry or arm_id in result
                     or not (uses_model_positive_decision(arm_registry[arm_id].get("dl_runtime_options"))
                             or rank_composition_source_ids(arm_registry[arm_id].get("dl_runtime_options"))
-                            or permutation_spec(arm_registry[arm_id].get("dl_runtime_options")))):
+                            or permutation_spec(arm_registry[arm_id].get("dl_runtime_options"))
+                            or arm_registry[arm_id].get("dl_runtime_options", {}).get("position_exit_model"))):
                 raise ValueError("Unresolved Oracle requires a declared model-decision composition")
             result[arm_id] = reason
     return result

@@ -1092,3 +1092,24 @@ The canonical `config/research_summary.py` roster alone determines current Model
 **2026-11-25 本機結果登錄。** 原 Research Rolling、四 Seed Robustness 與 Summary 均完成，沒有 FIT 或 Optimizer 搜尋。C195 四 Seed 平均 RoMD 9.283712，對 C106／C123 的配對均值差為 −2.886660／−1.528662，均僅 1/4 勝，平均 MDD 亦增加。C196 平均 RoMD 4.935194，對 C118／C124 為 −0.058127／+0.274569，均為 2/4 勝，未達研究晉級條件。兩組皆 `NO_ADVANCEMENT`；保留研究列與 C106／C123 原成果，不自動切換 Trading 或搜尋融合權重。原 35 組 Rolling 結果及原 140 個 Robustness 單元的核心績效逐值一致。完整配對與來源見 Experiment Log 同日固定等權融合條目及 `outputs/filters/breakout_quality/breakout_quality_v1/research_diagnostics/ci_co_rank_fusion_20261125.json`。
 
 **2026-11-26 使用者指定退役。** C195／C196 的 Summary group 設為停用，退出現行 Forward／Rolling Strategy Compare、Robustness 與 Summary，七項相關 contrasts 由同一 roster 自動排除；其餘 35 組策略、16 個模型及既有 Oracle catalog 不變。原 Replay 定義、歷史 binding、分數組合相容能力與工件保留供驗證舊成果，兩個編號永久保留，不重用。沒有切換 Training Model、重訓、重跑市場回測或新增下一輪研究身分；11 月 25 日的原始結果與當日決策不回寫。
+
+
+## 2026-11-27：移除一次性置換 Audit；持倉續抱／提前出場 HV1
+
+使用者指定移除一次性 CO 分數置換 Audit，並授權持倉模型工程驗證、Rolling、四 seed Robustness、Summary。C203／C204 與 AUD-co-score-permutation 退出 runtime registry／Audit catalog，專屬回放與測試程式移除；原歷史編號與未完成工件保留，沒有將部分置換結果判為通過或失敗。
+
+| 身分 | 定義 | 狀態 |
+|---|---|---|
+| HV1 | 獨立持倉續抱價值 CNN；不是 CO 排名 head，不產生 ticker/date 選股分數 | REGISTERED / FIT v1 / RESEARCH_ONLY |
+| C205 | 原 C123 CO＋P16 Exact，加 HV1 提前出場 | REGISTERED / REPLAY v1 |
+| C206 | 原 C124 CO＋P16 Direct，加同一 HV1 提前出場 | REGISTERED / REPLAY v1 |
+
+- 唯一處置：原進場分數、P16、部位規模、Exact／Direct、停損、自然出場、費稅不變，只增加持倉模型請求的提前出場。保留 C123／C124 配對控制及 C106 參照，不新增六組控制。
+- 資料：同 seed canonical Optimizer 歷史 Min＋P16；每個原始 setup 的第一次合法成交路徑，收集每天收盤後的持倉狀態。經 canonical trade-path observer 取得，沒有另造回測引擎。無自然完成或任一反事實出場仍未成交的 episode 不可 FIT；沒有期末強平標籤。
+- Target：原 P16 自然出場完整 NetPnL 減去當日收盤後提出賣出、下一可成交時點執行的 NetPnL，再除原始交易 risk money，得到 continuation ΔR。已實現部分損益相消；正值偏續抱、預測負值才提前出場，閾值固定 0。不是事後最高價或最佳賣點。
+- Input：canonical adjusted 個股＋0050 各 300 根已完成日 OHLCV，沿用原正規化；另 6 個當時已知狀態：log1p(持倉 session)、未實現價差/R、收盤距 trailing stop/R、持倉最高價距 entry/R、已半倉旗標、剩餘股數比例。保留 300 日暖機；缺足夠行情不預測而沿原規則，不補未來資料。尚無法人、週月 K、EMA 或 Positive gate。
+- FIT：Conv1d(10→16,k7)→ELU→Conv1d(16→32,k5)→ELU→時間均值，串接 6 狀態後 MLP32→1。episode 等權 MSE；每 epoch 對每 episode 均勻抽一個持倉日，為該 objective 的無偏 SGD，沒有刪除其他日。Adam 0.001，batch512，最多12 epoch、patience3。各年度只用以前自然成熟 episode；前一曆年為 validation，跨 validation 起點的 episode 從內層 train/validation purge；按 validation MSE 選 epoch 後以全部該年度以前成熟 episode refit。normalization 只在各自 FIT subset 計算。
+- DL 必要性檢查：同一內層時間切分，額外記錄小型 ridge 的 MSE、提前出場比例、相對續抱 ΔR 與漏失正向續抱 R；不新增正式 C 對照、不中途按 OOS 改 target/閾值。
+- 執行：收盤已知狀態、次 session 開盤；跌停／零量的賣出請求持續，原 pending stop／half-exit 優先；實際成交與費稅完全經 canonical execute_bar_step。模型每 seed／每 fold 的 weights、FIT cutoff、自然 maturity、資料前綴與 teacher／程式 SHA、validation、決策 sidecar 皆保留；Exact／Direct 共用 FIT，禁止跨 seed fallback。
+- Research：Strategy preparation 的持倉模型依賴與既有 Rolling／Robustness 正式 replay／paired contrasts 整合；七項 Model Research 選單不新增專用入口。原 RankDL／ρ 仍代表進場 CO，HV1 的持倉 validation 獨立保存並在 Summary 註明。原 CO 的 entry-rank Oracle 不能代表持倉決策；C205／C206 明列 CONTRACT_UNRESOLVED，沒有假造出場 Oracle 或 stock-day rho。
+- 判定：2021-01-01～2026-03-02 為迭代研究 OOS；四 seed 對控制的 ΔRoMD mean／median 均正、至少3/4改善、平均 MDD 不增加，並檢查總報酬與大贏家被提前賣掉的代價。未達成不晉級；不自動取代正式 Trading 模型。市場結果另據實登錄。

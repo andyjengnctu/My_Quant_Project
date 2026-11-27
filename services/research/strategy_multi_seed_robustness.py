@@ -2523,6 +2523,12 @@ def build_multi_seed_robustness_contract(
                 "dl_runtime_options": dict(arm.dl_runtime_options or {}),
                 "runtime_dl_sources": [source_contract(dl_id) for dl_id in resolve_arm_runtime_dl_source_ids(settings, arm)],
             })
+            if dict(arm.dl_runtime_options or {}).get("position_exit_model"):
+                from services.research.position_model_dependency import position_model_identity
+                payload["position_model_sources"] = {
+                    str(seed): position_model_identity(root=PROJECT_ROOT, settings=settings, arm=arm, seed=seed)
+                    for seed in seeds
+                }
         return payload
 
     scientific = {
@@ -5804,6 +5810,8 @@ def run_multi_seed_robustness(
         comparison_start=str(comparison_start), comparison_end=str(comparison_end),
         reusable_observations=registered_scientific_reuse,
     )
+    from services.research.position_model_dependency import ensure_position_models
+    ensure_position_models(root=PROJECT_ROOT, settings=settings, seeds=cfg.resolved_seeds)
     status = dict(status)
     status["comparison_period"] = {"start": comparison_start, "end": comparison_end}
     final_text, final_plan = _render_robustness_execution_plan(

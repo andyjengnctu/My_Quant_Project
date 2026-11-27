@@ -41,7 +41,7 @@ _STRATEGY_ROBUSTNESS_SPEC = ROBUSTNESS_BENCHMARK_SPECS[ROBUSTNESS_BENCHMARK_ID]
 ROBUSTNESS_BENCHMARK_SEED_COUNT = int(_STRATEGY_ROBUSTNESS_SPEC["seed_count"])
 ROBUSTNESS_BENCHMARK_SEED_GENERATOR_SEED = int(_STRATEGY_ROBUSTNESS_SPEC["seed_generator_seed"])
 
-STRATEGY_COMPARE_SCHEMA_VERSION = 75
+STRATEGY_COMPARE_SCHEMA_VERSION = 76
 
 _ROLLING_OOS = get_breakout_quality_rolling_test_mode("oos")
 _ROLLING_ROLLING = get_breakout_quality_rolling_test_mode("rolling")
@@ -141,7 +141,7 @@ STRATEGY_COMPARE_SUITES = {
         # A compact connected contrast graph supports each selected model
         # versus C96 plus the matched CK/CJ label contrast. Historical AO/CH
         # contrasts remain registered and filter out with their inactive arms.
-        "contrast_ids": ('C203-C123', 'C204-C124', 'C203-C204', 'C201-C123', 'C202-C124', 'C201-C202', 'C201-C106', 'C199-C123', 'C200-C124', 'C199-C200', 'C195-C106', 'C195-C123', 'C196-C118', 'C196-C124', 'C195-C196', 'C195-C96', 'C196-C96', 'C194-C124', 'C193-C194', 'C194-C118', 'C194-C96', 'C193-C123', 'C193-C106', 'C193-C96', 'C189-C96', 'C190-C96', 'C189-C190', 'C189-C106', 'C190-C118', 'C186-C183', 'C97-C96', 'C98-C97', 'C98-C96', 'C103-C96', 'C106-C96', 'C107-C96', 'C109-C96', 'C111-C96', 'C112-C96', 'C118-C96', 'C123-C96', 'C124-C96', 'C125-C96', 'C126-C96', 'C109-C107', 'C111-C112', 'C106-C118', 'C123-C124', 'C125-C126', 'C123-C125', 'C124-C126', 'C147-C107', 'C148-C109', 'C147-C148', 'C153-C97', 'C154-C97', 'C153-C107', 'C154-C109', 'C154-C153', 'C155-C97', 'C156-C97', 'C155-C156', 'C155-C153', 'C156-C154', 'C157-C97', 'C158-C97', 'C157-C158', 'C157-C153', 'C158-C154'),
+        "contrast_ids": ('C205-C123', 'C206-C124', 'C205-C206', 'C205-C106', 'C201-C123', 'C202-C124', 'C201-C202', 'C201-C106', 'C199-C123', 'C200-C124', 'C199-C200', 'C195-C106', 'C195-C123', 'C196-C118', 'C196-C124', 'C195-C196', 'C195-C96', 'C196-C96', 'C194-C124', 'C193-C194', 'C194-C118', 'C194-C96', 'C193-C123', 'C193-C106', 'C193-C96', 'C189-C96', 'C190-C96', 'C189-C190', 'C189-C106', 'C190-C118', 'C186-C183', 'C97-C96', 'C98-C97', 'C98-C96', 'C103-C96', 'C106-C96', 'C107-C96', 'C109-C96', 'C111-C96', 'C112-C96', 'C118-C96', 'C123-C96', 'C124-C96', 'C125-C96', 'C126-C96', 'C109-C107', 'C111-C112', 'C106-C118', 'C123-C124', 'C125-C126', 'C123-C125', 'C124-C126', 'C147-C107', 'C148-C109', 'C147-C148', 'C153-C97', 'C154-C97', 'C153-C107', 'C154-C109', 'C154-C153', 'C155-C97', 'C156-C97', 'C155-C156', 'C155-C153', 'C156-C154', 'C157-C97', 'C158-C97', 'C157-C158', 'C157-C153', 'C158-C154'),
         "display_name_bases": {'C96': 'Min Base-Finalist-Best / Broker-Cash', 'C97': 'Full Base-Finalist-Best / Broker-Cash', 'C98': 'Full Corrected Same-Signal Agree 4x300 / Broker-Cash', 'C103': 'Min MR-13CG Exact K/R0 / Broker-Cash', 'C106': 'Min MR-13CI Exact K/R0 / Broker-Cash', 'C189': 'Min MR-13CI Rank + MR-13DL R40 Positive Exact K/R0 / Broker-Cash', 'C190': 'Min MR-13CI Rank + MR-13DL R40 Positive Direct No-K No-R0 / Broker-Cash', 'C107': 'Min MR-13CJ Exact K/R0 / Broker-Cash', 'C109': 'Min MR-13CJ T40 Direct No-K No-R0 / Broker-Cash', 'C111': 'Min MR-13K Pure-MFE Control Exact K/R0 / Broker-Cash', 'C112': 'Min MR-13K Pure-MFE Direct No-K No-R0 / Broker-Cash', 'C118': 'Min MR-13CI R40 Direct No-K No-R0 / Broker-Cash', 'C123': 'Min MR-13CO Formal MinTrade Full-cycle NetPnL Exact K/R0 / Broker-Cash', 'C124': 'Min MR-13CO Formal MinTrade Full-cycle NetPnL Direct No-K No-R0 / Broker-Cash', 'C125': 'Min MR-13CO Rank + MR-13CP Positive Exact K/R0 / Broker-Cash', 'C126': 'Min MR-13CO Rank + MR-13CP Positive Direct No-K No-R0 / Broker-Cash', 'C147': 'Min MR-13CX T40 Pairwise-Confidence Exact K/R0 / Broker-Cash', 'C148': 'Min MR-13CX T40 Pairwise-Confidence Direct No-K No-R0 / Broker-Cash', 'C153': 'Full MR-13CJ T40 Exact K/R0 / Broker-Cash', 'C154': 'Full MR-13CJ T40 Direct No-K No-R0 / Broker-Cash', 'C155': 'Full MR-13CZ Rank + MR-13DA Positive Exact K/R0 / Broker-Cash', 'C156': 'Full MR-13CZ Rank + MR-13DA Positive Direct No-K No-R0 / Broker-Cash', 'C157': 'Full MR-13CZ NetPnL Rank Exact K/R0 / Broker-Cash', 'C158': 'Full MR-13CZ NetPnL Rank Direct No-K No-R0 / Broker-Cash', 'C179': 'Daily (Min/P21) No DL / Default Selector / Broker-Cash'},
     },
     # Historical Round-10 suite retained unchanged for artifact interpretation/replay.
@@ -1300,21 +1300,18 @@ for _new_id, _reference_id, _weights, _label in (
         },
     }
 
-# AI: Replay-only randomization; the original CO FIT/score source is unchanged.
+# Independent holding decision; original CO entry score and selectors are unchanged.
 for _new_id, _reference_id, _selector in (
-    ("C203", "C123", "Exact K/R0"), ("C204", "C124", "Direct No-K/No-R0"),
+    ("C205", "C123", "Exact K/R0"), ("C206", "C124", "Direct No-K/No-R0"),
 ):
     STRATEGY_COMPARE_ARMS[_new_id] = {
         **STRATEGY_COMPARE_ARMS[_reference_id],
-        "name": f"CO Same-day Score Permutation {_selector} / 99次平均",
-        "description": "Exchange finite raw CO scores inside each decision-day legal candidate set; 99 complete replays per seed.",
+        "name": f"Min CO + HV1 持倉續抱／提前出場 {_selector} / Broker-Cash",
+        "description": "Original CO/P16 entry ranking; separate PIT holding-value CNN may request next-session early exit. Original protective exits retained.",
         "replay_contract_version": 1,
         "dl_runtime_options": {
             **STRATEGY_COMPARE_ARMS[_reference_id]["dl_runtime_options"],
-            "candidate_score_permutation": {
-                "policy": "same_day_raw_score_permutation_v1", "repeats": 99,
-                "control_arm_id": _reference_id,
-            },
+            "position_exit_model": {"model_id": "HV1", "contract_version": 1},
         },
     }
 
@@ -1339,9 +1336,10 @@ for _mode in ("oos", "rolling"):
 # Contrast 是否啟用只由 STRATEGY_COMPARE_PROFILES[*]["contrast_ids"] 決定。
 
 STRATEGY_COMPARE_CONTRASTS = {
-    "C203-C123": {"left": "C203", "right": "C123", "description": "99 same-day score permutations versus original CO Exact"},
-    "C204-C124": {"left": "C204", "right": "C124", "description": "99 same-day score permutations versus original CO Direct"},
-    "C203-C204": {"left": "C203", "right": "C204", "description": "Same permutation protocol: Exact versus Direct"},
+    "C205-C123": {"left": "C205", "right": "C123", "description": "Same CO Exact entry; holding value early exit versus original P16 exit"},
+    "C206-C124": {"left": "C206", "right": "C124", "description": "Same CO Direct entry; holding value early exit versus original P16 exit"},
+    "C205-C206": {"left": "C205", "right": "C206", "description": "Same holding model; Exact versus Direct"},
+    "C205-C106": {"left": "C205", "right": "C106", "description": "Holding value treatment versus retained CI Exact reference"},
     "C201-C123": {"left": "C201", "right": "C123", "description": "Signal frequency weighting versus original CO, same P16 Exact"},
     "C202-C124": {"left": "C202", "right": "C124", "description": "Signal frequency weighting versus original CO, same P16 Direct"},
     "C201-C202": {"left": "C201", "right": "C202", "description": "Same frequency-weighted model and P16: Exact versus Direct"},

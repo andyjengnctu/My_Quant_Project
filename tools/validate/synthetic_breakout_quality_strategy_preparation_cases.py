@@ -248,12 +248,11 @@ def append_strategy_compare_preparation_contract_checks(
             source = active_settings.dl_sources[active_arm.dl_id]
             if str(source.score_source) != "selection_point_in_time":
                 continue
-            # Replay I/O is replaced at both supported execution boundaries;
-            # fixed-repeat checkpoint/count behavior has its own real fixtures.
+            from contextlib import nullcontext
             with patch.object(execution_module, "run_comparison", return_value={}) as replay, patch(
-                "services.research.strategy_score_permutation.run_permutation_comparison",
-                side_effect=lambda **kw: kw["run_once"](**kw["arguments"]),
-            ) as repeat_driver:
+                "services.breakout_quality.holding_value_model.holding_model_runtime",
+                side_effect=lambda *args, **kwargs: nullcontext(),
+            ) as holding_runtime:
                 execution_module.run_strategy_compare_active_arm(
                     settings=active_settings, arm=active_arm,
                     project_root=project_root, params_path="synthetic.json",
@@ -262,11 +261,7 @@ def append_strategy_compare_preparation_contract_checks(
                     param_evaluation_mode="rolling",
                 )
             kwargs = dict(replay.call_args.kwargs)
-            from core.candidate_score_permutation import permutation_spec
-            repetition = permutation_spec(active_arm.dl_runtime_options)
-            repeat_ok = repeat_driver.call_count == int(repetition is not None)
-            if repetition is not None:
-                repeat_ok = repeat_ok and repeat_driver.call_args.kwargs["spec"] == repetition
+            repeat_ok = holding_runtime.call_count == int(bool(active_arm.dl_runtime_options.get("position_exit_model")))
             expected_override = resolve_strategy_compare_selection_pit_contract_override(
                 root=project_root, source=source,
             )

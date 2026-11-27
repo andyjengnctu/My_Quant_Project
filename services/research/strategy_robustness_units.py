@@ -70,6 +70,11 @@ def scientific_unit_signature(
             signature["arm"][key] = arm[key]
     if model:
         signature["training_defaults"] = dict(contract.get("training_defaults") or {})
+    if dict(arm.get("dl_runtime_options") or {}).get("position_exit_model"):
+        position_source = dict(arm.get("position_model_sources") or {}).get(str(seed))
+        if not position_source or not position_source.get("manifest_sha256"):
+            return None
+        signature["position_model_source"] = position_source
     return signature
 
 

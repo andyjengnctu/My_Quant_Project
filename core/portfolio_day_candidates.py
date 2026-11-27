@@ -138,18 +138,6 @@ def select_portfolio_candidate_orders(
         and not bool(getattr(params, "use_breakout_quality_ranking", False))
     )
     diagnostic = {}
-    from core.candidate_score_permutation import active_permutation, prepare_permuted_selection
-    permutation = active_permutation(params)
-    if permutation is not None:
-        orderable_rows, permutation_evidence, original_actions = prepare_permuted_selection(
-            permutation, today=today, rows=orderable_rows,
-            reorder_callback=reorder_callback, select_action_callback=select_action_callback,
-            selector_kwargs=dict(available_cash=available_cash, sizing_equity=sizing_equity,
-                                 pre_market_occupied=pre_market_occupied,
-                                 max_positions=max_positions, params=params),
-        )
-        if trace_input is not None:
-            trace_input = list(orderable_rows)
     if skip_noop:
         # Training without DL/ranking: identity selector; keep the same list.
         action_rows = orderable_rows
@@ -166,6 +154,4 @@ def select_portfolio_candidate_orders(
             params=params,
         )
         action_rows = select_action_callback(orderable_rows, diagnostic)
-    if permutation is not None:
-        permutation.record(permutation_evidence, original_actions, action_rows)
     return PortfolioCandidateSelection(orderable_rows, action_rows, diagnostic, trace_input)

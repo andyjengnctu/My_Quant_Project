@@ -24,6 +24,7 @@ from core.price_utils import (
 )
 from core.portfolio_fast_data import (
     get_fast_close,
+    get_fast_dates,
     get_fast_management_session_values,
     get_fast_pos,
     get_fast_value,
@@ -386,10 +387,17 @@ def settle_portfolio_positions(
             y_atr, y_ind_sell, y_close, y_high, t_open, t_high, t_low,
             t_close, t_volume,
         ) = get_fast_management_session_values(fast_df, t_pos)
+        from core.position_exit_policy import request_position_early_exit
+        model_exit = request_position_early_exit(
+            ticker=ticker, position=pos,
+            information_date=get_fast_dates(fast_df)[y_pos], execution_date=today,
+            completed_atr=y_atr, completed_high=y_high, params=pos_params,
+            natural_exit=bool(y_ind_sell),
+        )
         pos, freed_cash_milli, _pnl_realized_milli, events = execute_bar_step(
             pos,
             y_atr,
-            y_ind_sell,
+            bool(y_ind_sell) or model_exit,
             y_close,
             t_open,
             t_high,
@@ -440,6 +448,8 @@ def settle_portfolio_positions(
             total_pnl = milli_to_money(total_pnl_milli) if is_training else pos['realized_pnl']
             total_r = calc_ratio_from_milli(pos.get('realized_pnl_milli', 0), pos.get('initial_risk_total_milli', 0))
             t_type = '全倉結算(停損)' if 'STOP' in events else '全倉結算(指標)'
+            if 'STOP' not in events and model_exit:
+                t_type = '全倉結算(模型提前出場)'
             exit_context = stop_context if 'STOP' in events else ind_sell_context
             closed_trades_stats.append(
                 _build_closed_trade_stat(

@@ -1272,6 +1272,8 @@ def collect_target_dl_overview(project_root: Path) -> dict[str, Any]:
                 selector=selector, model=model, arm=arm_id, metrics=equivalent_metrics,
                 classifier=(binding.get("positive_model") or (None, None))[1],
             )
+            if binding.get("exit_model"):
+                rows[-1]["exit_model"] = binding["exit_model"]
     return {"rows": sort_target_dl_overview_rows(rows), "oracle": oracle_info,
             "source": "local_completed_reports_only"}
 
@@ -1367,6 +1369,10 @@ def render_target_dl_overview(
             cells.append(cell)
         formatted.append(cells)
     header.append(render_table(table.headers, formatted, alignments=table.alignments))
+    holding = [row for row in rows if row.get("exit_model")]
+    if holding:
+        header.append("持倉模型：" + "、".join(f"{row['strategy']}={row['exit_model']}" for row in holding)
+                      + "；RankDL／ρ 仍指進場 CO。持倉模型的成熟交易 validation 另存於模型 manifest；出場 Oracle 尚未定義。")
     return "\n".join(header)
 
 
