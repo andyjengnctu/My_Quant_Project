@@ -279,7 +279,7 @@ class PositiveNetPnlContractCases(TestCase):
         # A classifier may use the same raw NetPnL truth but cannot provide
         # the rolling Spearman rho as evidence for its ranker.
         for rank, classifier in (("CONT13CO_ROLL", "CONT13CP_ROLL"),
-                                  ("CONT13CU_ROLL", "CONT13CT_ROLL")):
+                                  ("CONT13CZ_ROLL", "CONT13DA_ROLL")):
             rank_profile = settings.dl_sources[rank].experiment_profile
             binary_profile = settings.dl_sources[classifier].experiment_profile
             target_id = get_breakout_quality_experiment_profile(rank_profile).continuous_target_id
