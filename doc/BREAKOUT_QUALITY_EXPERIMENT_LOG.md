@@ -5567,9 +5567,7 @@ C201 的替代贏家總 R 略高，仍因交易金額及投組路徑等差異形
 
 **固定科學契約。** Target 為自然 P16 完整交易 NetPnL 減去下一可成交出場的 NetPnL，再除原始風險金額；由 canonical trade-path observer／execute_bar_step 產生。輸入為已完成個股＋0050 各 300 日 OHLCV 及 6 個已知持倉狀態，小型 CNN＋狀態 head，episode 等權 MSE、每 epoch 每 episode 均勻抽一個持倉日。逐年以前一年 validation 選 epoch，再 refit 全部合法成熟 episode；FIT 正規化、完整 episode purge、成熟截止、停牌／跌停及原保護出場優先均維持既定契約。預測 ΔR＜0 才請求下一 session 出場；沒有按 OOS 調閾值、增設最短持倉期或改進場。
 
-**工程驗證。** 15 項持倉任務測試通過；完整工程檢查 10,384 項，0 失敗、30 skip，Oracle build VERIFIED。獨立 canonical parity 的 61 個觀察與修改前一致。修正 Windows 短暫檔案鎖的發布重試，以及舊快取替代路徑忽略持倉模型換版的漏洞；一般、legacy projection 與 archived fallback 都必須核對模型來源，決策 sidecar 也必須綁定相同模型。實際計畫確認 C205／C206 RUN，C106／C123／C124 REUSE。中途失敗或來源不一致的工件不列為最終證據；最終 Rolling 兩組均確實重播。寫入修正前後 Seed42 六折數學權重逐值相同。
-
-**正式執行與完整性。** 沿用 Research Rolling、Robustness、Summary 原入口；期間 2021-01-01～2026-03-02。Robustness Seeds 固定為 693545351、2014432738、104504529、762252050；35 組 × 4 Seed＝140 單元，原 132 單元重用、新增 8 單元實際回放。每 Seed 的 Exact／Direct 共用 HV1，無跨 Seed fallback。共完成 Seed42＋四 Seed 的 30 個年度模型；8 份新策略決策紀錄均核對模型 SHA、Seed、FIT 來源及 information_date＜execution_date。原 33 組 Rolling、132 個 Robustness 單元的 RoMD／MDD／總報酬／交易數／曝險均逐值一致。
+**正式執行與完整性。** 最終 Rolling 兩組均實際重播，未將中途失敗或來源不一致的工件列為最終研究證據。沿用 Research Rolling、Robustness、Summary 原入口；期間 2021-01-01～2026-03-02。Robustness Seeds 固定為 693545351、2014432738、104504529、762252050；35 組 × 4 Seed＝140 單元，原 132 單元重用、新增 8 單元實際回放。每 Seed 的 Exact／Direct 共用 HV1，無跨 Seed fallback。共完成 Seed42＋四 Seed 的 30 個年度模型；8 份新策略決策紀錄均核對模型 SHA、Seed、FIT 來源及 information_date＜execution_date。原 33 組 Rolling、132 個 Robustness 單元的 RoMD／MDD／總報酬／交易數／曝險均逐值一致。
 
 | 策略 | Seed42 RoMD | 四 Seed 平均 RoMD | 四 Seed 平均 MDD | 四 Seed 平均總報酬 |
 |---|---:|---:|---:|---:|
