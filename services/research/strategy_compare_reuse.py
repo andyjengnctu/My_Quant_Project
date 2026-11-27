@@ -725,11 +725,35 @@ def _pair_fit_lineages_match(
     *, settings: StrategyComparisonSettings, on_arm: StrategyComparisonArm,
     current: dict[str, Any], published: dict[str, Any],
 ) -> bool:
-    """Prevent the legacy projection/archived fallbacks bypassing an FIT bump."""
+    """Prevent every legacy fallback bypassing entry or position FIT changes."""
+    position = dict(on_arm.dl_runtime_options or {}).get("position_exit_model")
+    if position:
+        from config.research import RESEARCH_SINGLE_SEED
+        key = f"position_model:{position['model_id']}:{RESEARCH_SINGLE_SEED}"
+        current_sha = _artifact_identity_sha(current.get(key))
+        if not current_sha or current_sha != _artifact_identity_sha(published.get(key)):
+            return False
     return all(
         current.get(f"dl:{source_id}:fit_contract")
         == published.get(f"dl:{source_id}:fit_contract")
         for source_id in resolve_arm_runtime_dl_source_ids(settings, on_arm)
+    )
+
+
+def _position_model_pair_evidence_matches(*, pair_dir, on_arm, artifact_identities):
+    """Bind retained decisions to the model declared by this published pair."""
+    position = dict(on_arm.dl_runtime_options or {}).get("position_exit_model")
+    if not position:
+        return True
+    from config.research import RESEARCH_SINGLE_SEED
+    key = f"position_model:{position['model_id']}:{RESEARCH_SINGLE_SEED}"
+    expected = _artifact_identity_sha(artifact_identities.get(key))
+    evidence = _read_json(Path(pair_dir) / "position_model_decisions.json")
+    return bool(
+        expected and isinstance(evidence, dict)
+        and evidence.get("model_manifest_sha256") == expected
+        and evidence.get("seed") == int(RESEARCH_SINGLE_SEED)
+        and dict(evidence.get("contract") or {}).get("model_id") == position["model_id"]
     )
 
 
@@ -870,6 +894,10 @@ def _find_reusable_pair_with_archived_source(
         pair_dir = run_dir / "pairs" / stored_group_id
         required_paths = _pair_cache_required_files(pair_dir, on_arm=on_arm)
         if not _required_pair_files_present(pair_dir, required_paths):
+            continue
+        if not _position_model_pair_evidence_matches(
+            pair_dir=pair_dir, on_arm=on_arm, artifact_identities=run_artifacts,
+        ):
             continue
         if not _pair_json_matches_recorded_result(pair_dir, pair_payload):
             continue
@@ -1153,6 +1181,11 @@ def _find_reusable_pair(
         pair_dir = run_dir / "pairs" / stored_group_id
         required_paths = _pair_cache_required_files(pair_dir, on_arm=on_arm)
         if not _required_pair_files_present(pair_dir, required_paths):
+            continue
+        if not _position_model_pair_evidence_matches(
+            pair_dir=pair_dir, on_arm=on_arm,
+            artifact_identities=dict(run_payload.get("artifact_identities") or {}),
+        ):
             continue
         try:
             actual = _pair_cache_fingerprint_from_payload(

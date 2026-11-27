@@ -48,6 +48,31 @@ class HoldingValueTests(TestCase):
             self.assertEqual(json.loads(path.read_text(encoding="utf-8")), {"completed": 2})
             self.assertFalse(path.with_suffix(".json.tmp").exists())
 
+    def test_rolling_fallbacks_require_current_position_fit_and_decisions(self):
+        import json
+        from core.strategy_compare_policy import get_strategy_comparison_settings
+        from services.research.strategy_compare_reuse import (
+            _pair_fit_lineages_match, _position_model_pair_evidence_matches,
+        )
+        settings = get_strategy_comparison_settings("broker_cash_dl_conversion_rolling")
+        arm = settings.arms["C205"]
+        current = {"position_model:HV1:42": {"sha256": "a" * 64}}
+        old = {"position_model:HV1:42": {"sha256": "b" * 64}}
+        self.assertFalse(_pair_fit_lineages_match(settings=settings, on_arm=arm, current=current, published=old))
+        self.assertFalse(_pair_fit_lineages_match(settings=settings, on_arm=arm, current={}, published={}))
+        self.assertTrue(_pair_fit_lineages_match(settings=settings, on_arm=arm, current=current, published=current))
+        self.assertTrue(_pair_fit_lineages_match(settings=settings, on_arm=settings.arms["C123"], current=current, published=old))
+        with TemporaryDirectory() as folder:
+            path = Path(folder) / "position_model_decisions.json"
+            def matches():
+                return _position_model_pair_evidence_matches(pair_dir=Path(folder), on_arm=arm, artifact_identities=current)
+            evidence = {"model_manifest_sha256": "b" * 64, "seed": 42, "contract": {"model_id": "HV1"}}
+            path.write_text(json.dumps(evidence), encoding="utf-8")
+            self.assertFalse(matches())  # rejected even if a parent report claims the new FIT
+            evidence["model_manifest_sha256"] = "a" * 64
+            path.write_text(json.dumps(evidence), encoding="utf-8")
+            self.assertTrue(matches())
+
     def test_counterfactual_uses_canonical_fees_and_next_open(self):
         days, frame, params, pos = position_fixture()
         frame.loc[days[302], ["Open", "High", "Low", "Close"]] = [103., 105., 102., 104.]
