@@ -138,6 +138,23 @@ class HoldingValueTests(TestCase):
                           scientific_unit_signature(contract=modified, arm_id=a.arm_id, seed=s)}
         self.assertEqual(differences, {(affected["arm_id"], seeds[0])})
 
+    def test_missing_position_dependencies_are_planned_once_per_seed(self):
+        from core.strategy_compare_policy import get_strategy_comparison_settings
+        from core.research_orchestration import ResearchArtifactPlan
+        from services.research.position_model_dependency import append_position_model_actions
+        settings = get_strategy_comparison_settings("broker_cash_dl_conversion_rolling")
+        with TemporaryDirectory() as directory, patch(
+            "services.research.position_model_dependency.inspect_holding_model",
+            side_effect=lambda root, seed, config: {"ready": False,
+                "path": str(Path(root) / str(seed) / "manifest.json"), "reason": "unbuilt"},
+        ):
+            actions, identities = [], {}
+            append_position_model_actions(root=Path(directory), settings=settings,
+                                          actions=actions, identities=identities, seeds=(11, 12, 13, 14))
+            self.assertEqual(len(actions), 4)  # Exact and Direct share each fit
+            self.assertTrue(all(a.action == "BUILD" for a in actions))
+            self.assertEqual(ResearchArtifactPlan.from_actions(actions).overall_status, "PREPARABLE")
+
     def test_whole_episode_purge_and_natural_maturity(self):
         rows = pd.DataFrame([
             {"episode": "old", "entry_date": "2019-01-01", "maturity_date": "2019-05-01"},

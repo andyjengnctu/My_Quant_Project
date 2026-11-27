@@ -1857,7 +1857,13 @@ def _render_robustness_execution_plan(
         settings=settings, status=status, required_sources=required_sources
     )
     upstream_rows, upstream_blockers = _model_upstream_rows(status)
-    blockers = [*param_blockers, *upstream_blockers]
+    from services.research.position_model_dependency import append_position_model_actions
+    position_actions = []
+    append_position_model_actions(root=PROJECT_ROOT, settings=settings,
+                                  actions=position_actions, identities={}, seeds=cfg.resolved_seeds)
+    position_rows = [(a.action, a.artifact_key, a.description) for a in position_actions]
+    blockers = [*param_blockers, *upstream_blockers,
+                *(a.description for a in position_actions if a.action == "BLOCKED")]
     upstream_pending = any(row[0] in {"BUILD", "REBUILD", "RESUME"} for row in upstream_rows)
     # A missing optimizer Target teacher cannot erase an independently known
     # comparison period.  The shared Strategy preparation owner has already
@@ -1901,10 +1907,10 @@ def _render_robustness_execution_plan(
     blockers.extend(benchmark_blockers)
     pending_work = any(
         row[0] in {"BUILD", "REBUILD", "RESUME", "CHECK", "REPAIR"}
-        for row in (*param_rows, *benchmark_rows, *upstream_rows)
+        for row in (*param_rows, *benchmark_rows, *upstream_rows, *position_rows)
     )
     overall = "BLOCKED" if blockers else "PREPARABLE" if pending_work else "READY"
-    rows = [*upstream_rows, *param_rows, *benchmark_rows]
+    rows = [*upstream_rows, *param_rows, *benchmark_rows, *position_rows]
     robustness_unit_states: dict[tuple[str, int], dict[str, Any]] = {
         unit: resolve_strategy_result_state(
             verified_evidence={
