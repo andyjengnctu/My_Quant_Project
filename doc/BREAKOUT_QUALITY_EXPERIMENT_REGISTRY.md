@@ -1100,9 +1100,9 @@ The canonical `config/research_summary.py` roster alone determines current Model
 
 | 身分 | 定義 | 狀態 |
 |---|---|---|
-| HV1 | 獨立持倉續抱價值 CNN；不是 CO 排名 head，不產生 ticker/date 選股分數 | COMPLETED / FIT v1 / NO_ADVANCEMENT / RESEARCH_ONLY |
-| C205 | 原 C123 CO＋P16 Exact，加 HV1 提前出場 | COMPLETED / REPLAY v1 / NO_ADVANCEMENT |
-| C206 | 原 C124 CO＋P16 Direct，加同一 HV1 提前出場 | COMPLETED / REPLAY v1 / NO_ADVANCEMENT |
+| HV1 | 獨立持倉續抱價值 CNN；不是 CO 排名 head，不產生 ticker/date 選股分數 | RETIRED / FIT v1 / NO_ADVANCEMENT / HISTORICAL_ID_RESERVED |
+| C205 | 原 C123 CO＋P16 Exact，加 HV1 提前出場 | RETIRED / REPLAY v1 / NO_ADVANCEMENT / HISTORICAL_ID_RESERVED |
+| C206 | 原 C124 CO＋P16 Direct，加同一 HV1 提前出場 | RETIRED / REPLAY v1 / NO_ADVANCEMENT / HISTORICAL_ID_RESERVED |
 
 - 唯一處置：原進場分數、P16、部位規模、Exact／Direct、停損、自然出場、費稅不變，只增加持倉模型請求的提前出場。保留 C123／C124 配對控制及 C106 參照，不新增六組控制。
 - 資料：同 seed canonical Optimizer 歷史 Min＋P16；每個原始 setup 的第一次合法成交路徑，收集每天收盤後的持倉狀態。經 canonical trade-path observer 取得，沒有另造回測引擎。未自然完成的 episode 或反事實出場仍未成交的持倉狀態不納入 FIT；沒有期末強平標籤。
@@ -1116,3 +1116,5 @@ The canonical `config/research_summary.py` roster alone determines current Model
 
 
 **2026-11-27 完成結果。** C205／C206 的 Rolling、四 Seed Robustness、Summary 皆已完成；兩組未通過事前晉級門檻，登錄 NO_ADVANCEMENT，維持 Research-only。完整數值、工程驗證及最終工件見 Experiment Log 同日 HV1 結果節；未將中止或來源不一致的中間工件算入正式結果。
+
+**2026-11-27 後續使用者指定退役。** C205／C206 的共用 Summary group 停用，退出現行 Forward／Rolling、Robustness 與 Summary，四個 contrasts 隨 roster 排除；現行 33 組策略保留原 CO C123／C124 與 C106。HV1 不再構成現行 Research 訓練／準備依賴。原策略定義、FIT／Replay 版本、模型、決策紀錄與科學成果保留，編號永久保留；仍由歷史 replay 相容與共用持倉決策鏈引用的 producer／execution capability 保留。既有結果的「尚未退役」屬當次決策，不回寫。此次僅核對既有工件與退役，未重訓或執行市場回放，未實作或分配下一個研究 identity。新增的持倉抽樣權重與買進當天決策診斷見 Experiment Log 同節補記。

@@ -5609,3 +5609,23 @@ Seed42 的 Exact 持倉中位數由 28 日降至 1 日，Direct 由 29 日降至
 - Summary：`outputs/validation/holding_value_20261127/summary.txt`／`summary.json`。
 - 核對：`outputs/validation/holding_value_20261127/result_review.json` 保存逐 Seed 配對、交易歸因、模型 validation、來源 SHA256 與不變性驗證；同目錄 `reuse_guard_check.json`、`io_retry_weight_parity.json`、`research_final.log`、`run_bundle_7.log` 保存工程與執行證據。
 - Audit：AUD-co-score-permutation 入口與專屬執行程式已移除；C203／C204 歷史編號及未完成工件保留，不將部分置換結果列為實驗結論。
+
+**2026-11-27 後續退役與隔日出場原因補記。** 使用者指定退役 C205／C206；兩列及 HV1 退出現行比較與依賴，保留原 CO C123／C124、C106、歷史定義與完整工件。四 Seed Exact／Direct 對各自 CO 的 RoMD 皆 0/4 勝，平均 MDD 分別增加 55.147973／54.521175 百分點；據此結案，不再為這一版調整賣出閾值或加最短持倉限制。以下為既有樣本／決策工件的唯讀分析，沒有新 FIT 或市場 replay。
+
+買進當天（information_date＝entry_date）獲得有效模型預測的決策中，Seed42 Exact 有 1,920／1,921（99.9479%）請求次日出場，Direct 為 2,134／2,134（100%）；四 Seed 的兩個 selector 均為 99.0463%～100%。此分母是有預測的買進當天決策，不是所有成交，也不代表每張賣單一定次日成交。固定負 ΔR 閾值與持續出場請求將近乎一致的負預測轉成短持倉；不是回測程式另設了一日到期。
+
+核對每個 seed 第一折（2021-01-01 cutoff）的合法 final refit。令 L 為一筆成熟 episode 的有效持倉狀態數，現行每 epoch 每 episode 均勻抽一日，故單一狀態在 objective 中的有效權重為 1/L。下表只比較買進當天的同一批 states，揭露該抽樣對條件學習分布的影響：
+
+| Seed | 成熟 episodes／買進當天 states | 每筆等權的買進當天 Target 平均 R | 按 1/L 加權的同一天 Target 平均 R |
+|---|---:|---:|---:|
+| 42 | 7,288 | +0.263206 | −0.330423 |
+| 693545351 | 8,167 | +0.285893 | −0.275852 |
+| 2014432738 | 6,269 | +0.308926 | −0.337574 |
+| 104504529 | 6,374 | +0.310168 | −0.344913 |
+| 762252050 | 6,468 | +0.336990 | −0.345002 |
+
+Seed42 中，買進當天續抱優於下一可成交出場的 episodes 占 39.6817%，經 1/L 加權只占 15.8084%；這組的平均 L 為 70.8928，非正向組為 26.8505。持倉較久的趨勢贏家在「剛買進」狀態被抽中的機率較低，五個 seed 的當天平均續抱價值皆因此由正翻負。全 episode 等權 MSE 不等於各決策年齡的交易等權經濟價值；這是原研究目標／抽樣設計的盲點，實作確實遵守當時已登錄的 objective，沒有證據可將它重新描述成單位或正負號的程式 Bug。L 來自 cutoff 前已成熟 episode，並非推論 input 的前視；但其事後長度與結果相關，仍會改變被估計的條件期望。
+
+另外，validation 以自然持倉路徑逐日 MSE 選 epoch，並非從第一日實際執行模型到退出後停止的完整交易績效。30 折中 24 折勝過 ridge 的 MSE 不足以證明 DL 出場有用；逐日 ΔR 也未計入提前退出後的再進場、交易成本累積與資金路徑。上述權重翻轉已由資料確認，與幾乎全賣的行為一致；尚未用受控重訓隔離其對總損失的份額，不能宣稱是唯一原因或修正後必定獲利。2021 起仍為迭代研究 OOS，沒有將該段決策或統計回饋 FIT。
+
+新增證據：`outputs/validation/holding_value_retirement_20261127/weight_diagnosis.json` 保存五 seed 第一折 train／validation／final refit 分布；`diagnostic_provenance.json` 保存買進當天決策分位數、模型／receipt／producer／原結果 SHA256 與權重定義。每份 receipt 所列 sample parquet SHA 皆已逐一核對。下一個研究僅提出設計，未實作或預占編號。

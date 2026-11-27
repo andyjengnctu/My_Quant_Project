@@ -1,5 +1,6 @@
 """Economic, causal and Research integration regressions for holding decisions."""
 from copy import deepcopy
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -25,6 +26,19 @@ def position_fixture():
         100., 1000, 80., 80., params, target_price=150., entry_atr=5.,
         ticker="2330", trade_date=days[300])
     return days, frame, params, position
+
+
+@contextmanager
+def holding_research_fixture():
+    """Exercise the retained capability without requiring an active experiment."""
+    from config import research_summary
+    rows = tuple(
+        {**row, "enabled": True} if any(
+            binding.get("exit_model") == "HV1" for binding in row.get("bindings", ())
+        ) else row for row in research_summary.RESEARCH_SUMMARY_ROWS
+    )
+    with patch.object(research_summary, "RESEARCH_SUMMARY_ROWS", rows):
+        yield
 
 
 class HoldingValueTests(TestCase):
@@ -174,7 +188,8 @@ class HoldingValueTests(TestCase):
     def test_holding_source_change_invalidates_only_its_own_seed(self):
         from services.research.strategy_robustness_units import scientific_unit_signature
         from tools.validate.synthetic_strategy_robustness_unit_cases import _registered_fixture
-        _, _, arms, seeds, contract = _registered_fixture()
+        with holding_research_fixture():
+            _, _, arms, seeds, contract = _registered_fixture()
         modified = deepcopy(contract)
         affected = next(a for a in modified["stochastic_arms"] if a.get("position_model_sources"))
         affected["position_model_sources"][str(seeds[0])]["manifest_sha256"] = "different-weights"
@@ -187,7 +202,8 @@ class HoldingValueTests(TestCase):
         from core.strategy_compare_policy import get_strategy_comparison_settings
         from core.research_orchestration import ResearchArtifactPlan
         from services.research.position_model_dependency import append_position_model_actions
-        settings = get_strategy_comparison_settings("broker_cash_dl_conversion_rolling")
+        with holding_research_fixture():
+            settings = get_strategy_comparison_settings("broker_cash_dl_conversion_rolling")
         with TemporaryDirectory() as directory, patch(
             "services.research.position_model_dependency.inspect_holding_model",
             side_effect=lambda root, seed, config: {"ready": False,
@@ -199,6 +215,14 @@ class HoldingValueTests(TestCase):
             self.assertEqual(len(actions), 4)  # Exact and Direct share each fit
             self.assertTrue(all(a.action == "BUILD" for a in actions))
             self.assertEqual(ResearchArtifactPlan.from_actions(actions).overall_status, "PREPARABLE")
+            inactive = replace(settings, arms={key: replace(arm, enabled=False)
+                if (arm.dl_runtime_options or {}).get("position_exit_model") else arm
+                for key, arm in settings.arms.items()})
+            actions, identities = [], {}
+            append_position_model_actions(root=Path(directory), settings=inactive,
+                                          actions=actions, identities=identities, seeds=(11, 12, 13, 14))
+            self.assertEqual(actions, [])
+            self.assertEqual(identities, {})
 
     def test_whole_episode_purge_and_natural_maturity(self):
         rows = pd.DataFrame([
@@ -231,7 +255,9 @@ class HoldingValueTests(TestCase):
         from core.research_summary import unresolved_oracle_strategy_contracts
         from core.strategy_compare_registry import STRATEGY_COMPARE_ARMS
         from services.research.position_model_dependency import position_model_bindings
-        settings = get_strategy_comparison_settings("broker_cash_dl_conversion_rolling")
+        with holding_research_fixture():
+            settings = get_strategy_comparison_settings("broker_cash_dl_conversion_rolling")
+            unresolved = unresolved_oracle_strategy_contracts(arm_registry=STRATEGY_COMPARE_ARMS)
         self.assertEqual(set(position_model_bindings(settings)), {"HV1"})
         for treatment, control in (("C205", "C123"), ("C206", "C124")):
             left, right = settings.arms[treatment], settings.arms[control]
@@ -241,7 +267,7 @@ class HoldingValueTests(TestCase):
             self.assertEqual(left.dl_runtime_mode, right.dl_runtime_mode)
             self.assertEqual({k: v for k, v in left.dl_runtime_options.items() if k != "position_exit_model"}, right.dl_runtime_options)
         self.assertTrue(settings.arms["C106"].enabled)
-        self.assertTrue({"C205", "C206"} <= set(unresolved_oracle_strategy_contracts(arm_registry=STRATEGY_COMPARE_ARMS)))
+        self.assertTrue({"C205", "C206"} <= set(unresolved))
         self.assertNotIn("C203", STRATEGY_COMPARE_ARMS)
 
     def test_real_fit_exports_only_mature_states_and_validates_before_refit(self):
