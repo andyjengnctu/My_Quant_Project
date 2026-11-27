@@ -5629,3 +5629,38 @@ Seed42 中，買進當天續抱優於下一可成交出場的 episodes 占 39.68
 另外，validation 以自然持倉路徑逐日 MSE 選 epoch，並非從第一日實際執行模型到退出後停止的完整交易績效。30 折中 24 折勝過 ridge 的 MSE 不足以證明 DL 出場有用；逐日 ΔR 也未計入提前退出後的再進場、交易成本累積與資金路徑。上述權重翻轉已由資料確認，與幾乎全賣的行為一致；尚未用受控重訓隔離其對總損失的份額，不能宣稱是唯一原因或修正後必定獲利。2021 起仍為迭代研究 OOS，沒有將該段決策或統計回饋 FIT。
 
 新增證據：`outputs/validation/holding_value_retirement_20261127/weight_diagnosis.json` 保存五 seed 第一折 train／validation／final refit 分布；`diagnostic_provenance.json` 保存買進當天決策分位數、模型／receipt／producer／原結果 SHA256 與權重定義。每份 receipt 所列 sample parquet SHA 皆已逐一核對。下一個研究僅提出設計，未實作或預占編號。
+
+## 2026-11-27 — HV2／C207／C208：整筆交易收益出場，2018–2020 Seed42 未通過前置門檻
+
+**設計與執行。** 使用者核准 C207 Exact／C208 Direct，沿用既有 Research 比較，保留原 CO C123／C124 及 C106；工程驗證後先跑 2018–2020 Seed42，通過才執行正式 Rolling、四 Seed Robustness、Summary。HV2 使用已知個股＋0050 的 300 日 OHLCV 與 6 個持倉狀態，逐筆完整交易等權最大化預期淨 R；全部持倉狀態參與，不再每筆隨機抽一天或除以持倉長度。自然／提前出場及費稅由 canonical execution 產生；只有第一次有效出場請求決定該筆完整 payoff，原保護義務與未成交後持續請求維持。完整契約已在結果產生前登錄於 Registry。
+
+**實際訓練與時間切分。** 616 檔股票完成樣本建置，其中 457 檔有合法成熟樣本，共 7,299 episodes、323,919 states、120,313 個唯一個股／日期價量視窗，缺特徵 states＝0。僅使用 2020-12-31 以前真值；未成熟的 617 筆 2020 進場交易整筆排除，沒有期末強平。每折 DL 與線性基線各實際訓練 12 epochs，共 72 個 candidate epochs，沒有用舊模型冒充新訓練。
+
+| 年度 FIT cutoff | Inner train episodes | Validation episodes | 合法 final refit episodes | 最大 maturity | DL 選定 epochs | 線性選定 epochs |
+|---|---:|---:|---:|---|---:|---:|
+| 2018-01-01 | 2,783 | 1,194 | 4,072 | 2017-12-27 | 0 | 0 |
+| 2019-01-01 | 4,072 | 661 | 5,131 | 2018-12-28 | 0 | 11 |
+| 2020-01-01 | 5,131 | 698 | 5,855 | 2019-12-30 | 0 | 10 |
+
+前一曆年為內層 validation，跨 validation 起點的 episode purge；final refit 重新納入 cutoff 前合法成熟交易，故數量不必等於 inner train＋validation。表中 final refit episodes 是可用資料集合；DL 三折與線性第一折選定 epochs＝0 時，沒有梯度 refit，直接發布固定 p＝0.01 的原規則 fallback。這是事前完整交易 validation 的選擇結果，不是沒有訓練或執行失敗。跨年持倉逐決策使用當年已合法 FIT 的模型；年度結果依進場年分組，因此 2018 年進場的線性交易仍可能被 2019 年模型提前結束。
+
+**第一階段同批完整交易結果。** 每筆先以原始風險金額換算完整淨 R，再與同一自然 P16 交易配對；以下不是 Exact／Direct 資金組合 RoMD，也未計入提前出場後重新投入資金的效果。
+
+| 進場年度 | Episodes | DL−P16 平均 ΔR | 線性−P16 平均 ΔR | DL 提前出場 | 線性提前出場 | 原 P16／DL 持倉中位數（曆日） |
+|---|---:|---:|---:|---:|---:|---:|
+| 2018 | 690 | 0.000000 | −0.066950 | 0.00% | 2.61% | 38.0 |
+| 2019 | 1,106 | 0.000000 | −0.023257 | 0.00% | 25.05% | 60.0 |
+| 2020 | 1,032 | 0.000000 | +0.052560 | 0.00% | 16.47% | 32.5 |
+
+三年等權 DL−P16＝**0.000000R**，未達嚴格正增量；改善年度 **0/3**，未達至少 2/3；DL−線性等權 **+0.012549R**，此項單獨通過。線性平均相對 P16 為 −0.012549R，不能將「維持原 P16 比線性少損失」解讀為 DL 學到有效出場。三個必要條件須同時成立，故正式判定 **REJECT**。
+
+**大贏家與限制。** 逐年以原 P16 完整 Net R 定義前十分位，原／DL 合計分別同為 198.341347R、347.659210R、281.170226R，DL 截短的正損失皆 0R。這來自完全沒有啟用學到的提前出場，不能稱為模型成功辨識大贏家。線性同一組贏家合計為 151.036698R、307.225675R、291.273723R；逐筆正損失加總為 48.564847R、54.702680R、12.224584R，與淨差不同。樣本排除截止日仍未成熟的 617 筆交易，尤其限制 2020 的代表性；沒有用 2021 起結局補齊後再決定是否通過，也不外推為所有出場 DL 均無效。
+
+**決策與下游。** HV2／C207／C208 登錄 **DEVELOPMENT_REJECT／NO_ADVANCEMENT**。保留實作、比較身分、歷史及工件，未自行退役、未調整出場閾值或增加 epochs 重試。依原條件不執行 2021 起 Rolling、四 Seed Robustness、Summary，不產生或填入 C207／C208 正式策略績效。原 CO 與 C106 保留；C205／C206 繼續退役。工程 PASS 與科學門檻 REJECT 分別成立。
+
+**正式證據。**
+
+- 前置結果：`outputs/research/breakout_quality/holding_policy/HV2/development_seed42_2018_2020/result.json`／`result.md`、`dl_episodes.csv`、`linear_episodes.csv`。
+- 樣本：`outputs/research/breakout_quality/holding_episode_samples/seed_42/6b83c05d5b9e3a30613420542263ab76897bd15678574a9ea10bf7143cf98b36/receipt.json` 及逐股票 parquet；receipt SHA256＝`940789362b0933a197f77c282ba12448b6c74c05cc7cef0b566e97377973b045`。
+- FIT：`models/research/breakout_quality/holding_value/HV2/seed_42/fits/` 下三個年度 `fold.json` 與 DL／線性權重；保存每個 epoch 的訓練收益、完整交易 validation、選定 epoch、資料與程式身分及權重 SHA256。
+- 實際執行：`outputs/validation/holding_policy_20261127/development.log` 保存全部 epoch、refit 及最終 `DEVELOPMENT_COMPLETED gate=REJECT`；同目錄 `development_verified.json` 保存逐筆重算、樣本 SHA／日期及 Research gate 核對，`run_bundle_verified.log` 保存訓練前完整工程 PASS。

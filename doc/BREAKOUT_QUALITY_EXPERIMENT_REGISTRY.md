@@ -1139,3 +1139,7 @@ The canonical `config/research_summary.py` roster alone determines current Model
 - Research 原共用 Summary roster 註冊兩列、沿用 Exact／Direct／P16／CO 分數及比較服務，保留 C106；共用 position producer registry 負責路由，consumer 不認 HV2 名稱。新出場模型沒有核准的 matching Oracle，兩列保持 CONTRACT_UNRESOLVED，不借用 CO entry Oracle；Summary 的進場 CO ρ 與持倉 validation 分開。
 - 第一階段通過後才啟動原 2021-01-01～2026-03-02 Rolling、既有四 Seed Robustness、Summary；四 Seed 對各自 CO 的配對 ΔRoMD mean／median 皆正、至少 3/4 改善、平均 MDD 不增加，並報總報酬、大贏家與資金再投入後果。2021 起為迭代研究 OOS；不自動更新 Trading。
 - 前置驗證唯一工件：`outputs/research/breakout_quality/holding_policy/HV2/development_seed42_2018_2020/result.json`／`result.md` 與逐筆 CSV。正式 FIT 在 `models/research/breakout_quality/holding_value/HV2/seed_*/fits/`，各 mode manifest 只引用同一 FIT。研究結果另於取得後登錄，不以工程 PASS 代替。
+
+**2026-11-27 第一階段完成：DEVELOPMENT_REJECT／NO_ADVANCEMENT。** 已實際建立完整交易樣本、執行 Seed42 的 2018／2019／2020 三個年度 FIT；DL 與相同輸入線性基線每折各訓練 12 epochs。三折 DL 的內層 validation 均未找到嚴格優於原 P16 的完整交易收益，依事前 fallback 選擇 selected_epochs=0／always_continue，並非漏跑訓練。三年驗證 episodes 為 690／1,106／1,032，DL−P16 平均單筆增量皆為 0R，改善年度 0/3；DL−線性年度等權平均 +0.012549R，不能取代另外兩個未通過的必要條件。
+
+HV2／C207／C208 保留已實作身分、比較綁定與失敗工件，狀態為 **DEVELOPMENT_REJECT / FORMAL_BLOCKED / NO_ADVANCEMENT / NO_TRADING**，未自行退役。依使用者的條件授權與 producer gate，未建立 2021 起正式出場 FIT，未執行 C207／C208 Rolling、四 Seed Robustness 或 Summary。原 CO C123／C124、C106 及其他對照保留。完整數值、未成熟交易限制與實際訓練證據見 Experiment Log 同日 HV2 結果節。
