@@ -141,7 +141,7 @@ STRATEGY_COMPARE_SUITES = {
         # A compact connected contrast graph supports each selected model
         # versus C96 plus the matched CK/CJ label contrast. Historical AO/CH
         # contrasts remain registered and filter out with their inactive arms.
-        "contrast_ids": ('C201-C123', 'C202-C124', 'C201-C202', 'C201-C106', 'C199-C123', 'C200-C124', 'C199-C200', 'C195-C106', 'C195-C123', 'C196-C118', 'C196-C124', 'C195-C196', 'C195-C96', 'C196-C96', 'C194-C124', 'C193-C194', 'C194-C118', 'C194-C96', 'C193-C123', 'C193-C106', 'C193-C96', 'C189-C96', 'C190-C96', 'C189-C190', 'C189-C106', 'C190-C118', 'C186-C183', 'C97-C96', 'C98-C97', 'C98-C96', 'C103-C96', 'C106-C96', 'C107-C96', 'C109-C96', 'C111-C96', 'C112-C96', 'C118-C96', 'C123-C96', 'C124-C96', 'C125-C96', 'C126-C96', 'C109-C107', 'C111-C112', 'C106-C118', 'C123-C124', 'C125-C126', 'C123-C125', 'C124-C126', 'C147-C107', 'C148-C109', 'C147-C148', 'C153-C97', 'C154-C97', 'C153-C107', 'C154-C109', 'C154-C153', 'C155-C97', 'C156-C97', 'C155-C156', 'C155-C153', 'C156-C154', 'C157-C97', 'C158-C97', 'C157-C158', 'C157-C153', 'C158-C154'),
+        "contrast_ids": ('C189-C96', 'C190-C96', 'C189-C190', 'C189-C106', 'C190-C118', 'C186-C183', 'C97-C96', 'C98-C97', 'C98-C96', 'C103-C96', 'C106-C96', 'C107-C96', 'C109-C96', 'C111-C96', 'C112-C96', 'C118-C96', 'C123-C96', 'C124-C96', 'C125-C96', 'C126-C96', 'C109-C107', 'C111-C112', 'C106-C118', 'C123-C124', 'C125-C126', 'C123-C125', 'C124-C126', 'C147-C107', 'C148-C109', 'C147-C148', 'C153-C97', 'C154-C97', 'C153-C107', 'C154-C109', 'C154-C153', 'C155-C97', 'C156-C97', 'C155-C156', 'C155-C153', 'C156-C154', 'C157-C97', 'C158-C97', 'C157-C158', 'C157-C153', 'C158-C154'),
         "display_name_bases": {'C96': 'Min Base-Finalist-Best / Broker-Cash', 'C97': 'Full Base-Finalist-Best / Broker-Cash', 'C98': 'Full Corrected Same-Signal Agree 4x300 / Broker-Cash', 'C103': 'Min MR-13CG Exact K/R0 / Broker-Cash', 'C106': 'Min MR-13CI Exact K/R0 / Broker-Cash', 'C189': 'Min MR-13CI Rank + MR-13DL R40 Positive Exact K/R0 / Broker-Cash', 'C190': 'Min MR-13CI Rank + MR-13DL R40 Positive Direct No-K No-R0 / Broker-Cash', 'C107': 'Min MR-13CJ Exact K/R0 / Broker-Cash', 'C109': 'Min MR-13CJ T40 Direct No-K No-R0 / Broker-Cash', 'C111': 'Min MR-13K Pure-MFE Control Exact K/R0 / Broker-Cash', 'C112': 'Min MR-13K Pure-MFE Direct No-K No-R0 / Broker-Cash', 'C118': 'Min MR-13CI R40 Direct No-K No-R0 / Broker-Cash', 'C123': 'Min MR-13CO Formal MinTrade Full-cycle NetPnL Exact K/R0 / Broker-Cash', 'C124': 'Min MR-13CO Formal MinTrade Full-cycle NetPnL Direct No-K No-R0 / Broker-Cash', 'C125': 'Min MR-13CO Rank + MR-13CP Positive Exact K/R0 / Broker-Cash', 'C126': 'Min MR-13CO Rank + MR-13CP Positive Direct No-K No-R0 / Broker-Cash', 'C147': 'Min MR-13CX T40 Pairwise-Confidence Exact K/R0 / Broker-Cash', 'C148': 'Min MR-13CX T40 Pairwise-Confidence Direct No-K No-R0 / Broker-Cash', 'C153': 'Full MR-13CJ T40 Exact K/R0 / Broker-Cash', 'C154': 'Full MR-13CJ T40 Direct No-K No-R0 / Broker-Cash', 'C155': 'Full MR-13CZ Rank + MR-13DA Positive Exact K/R0 / Broker-Cash', 'C156': 'Full MR-13CZ Rank + MR-13DA Positive Direct No-K No-R0 / Broker-Cash', 'C157': 'Full MR-13CZ NetPnL Rank Exact K/R0 / Broker-Cash', 'C158': 'Full MR-13CZ NetPnL Rank Direct No-K No-R0 / Broker-Cash', 'C179': 'Daily (Min/P21) No DL / Default Selector / Broker-Cash'},
     },
     # Historical Round-10 suite retained unchanged for artifact interpretation/replay.
@@ -1199,107 +1199,6 @@ STRATEGY_COMPARE_ARMS = {
     },
 }
 
-# AI: History candidates share one DN score source and the original CO/P16 selectors.
-from config.breakout_quality_history import HISTORY_PROFILE as _HISTORY_PROFILE
-STRATEGY_DL_SOURCES["CONT13DN_ROLL"] = {
-    **STRATEGY_DL_SOURCES[STRATEGY_COMPARE_ARMS["C123"]["dl_id"]],
-    "experiment_profile": _HISTORY_PROFILE,
-    "description": "MR-13DN CO early real-event history extension",
-}
-STRATEGY_COMPARE_ARMS["C193"] = {
-    **STRATEGY_COMPARE_ARMS["C123"],
-    "name": "Min MR-13DN Early History Exact K/R0 / Broker-Cash",
-    "description": "Same CO target/model/loss and P16 Exact; only add legal 2008-2013 FIT history.",
-    "dl_id": "CONT13DN_ROLL",
-}
-STRATEGY_COMPARE_ARMS["C194"] = {
-    **STRATEGY_COMPARE_ARMS["C124"],
-    "name": "Min MR-13DN Early History Direct No-K No-R0 / Broker-Cash",
-    "description": "Same DN PIT scores and P16 broker cash as C193; canonical Direct No-K/No-R0 selector from C124.",
-    "dl_id": "CONT13DN_ROLL",
-}
-
-# AI: One EMA-input model supplies the same original CO Exact/Direct selectors.
-from core.breakout_quality_registry import (
-    STOCK_EMA_PROFILE as _STOCK_EMA_PROFILE,
-    get_breakout_quality_experiment_profile as _get_experiment_profile,
-)
-STRATEGY_DL_SOURCES["CONT13DO_ROLL"] = {
-    **STRATEGY_DL_SOURCES[STRATEGY_COMPARE_ARMS["C123"]["dl_id"]],
-    "model_architecture": _get_experiment_profile(_STOCK_EMA_PROFILE).model_architecture,
-    "experiment_profile": _STOCK_EMA_PROFILE,
-    "description": "MR-13DO CO plus full-history stock close EMA inputs",
-}
-for _new_id, _reference_id, _selector in (
-    ("C197", "C123", "Exact K/R0"),
-    ("C198", "C124", "Direct No-K/No-R0"),
-):
-    STRATEGY_COMPARE_ARMS[_new_id] = {
-        **STRATEGY_COMPARE_ARMS[_reference_id],
-        "name": f"Min MR-13DO EMA {_selector} / Broker-Cash",
-        "description": "Same CO full-cycle NetPnL and P16; append full-history stock close EMA inputs.",
-        "dl_id": "CONT13DO_ROLL",
-        "replay_contract_version": 1,
-    }
-
-# AI: One calendar-input model supplies the original CO/P16 selectors.
-from core.breakout_quality_registry import CALENDAR_BARS_PROFILE as _CALENDAR_BARS_PROFILE
-STRATEGY_DL_SOURCES["CONT13DP_ROLL"] = {
-    **STRATEGY_DL_SOURCES[STRATEGY_COMPARE_ARMS["C123"]["dl_id"]],
-    "model_architecture": _get_experiment_profile(_CALENDAR_BARS_PROFILE).model_architecture,
-    "experiment_profile": _CALENDAR_BARS_PROFILE,
-    "description": "MR-13DP CO plus closed weekly and monthly OHLCV branches",
-}
-for _new_id, _reference_id, _selector in (
-    ("C199", "C123", "Exact K/R0"),
-    ("C200", "C124", "Direct No-K/No-R0"),
-):
-    STRATEGY_COMPARE_ARMS[_new_id] = {
-        **STRATEGY_COMPARE_ARMS[_reference_id],
-        "name": f"Min MR-13DP Daily Weekly Monthly {_selector} / Broker-Cash",
-        "description": "Same CO full-cycle NetPnL and P16; add closed calendar OHLCV branches with missing-period masks.",
-        "dl_id": "CONT13DP_ROLL",
-        "replay_contract_version": 1,
-    }
-
-# AI: One FIT-only frequency treatment supplies both existing CO/P16 selectors.
-from core.breakout_quality_registry import SIGNAL_FREQUENCY_PROFILE as _SIGNAL_FREQUENCY_PROFILE
-STRATEGY_DL_SOURCES["CONT13DQ_ROLL"] = {
-    **STRATEGY_DL_SOURCES[STRATEGY_COMPARE_ARMS["C123"]["dl_id"]],
-    "experiment_profile": _SIGNAL_FREQUENCY_PROFILE,
-    "description": "MR-13DQ CO original-signal FIT frequency weighted pairs",
-}
-for _new_id, _reference_id, _selector in (
-    ("C201", "C123", "Exact K/R0"),
-    ("C202", "C124", "Direct No-K/No-R0"),
-):
-    STRATEGY_COMPARE_ARMS[_new_id] = {
-        **STRATEGY_COMPARE_ARMS[_reference_id],
-        "name": f"Min MR-13DQ Signal Frequency {_selector} / Broker-Cash",
-        "description": "Same CO/P16; multiply Delta-NDCG by inverse FIT episode frequencies at both pair endpoints.",
-        "dl_id": "CONT13DQ_ROLL", "replay_contract_version": 1,
-    }
-
-# AI: User-approved fixed equal-rank fusion; keep all original CI/CO references.
-for _new_id, _reference_id, _weights, _label in (
-    ("C195", "C106", (0.5, 0.5), "CI+CO Equal Rank Exact"),
-    ("C196", "C118", (0.5, 0.5), "CI+CO Equal Rank Direct"),
-):
-    STRATEGY_COMPARE_ARMS[_new_id] = {
-        **STRATEGY_COMPARE_ARMS[_reference_id], "replay_contract_version": 1,
-        "name": f"Min {_label} / Broker-Cash",
-        "description": "Fixed daily average-zero-based percentiles on common feature-eligible CI/CO stock days; original same-seed P16 and selector.",
-        "dl_runtime_options": {
-            **STRATEGY_COMPARE_ARMS[_reference_id]["dl_runtime_options"],
-            "rank_score_composition": {
-                "method": "same_day_percentile_weighted_v1",
-                "universe": "common_score_eligible_stock_days", "tie_method": "average_zero_based",
-                "members": [{"dl_id": _source, "weight": _weight} for _source, _weight in zip(
-                    ("CONT13CI_ROLL", "CONT13CO_ROLL"), _weights, strict=True)],
-            },
-        },
-    }
-
 # AI: Materialize mode-specific parameter-source overrides from the canonical
 # arm definitions, after those definitions exist. This keeps Full P17 and Min
 # P16 in the same generic Compare Suite without per-arm dispatch exceptions.
@@ -1321,30 +1220,6 @@ for _mode in ("oos", "rolling"):
 # Contrast 是否啟用只由 STRATEGY_COMPARE_PROFILES[*]["contrast_ids"] 決定。
 
 STRATEGY_COMPARE_CONTRASTS = {
-    "C201-C123": {"left": "C201", "right": "C123", "description": "Signal frequency weighting versus original CO, same P16 Exact"},
-    "C202-C124": {"left": "C202", "right": "C124", "description": "Signal frequency weighting versus original CO, same P16 Direct"},
-    "C201-C202": {"left": "C201", "right": "C202", "description": "Same frequency-weighted model and P16: Exact versus Direct"},
-    "C201-C106": {"left": "C201", "right": "C106", "description": "Signal frequency weighted NetPnL versus retained CI R40 Exact reference"},
-    "C199-C123": {"left": "C199", "right": "C123", "description": "Daily weekly monthly CO versus original CO, same P16 Exact"},
-    "C200-C124": {"left": "C200", "right": "C124", "description": "Daily weekly monthly CO versus original CO, same P16 Direct"},
-    "C199-C200": {"left": "C199", "right": "C200", "description": "Same daily weekly monthly model score and P16: Exact versus Direct"},
-    "C197-C123": {"left": "C197", "right": "C123", "description": "CO full-history EMA inputs versus original CO, same P16 Exact"},
-    "C198-C124": {"left": "C198", "right": "C124", "description": "CO full-history EMA inputs versus original CO, same P16 Direct"},
-    "C197-C198": {"left": "C197", "right": "C198", "description": "Same full-history EMA model score and P16: Exact versus Direct"},
-    'C195-C106': {'left': 'C195', 'right': 'C106', 'description': 'Equal rank fusion versus original CI Exact'},
-    'C195-C123': {'left': 'C195', 'right': 'C123', 'description': 'Equal rank fusion versus original CO Exact'},
-    'C196-C118': {'left': 'C196', 'right': 'C118', 'description': 'Equal rank fusion versus original CI Direct'},
-    'C196-C124': {'left': 'C196', 'right': 'C124', 'description': 'Equal rank fusion versus original CO Direct'},
-    'C195-C196': {'left': 'C195', 'right': 'C196', 'description': 'Same fused scores, Exact versus Direct'},
-    'C195-C96': {'left': 'C195', 'right': 'C96', 'description': 'Equal rank fusion Exact versus no-DL control'},
-    'C196-C96': {'left': 'C196', 'right': 'C96', 'description': 'Equal rank fusion Direct versus no-DL control'},
-    "C194-C124": {"left": "C194", "right": "C124", "description": "Same CO/P16 Direct: early-history extension versus original training history"},
-    "C193-C194": {"left": "C193", "right": "C194", "description": "Same DN scores and P16: Exact K/R0 versus Direct No-K/No-R0"},
-    "C194-C118": {"left": "C194", "right": "C118", "description": "Early-history CO versus CI R40 reference, same P16 Direct"},
-    "C194-C96": {"left": "C194", "right": "C96", "description": "Early-history CO Direct versus same-P16 no-DL control"},
-    "C193-C123": {"left": "C193", "right": "C123", "description": "Same CO/P16 Exact: early-history extension versus original training history"},
-    "C193-C106": {"left": "C193", "right": "C106", "description": "Early-history CO versus CI R40 positive reference, same P16 Exact"},
-    "C193-C96": {"left": "C193", "right": "C96", "description": "Early-history CO versus same-P16 no-DL control"},
     "C189-C96": {"left": "C189", "right": "C96", "description": "CI R40 rank plus DL Positive Exact versus same-P16 no-DL control"},
     "C190-C96": {"left": "C190", "right": "C96", "description": "CI R40 rank plus DL Positive Direct versus same-P16 no-DL control"},
     "C189-C190": {"left": "C189", "right": "C190", "description": "Same CI R40 rank and independent DL Positive: Exact versus Direct"},

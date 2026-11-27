@@ -117,11 +117,6 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
     case_id = "BREAKOUT_QUALITY_STRATEGY_COMPARISON"
     results = []
     summary = {"ticker": case_id, "synthetic": True}
-    from .check_result_utils import run_unittest_capability_cases
-    from .test_rank_score_composition import RankScoreCompositionTests
-    composition_results, _ = run_unittest_capability_cases(
-        case_id, "rank_score_composition", [RankScoreCompositionTests])
-    results.extend(composition_results)
     check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
 
     # AI: An archived treatment must never silently fall back to ordinary replay.
@@ -1325,6 +1320,7 @@ def validate_breakout_quality_legacy_research_cleanup_contract_case(_base_params
         maintenance.get("disabled_audits"),
         maintenance.get("oversized_transient_tests"),
         retired_dedicated_tests,
+        maintenance.get("retired_registrations"),
         private_zero_callers,
         experiment_execution_branches,
         growth_reviews,

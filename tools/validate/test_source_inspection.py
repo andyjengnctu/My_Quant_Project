@@ -146,6 +146,30 @@ class Plain:
 
 
 class MaintenanceInspectionContractTests(_IsolatedSourceCacheTest):
+    def test_retirement_scan_requires_explicit_decision_and_live_registration(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            registry = root / "doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md"
+            registry.parent.mkdir()
+            registry.write_text(
+                "Historical narrative: SR-C701 also compared with SR-C700.\n"
+                "<!-- implementation-lifecycle -->\n"
+                "| Identities | Research status | Implementation status |\n"
+                "| --- | --- | --- |\n"
+                "| SR-C701, MR-71A | RETIRED | PENDING_DEPENDENCY_REVIEW |\n"
+                "| SR-C702 | CANCELLED | REMOVED |\n"
+                "| SR-C703 | RETIRED | REMOVED |\n"
+                "| SR-C700 | ACTIVE | RETAINED |\n"
+                "<!-- /implementation-lifecycle -->\n", encoding="utf-8")
+            findings = maintenance._retired_registration_candidates(
+                root, registered_ids={"SR-C700", "SR-C701", "MR-71A", "SR-C702", "SR-C704"})
+            self.assertEqual([item["identities"] for item in findings],
+                             [["MR-71A", "SR-C701"], ["SR-C702"]])
+            # A disabled/shared witness without a retirement decision is kept.
+            self.assertFalse(maintenance._retired_registration_candidates(
+                root, registered_ids={"SR-C700", "SR-C704"}))
+            self.assertIn("PENDING_DEPENDENCY_REVIEW", registry.read_text())
+
     def test_branch_prefilter_preserves_decoded_and_concatenated_literals(self):
         spellings = [
             '"MR-71"', '"M" "R-71"', '("M" # split\n "R-71")',

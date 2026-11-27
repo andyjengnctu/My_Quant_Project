@@ -1393,6 +1393,34 @@ for _scope in ("portfolio_candidates", "replay_numerics"):
 
 _REVIEWED_SOURCE_INVENTORIES["mintrade_source_graph"]["current"]["filters/breakout_quality/trade_path_label.py"] = ('48417c248b092f97d91a51f7049593db44bbd5243d8804f469c36e36f3941ed6', '48417c248b092f97d91a51f7049593db44bbd5243d8804f469c36e36f3941ed6', '95da26f67620e72a6faac4b22734fb24f0496802b6efaba1c01e65eb50a75b82')
 
+# AI: Retired input/history/frequency capabilities preserve all 28 retained
+# profile contracts, two model specs, real-stock tensors, CO select/refit
+# weights and 61 independent replay observations against frozen 7404f160.
+# Evidence: outputs/validation/retirement_sweep_20261128/*_{inputs,fit,receipt}.json.
+# Pin only these reviewed bytes; any unknown shared numerical edit stays strict.
+_RETIRED_INPUT_CAPABILITIES_SOURCE_PINS = {'core/breakout_quality_registry.py': (('8a8d7a48206f840c1c4d03b4bdc7a0e34afa3665a4eebfca20f0500d6c5c56e8',
+                                        '6cc94509b7acfa71bbd25c2bba7a5b0ff955512c069abde51609d85d84756f80'),
+                                       '310db0713692a8a335d8f7514e8026b05e0e921781b5a89412cd5d1d63f4aa5e'),
+ 'filters/breakout_quality/models/architectures.py': (('a60ebd43a8cc0559d6c4a7cc9861eff07bb16c456426b7c58bba06758c1fa9c0',
+                                                       'd1e73cd3212c75953221c80f64f53469f3ac9934b7daa348acf18ea2f98f8abb'),
+                                                      '7759ecf25673d4e1709376f19f1dffb885e00fa8294b3275d718d1dda473f302'),
+ 'filters/breakout_quality/models/spec_builders.py': (('78443aa7a0b82eff439841430bdb274b5943ef3fdfc55a9eb51a7415c5268ba7',
+                                                       'f3527a2e7216e873e016d91fb50fca99d9682efc7834937dfc8423654f406ae0'),
+                                                      '82ffabeea6b096e09370ab2ae871e95f5c4f430ab119984ffd1fad89bbe158ca'),
+ 'filters/breakout_quality/models/spec_contract.py': (('e52a81e42cda0238bb935d6021450d348a825209636188404c81fea6e0bb3b7c',
+                                                       'bdc029b4e9a96b52e488aa9c111e16b11308cc69ad611a4846421cf58e72d7d5'),
+                                                      'bdc029b4e9a96b52e488aa9c111e16b11308cc69ad611a4846421cf58e72d7d5')}
+for _relative, (_pins, _previous) in _RETIRED_INPUT_CAPABILITIES_SOURCE_PINS.items():
+    _REVIEWED[_relative].setdefault("reviewed_model_only_revisions", {}).update(
+        dict.fromkeys(_pins, _previous)
+    )
+_REVIEWED_SOURCE_INVENTORIES["oracle_daily_provider"]["current"][
+    "filters/breakout_quality/daily_ranker_data.py"
+] = ('e2b61e98476854365099f2cddb7ce3bbb5c100110589e73bcfaab698628abbd3',
+ 'e2b61e98476854365099f2cddb7ce3bbb5c100110589e73bcfaab698628abbd3',
+ 'fe6fb8ae03e76037974822d286eb3e31e3af83542fe25a2bef7b2ddb18a45b78')
+
+
 def _reviewed_source_group(scope: str):
     proof = _REVIEWED_SOURCE_INVENTORIES.get(scope)
     updates = _OPTIMIZER_EXECUTION_GROUP_UPDATES.get(scope)

@@ -4,6 +4,22 @@
 
 本文件是 `breakout_quality` 的**實驗 identity、命名、版本語意、namespace、目前基準與 ID 佔用狀態**單一真理來源。
 
+### 2026-11-28 退役研究的實作生命週期
+
+本表區分研究決策與工程移除狀態，僅記錄已明確退役的對象；未啟用、共用依賴或 Oracle 對照不因此視為可刪。後續退役先登錄 `PENDING_DEPENDENCY_REVIEW`，完成依賴檢查並移除專屬 registration、implementation、呼叫與測試後改為 `REMOVED`。既有維護掃描將本表與可執行註冊比對，只提出 REVIEW 候選。
+
+<!-- implementation-lifecycle -->
+| Identities | Research status | Implementation status |
+| --- | --- | --- |
+| SR-C193, SR-C194, MR-13DN | RETIRED | REMOVED |
+| SR-C195, SR-C196 | RETIRED | REMOVED |
+| SR-C197, SR-C198, MR-13DO | RETIRED | REMOVED |
+| SR-C199, SR-C200, MR-13DP | RETIRED | REMOVED |
+| SR-C201, SR-C202, MR-13DQ | RETIRED | REMOVED |
+<!-- /implementation-lifecycle -->
+
+以上原始研究定義、結果、決策、FIT／Replay 版本與必要模型／驗證工件保留；下文歷史實作說明不代表現行可執行能力，ID 不回收。CI／CO 與其他現行模型、一般 EMA／排名／配重、canonical 教師資料及 Oracle 對照繼續由共用 owner 提供；原始 Experiment Log 不回寫。
+
 ### 2026-11-28 使用者指定退役實作：C203／C204、HV1／HV2
 
 C203／C204 不再測試，現況為 `CANCELLED / IMPLEMENTATION_RETIRED / MARKET_RESULTS_INCOMPLETE / HISTORICAL_ID_RESERVED`；既有 2/99 部分 checkpoint 仍只代表未完成觀察，不作 PASS／FAIL 結論。HV1／C205／C206 與 HV2／C207／C208 維持既有退役及 NO_ADVANCEMENT 決策，專屬模型、出場掛鉤、準備／重用／報表分支、runtime registration 與專屬測試一併退出現行程式。下列舊節的入口與 producer 說明僅記錄當時實作，不再代表可執行能力。

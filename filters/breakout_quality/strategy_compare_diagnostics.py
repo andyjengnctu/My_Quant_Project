@@ -1234,7 +1234,6 @@ def backfill_pair_selection_diagnostics(
     pair_dir: Path,
     project_root: Path,
     active_trades_filename: str = "score_ranking_trades.csv",
-    rank_composition_score_loader=None,
 ) -> bool:
     """Backfill post-replay Forward selection diagnostics from canonical sidecars.
 
@@ -1291,13 +1290,6 @@ def backfill_pair_selection_diagnostics(
             or "model_score"
         ),
     )
-    from core.rank_score_composition import rank_score_composition
-    ranking_options = metadata.get("score_ranking_options") or {}
-    if rank_score_composition(ranking_options):
-        if rank_composition_score_loader is None:
-            raise ValueError("Rank composition diagnostic refresh requires canonical source admission")
-        from filters.breakout_quality.rank_score_composition import rank_composition_diagnostic_lookup
-        lookup = rank_composition_diagnostic_lookup(lookup, rank_composition_score_loader())
     baseline_diag, baseline_orderable_joined, baseline_selected_joined = (
         _strategy_selection_diagnostics(
             orderable=read_detail_csv(baseline_orderable_path, encoding="utf-8-sig"),

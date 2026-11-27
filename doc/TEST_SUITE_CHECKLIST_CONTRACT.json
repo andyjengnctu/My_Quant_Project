@@ -1526,8 +1526,8 @@
       "priority": "P1",
       "order": 183,
       "item": "臨時 research／Audit／diagnostic／synthetic code 在研究結案且無 current dependency 後必須退役；current runtime 與必要 reconstruction／compatibility boundary 必須保留。",
-      "gap": "已完成且無正式依賴的臨時research／Audit／diagnostic／synthetic須退役；必要checkpoint reconstruction與current Strategy Compare compatibility不得誤刪。`meta quality`主動執行advisory slimming scan，候選只能提示人工確認，不得依檔名、年齡或LOC自動刪除；`validate_breakout_quality_legacy_research_cleanup_contract_case`驗證退役CLI／Audit路徑不存在、current replacement與必要compatibility仍存在、正式docs不再宣告退役命令、maintenance scan回報CLEAN，並核對PROJECT_SETTINGS已定義disposable lifecycle",
-      "entry": "`tools/validate/transient_code_maintenance.py`, `tools/local_regression/run_meta_quality.py`, `doc/PROJECT_SETTINGS.md`, `doc/CMD.md`, `doc/ARCHITECTURE.md`, `tools/validate/synthetic_breakout_quality_strategy_cases.py`",
+      "gap": "已完成且無正式依賴的臨時 research／Audit／diagnostic／synthetic 須連同專屬呼叫與測試退役；保留 current runtime、必要 reconstruction／compatibility 及研究 evidence。meta quality 維護掃描只提出 advisory REVIEW，不因檔名、年齡、LOC 或未啟用自動刪除。Experiment Registry 的實作生命週期與可執行模型／策略註冊對照，辨識仍可被呼叫的退役能力；能力測試驗證明確退役、仍有註冊、已移除及未宣告退役的共用對照情境，並維持分類計數與 advisory 狀態一致。",
+      "entry": "`tools/validate/transient_code_maintenance.py`, `tools/validate/test_source_inspection.py`, `tools/local_regression/run_meta_quality.py`, `doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md`, `tools/validate/synthetic_breakout_quality_strategy_cases.py`",
       "category": "Legacy／臨時研究程式 disposable lifecycle與compatibility boundary",
       "status": "DONE"
     },

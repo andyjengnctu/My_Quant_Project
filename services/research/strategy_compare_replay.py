@@ -129,10 +129,7 @@ def _run_scenario(
             ),
         ))
         if ranking_source:
-            from filters.breakout_quality.rank_score_composition import rank_composition_scores_context
-            source = dict(ranking_source)
-            stack.enter_context(rank_composition_scores_context(source.pop("rank_composition_scores", None)))
-            stack.enter_context(breakout_quality_ranking_source_context(**source))
+            stack.enter_context(breakout_quality_ranking_source_context(**ranking_source))
         if filter_source:
             stack.enter_context(breakout_quality_filter_source_execution_context(**filter_source))
         return _run_scenario_inside_source_context(

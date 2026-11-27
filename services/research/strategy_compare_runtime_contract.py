@@ -97,21 +97,6 @@ def _resolve_continuous_score_override_period(
     return execution_start, available_from, available_through
 
 
-def load_strategy_rank_composition_scores(*, root, options, score_bindings=None, dataset="full"):
-    """Share source admission between live replay and offline diagnostic refresh."""
-    from services.breakout_quality.forward_model_source import load_forward_score_binding
-    from filters.breakout_quality.rank_score_composition import load_rank_composition_scores
-    bindings = score_bindings if score_bindings is not None else {}
-    for source in options.get("rank_composition_sources", ()):
-        if source["score_source"] != SCORE_SOURCE_CONTINUOUS_RANKER_OOS:
-            continue
-        path = str(Path(source["score_path"]).resolve())
-        if path not in bindings:
-            bindings[path] = load_forward_score_binding(
-                project_root=root, filter_id=source["filter_id"],
-                model_architecture=source["model_architecture"], experiment_profile=source["experiment_profile"],
-                expected_seed=int(source["expected_seed"]), dataset=str(dataset))
-    return load_rank_composition_scores(project_root=root, options=options, score_bindings=bindings)
 
 
 def resolve_strategy_compare_runtime_contract(
@@ -360,13 +345,6 @@ def resolve_strategy_compare_runtime_contract(
             binding = load_forward_score_binding(
                 project_root=root, **identity, expected_seed=int(workflow.seed), dataset=str(dataset))
             score_bindings[str(binding.contract.score_path.resolve())] = binding
-
-    from core.rank_score_composition import rank_score_composition
-    if rank_score_composition(ranking_options):
-        if ranking_source is None:
-            raise ValueError("Rank composition requires a Research ranking source")
-        ranking_source["rank_composition_scores"] = load_strategy_rank_composition_scores(
-            root=root, options=ranking_options, score_bindings=score_bindings, dataset=dataset)
 
     if (comparison_start_date is None) != (comparison_end_date is None):
         raise ValueError("comparison_start_date與comparison_end_date必須同時提供")

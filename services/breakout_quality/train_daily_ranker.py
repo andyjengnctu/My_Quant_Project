@@ -1211,8 +1211,6 @@ def run(args) -> int:
             plan=plan,
             evaluate_train_metrics=False,
             information_cutoff=str(bundle.outer_policy["selection_end_date"]),
-            **({"fit_cutoff": str(split.report["inner_validation_start_date"])}
-               if bundle.profile.fit_sample_weight_policy is not None else {}),
         )
         selected_epoch = int(epoch_selection["best_epoch"])
         model, final_history = ranker_api.fit_final(
@@ -1228,8 +1226,6 @@ def run(args) -> int:
             plan=plan,
             phase_label="Daily Selection完整重訓",
             epoch_selection=epoch_selection,
-            **({"fit_cutoff": str(bundle.outer_policy["oos_start_date"])}
-               if bundle.profile.fit_sample_weight_policy is not None else {}),
         )
         from filters.breakout_quality.positive_rank_calibration import checkpoint_calibration_payload
         fitted_model_action = "BUILD"

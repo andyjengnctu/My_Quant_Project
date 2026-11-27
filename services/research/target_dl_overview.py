@@ -119,18 +119,6 @@ def _summary_scientific_target(
 ) -> str:
     """Target is a supervised outcome, not strategy, parameter, selector or DL ID."""
     explicit = str(group.get("display_target") or "").strip()
-    if binding.get("rank_models"):
-        arm = STRATEGY_COMPARE_ARMS[binding["arm_id"]]
-        from core.rank_score_composition import rank_score_composition
-        composition = rank_score_composition(arm.get("dl_runtime_options"))
-        targets = []
-        for pair, member in zip(binding["rank_models"], composition["members"], strict=True):
-            if member["weight"] > 0:
-                labels = model_targets.get(pair[1], set())
-                if len(labels) != 1:
-                    return ""
-                targets.extend(sorted(labels))
-        return " + ".join(dict.fromkeys(targets))
     pair = binding.get("rank_model")
     candidates = model_targets.get(str(pair[1]), set()) if pair else set()
     if explicit:
@@ -1216,13 +1204,6 @@ def collect_target_dl_overview(project_root: Path) -> dict[str, Any]:
             arm = STRATEGY_COMPARE_ARMS.get(arm_id, {})
             pair = binding.get("rank_model")
             model = model_evidence.get(pair[1], {}) if pair else {}
-            if binding.get("rank_models"):
-                from core.rank_score_composition import rank_score_composition
-                composition = rank_score_composition(arm.get("dl_runtime_options"))
-                model = {"model": " + ".join(
-                    f"{item[0]} pct {member['weight']:.0%}"
-                    for item, member in zip(binding["rank_models"], composition["members"], strict=True)
-                    if member["weight"] > 0)}
                 # A deterministic runtime composition is not a newly fitted model.
                 # Do not copy a constituent's rho or manufacture an averaged rho.
             # AI: A model-only Summary binding has no Strategy/Optimizer lineage.

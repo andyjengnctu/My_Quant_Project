@@ -270,7 +270,7 @@ project/
 └── run_all.py
 ```
 
-- `run_meta_quality.py`：meta quality 工具；負責 formal contract、coverage、摘要與結構一致性檢查。
+- `run_meta_quality.py`：meta quality 工具；負責 formal contract、coverage、摘要與結構一致性檢查。既有維護掃描另將 Experiment Registry 的實作生命週期表與可執行模型／策略註冊比對；明確退役但仍註冊者列為 advisory REVIEW，未啟用本身不構成退役或刪除依據。
 - Synthetic worker 逐案例傳回完成回執；後續崩潰、硬退出或取消時，`coverage_artifacts/synthetic_completed_receipts.json` 僅保存本輪已完成的診斷。整套仍為 incomplete／FAIL，部分 coverage 不具有發布資格；重試先清除先前診斷。架構呼叫／import guard 以 AST 驗證實際依賴，獨立 fixture 保留違反契約的 mutation 覆蓋。
 - Formal suite 的 `tools/local_regression/manifest.json:test_cpu_threads` 統一限制測試子程序的 native CPU pools（預設 1）；synthetic runner 同時限制已載入的 PyTorch，結束／失敗均恢復原執行緒數。只影響隔離測試，不改 Research／Trading 訓練設定。Quick Gate、Consistency、Chain Checks、ML Smoke 依 CPU 數有界並行，Meta Quality 等待全部 producer 完成後消費本輪 coverage；不重用前輪 PASS、不減少 validator、coverage targets 或門檻。
 - Consistency 的 synthetic execution 由 `tools/validate/validator_execution.py` 負責；`manifest.json:synthetic_workers` 是子程序數上限（預設 4，1 為原循序路徑），依 CPU／native threads 與其他 formal producers 保留容量。以 registry 的實作 module 分組，保留同 owner 的快取共用與組內順序，再依原 registry 順序彙整全部結果。每個 validator 完成原始斷言後，立即將診斷結果快照為可傳輸資料：保留純資料、數值與 PASS／FAIL／SKIP，函式／module 等 process-local 物件只保留人讀文字，不重算斷言；循序與並行共用此邊界，後續模組重載或可變診斷更新不得破壞先前 receipt。每次使用全新的 worker coverage 目錄，各程序獨立收集 branch coverage，父程序逐份驗證後合併，只產生一次 JSON；Meta Quality 沿用同輪成果。缺少／重複／錯誤身分的 receipt、程序異常、硬逾時或 coverage 缺損皆不得 PASS。此分工讓大型靜態 AST 快取留在個別 worker，避免拖累父程序的 coverage 報告輸出；不改 Research／Trading／FIT／Replay 身分。
@@ -283,19 +283,3 @@ project/
 - `trade_decision_context.py` 持有決策時可知的 numeric input schema／PIT publication 及還原價縮放不變規則，消費 Target 所綁的 canonical same-seed teacher，不產生第二套參數、訊號或交易結果。
 - Architecture descriptor 的 `trade_decision_context` capability 委派通用 data provider；條件缺值採 mask，不改原模型的股票日／Target membership。InceptionTime 的雙線性交互基底讓同日共同政策可以調整不同個股 latent 的排序權重。
 - `FitDataDependencies` 在新 capability 出現時才增加 context contract 與 ordered FIT values 證據；原模型的 source／FIT payload 不變。Scientific identities、狀態與實驗範圍由 Experiment Registry 持有，績效只由 Experiment Log 持有。
-
-
-### 完整歷史均線輸入
-
-`sequence_indicators.py` 持有 causal stock-close EMA 的公式、初始化、缺值與欄位契約。Architecture descriptor 宣告 spans，model spec 保存完整契約；原 `LazyDailyFeatureBank` 從每股完整 canonical frame 計算一次 EMA，再依原 stock-day 索引切取輸入窗，並使用相同資訊日 Close 正規化。均線計算不依賴 Target 成熟或樣本起點。原訓練、PIT score、模型比較與 artifact identity 消費相同 feature bank／model spec，原 Strategy Compare 讀取其合法分數。研究列與比較由原 Research roster／Compare Suite 派生。
-
-### Controlled learning studies
-
-`config/breakout_quality_history.py` declares model training-history extensions. `services/breakout_quality/training_history.py` composes canonical early-history and unchanged original-label materializers; parameter preparation remains a registered dependency of the existing Research artifact planner. The current model/strategy bindings live in `config/research_summary.py`, which projects membership into the existing model comparison, Strategy Compare, Robustness, Target and Summary workflows. No separate learning-study menu, orchestration engine or report schema is used. New history bounds and ordered FIT truth participate in model identity; unchanged controls retain their existing FIT/Replay contracts and canonical validation/reuse rules.
-
-
-### Research 同日百分位分數組合
-
-`core/rank_score_composition.py` 持有未擬合的 frozen score composition 契約；`filters/breakout_quality/rank_score_composition.py` 透過原 PIT／Forward admission owner 驗證全部來源、同 Seed 及資訊 cutoff，在共同 feature-eligible 股票日母體上呼叫既有百分位 primitive。原 `strategy_compare_execution` 組裝 mode／seed 路徑，`strategy_compare_runtime_contract` 每次 Replay 準備一次表，原 runtime score lookup 在 unchanged information-date／selector 邊界消費；不另建 Replay、FIT 或資料真理。零權重控制仍保留全部共同母體依賴。來源列舉與 score projection／signature 同步納入所有組成模型，因此任何來源變更會使相關 Replay 失效。`config/research_summary.py` 的 `rank_models` binding 表示既有模型組成，原 Summary 欄位顯示權重，沒有獨立模型 ρ；未核准 perfect-score 合成的 Oracle 明列未解，不借用其他 Target 結果。
-
-完整融合表只存在於 Replay 專用 ContextVar，不放入會逐候選序列化的 `ranking_options`；後者只保存契約與來源描述。事後 Selection Target 診斷與報表補建使用相同經驗證的融合分數替換 score witness，保留原 outcome／maturity 欄位及 runtime-score 一致性檢查，不在成熟樣本上重新排名。Robustness 不把 primary 模型的 ρ 等模型診斷歸給融合策略。

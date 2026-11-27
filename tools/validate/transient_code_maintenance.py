@@ -495,6 +495,46 @@ def _git_growth_summary(project_root: Path, current_source_shape: dict[str, Any]
         summary["review_reasons"].append("new_large_source_shape_validator")
     return summary
 
+def _retired_registration_candidates(project_root: Path, *, registered_ids=None) -> list[dict[str, Any]]:
+    """Compare explicit lifecycle decisions with executable registrations.
+
+    Disabled roster entries alone are not retirement decisions: Oracle and
+    compatibility consumers can still need them. The existing research Registry
+    owns the decision; this scan neither changes it nor authorizes deletion.
+    """
+    relative = "doc/BREAKOUT_QUALITY_EXPERIMENT_REGISTRY.md"
+    path = project_root / relative
+    if not path.is_file():
+        return []
+    text = read_source_text(path)
+    start, end = "<!-- implementation-lifecycle -->", "<!-- /implementation-lifecycle -->"
+    if start not in text or end not in text:
+        return []
+    if registered_ids is None:
+        from core.strategy_compare_registry import STRATEGY_COMPARE_ARMS
+        from core.breakout_quality_registry import (
+            SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES, get_continuous_ranker_research_spec,
+        )
+        registered_ids = {f"SR-{key}" for key in STRATEGY_COMPARE_ARMS}
+        registered_ids.update(get_continuous_ranker_research_spec(name).model_research_id
+                              for name in SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES)
+    findings = []
+    section = text.split(start, 1)[1].split(end, 1)[0]
+    for line in section.splitlines():
+        columns = [value.strip() for value in line.strip().strip("|").split("|")]
+        if len(columns) != 3 or columns[1] not in {"RETIRED", "CANCELLED"}:
+            continue
+        identities = {value.strip() for value in columns[0].split(",")}
+        remaining = sorted(identities.intersection(registered_ids))
+        if remaining:
+            findings.append({
+                "path": relative, "identities": remaining,
+                "research_status": columns[1], "implementation_status": columns[2],
+                "reason": "retired_identity_still_registered_requires_dependency_review",
+            })
+    return findings
+
+
 def summarize_transient_code_maintenance(project_root: Path) -> dict[str, Any]:
     root = Path(project_root).resolve()
     index = _module_index(root)
@@ -555,6 +595,7 @@ def summarize_transient_code_maintenance(project_root: Path) -> dict[str, Any]:
                 )
 
     retired_dedicated_tests = _retired_dedicated_test_candidates(root, index)
+    retired_registrations = _retired_registration_candidates(root)
     private_zero_callers = _private_zero_caller_candidates(root)
     source_shape_inventory = _source_shape_validator_inventory(root)
     growth = _git_growth_summary(root, source_shape_inventory)
@@ -568,6 +609,7 @@ def summarize_transient_code_maintenance(project_root: Path) -> dict[str, Any]:
         + len(disabled_audits)
         + len(oversized_transient_tests)
         + len(retired_dedicated_tests)
+        + len(retired_registrations)
         + len(private_zero_callers)
         + len(experiment_execution_branches)
         + len(growth_reviews)
@@ -580,6 +622,7 @@ def summarize_transient_code_maintenance(project_root: Path) -> dict[str, Any]:
         "disabled_audits": disabled_audits,
         "oversized_transient_tests": oversized_transient_tests,
         "retired_dedicated_tests": retired_dedicated_tests,
+        "retired_registrations": retired_registrations,
         "private_zero_callers": private_zero_callers,
         "experiment_execution_branches": experiment_execution_branches,
         "source_shape_inventory": {

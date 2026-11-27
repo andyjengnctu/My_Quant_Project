@@ -280,18 +280,13 @@ def append_strategy_compare_preparation_contract_checks(
                 experiment_profile=str(source.experiment_profile),
                 available_from="2021-01-01", available_through="2026-03-02",
             )
-            from filters.breakout_quality import rank_score_composition as composition_owner
-            composed = {"scores": {("fixture", "2021-01-04"): .5},
-                        "available_from": "2021-01-01", "available_through": "2026-03-02"}
             with patch.object(
                 runtime_module, "load_selection_point_in_time_ranking_contract",
                 return_value=synthetic,
             ) as canonical_loader, patch.object(
                 runtime_module, "_load_isolated_selection_pit_contract",
                 return_value=synthetic,
-            ) as isolated_loader, patch.object(
-                composition_owner, "load_rank_composition_scores", return_value=composed,
-            ) as composition_loader:
+            ) as isolated_loader:
                 resolved = runtime_module.resolve_strategy_compare_runtime_contract(
                     root=project_root,
                     comparison_mode=kwargs["comparison_mode"],
@@ -312,7 +307,6 @@ def append_strategy_compare_preparation_contract_checks(
                 )
             loader_ok = (
                 resolved.pit_contract is synthetic
-                and composition_loader.call_count == int(bool(kwargs["ranking_options"].get("rank_score_composition")))
                 and canonical_loader.call_count == int(expected_override is None)
                 and isolated_loader.call_count == int(expected_override is not None)
                 and (
@@ -320,10 +314,6 @@ def append_strategy_compare_preparation_contract_checks(
                     or canonical_loader.call_args.kwargs.get("require_model_validation_pass") is False
                 )
             )
-            if composition_loader.called:
-                loader_ok = loader_ok and resolved.ranking_source["rank_composition_scores"] is composed
-                loader_ok = loader_ok and resolved.ranking_source["ranking_options"] == kwargs["ranking_options"]
-                loader_ok = loader_ok and composition_loader.call_args.kwargs["options"] == kwargs["ranking_options"]
             recorded.append(paths_ok and loader_ok and replay_once)
     add_check(
         results, "synthetic_breakout_quality", case_id,

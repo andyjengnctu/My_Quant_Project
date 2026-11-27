@@ -131,12 +131,6 @@ def resolve_arm_runtime_dl_source_ids(
 
     from core.positive_score_admission import requires_positive_score, uses_primary_positive_classifier
     options = dict(arm.dl_runtime_options or {})
-    from core.rank_score_composition import rank_composition_source_ids
-    composition_ids = rank_composition_source_ids(options)
-    if composition_ids:
-        if primary not in composition_ids or any(key not in settings.dl_sources for key in composition_ids):
-            raise ValueError(f"Rank composition references an unregistered source: {arm.arm_id}")
-        source_ids.extend(composition_ids)
     if requires_positive_score(options) and not uses_primary_positive_classifier(options):
         positive_dl_id = str(options["positive_dl_id"])
         if positive_dl_id not in settings.dl_sources or positive_dl_id == primary:

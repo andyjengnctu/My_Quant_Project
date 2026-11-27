@@ -175,11 +175,6 @@ def _oracle_price_provider_contract_sha256() -> str:
         profile = str(registered[role])
         recipe = get_continuous_ranker_execution_recipe(profile)
         profile_contract = asdict(get_breakout_quality_experiment_profile(profile))
-        # The new opt-in FIT metadata is absent from every original provider.
-        # Preserve their exact pre-extension dataclass contract; non-default
-        # weighting remains explicit and is never silently projected away.
-        if profile_contract.get("fit_sample_weight_policy") is None:
-            profile_contract.pop("fit_sample_weight_policy", None)
         contracts[role] = {
             "profile_id": profile,
             "profile": profile_contract,

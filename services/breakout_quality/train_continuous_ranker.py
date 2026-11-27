@@ -833,20 +833,8 @@ def _new_model_and_optimizer(
     return model, optimizer
 
 
-def _fit_stage_sample_weights(profile, table, ids, raw_target, cutoff, seed):
-    policy = getattr(profile, "fit_sample_weight_policy", None)
-    if policy is None:
-        return None
-    from filters.breakout_quality.fit_sample_weighting import build_fit_sample_weights
-    return build_fit_sample_weights(table, ids, policy=policy, cutoff=cutoff,
-                                    raw_target=raw_target, expected_seed=int(seed))
 
 
-def _new_pair_mass_audit(fit_weights):
-    if fit_weights is None:
-        return None
-    from filters.breakout_quality.fit_sample_weighting import PairMassAudit
-    return PairMassAudit(fit_weights)
 
 
 def _initialize_ranker_fitting_stage(
@@ -892,8 +880,6 @@ def _train_ranker_fitting_epoch(
     raw_r_loss_name,
     raw_r_delta,
     adaptive_horizon_target_provider,
-    fit_sample_weights=None,
-    pair_mass_audit=None,
 ) -> float:
     """Single profile/recipe-to-epoch mapping for inner selection and final refit.
 
@@ -930,8 +916,6 @@ def _train_ranker_fitting_epoch(
         numerical_execution_policy=profile.numerical_execution_policy,
         bf16_backward_retry_scales=profile.bf16_backward_retry_scales,
         adaptive_horizon_target_provider=adaptive_horizon_target_provider,
-        **({"fit_sample_weights": fit_sample_weights, "pair_mass_audit": pair_mass_audit}
-           if fit_sample_weights is not None else {}),
     )
 
 
@@ -1084,8 +1068,6 @@ def _pairwise_logistic_loss(
     pair_truth_weight_values=None,
     pair_truth_weight_policy: str = CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_NONE,
     ndcg_top_k_threshold: float | None = None,
-    item_weights=None,
-    pair_mass_audit=None,
 ) -> tuple[Any | None, int]:
     """Return the configured RankNet loss over comparable within-day pairs.
 
@@ -1149,16 +1131,6 @@ def _pairwise_logistic_loss(
     }:
         raise ValueError(f"不支援的pairwise reduction: {reduction!r}")
 
-    sample_weights = None
-    if item_weights is not None:
-        if base_reduction != CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG:
-            raise ValueError("FIT item weights require full-list Delta-NDCG")
-        sample_weights = torch.as_tensor(item_weights, dtype=margins.dtype, device=margins.device).detach()
-        if (sample_weights.shape != margins.shape or not bool(torch.isfinite(sample_weights).all().item())
-                or not bool((sample_weights > 0).all().item())):
-            raise ValueError("FIT item weights must be aligned, positive and finite")
-    if pair_mass_audit is not None and sample_weights is None:
-        raise ValueError("Pair mass audit requires explicit FIT weights")
     date_values = pd.to_datetime(pd.Series(dates), errors="raise").dt.normalize().to_numpy()
     eligibility_values = None
     if item_eligibility is not None:
@@ -1397,13 +1369,6 @@ def _pairwise_logistic_loss(
             if not bool(torch.isfinite(boundary_proximity).all().item()):
                 raise FloatingPointError("binary-boundary proximity pair weight必須為有限值")
             weights = weights * boundary_proximity
-        if sample_weights is not None:
-            day_item_weights = sample_weights.index_select(0, pos)
-            pair_multiplier = (day_item_weights[:, None] * day_item_weights[None, :])[comparable]
-            original_weights = weights
-            weights = weights * pair_multiplier
-            if pair_mass_audit is not None:
-                pair_mass_audit.observe(torch, pos, comparable, original_weights, weights)
         if not bool(torch.isfinite(weights).all().item()):
             raise FloatingPointError("full-list Delta-NDCG pairwise weights必須為有限值")
         pair_losses.append(losses * weights)
@@ -1444,8 +1409,6 @@ def _pairwise_logistic_loss(
             if truth_weight_policy != CONTINUOUS_RANKER_PRIMARY_PAIR_WEIGHT_POLICY_NONE:
                 return None, 0
             raise FloatingPointError(f"{label} pairwise weight sum必須為正有限值")
-        if pair_mass_audit is not None:
-            pair_mass_audit.finish()
         return all_losses.sum() / weight_sum, int(pair_count)
     if not day_losses:
         return None, 0
@@ -2293,14 +2256,10 @@ def _train_epoch(
     numerical_execution_policy: str = NUMERICAL_EXECUTION_POLICY_ARCHITECTURE_DEFAULT,
     bf16_backward_retry_scales: tuple[float, ...] = (),
     adaptive_horizon_target_provider=None,
-    fit_sample_weights=None,
-    pair_mass_audit=None,
 ) -> float:
     model.train()
     training_policy = get_continuous_ranker_training_policy(training_objective)
     loss_handler = str(training_policy.loss_handler)
-    if fit_sample_weights is not None and loss_handler != CONTINUOUS_RANKER_LOSS_HANDLER_SINGLE_PAIRWISE:
-        raise ValueError("FIT sample weights are only supported by scalar pairwise loss")
     numerical_policy = str(numerical_execution_policy).strip().lower()
     dynamic_bf16_backward_scaling = _bf16_dynamic_backward_scaling_enabled(
         model, plan, grad_scaler, training_policy, numerical_policy
@@ -2489,9 +2448,6 @@ def _train_epoch(
                         group_dates_series.iloc[ids].to_numpy(),
                         reduction=str(pairwise_reduction),
                         pair_weight_policy=str(pair_weight_policy),
-                        **({"item_weights": fit_sample_weights.values[ids],
-                            "pair_mass_audit": pair_mass_audit.batch(ids) if pair_mass_audit is not None else None}
-                           if fit_sample_weights is not None else {}),
                     )
                     if loss is None:
                         continue
@@ -4289,12 +4245,10 @@ def select_epoch(
     selection_metrics_only: bool = False,
     progress_callback=None,
     information_cutoff: str | None = None,
-    fit_cutoff: str | None = None,
 ) -> dict[str, Any]:
     profile = get_breakout_quality_experiment_profile(args.experiment_profile)
     research_spec = get_continuous_ranker_research_spec(str(args.experiment_profile))
     execution_recipe = get_continuous_ranker_execution_recipe(str(args.experiment_profile))
-    fit_weights = _fit_stage_sample_weights(profile, group_table, train_ids, raw_target, fit_cutoff, args.seed)
     training_policy = execution_recipe.training_policy
     target_builder = str(training_policy.target_builder)
     loss_handler = str(training_policy.loss_handler)
@@ -4402,7 +4356,6 @@ def select_epoch(
         if progress_callback is not None:
             progress_callback("select", int(epoch), int(args.epochs))
         started = time.perf_counter()
-        pair_audit = _new_pair_mass_audit(fit_weights)
         batch_loss = _train_ranker_fitting_epoch(
             torch,
             model,
@@ -4421,8 +4374,6 @@ def select_epoch(
             raw_r_loss_name=raw_r_loss_name,
             raw_r_delta=raw_r_delta,
             adaptive_horizon_target_provider=adaptive_horizon_target_provider,
-            **({"fit_sample_weights": fit_weights, "pair_mass_audit": pair_audit}
-               if fit_weights is not None else {}),
         )
         validation_evaluation = _evaluate_epoch_split(
             torch,
@@ -4605,7 +4556,6 @@ def select_epoch(
         history.append({
             "epoch": int(epoch),
             "batch_loss": float(batch_loss),
-            **({"pair_mass_audit": pair_audit.summary()} if pair_audit is not None else {}),
             "inner_train_metrics": train_metrics,
             "inner_validation_metrics": validation_metrics,
             "inner_validation_conditional_mfe_safety_metrics": validation_conditional_metrics,
@@ -4840,7 +4790,6 @@ def select_epoch(
         ),
         "completed_epochs": int(len(history)),
         "history": history,
-        **({"fit_sample_weighting": fit_weights.summary} if fit_weights is not None else {}),
     }
     return result
 
@@ -4860,12 +4809,10 @@ def fit_final(
     phase_label: str = "完整Selection重訓",
     progress_callback=None,
     epoch_selection: dict | None = None,
-    fit_cutoff: str | None = None,
 ):
     profile = get_breakout_quality_experiment_profile(args.experiment_profile)
     research_spec = get_continuous_ranker_research_spec(str(args.experiment_profile))
     execution_recipe = get_continuous_ranker_execution_recipe(str(args.experiment_profile))
-    fit_weights = _fit_stage_sample_weights(profile, group_table, final_ids, raw_target, fit_cutoff, args.seed)
     training_policy = execution_recipe.training_policy
     loss_handler = str(training_policy.loss_handler)
     training_target = _training_target_for_profile(
@@ -4900,7 +4847,6 @@ def fit_final(
         if progress_callback is not None:
             progress_callback("refit", int(epoch), int(epochs))
         started = time.perf_counter()
-        pair_audit = _new_pair_mass_audit(fit_weights)
         loss = _train_ranker_fitting_epoch(
             torch,
             model,
@@ -4919,15 +4865,9 @@ def fit_final(
             raw_r_loss_name=raw_r_loss_name,
             raw_r_delta=raw_r_delta,
             adaptive_horizon_target_provider=adaptive_horizon_target_provider,
-            **({"fit_sample_weights": fit_weights, "pair_mass_audit": pair_audit}
-               if fit_weights is not None else {}),
         )
         elapsed = time.perf_counter() - started
         history.append({"epoch": int(epoch), "batch_loss": float(loss), "elapsed_sec": round(float(elapsed), 3)})
-        if pair_audit is not None:
-            history[-1]["pair_mass_audit"] = pair_audit.summary()
-            if epoch == 1:
-                history[-1]["fit_sample_weighting"] = fit_weights.summary
         if not compact_console:
             print(f"  Epoch {epoch:>3}/{int(epochs)} | Batch Loss {loss:.6f} | {elapsed:.1f}s")
     return model.eval(), history

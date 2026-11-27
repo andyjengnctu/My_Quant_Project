@@ -24,8 +24,6 @@ MULTISCALE_CNN_REGIME_CONTEXT_V1 = "multiscale_cnn_regime_context_v1"
 MULTISCALE_CNN_SEQUENCE_ONLY_V1 = "multiscale_cnn_sequence_only_v1"
 MULTISCALE_CNN_SEQUENCE_ONLY_DUAL_PATH_V1 = "multiscale_cnn_sequence_only_dual_path_v1"
 INCEPTION_TIME_V1 = "inception_time_v1"
-INCEPTION_TIME_STOCK_EMA_V1 = "inception_time_stock_ema_v1"
-INCEPTION_TIME_CALENDAR_BARS_V1 = "inception_time_calendar_bars_v1"
 INCEPTION_TIME_TRADE_DECISION_CONTEXT_V1 = "inception_time_trade_decision_context_v1"
 INCEPTION_TIME_JOINT_QUADRANT_V1 = "inception_time_joint_quadrant_v1"
 INCEPTION_TIME_RISK_CONTEXT_V1 = "inception_time_risk_context_v1"
@@ -143,8 +141,6 @@ def _descriptor(
 
 _ARCHITECTURE_DESCRIPTORS = (
     _descriptor(INCEPTION_TIME_V1, active=True, active_order=0, spec_builder="inception_variant", runtime_builder="inception_time", family="inception_time", pooling=("global_average",), use_dataset_context=False, sequence_input_paths=("raw_level",), head_width=None),
-    _descriptor(INCEPTION_TIME_STOCK_EMA_V1, active=True, active_order=1, spec_builder="inception_variant", runtime_builder="inception_time", family="inception_time", pooling=("global_average",), use_dataset_context=False, sequence_input_paths=("raw_level", "full_history_stock_close_ema"), stock_close_ema_spans=(5, 20, 60), head_width=None),
-    _descriptor(INCEPTION_TIME_CALENDAR_BARS_V1, active=True, active_order=2, spec_builder="inception_variant", runtime_builder="calendar_inception", family="inception_time", pooling=("global_average",), use_dataset_context=False, sequence_input_paths=("raw_level", "closed_calendar_ohlcv"), input_window_bars=300, calendar_bar_windows=(("W-SUN", 104), ("M", 60)), calendar_encoder_channels=16, calendar_encoder_depth=2, calendar_encoder_kernel_size=3, calendar_fusion_width=64, head_width=None),
     _descriptor(INCEPTION_TIME_SHARED_SAFETY_MFE_V1, active=True, active_order=6, spec_builder="inception_variant", runtime_builder="inception_time", capabilities=("shared_safety_mfe",), family="inception_time_shared_safety_mfe", pooling=("global_average", "raw_safety_head", "raw_mfe_head"), use_dataset_context=False, sequence_input_paths=("raw_level",), head_width=None),
 )
 

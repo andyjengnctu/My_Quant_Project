@@ -938,11 +938,6 @@ def run_comparison(
                     score_path_override=forward_score_path,
                     score_column=runtime_primary_score_column,
                 )
-            from core.rank_score_composition import rank_score_composition
-            if rank_score_composition(ranking_options):
-                from filters.breakout_quality.rank_score_composition import rank_composition_diagnostic_lookup
-                lookup = rank_composition_diagnostic_lookup(
-                    lookup, (ranking_source or {}).get("rank_composition_scores"))
             baseline_diag, baseline_orderable_joined, baseline_selected_joined = (
                 _strategy_selection_diagnostics(
                     orderable=baseline_orderable,

@@ -99,39 +99,6 @@ def resolve_strategy_compare_ranking_options(
     """
 
     options = dict(arm.dl_runtime_options or {})
-    from core.rank_score_composition import rank_composition_source_ids
-    from filters.breakout_quality.strategy_score_projection import primary_score_column_for_source
-    from filters.breakout_quality.ranking_score_store import resolve_continuous_ranker_oos_score_path
-    composition_sources = []
-    for source_id in rank_composition_source_ids(options):
-        source = settings.dl_sources[source_id]
-        override = dict((score_overrides or {}).get(source_id) or {})
-        seed = (int(expected_seed) if expected_seed is not None else
-                int(get_breakout_quality_workflow_settings(experiment_profile=source.experiment_profile).seed))
-        if expected_seed is not None and (not override.get("score_path") or not override.get("manifest_path")):
-            raise ValueError("Rank composition robustness requires every isolated same-seed source")
-        if source.score_source == SCORE_SOURCE_SELECTION_POINT_IN_TIME:
-            if bool(override.get("score_path")) != bool(override.get("manifest_path")):
-                raise ValueError("Rank composition PIT score and manifest overrides must be paired")
-            paths = override or {f"{key}_path": value for key, value in
-                                selection_pit_mode_paths(source, project_root=project_root).items()}
-            pit_dir = (Path(override["score_path"]).parent if override else
-                       resolve_strategy_compare_selection_pit_contract_override(root=project_root, source=source))
-        elif source.score_source == SCORE_SOURCE_CONTINUOUS_RANKER_OOS:
-            paths = override or {"score_path": resolve_continuous_ranker_oos_score_path(
-                project_root, source.filter_id, source.model_architecture, source.experiment_profile)}
-            pit_dir = None
-        else:
-            raise ValueError("Rank composition only supports Research PIT/Forward sources")
-        composition_sources.append({
-            "dl_id": source_id, "filter_id": source.filter_id, "score_source": source.score_source,
-            "model_architecture": source.model_architecture, "experiment_profile": source.experiment_profile,
-            "score_path": str(paths["score_path"]), "manifest_path": str(paths.get("manifest_path") or ""),
-            "point_in_time_dir_override": str(pit_dir) if pit_dir else None,
-            "expected_seed": seed, "score_column": primary_score_column_for_source(source.score_source),
-        })
-    if composition_sources:
-        options["rank_composition_sources"] = composition_sources
     from core.positive_score_admission import requires_positive_score, uses_primary_positive_classifier
     if requires_positive_score(options) and not uses_primary_positive_classifier(options):
         positive_dl_id = str(options["positive_dl_id"])

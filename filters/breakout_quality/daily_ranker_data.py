@@ -102,7 +102,6 @@ from filters.breakout_quality.features import (
     normalize_ohlcv_array_windows,
 )
 from filters.breakout_quality.models.spec import get_model_spec, validate_model_sequence_length
-from filters.breakout_quality.sequence_indicators import full_history_stock_emas, stock_ema_contract
 from filters.breakout_quality.trade_activity_features import (
     TRADE_COUNT_FEATURE_NAMES,
     normalized_trade_count_windows,
@@ -137,9 +136,6 @@ class LazyDailyFeatureBank:
         feature_quote_mask: bool = False,
         trade_count_source: dict[str, Any] | None = None,
         trade_count_placebo: bool = False,
-        stock_close_ema_spans: tuple[int, ...] = (),
-        calendar_bar_windows: tuple[tuple[str, int], ...] = (),
-        exchange_calendar: pd.DatetimeIndex | None = None,
         ticker_ids: np.ndarray,
         source_positions: np.ndarray,
         benchmark_positions: np.ndarray,
@@ -190,35 +186,10 @@ class LazyDailyFeatureBank:
             (*FEATURE_COLUMNS, *TRADE_COUNT_FEATURE_NAMES)
             if self._trade_count_enabled else FEATURE_COLUMNS
         )
-        self._stock_ema_spans = tuple(stock_close_ema_spans)
-        self._stock_emas = ()
-        if self._stock_ema_spans:
-            if feature_frames is not None:
-                raise ValueError("Stock EMA inputs require canonical adjusted-price frames")
-            self.feature_columns += tuple(stock_ema_contract(self._stock_ema_spans)["feature_columns"])
-            self._stock_emas = tuple(
-                full_history_stock_emas(values[:, 3], self._stock_ema_spans)
-                for values in self._frame_arrays
-            )
-        self._calendar_features = None
-        if calendar_bar_windows:
-            from filters.breakout_quality.calendar_bars import CalendarBarFeatureBank
-
-            if (feature_frames is not None or feature_benchmark is not None
-                    or self._feature_quote_mask or self._trade_count_enabled or self._stock_ema_spans):
-                raise ValueError("Calendar branches require original canonical OHLCV inputs")
-            if exchange_calendar is None:
-                raise ValueError("Calendar branches require the canonical exchange calendar")
-            self._calendar_features = CalendarBarFeatureBank(
-                frames=frames, benchmark=benchmark, exchange_calendar=exchange_calendar,
-                windows=calendar_bar_windows, sequence_length=int(policy.feature_window_bars),
-                normalizer=normalize_ohlcv_array_windows,
-            )
-            self.feature_columns += self._calendar_features.feature_columns
         # Preserve legacy manifest byte semantics for existing AO/BX artifacts;
         # only the new data capability publishes its additional feature schema.
         self.manifest_feature_columns = (
-            self.feature_columns if self._trade_count_enabled or self._stock_ema_spans or self._calendar_features is not None else FEATURE_COLUMNS
+            self.feature_columns if self._trade_count_enabled else FEATURE_COLUMNS
         )
         self._stock_trade_counts: tuple[np.ndarray, ...] = ()
         self._stock_trade_masks: tuple[np.ndarray, ...] = ()
@@ -705,12 +676,6 @@ class LazyDailyFeatureBank:
             if len(window) != feature_window:
                 raise RuntimeError("daily feature window長度與policy不一致")
             stock_windows[out_index] = window
-            if self._stock_ema_spans:
-                ema_window = self._stock_emas[int(ticker_id)][start_pos:int(source_pos) + 1]
-                normalized_ema = ema_window / frame[int(source_pos), 3] - 1.0
-                if not np.isfinite(normalized_ema).all():
-                    raise RuntimeError("Stock EMA input contains non-finite values")
-                output[out_index, :, -len(self._stock_ema_spans):] = normalized_ema
             if self._trade_count_enabled:
                 activity_counts[out_index] = self._stock_trade_counts[int(ticker_id)][start_pos:int(source_pos) + 1]
                 activity_masks[out_index] = self._stock_trade_masks[int(ticker_id)][start_pos:int(source_pos) + 1]
@@ -757,8 +722,6 @@ class LazyDailyFeatureBank:
             if self._trade_count_enabled:
                 output[local, :, 11] = benchmark_feature[:, 5]
                 output[local, :, 13] = benchmark_feature[:, 6]
-        if self._calendar_features is not None:
-            self._calendar_features.pack(output, ticker_ids, source_positions, benchmark_positions)
         return output[0] if scalar else output
 
 
@@ -1993,13 +1956,6 @@ def load_daily_universal_ranker_data(
             "target_minimum_low_return": minimum_low_return,
         }
     )
-    if profile.fit_sample_weight_policy is not None:
-        from filters.breakout_quality.fit_sample_weighting import attach_fit_episodes
-        attach_fit_episodes(
-            group_table, frames=samples.frames, tickers=samples.tickers,
-            target_valid=target_valid, source=target_teacher,
-            exchange_calendar=exchange_calendar, policy=profile.fit_sample_weight_policy,
-        )
     if trade_diagnostic_r_required:
         # NetPnL is the supervised currency target. Only R-named post-replay
         # diagnostics consume the R value from the very same executed trade.
@@ -2213,9 +2169,6 @@ def load_daily_universal_ranker_data(
         feature_quote_mask=use_quote_mask,
         trade_count_source=trade_count_input,
         trade_count_placebo=architecture_descriptor.has_capability("lagged_trade_count_placebo"),
-        stock_close_ema_spans=model_spec.stock_close_ema_spans,
-        calendar_bar_windows=model_spec.calendar_bar_windows,
-        exchange_calendar=exchange_calendar,
         ticker_ids=ticker_ids,
         source_positions=source_positions,
         benchmark_positions=benchmark_positions,
