@@ -152,7 +152,10 @@ _RESEARCH_SELECTION_ONLY_CONFIG_BASELINE_SHA256 = (
 # from model-membership assignments/import and its one policy getter, both
 # complete module ASTs are independently unchanged. The exact reviewed ASTs
 # below preserve the uploaded source identities, not a different producer.
-_SUMMARY_MEMBERSHIP_CONFIG_AST_SHA256 = "419dd1afabf15fa38522de310d06719f36bcaec31ff1701fe54da1cfd344603f"
+# AI: Frozen 6d565314 config minus 19 unused Market Set/pretraining literals
+# reproduces this complete AST; active declarations and numerical evidence
+# remain identical. See retirement_followup_20261128/config_ast_equivalence.json.
+_SUMMARY_MEMBERSHIP_CONFIG_AST_SHA256 = "e6283803efda637063c8f88130ce4a0143dda30cf26c440c8948b2ec88998f6b"
 _SUMMARY_MEMBERSHIP_CONFIG_BASELINE_SHA256 = _RESEARCH_SELECTION_ONLY_CONFIG_BASELINE_SHA256
 _SUMMARY_MEMBERSHIP_POLICY_AST_SHA256 = "200baddc2fedeb3f88cf5c755c43891e5302a3f2e5ed4f86419daf69e961b7e2"
 _SUMMARY_MEMBERSHIP_POLICY_BASELINE_SHA256 = "8c6a1d59c13d87efca83b10587b0d23027f36af9c2403b9ff165fcd1e2fd943f"

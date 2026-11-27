@@ -71,5 +71,3 @@ def restore_score_calibration(model, profile, checkpoint) -> None:
     calibration_enabled(profile)
     if checkpoint.get(PAYLOAD_KEY) is not None:
         raise ValueError("Retired single-ranker Positive calibration cannot supply current FIT scores")
-
-
