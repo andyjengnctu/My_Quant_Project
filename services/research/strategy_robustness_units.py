@@ -226,6 +226,10 @@ def model_observation_provenance_matches(
     All declared heads must be present and covered by the observation's SHA.
     """
     arm = dict(signature.get("arm") or {})
+    if signature.get("position_model_source") is not None:
+        if (attribution.get("position_model_identity") != signature["position_model_source"]
+                or "position_decisions" not in dict(attribution.get("files") or {})):
+            return False
     declared = {str(source.get("dl_id") or "")
                 for source in arm.get("runtime_dl_sources", ())}
     actual = dict(attribution.get("runtime_training_identities") or {})

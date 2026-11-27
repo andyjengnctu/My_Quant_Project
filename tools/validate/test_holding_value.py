@@ -109,9 +109,34 @@ class HoldingValueTests(TestCase):
         np.testing.assert_array_equal(original, changed)
         self.assertIsNone(HoldingFeatures({"2330": frame}, market).coordinates("2330", days[298]))
         before = deepcopy(pos)
+        class SharedMarketContext:
+            def __deepcopy__(self, memo):
+                raise AssertionError("Position inputs must not copy the shared market graph")
+        pos["_entry_context"] = SharedMarketContext()
         state = position_context(pos, frame=frame, information_pos=301, completed_atr=5., completed_high=101., params=params)
         self.assertEqual(state.shape, (6,))
         self.assertEqual(pos["trailing_stop"], before["trailing_stop"])
+
+    def test_position_rank_binding_can_activate_without_mutating_origin_params(self):
+        days, _, params, pos = position_fixture()
+        pos["use_breakout_quality_ranking"] = True
+        with bind_position_exit_provider(lambda **kwargs: -0.3):
+            self.assertTrue(request_position_early_exit(
+                ticker="2330", position=pos, information_date=days[301], execution_date=days[302],
+                completed_atr=5., completed_high=101., params=params))
+        self.assertFalse(params.use_breakout_quality_ranking)
+
+    def test_holding_source_change_invalidates_only_its_own_seed(self):
+        from services.research.strategy_robustness_units import scientific_unit_signature
+        from tools.validate.synthetic_strategy_robustness_unit_cases import _registered_fixture
+        _, _, arms, seeds, contract = _registered_fixture()
+        modified = deepcopy(contract)
+        affected = next(a for a in modified["stochastic_arms"] if a.get("position_model_sources"))
+        affected["position_model_sources"][str(seeds[0])]["manifest_sha256"] = "different-weights"
+        differences = {(a.arm_id, s) for a in arms for s in seeds
+                       if scientific_unit_signature(contract=contract, arm_id=a.arm_id, seed=s) !=
+                          scientific_unit_signature(contract=modified, arm_id=a.arm_id, seed=s)}
+        self.assertEqual(differences, {(affected["arm_id"], seeds[0])})
 
     def test_whole_episode_purge_and_natural_maturity(self):
         rows = pd.DataFrame([

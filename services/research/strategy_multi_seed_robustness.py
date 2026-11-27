@@ -2753,6 +2753,15 @@ def _write_compact_attribution_source(
         "selected_buys": pair_dir / f"{prefix}_selected_buys.csv",
         "execution": pair_dir / f"{prefix}_execution.csv",
     }
+    position_identity = None
+    if dict(arm.dl_runtime_options or {}).get("position_exit_model"):
+        position_path = pair_dir / "position_model_decisions.json"
+        decisions = _read_json(position_path)
+        if int(decisions["seed"]) != int(job["seed"]) or len(decisions["model_manifest_sha256"]) != 64:
+            raise ValueError("Holding decision provenance differs from replication")
+        source_files["position_decisions"] = position_path
+        position_identity = {"model_id": decisions["contract"]["model_id"], "seed": int(job["seed"]),
+                             "manifest_sha256": decisions["model_manifest_sha256"]}
     from core.candidate_score_permutation_contract import permutation_spec
     repetition = permutation_spec(arm.dl_runtime_options)
     if repetition is not None:
@@ -2780,7 +2789,8 @@ def _write_compact_attribution_source(
             "source_filename": source.name,
             "source_sha256": compute_file_sha256(source),
             "sha256": compute_file_sha256(destination),
-            "row_count": repetition["repeats"] if repetition is not None else _csv_row_count(source),
+            "row_count": (len(decisions["decisions"]) if role == "position_decisions" else
+                          repetition["repeats"] if repetition is not None else _csv_row_count(source)),
         }
     payload = {
         "schema_version": ATTRIBUTION_SOURCE_SCHEMA_VERSION,
@@ -2825,6 +2835,8 @@ def _write_compact_attribution_source(
     }
     if repetition is not None:
         payload["observation_kind"] = "fixed_candidate_score_permutations_v1"
+    if position_identity is not None:
+        payload["position_model_identity"] = position_identity
     _write_json(destination_dir / MANIFEST_FILENAME, payload)
     return payload
 
@@ -2878,7 +2890,8 @@ def _read_attribution_unit_manifest(
 def _attribution_roles(payload):
     if payload.get("observation_kind") == "fixed_candidate_score_permutations_v1":
         return ("permutations",)
-    return ("trades", "equity", "daily_capacity", "selected_buys", "execution")
+    base = ("trades", "equity", "daily_capacity", "selected_buys", "execution")
+    return (*base, "position_decisions") if dict(payload.get("dl_runtime_options") or {}).get("position_exit_model") else base
 
 
 def _read_permutation_attribution(payload):

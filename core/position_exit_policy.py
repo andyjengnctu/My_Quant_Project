@@ -33,7 +33,8 @@ def request_position_early_exit(*, ticker, position, information_date,
                                 execution_date, completed_atr, completed_high,
                                 params, natural_exit=False):
     provider = _PROVIDER.get()
-    if provider is None or not bool(getattr(params, "use_breakout_quality_ranking", False)):
+    if provider is None or not (bool(position.get("use_breakout_quality_ranking"))
+                               or bool(getattr(params, "use_breakout_quality_ranking", False))):
         return False
     if information_date >= execution_date:
         raise ValueError("Holding decision must precede its execution session")

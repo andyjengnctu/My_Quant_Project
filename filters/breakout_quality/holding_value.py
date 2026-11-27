@@ -32,7 +32,9 @@ CONTRACT = {
 
 def position_context(position, *, frame, information_pos, completed_atr, completed_high, params):
     """Known state only; trailing protection is rolled from the completed bar."""
-    pos = deepcopy(position)
+    # Management updates scalar fields only. A live position can also hold the
+    # entire shared market/parameter context: never deep-copy that data graph.
+    pos = dict(position)
     rollforward_position_management_from_completed_bar(
         pos, completed_high=completed_high, completed_atr=completed_atr, params=params)
     initial_qty = int(pos["initial_qty"])
