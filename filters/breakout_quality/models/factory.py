@@ -23,7 +23,6 @@ def resolve_model_spec(
     *,
     architecture: str | None = None,
     model_spec: Mapping[str, object] | None = None,
-    pretrained_encoder_state: Mapping[str, object] | None = None,
 ):
     if model_spec is not None:
         resolved = model_spec_from_manifest(model_spec)

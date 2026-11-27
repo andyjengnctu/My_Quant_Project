@@ -115,8 +115,6 @@ from services.breakout_quality.fitted_model_artifacts import (
 DAILY_SPLIT_FILENAME = "daily_split_by_date.csv"
 
 
-
-
 def _empty_split_metrics(group_count: int, reason: str) -> dict:
     return {
         "group_count": int(group_count),
@@ -268,84 +266,6 @@ def _hs_lexicographic_reference_control(
         }
 
 
-def build_safety_raw_mfe_truth_geometry_control_from_score_frame(
-    score_frame: pd.DataFrame,
-    *,
-    breakout_candidate_keys: set[tuple[str, pd.Timestamp]],
-) -> dict:
-    """Build actual Daily/Breakout 5×5 geometry from persisted MR-13S OOS targets.
-
-    Breakout rows are filtered *after* the canonical daily-universal target percentiles
-    have been loaded.  Percentiles are never recomputed inside the breakout subset.
-    """
-
-    required = {
-        "ticker",
-        "date",
-        "target_low_adverse_safety_percentile",
-        "target_pure_mfe_percentile",
-        "raw_safety_score",
-        "raw_mfe_score",
-    }
-    missing = sorted(required.difference(score_frame.columns))
-    if missing:
-        raise ValueError(f"MR-13S Truth Geometry score artifact缺少欄位: {missing}")
-    frame = score_frame.loc[:, sorted(required)].copy()
-    frame["ticker"] = frame["ticker"].astype(str)
-    frame["date"] = pd.to_datetime(frame["date"], errors="raise").dt.normalize()
-    for column in (
-        "target_low_adverse_safety_percentile",
-        "target_pure_mfe_percentile",
-        "raw_safety_score",
-        "raw_mfe_score",
-    ):
-        frame[column] = pd.to_numeric(frame[column], errors="coerce")
-    evaluable = frame[
-        np.isfinite(frame["target_low_adverse_safety_percentile"].to_numpy(dtype=np.float64))
-        & np.isfinite(frame["target_pure_mfe_percentile"].to_numpy(dtype=np.float64))
-    ].copy()
-    if evaluable.empty:
-        raise ValueError("MR-13S Truth Geometry沒有target-evaluable OOS rows")
-
-    candidate_mask = np.fromiter(
-        (
-            (ticker, date) in breakout_candidate_keys
-            for ticker, date in zip(evaluable["ticker"], evaluable["date"])
-        ),
-        dtype=bool,
-        count=len(evaluable),
-    )
-    breakout = evaluable.loc[candidate_mask].copy()
-
-    def build_scope(rows: pd.DataFrame) -> dict:
-        dates = rows["date"].to_numpy()
-        safety_true = rows["target_low_adverse_safety_percentile"].to_numpy(dtype=np.float64)
-        mfe_true = rows["target_pure_mfe_percentile"].to_numpy(dtype=np.float64)
-        actual = ranker_api.safety_mfe_truth_geometry(dates, safety_true, mfe_true)
-        safety_pred = rows["raw_safety_score"].to_numpy(dtype=np.float64)
-        mfe_pred = rows["raw_mfe_score"].to_numpy(dtype=np.float64)
-        pred_valid = np.isfinite(safety_pred) & np.isfinite(mfe_pred)
-        predicted_relation = (
-            ranker_api.daily_rank_metrics(
-                dates[pred_valid], safety_pred[pred_valid], mfe_pred[pred_valid]
-            )
-            if bool(pred_valid.any())
-            else {}
-        )
-        return {
-            "population_n": int(len(rows)),
-            "actual": actual,
-            "predicted_safety_to_raw_mfe_mean_daily_spearman": predicted_relation.get("mean_daily_spearman"),
-            "predicted_relation_valid_days": int(predicted_relation.get("rankable_date_count", 0) or 0),
-        }
-
-    return {
-        "daily_universal_oos": build_scope(evaluable),
-        "breakout_candidate_oos": build_scope(breakout),
-        "breakout_percentile_policy": "filter_daily_universal_percentiles_without_subset_rerank",
-    }
-
-
 def _date_split_frame(
     bundle,
     split,
@@ -430,7 +350,6 @@ def _dual_component_metrics(
         "favorable_mfe_r": one_component(favorable_pred, favorable_true),
         "adverse_to_peak_r": one_component(adverse_pred, adverse_true),
     }
-
 
 
 from services.breakout_quality.standard_model_sop import (
@@ -924,7 +843,6 @@ def _render_markdown(payload: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
-
 def _forward_slice_positions(
     forward_position_by_group: dict[int, int], group_ids: np.ndarray
 ) -> np.ndarray:
@@ -1227,13 +1145,11 @@ def run(args) -> int:
             phase_label="Daily Selection完整重訓",
             epoch_selection=epoch_selection,
         )
-        from filters.breakout_quality.positive_rank_calibration import checkpoint_calibration_payload
         fitted_model_action = "BUILD"
         trainable_parameter_count = count_trainable_parameters(model)
         total_parameter_count = sum(int(parameter.numel()) for parameter in model.parameters())
         torch.save(
             {
-                **checkpoint_calibration_payload(model, bundle.profile),
                 "model_state_dict": {key: value.detach().cpu() for key, value in model.state_dict().items()},
                 "feature_count": int(bundle.feature_bank.shape[2]),
                 "context_count": int(bundle.group_context.shape[1]),
@@ -1425,7 +1341,7 @@ def run(args) -> int:
             forward_components["predicted_adverse_r"][oos_component_positions],
         )
     else:
-        if training_policy.categorical_class_count is not None or bundle.profile.score_calibration is not None:
+        if training_policy.categorical_class_count is not None:
             validation_scores, validation_sidecars = predict_score_output_payload(
                 torch, model, bundle, split.validation_ids,
                 batch_size=int(args.evaluation_batch_size), plan=plan,

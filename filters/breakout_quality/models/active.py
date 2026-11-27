@@ -62,7 +62,6 @@ def build_active_model(
         feature_count=int(feature_count),
         context_count=int(context_count),
         spec=spec,
-        pretrained_encoder_state=None,
     )
 
 

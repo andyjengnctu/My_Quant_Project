@@ -10,6 +10,40 @@ from services.breakout_quality.train_continuous_ranker import _date_coherent_bat
 from tools.benchmark_research_training_batches import reference_date_coherent_batches
 
 
+class BinaryTrainingBatchTests(unittest.TestCase):
+    def test_prefetch_preserves_sample_order_weights_and_tail(self):
+        from services.breakout_quality.train import _iter_training_batches
+
+        features = np.arange(60, dtype=np.float32).reshape(10, 3, 2)
+        context = np.arange(10, dtype=np.float32).reshape(10, 1)
+        labels = np.arange(10) % 2
+        weights = np.linspace(0.25, 2.5, 10, dtype=np.float32)
+        for ids in (np.array([7, 1, 7, 9, 0, 4, 2]), np.array([], dtype=np.int64)):
+            for prefetch in (0, 1, 4):
+                with self.subTest(prefetch=prefetch, count=len(ids)):
+                    batches = list(_iter_training_batches(
+                        features, context, labels, weights, ids,
+                        batch_size=3, prefetch_batches=prefetch,
+                    ))
+                    self.assertEqual([len(batch[0]) for batch in batches],
+                                     [3, 3, 1] if len(ids) else [])
+                    for column, original in enumerate((features, context, labels, weights)):
+                        actual = np.concatenate([batch[column] for batch in batches]) if batches else original[:0]
+                        np.testing.assert_array_equal(actual, original[ids])
+
+    def test_retired_market_input_is_rejected_before_forward(self):
+        from filters.breakout_quality.inference import forward_breakout_quality_model
+
+        class HistoricalModel:
+            requires_market_set = True
+
+            def __call__(self, *_args):
+                raise AssertionError("A retired model must not execute")
+
+        with self.assertRaisesRegex(ValueError, "Retired Market Set"):
+            forward_breakout_quality_model(HistoricalModel(), None, None)
+
+
 class ResearchTrainingBatchTests(unittest.TestCase):
     def assert_same_batches(self, ids, dates, *, batch_size, seed, single=False):
         options = dict(batch_size=batch_size, seed=seed, single_date_per_batch=single)

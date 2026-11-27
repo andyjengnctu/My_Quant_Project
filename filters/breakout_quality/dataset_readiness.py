@@ -22,10 +22,8 @@ from filters.breakout_quality.dataset_store import (
     DATASET_STORAGE_SCHEMA_VERSION,
     dataset_artifact_metadata_reasons,
     dataset_artifact_content_reasons,
-    market_set_artifact_metadata_reasons,
     resolve_dataset_paths,
 )
-from filters.breakout_quality.market_set import market_set_contract_payload
 from filters.breakout_quality.models.spec import get_model_spec
 from filters.breakout_quality.paths import resolve_filter_output_dir
 from filters.breakout_quality.source_inventory import build_source_data_inventory
@@ -99,16 +97,7 @@ def collect_dataset_readiness(
         dataset_artifact_metadata_reasons(paths, summary.get("dataset_artifacts"))
     )
 
-    model_spec = get_model_spec(str(model_architecture))
-    if bool(model_spec.requires_market_set):
-        if summary.get("market_set_contract") != market_set_contract_payload():
-            full_rebuild_reasons.append("market-set input contract 已變更或缺少")
-        full_rebuild_reasons.extend(
-            market_set_artifact_metadata_reasons(
-                paths,
-                summary.get("market_set_artifacts"),
-            )
-        )
+    get_model_spec(str(model_architecture))
 
     requested_profile = str(dataset).strip().lower()
     stored_profile = str(summary.get("dataset") or "").strip().lower()
@@ -190,10 +179,6 @@ def collect_dataset_readiness(
     content_reasons = dataset_artifact_content_reasons(
         paths.artifact_paths(), summary.get("dataset_artifacts")
     )
-    if bool(model_spec.requires_market_set):
-        content_reasons.extend(dataset_artifact_content_reasons(
-            paths.market_set_artifact_paths(), summary.get("market_set_artifacts")
-        ))
     if content_reasons:
         return DatasetReadiness(
             ready=False,

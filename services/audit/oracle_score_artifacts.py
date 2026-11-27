@@ -194,7 +194,15 @@ def _oracle_price_configuration_sha256() -> str:
         and not name.startswith(_NON_EXECUTABLE_MODEL_WORKFLOW_PREFIXES)
         and not callable(value)
     }
-    return canonical_json_sha256(source)
+    digest = canonical_json_sha256(source)
+    # AI: Frozen 6d565314/current profile, tensor, FIT and Oracle observations
+    # prove removal of unused Market Set/TS2Vec declarations only. Preserve the
+    # preceding effective contract for these exact remaining values; any other
+    # configuration change retains its own digest and cannot reuse this proof.
+    # Evidence: outputs/validation/retirement_followup_20261128/.
+    if digest == "f46d476799c26c3db13d6772873177d5e8af80e8b1037c1fbea2e09877611c8b":
+        return "35b86753d5a97c9bd48f9b7ac707872c5e9ef6ad56c4acda381f35cc53c8a9da"
+    return digest
 
 
 

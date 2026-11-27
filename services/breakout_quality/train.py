@@ -104,10 +104,8 @@ from filters.breakout_quality.contract import (
     TRAINING_MODE_INNER_VALIDATION_FULL_REFIT,
 )
 from filters.breakout_quality.dataset_store import IndexedFeatureBank
-from filters.breakout_quality.market_set import IndexedMarketSetBank
 from filters.breakout_quality.inference import (
     forward_breakout_quality_model,
-    market_batch_to_torch,
     materialize_indexed_feature_inputs,
     strict_parallel_batched_logits,
 )
@@ -150,7 +148,6 @@ from filters.breakout_quality.workflow_io import (
     group_size_weights,
     label_counts,
     load_validated_dataset_bundle,
-    load_validated_market_set_bank,
     model_dir,
     write_json,
 )
@@ -916,162 +913,10 @@ def _preload_training_arrays(
     return materialized_features, materialized_context, y_memory
 
 
-def _materialize_training_microbatch(
-    X,
-    C: np.ndarray,
-    y: np.ndarray,
-    sample_weights: np.ndarray,
-    rows: np.ndarray,
-    market_set_bank: IndexedMarketSetBank | None,
-):
-    market_batch = (
-        None
-        if market_set_bank is None
-        else market_set_bank.materialize_for_event_rows(X.event_group_index, rows)
-    )
-    return (
-        X[rows],
-        C[rows],
-        y[rows],
-        sample_weights[rows],
-        market_batch,
-    )
-
-
-def _build_training_microbatch_rows(
-    X,
-    shuffled: np.ndarray,
-    *,
-    batch_size: int,
-    market_set_bank: IndexedMarketSetBank | None,
-) -> list[np.ndarray]:
-    """Build memory-bounded physical microbatches without defining optimizer steps."""
-
-    normalized = np.asarray(shuffled, dtype=np.int64)
-    if market_set_bank is None:
-        return [
-            normalized[start:start + int(batch_size)]
-            for start in range(0, len(normalized), int(batch_size))
-        ]
-    if not isinstance(X, IndexedFeatureBank):
-        raise TypeError("market-set training 需要 IndexedFeatureBank")
-    market_dates = market_set_bank.market_date_indices_for_event_rows(
-        X.event_group_index, normalized
-    )
-    unique_dates = np.unique(market_dates)
-    date_to_block = {
-        int(date_index): int(position // market_set_bank.max_dates_per_batch)
-        for position, date_index in enumerate(unique_dates.tolist())
-    }
-    rows_by_block: dict[int, list[int]] = {}
-    block_order: list[int] = []
-    for row, date_index in zip(normalized.tolist(), market_dates.tolist()):
-        block = date_to_block[int(date_index)]
-        if block not in rows_by_block:
-            rows_by_block[block] = []
-            block_order.append(block)
-        rows_by_block[block].append(int(row))
-    microbatches: list[np.ndarray] = []
-    for block in block_order:
-        rows = np.asarray(rows_by_block[block], dtype=np.int64)
-        for start in range(0, len(rows), int(batch_size)):
-            microbatches.append(rows[start:start + int(batch_size)])
-    return microbatches
-
-
-def _build_training_optimizer_batches(
-    X,
-    shuffled: np.ndarray,
-    *,
-    batch_size: int,
-    market_set_bank: IndexedMarketSetBank | None,
-) -> list[list[np.ndarray]]:
-    """Pack market microbatches into logical event batches.
-
-    `max_dates_per_batch` is strictly a market-memory boundary. It must not
-    increase optimizer updates or silently change the configured 128-group
-    training batch. Each returned outer item is one optimizer step; its inner
-    arrays are market-memory microbatches whose combined row count is at most
-    `batch_size`.
-    """
-
-    normalized_batch_size = int(batch_size)
-    if normalized_batch_size < 1:
+def _training_batch_count(X, indices: np.ndarray, *, batch_size: int) -> int:
+    if int(batch_size) < 1:
         raise ValueError("batch_size 必須 >=1")
-    microbatches = _build_training_microbatch_rows(
-        X,
-        shuffled,
-        batch_size=normalized_batch_size,
-        market_set_bank=market_set_bank,
-    )
-    if market_set_bank is None:
-        return [[rows] for rows in microbatches]
-
-    optimizer_batches: list[list[np.ndarray]] = []
-    current: list[np.ndarray] = []
-    current_count = 0
-    for rows in microbatches:
-        offset = 0
-        while offset < len(rows):
-            remaining = normalized_batch_size - current_count
-            take = min(remaining, len(rows) - offset)
-            current.append(np.asarray(rows[offset:offset + take], dtype=np.int64))
-            current_count += int(take)
-            offset += int(take)
-            if current_count == normalized_batch_size:
-                optimizer_batches.append(current)
-                current = []
-                current_count = 0
-    if current:
-        optimizer_batches.append(current)
-
-    expected_rows = np.asarray(shuffled, dtype=np.int64)
-    actual_rows = np.concatenate(
-        [np.concatenate(batch) for batch in optimizer_batches]
-    ) if optimizer_batches else np.empty((0,), dtype=np.int64)
-    if actual_rows.size != expected_rows.size or not np.array_equal(
-        np.sort(actual_rows), np.sort(expected_rows)
-    ):
-        raise AssertionError("market-set logical batch packing 未完整保留 shuffled rows")
-    return optimizer_batches
-
-
-def _training_batch_count(
-    X,
-    indices: np.ndarray,
-    *,
-    batch_size: int,
-    market_set_bank: IndexedMarketSetBank | None,
-) -> int:
-    return len(
-        _build_training_optimizer_batches(
-            X,
-            np.asarray(indices, dtype=np.int64),
-            batch_size=batch_size,
-            market_set_bank=market_set_bank,
-        )
-    )
-
-
-def _materialize_training_optimizer_batch(
-    X,
-    C: np.ndarray,
-    y: np.ndarray,
-    sample_weights: np.ndarray,
-    optimizer_batch_rows: list[np.ndarray],
-    market_set_bank: IndexedMarketSetBank | None,
-):
-    return [
-        _materialize_training_microbatch(
-            X,
-            C,
-            y,
-            sample_weights,
-            rows,
-            market_set_bank,
-        )
-        for rows in optimizer_batch_rows
-    ]
+    return (len(indices) + int(batch_size) - 1) // int(batch_size)
 
 
 def _iter_training_batches(
@@ -1083,61 +928,31 @@ def _iter_training_batches(
     *,
     batch_size: int,
     prefetch_batches: int,
-    market_set_bank: IndexedMarketSetBank | None,
 ):
-    optimizer_batches = _build_training_optimizer_batches(
-        X,
-        shuffled,
-        batch_size=batch_size,
-        market_set_bank=market_set_bank,
-    )
-    if int(prefetch_batches) <= 0 or len(optimizer_batches) <= 1:
-        for optimizer_batch_rows in optimizer_batches:
-            yield _materialize_training_optimizer_batch(
-                X,
-                C,
-                y,
-                sample_weights,
-                optimizer_batch_rows,
-                market_set_bank,
-            )
-        return
+    """Materialize the original ordered logical batches; prefetch only changes I/O."""
+    size = int(batch_size)
+    if size < 1:
+        raise ValueError("batch_size 必須 >=1")
+    rows = np.asarray(shuffled, dtype=np.int64)
+    batches = [rows[start:start + size] for start in range(0, len(rows), size)]
 
-    queue_depth = min(int(prefetch_batches), len(optimizer_batches))
-    with ThreadPoolExecutor(
-        max_workers=1,
-        thread_name_prefix="breakout-quality-prefetch",
-    ) as executor:
-        pending = deque(
-            executor.submit(
-                _materialize_training_optimizer_batch,
-                X,
-                C,
-                y,
-                sample_weights,
-                optimizer_batches[index],
-                market_set_bank,
-            )
-            for index in range(queue_depth)
-        )
+    def materialize(indices):
+        return X[indices], C[indices], y[indices], sample_weights[indices]
+
+    if int(prefetch_batches) <= 0 or len(batches) <= 1:
+        for indices in batches:
+            yield materialize(indices)
+        return
+    queue_depth = min(int(prefetch_batches), len(batches))
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="breakout-quality-prefetch") as executor:
+        pending = deque(executor.submit(materialize, batches[i]) for i in range(queue_depth))
         next_index = queue_depth
         while pending:
-            future = pending.popleft()
-            batch_arrays = future.result()
-            if next_index < len(optimizer_batches):
-                pending.append(
-                    executor.submit(
-                        _materialize_training_optimizer_batch,
-                        X,
-                        C,
-                        y,
-                        sample_weights,
-                        optimizer_batches[next_index],
-                        market_set_bank,
-                    )
-                )
+            arrays = pending.popleft().result()
+            if next_index < len(batches):
+                pending.append(executor.submit(materialize, batches[next_index]))
                 next_index += 1
-            yield batch_arrays
+            yield arrays
 
 
 def _evaluate(
@@ -1152,7 +967,6 @@ def _evaluate(
     *,
     evaluation_batch_size: int,
     evaluation_workers: int,
-    market_set_bank: IndexedMarketSetBank | None = None,
     execution_plan: TorchExecutionPlan | None = None,
 ):
     if len(indices) == 0:
@@ -1186,7 +1000,6 @@ def _evaluate(
         batch_size=batch_size,
         workers=evaluation_workers,
         execution_plan=execution_plan,
-        market_set_bank=market_set_bank,
     )
 
     with torch.no_grad():
@@ -1235,11 +1048,9 @@ def _evaluate_inner_splits(
     evaluation_batch_size: int,
     evaluation_workers: int,
     parallel: bool,
-    market_set_bank: IndexedMarketSetBank | None = None,
     execution_plan: TorchExecutionPlan | None = None,
 ):
     common_kwargs = {
-        "market_set_bank": market_set_bank,
         "evaluation_batch_size": int(evaluation_batch_size),
         "evaluation_workers": int(evaluation_workers),
         "execution_plan": execution_plan,
@@ -1337,14 +1148,12 @@ def _new_training_state(
     class_weight_mode: str,
     seed: int,
     execution_plan: TorchExecutionPlan,
-    pretrained_encoder_state=None,
 ):
     seed_torch(torch, seed=int(seed), plan=execution_plan)
     model = build_model(
         feature_count,
         context_count,
         architecture=BREAKOUT_QUALITY_MODEL_ARCHITECTURE,
-        pretrained_encoder_state=pretrained_encoder_state,
     ).to(execution_plan.device)
     trainable_parameters = [parameter for parameter in model.parameters() if parameter.requires_grad]
     if not trainable_parameters:
@@ -1383,7 +1192,6 @@ def _train_one_epoch(
     train_idx: np.ndarray,
     sample_weights: np.ndarray,
     class_weights,
-    market_set_bank: IndexedMarketSetBank | None,
     batch_size: int,
     shuffle_seed: int,
     prefetch_batches: int,
@@ -1414,7 +1222,7 @@ def _train_one_epoch(
         "augmented_sample_count": 0,
         "masked_bar_count": 0,
     }
-    for optimizer_microbatches in _iter_training_batches(
+    for xb_np, cb_np, yb_np, wb_np in _iter_training_batches(
         X,
         C,
         y,
@@ -1422,16 +1230,9 @@ def _train_one_epoch(
         shuffled,
         batch_size=batch_size,
         prefetch_batches=prefetch_batches,
-        market_set_bank=market_set_bank,
     ):
         if max_batches is not None and completed_batches >= int(max_batches):
             break
-        if not optimizer_microbatches:
-            raise AssertionError("training optimizer batch 不得為空")
-        xb_np = np.concatenate([item[0] for item in optimizer_microbatches], axis=0)
-        cb_np = np.concatenate([item[1] for item in optimizer_microbatches], axis=0)
-        yb_np = np.concatenate([item[2] for item in optimizer_microbatches], axis=0)
-        wb_np = np.concatenate([item[3] for item in optimizer_microbatches], axis=0)
         if len(xb_np) > int(batch_size):
             raise AssertionError("logical optimizer batch 超過設定 batch_size")
         xb_np, batch_augmentation = apply_training_augmentation(
@@ -1457,50 +1258,7 @@ def _train_one_epoch(
         wb = torch.from_numpy(wb_np).to(execution_plan.device)
         optimizer.zero_grad(set_to_none=True)
         with autocast_context(torch, execution_plan):
-            if bool(getattr(model, "requires_market_set", False)):
-                if market_set_bank is None:
-                    raise ValueError("requires_market_set model 缺少 market_set_bank")
-                candidate_embedding = model.encode_candidate(xb)
-                logits_parts = []
-                event_offset = 0
-                for item in optimizer_microbatches:
-                    micro_size = int(len(item[0]))
-                    market_batch = item[4]
-                    if market_batch is None:
-                        raise ValueError("market-set optimizer microbatch 缺少 market inputs")
-                    sequences, history_mask, valid_stock_mask, event_to_market = (
-                        market_batch_to_torch(
-                            torch,
-                            market_batch,
-                            execution_plan.device,
-                        )
-                    )
-                    candidate_microbatch = candidate_embedding[
-                        event_offset:event_offset + micro_size
-                    ]
-                    market_embedding = model.encode_market_for_events(
-                        candidate_microbatch,
-                        sequences,
-                        history_mask,
-                        valid_stock_mask,
-                        event_to_market,
-                    )
-                    if event_to_market.ndim != 1 or event_to_market.shape[0] != micro_size:
-                        raise ValueError("market microbatch event_to_market shape 不一致")
-                    logits_parts.append(
-                        model.fuse_embeddings(
-                            candidate_microbatch,
-                            market_embedding,
-                        )
-                    )
-                    event_offset += micro_size
-                if event_offset != int(xb.shape[0]):
-                    raise AssertionError("market microbatch rows 未完整覆蓋 logical batch")
-                logits = torch.cat(logits_parts, dim=0)
-            else:
-                if len(optimizer_microbatches) != 1 or optimizer_microbatches[0][4] is not None:
-                    raise AssertionError("非 market-set model 收到不合法 microbatch")
-                logits = forward_breakout_quality_model(model, xb, cb, None)
+            logits = forward_breakout_quality_model(model, xb, cb)
             loss_items = F.cross_entropy(
                 logits,
                 yb,
@@ -1512,8 +1270,7 @@ def _train_one_epoch(
             loss = weighted_loss_sum / torch.clamp(wb.sum(), min=1e-12)
         elif training_weight_reduction == TRAINING_WEIGHT_REDUCTION_FIXED_BATCH_SIZE:
             # Keep globally normalized date weights intact. Divide by the
-            # unweighted logical sample count; market microbatches are only a
-            # memory boundary and must not change the optimizer denominator.
+            # unweighted logical sample count.
             loss = weighted_loss_sum / float(loss_items.numel())
         else:
             raise ValueError(
@@ -1553,7 +1310,6 @@ def _select_epoch_with_inner_validation(
     *,
     X: np.ndarray,
     C: np.ndarray,
-    market_set_bank: IndexedMarketSetBank | None,
     y: np.ndarray,
     events: pd.DataFrame,
     train_idx: np.ndarray,
@@ -1581,7 +1337,6 @@ def _select_epoch_with_inner_validation(
     parallel_split_evaluation: bool,
     train_prefetch_batches: int,
     execution_plan: TorchExecutionPlan,
-    pretrained_encoder_state=None,
 ):
     training_sample_weights, sample_weight_summaries = _build_sample_weights(
         events,
@@ -1611,14 +1366,12 @@ def _select_epoch_with_inner_validation(
         class_weight_mode=class_weight_mode,
         seed=seed,
         execution_plan=execution_plan,
-        pretrained_encoder_state=pretrained_encoder_state,
     )
     grad_scaler = build_grad_scaler(torch, execution_plan)
     batches_per_epoch = _training_batch_count(
         X,
         training_sampling_idx,
         batch_size=batch_size,
-        market_set_bank=market_set_bank,
     )
     schedule_plan = _build_learning_rate_schedule_plan(
         schedule_name=lr_schedule_name,
@@ -1653,7 +1406,6 @@ def _select_epoch_with_inner_validation(
             train_idx=training_sampling_idx,
             sample_weights=training_sample_weights,
             class_weights=class_weights,
-            market_set_bank=market_set_bank,
             batch_size=batch_size,
             shuffle_seed=int(seed) + epoch,
             prefetch_batches=train_prefetch_batches,
@@ -1676,7 +1428,6 @@ def _select_epoch_with_inner_validation(
             validation_idx,
             evaluation_sample_weights,
             class_weights,
-            market_set_bank=market_set_bank,
             evaluation_batch_size=evaluation_batch_size,
             evaluation_workers=evaluation_workers,
             parallel=parallel_split_evaluation,
@@ -1763,7 +1514,6 @@ def _fit_full_selection(
     *,
     X: np.ndarray,
     C: np.ndarray,
-    market_set_bank: IndexedMarketSetBank | None,
     y: np.ndarray,
     events: pd.DataFrame,
     train_idx: np.ndarray,
@@ -1789,7 +1539,6 @@ def _fit_full_selection(
     evaluation_workers: int,
     train_prefetch_batches: int,
     execution_plan: TorchExecutionPlan,
-    pretrained_encoder_state=None,
 ):
     training_sample_weights, sample_weight_summaries = _build_sample_weights(
         events,
@@ -1816,14 +1565,12 @@ def _fit_full_selection(
         class_weight_mode=class_weight_mode,
         seed=seed,
         execution_plan=execution_plan,
-        pretrained_encoder_state=pretrained_encoder_state,
     )
     grad_scaler = build_grad_scaler(torch, execution_plan)
     batches_per_epoch = _training_batch_count(
         X,
         training_sampling_idx,
         batch_size=batch_size,
-        market_set_bank=market_set_bank,
     )
     requested_steps = (
         int(target_optimizer_steps)
@@ -1880,7 +1627,6 @@ def _fit_full_selection(
             train_idx=training_sampling_idx,
             sample_weights=training_sample_weights,
             class_weights=class_weights,
-            market_set_bank=market_set_bank,
             batch_size=batch_size,
             shuffle_seed=int(seed) + cycle,
             prefetch_batches=train_prefetch_batches,
@@ -1908,7 +1654,6 @@ def _fit_full_selection(
             train_idx,
             evaluation_sample_weights,
             class_weights,
-            market_set_bank=market_set_bank,
             evaluation_batch_size=evaluation_batch_size,
             evaluation_workers=evaluation_workers,
             execution_plan=execution_plan,
@@ -2022,15 +1767,6 @@ def main(argv=None) -> int:
         expected_policy=expected_policy,
         require_current_source=True,
     )
-    market_set_bank = (
-        load_validated_market_set_bank(
-            args.filter_id,
-            dataset_summary=dataset_summary,
-            expected_model_spec=model_spec,
-        )
-        if bool(model_spec.requires_market_set)
-        else None
-    )
     X, C, y = _preload_training_arrays(
         X,
         C,
@@ -2094,7 +1830,6 @@ def main(argv=None) -> int:
         PROJECT_ROOT,
         source_data_end_date=source_data_end,
     )
-    pretrained_encoder_state = None
     pretraining_record = None
     external_pretrained_encoder_record = None
     early_stopping_enabled = bool(use_inner_validation and patience > 0)
@@ -2186,7 +1921,6 @@ def main(argv=None) -> int:
             torch,
             X=X,
             C=C,
-            market_set_bank=market_set_bank,
             y=y,
             events=events,
             train_idx=inner_train_idx,
@@ -2214,7 +1948,6 @@ def main(argv=None) -> int:
             parallel_split_evaluation=parallel_split_evaluation,
             train_prefetch_batches=train_prefetch_batches,
             execution_plan=execution_plan,
-            pretrained_encoder_state=pretrained_encoder_state,
         )
         selected_epoch = int(epoch_selection["best_epoch"])
         selected_optimizer_steps = int(epoch_selection["best_optimizer_steps"])
@@ -2225,7 +1958,6 @@ def main(argv=None) -> int:
             X,
             final_refit_sampling_idx,
             batch_size=batch_size,
-            market_set_bank=market_set_bank,
         )
         resolved_target_steps, minimum_full_pass_applied = (
             _resolve_final_refit_target_steps(
@@ -2252,7 +1984,6 @@ def main(argv=None) -> int:
         torch,
         X=X,
         C=C,
-        market_set_bank=market_set_bank,
         y=y,
         events=events,
         train_idx=final_refit_idx,
@@ -2278,7 +2009,6 @@ def main(argv=None) -> int:
         evaluation_workers=evaluation_workers,
         train_prefetch_batches=train_prefetch_batches,
         execution_plan=execution_plan,
-        pretrained_encoder_state=pretrained_encoder_state,
     )
     final_refit_plan = {
         "mode": final_refit_mode,
@@ -2356,16 +2086,8 @@ def main(argv=None) -> int:
             "frozen_parameter_count": int(frozen_parameter_count),
             "self_supervised_pretraining": pretraining_record,
             "external_pretrained_encoder": external_pretrained_encoder_record,
-            "market_set_contract": (
-                dataset_summary.get("market_set_contract")
-                if bool(model_spec.requires_market_set)
-                else None
-            ),
-            "market_set_artifacts": (
-                dataset_summary.get("market_set_artifacts")
-                if bool(model_spec.requires_market_set)
-                else None
-            ),
+            "market_set_contract": None,
+            "market_set_artifacts": None,
         },
         artifact_paths.model_path,
     )
@@ -2399,11 +2121,7 @@ def main(argv=None) -> int:
         "selection_role_counts": split_report["selection_role_counts"],
         "group_key": "ticker/date/high_len",
         "source_dataset_artifacts": dataset_summary.get("dataset_artifacts"),
-        "source_market_set_artifacts": (
-            dataset_summary.get("market_set_artifacts")
-            if bool(model_spec.requires_market_set)
-            else None
-        ),
+        "source_market_set_artifacts": None,
     }
     manifest = {
         "artifact_contract_version": ARTIFACT_CONTRACT_VERSION,
@@ -2418,16 +2136,8 @@ def main(argv=None) -> int:
         "frozen_parameter_count": int(frozen_parameter_count),
         "self_supervised_pretraining": pretraining_record,
         "external_pretrained_encoder": external_pretrained_encoder_record,
-        "market_set_contract": (
-            dataset_summary.get("market_set_contract")
-            if bool(model_spec.requires_market_set)
-            else None
-        ),
-        "market_set_artifacts": (
-            dataset_summary.get("market_set_artifacts")
-            if bool(model_spec.requires_market_set)
-            else None
-        ),
+        "market_set_contract": None,
+        "market_set_artifacts": None,
         "sequence_length": int(X.shape[1]),
         "model_filename": DEFAULT_MODEL_FILENAME,
         "manifest_filename": DEFAULT_MANIFEST_FILENAME,

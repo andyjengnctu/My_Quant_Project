@@ -1398,10 +1398,19 @@ _REVIEWED_SOURCE_INVENTORIES["mintrade_source_graph"]["current"]["filters/breako
 # weights and 61 independent replay observations against frozen 7404f160.
 # Evidence: outputs/validation/retirement_sweep_20261128/*_{inputs,fit,receipt}.json.
 # Pin only these reviewed bytes; any unknown shared numerical edit stays strict.
-_RETIRED_INPUT_CAPABILITIES_SOURCE_PINS = {'core/breakout_quality_registry.py': (('8a8d7a48206f840c1c4d03b4bdc7a0e34afa3665a4eebfca20f0500d6c5c56e8',
+# AI: Additional frozen 6d565314/current observations preserve the complete
+# 28-profile manifests, real-stock tensors, binary/ranker FIT weights and 61
+# Oracle replay cases after removing unused names and retired Market Set code.
+# Evidence: outputs/validation/retirement_followup_20261128/baseline_*.json
+# and current_*.json; only exact reviewed bytes enter the existing projection.
+_RETIRED_INPUT_CAPABILITIES_SOURCE_PINS = {'core/breakout_quality_registry.py': (('efd3ca56e6dc9214838f96a140f6a2388f9a537366659d524837ba3d6cfed718',
+                                        '3c3072b7664f2f404a2a6e279948affb447021519445006a7c95ae6a7e89f604',
+                                        '8a8d7a48206f840c1c4d03b4bdc7a0e34afa3665a4eebfca20f0500d6c5c56e8',
                                         '6cc94509b7acfa71bbd25c2bba7a5b0ff955512c069abde51609d85d84756f80'),
                                        '310db0713692a8a335d8f7514e8026b05e0e921781b5a89412cd5d1d63f4aa5e'),
- 'filters/breakout_quality/models/architectures.py': (('a60ebd43a8cc0559d6c4a7cc9861eff07bb16c456426b7c58bba06758c1fa9c0',
+ 'filters/breakout_quality/models/architectures.py': (('d3cf7b41a0622168f50fec8687f5f74f1c5c8f217c53d813cc50c35e34030fdf',
+                                                       '39466cf41f0cd2889576162b443f9abbc1ea2a1155777fb2fe4c4a08a30f246d',
+                                                       'a60ebd43a8cc0559d6c4a7cc9861eff07bb16c456426b7c58bba06758c1fa9c0',
                                                        'd1e73cd3212c75953221c80f64f53469f3ac9934b7daa348acf18ea2f98f8abb'),
                                                       '7759ecf25673d4e1709376f19f1dffb885e00fa8294b3275d718d1dda473f302'),
  'filters/breakout_quality/models/spec_builders.py': (('78443aa7a0b82eff439841430bdb274b5943ef3fdfc55a9eb51a7415c5268ba7',
@@ -1409,11 +1418,18 @@ _RETIRED_INPUT_CAPABILITIES_SOURCE_PINS = {'core/breakout_quality_registry.py': 
                                                       '82ffabeea6b096e09370ab2ae871e95f5c4f430ab119984ffd1fad89bbe158ca'),
  'filters/breakout_quality/models/spec_contract.py': (('e52a81e42cda0238bb935d6021450d348a825209636188404c81fea6e0bb3b7c',
                                                        'bdc029b4e9a96b52e488aa9c111e16b11308cc69ad611a4846421cf58e72d7d5'),
-                                                      'bdc029b4e9a96b52e488aa9c111e16b11308cc69ad611a4846421cf58e72d7d5')}
+                                                      'bdc029b4e9a96b52e488aa9c111e16b11308cc69ad611a4846421cf58e72d7d5'),
+ 'filters/breakout_quality/workflow_io.py': (('9376a70c1381cfdf8f8e73d9772aeeb024fae50d2fc9df7ca6392487dfe61c0b',
+                                              'daa627e026321858ee68d3f0dfb009c7a97971e0ab348da63af22cd2e2a3cb96'),
+                                             '332d1facb60f0474e78608e366db91a8b3b7aa00b0436998b7229854d65f0d42'),
+ 'filters/breakout_quality/dataset_readiness.py': (('f7e6894a9c75eb6ef640f3fec5a4bcb99e7afc90507b37552845b4cdf6730c66',
+                                                    '2ab5f6f3de36c1ab1fc95fdeebb9c8123d5f74d7098901461052739ce3350333'),
+                                                   'ddb52da895bfb21ac33aa915df65aa3350e85a63c62112480e2ca2fc9cb53947')}
 for _relative, (_pins, _previous) in _RETIRED_INPUT_CAPABILITIES_SOURCE_PINS.items():
-    _REVIEWED[_relative].setdefault("reviewed_model_only_revisions", {}).update(
-        dict.fromkeys(_pins, _previous)
-    )
+    _proof = _REVIEWED.setdefault(_relative, {
+        "file_sha256": _pins[0], "original_file_sha256": _previous, "calculations": {},
+    })
+    _proof.setdefault("reviewed_model_only_revisions", {}).update(dict.fromkeys(_pins, _previous))
 _REVIEWED_SOURCE_INVENTORIES["oracle_daily_provider"]["current"][
     "filters/breakout_quality/daily_ranker_data.py"
 ] = ('e2b61e98476854365099f2cddb7ce3bbb5c100110589e73bcfaab698628abbd3',

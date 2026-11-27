@@ -175,33 +175,6 @@ BREAKOUT_QUALITY_INCEPTION_DEPTH = 6
 BREAKOUT_QUALITY_INCEPTION_TARGET_RECEPTIVE_FIELD_BARS = 228
 BREAKOUT_QUALITY_INCEPTION_RESIDUAL_EVERY = 3
 
-# Stage 0／1 learned market-set branch settings。Global-query v1與10A Candidate-conditioned v1
-# 均已由完整 OOS 淘汰，只保留legacy checkpoint／manifest嚴格重建與歷史研究重現。
-BREAKOUT_QUALITY_MARKET_SET_HISTORY_BARS = 300
-BREAKOUT_QUALITY_MARKET_SET_BASE_FEATURES = (
-    "close_return",
-    "overnight_return",
-    "intraday_return",
-    "high_low_range",
-    "log_volume_change",
-)
-BREAKOUT_QUALITY_MARKET_SET_STOCK_EMBEDDING_DIM = 32
-BREAKOUT_QUALITY_MARKET_SET_TEMPORAL_CHANNELS = 32
-BREAKOUT_QUALITY_MARKET_SET_TEMPORAL_KERNEL_SIZE = 15
-BREAKOUT_QUALITY_MARKET_SET_TEMPORAL_STRIDE = 10
-BREAKOUT_QUALITY_MARKET_SET_TEMPORAL_DILATIONS = (1, 2, 4)
-BREAKOUT_QUALITY_MARKET_SET_TEMPORAL_NORMALIZATION = "group_norm"
-BREAKOUT_QUALITY_MARKET_SET_TEMPORAL_NORMALIZATION_GROUPS = 8
-BREAKOUT_QUALITY_MARKET_SET_QUERY_COUNT = 4  # Legacy Global Market Set v1 learned queries。
-BREAKOUT_QUALITY_MARKET_SET_CANDIDATE_QUERY_COUNT = 1  # 10A每個候選事件產生一個動態query。
-BREAKOUT_QUALITY_MARKET_SET_ATTENTION_HEADS = 4
-BREAKOUT_QUALITY_MARKET_SET_EMBEDDING_DIM = 128
-BREAKOUT_QUALITY_MARKET_SET_FUSION_HIDDEN_DIM = 128
-BREAKOUT_QUALITY_MARKET_SET_MIN_VALID_HISTORY_RATIO = 0.80
-BREAKOUT_QUALITY_MARKET_SET_MAX_STOCKS = 0  # 0 = 使用當時資料集中全部股票；正整數可作資源受控實驗。
-BREAKOUT_QUALITY_MARKET_SET_MAX_DATES_PER_BATCH = 4  # 每個 market microbatch 最多物化幾個日期；optimizer logical batch 仍固定使用 DEFAULT_BATCH_SIZE 個事件。
-
-
 # =============================================================================
 # 4. Supervised training and optimization
 # =============================================================================
@@ -258,14 +231,6 @@ BREAKOUT_QUALITY_CUDA_INFERENCE_PREFETCH = True  # Stage one following CUDA batc
 BREAKOUT_QUALITY_PARALLEL_SPLIT_EVALUATION = False  # 同時評估 Inner Train 與 Validation；峰值最多使用 2 × EVALUATION_WORKERS，只做 read-only inference。
 BREAKOUT_QUALITY_PIT_EPOCH_SELECTION_LIGHTWEIGHT_METRICS = True  # PIT每個epoch只計算真正參與checkpoint selection的Validation metric；完整Joint/geometry diagnostics保留於fold正式score/audit，避免GPU等待CPU O(N²)診斷。
 
-
-# =============================================================================
-# 8. Legacy compatibility: 9C Selection-only TS2Vec pretraining
-# =============================================================================
-
-# 只供舊工件重建；不是 active architecture 的新實驗入口。
-BREAKOUT_QUALITY_PRETRAINING_PROFILE = "ts2vec_selection_only"
-BREAKOUT_QUALITY_PRETRAINING_STRIDE = 5  # Dataset sampling設定；每個ticker在Selection endpoint每5個交易日建立一窗。
 
 # =============================================================================
 # 9. Rolling point-in-time evaluation contract

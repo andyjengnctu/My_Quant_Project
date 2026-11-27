@@ -11,7 +11,6 @@ import numpy as np
 from core.breakout_quality_runtime import BREAKOUT_QUALITY_OUTPUT_SCHEMA
 
 from filters.breakout_quality.dataset_store import IndexedFeatureBank
-from filters.breakout_quality.market_set import IndexedMarketSetBank, MarketSetBatch
 from filters.breakout_quality.torch_runtime import TorchExecutionPlan, autocast_context
 from filters.breakout_quality.same_date_relations import normalize_relation_date_key
 
@@ -46,31 +45,16 @@ def materialize_indexed_feature_inputs(
     return IndexedFeatureBank(feature_bank_memory, group_index_memory), context_memory
 
 
-def market_batch_to_torch(torch: Any, batch: MarketSetBatch, device) -> tuple[Any, Any, Any, Any]:
-    return (
-        torch.from_numpy(batch.sequences).to(device),
-        torch.from_numpy(batch.history_mask).to(device),
-        torch.from_numpy(batch.valid_stock_mask).to(device),
-        torch.from_numpy(batch.event_to_market).to(device),
-    )
-
-
 def forward_breakout_quality_model(
     model: Any,
     feature_tensor: Any,
     context_tensor: Any,
-    market_inputs=None,
     *,
     output_head: str | None = None,
     relation_history_tensor=None,
 ):
-    requires_market = bool(getattr(model, "requires_market_set", False))
-    if requires_market:
-        if market_inputs is None:
-            raise ValueError("requires_market_set model 缺少 market inputs")
-        return model(feature_tensor, context_tensor, market_inputs)
-    if market_inputs is not None:
-        raise ValueError("非 market-set model 不得收到 market inputs")
+    if bool(getattr(model, "requires_market_set", False)):
+        raise ValueError("Retired Market Set models cannot execute inference")
     if output_head is not None:
         forward_head = getattr(model, "forward_output_head", None)
         if forward_head is None:
@@ -97,7 +81,7 @@ def _iter_prefetched_cuda_inputs(torch, jobs, materialize, device):
     compute_stream = torch.cuda.current_stream(device=device)
 
     def stage(positions):
-        batch_features, batch_context, _, _ = materialize(positions)
+        batch_features, batch_context, _ = materialize(positions)
         # AI: This worker only prepares immutable inputs. The model and its
         # output transfer remain on the caller's original compute stream.
         with torch.inference_mode():
@@ -143,8 +127,6 @@ def strict_parallel_batched_logits(
     batch_size: int,
     workers: int,
     execution_plan: TorchExecutionPlan | None = None,
-    market_set_bank: IndexedMarketSetBank | None = None,
-    market_group_indices: np.ndarray | None = None,
     output_head: str | None = None,
     same_date_group_labels: np.ndarray | None = None,
     same_date_relation_history_indices: dict[Any, np.ndarray] | None = None,
@@ -178,20 +160,6 @@ def strict_parallel_batched_logits(
         raise ValueError("invalid declared model inference output width")
     if row_count == 0:
         return np.empty((0, output_width), dtype=np.float32)
-    explicit_market_groups = (
-        None if market_group_indices is None else np.asarray(market_group_indices, dtype=np.int64)
-    )
-    if explicit_market_groups is not None and explicit_market_groups.shape != (row_count,):
-        raise ValueError(
-            "market_group_indices 長度必須等於 inference row_count: "
-            f"market={explicit_market_groups.shape}, rows={row_count}"
-        )
-    if market_set_bank is not None and explicit_market_groups is None and not isinstance(
-        features, IndexedFeatureBank
-    ):
-        raise TypeError("market-set inference 需要 IndexedFeatureBank 或 explicit market_group_indices")
-    if market_set_bank is None and bool(getattr(model, "requires_market_set", False)):
-        raise ValueError("market-set model inference 缺少 IndexedMarketSetBank")
     requires_same_date_relations = bool(
         getattr(model, "requires_same_date_relations", False)
     )
@@ -212,8 +180,6 @@ def strict_parallel_batched_logits(
         }
     )
     if requires_same_date_relations:
-        if market_set_bank is not None:
-            raise ValueError("same-date relational inference不得與legacy market-set batching混用")
         if relation_labels is None or relation_labels.shape != (row_count,):
             raise ValueError(
                 "same-date relational model inference需要與requested rows對齊的date labels"
@@ -232,36 +198,11 @@ def strict_parallel_batched_logits(
             np.asarray(positions, dtype=np.int64)
             for positions in positions_by_label.values()
         ]
-    elif market_set_bank is None:
+    else:
         jobs = [
             local_positions[start:start + normalized_batch_size]
             for start in range(0, row_count, normalized_batch_size)
         ]
-    else:
-        if explicit_market_groups is not None:
-            all_group_indices = explicit_market_groups
-        else:
-            assert isinstance(features, IndexedFeatureBank)
-            source_rows = local_positions if idx is None else idx
-            all_group_indices = np.asarray(
-                features.event_group_index[source_rows], dtype=np.int64
-            )
-        market_dates = market_set_bank.market_date_indices_for_group_indices(
-            all_group_indices
-        )
-        unique_dates = np.unique(market_dates)
-        date_to_block = {
-            int(date_index): int(position // market_set_bank.max_dates_per_batch)
-            for position, date_index in enumerate(unique_dates.tolist())
-        }
-        positions_by_block: dict[int, list[int]] = {}
-        for position, date_index in enumerate(market_dates.tolist()):
-            positions_by_block.setdefault(date_to_block[int(date_index)], []).append(position)
-        jobs = []
-        for block in sorted(positions_by_block):
-            positions = np.asarray(positions_by_block[block], dtype=np.int64)
-            for start in range(0, len(positions), normalized_batch_size):
-                jobs.append(positions[start:start + normalized_batch_size])
 
     device_type = "cpu" if execution_plan is None else execution_plan.device_type
     worker_count = 1 if device_type == "cuda" else min(normalized_workers, len(jobs))
@@ -272,7 +213,6 @@ def strict_parallel_batched_logits(
         row_indices = positions if idx is None else idx[positions]
         batch_features = features[row_indices]
         batch_context = np.asarray(context[row_indices], dtype=np.float32)
-        market_batch = None
         relation_history_features = None
         if relation_history_steps > 0:
             if relation_labels is None or relation_history_indices is None:
@@ -292,16 +232,7 @@ def strict_parallel_batched_logits(
             relation_history_features = np.asarray(
                 features[history_ids], dtype=np.float32
             )
-        if market_set_bank is not None:
-            if explicit_market_groups is not None:
-                group_indices = explicit_market_groups[positions]
-            else:
-                assert isinstance(features, IndexedFeatureBank)
-                group_indices = np.asarray(
-                    features.event_group_index[row_indices], dtype=np.int64
-                )
-            market_batch = market_set_bank.materialize_for_group_indices(group_indices)
-        return batch_features, batch_context, market_batch, relation_history_features
+        return batch_features, batch_context, relation_history_features
 
     if worker_count == 1:
         device = torch.device("cpu") if execution_plan is None else execution_plan.device
@@ -311,7 +242,6 @@ def strict_parallel_batched_logits(
             device_type == "cuda"
             and BREAKOUT_QUALITY_CUDA_INFERENCE_PREFETCH
             and len(jobs) > 1
-            and market_set_bank is None
             and not requires_same_date_relations
         )
         if prefetch_cuda:
@@ -329,18 +259,13 @@ def strict_parallel_batched_logits(
             return logits_np
         with torch.inference_mode():
             for positions in jobs:
-                batch_features, batch_context, market_batch, relation_history_features = _batch_inputs(positions)
+                batch_features, batch_context, relation_history_features = _batch_inputs(positions)
                 feature_tensor = torch.from_numpy(batch_features).to(device)
                 context_tensor = torch.from_numpy(batch_context).to(device)
                 relation_history_tensor = (
                     None
                     if relation_history_features is None
                     else torch.from_numpy(relation_history_features).to(device)
-                )
-                market_inputs = (
-                    None
-                    if market_batch is None
-                    else market_batch_to_torch(torch, market_batch, device)
                 )
                 context_manager = (
                     autocast_context(torch, execution_plan)
@@ -349,7 +274,7 @@ def strict_parallel_batched_logits(
                 )
                 with context_manager:
                     batch_logits = forward_breakout_quality_model(
-                        model, feature_tensor, context_tensor, market_inputs,
+                        model, feature_tensor, context_tensor,
                         output_head=output_head,
                         relation_history_tensor=relation_history_tensor,
                     )
@@ -368,12 +293,7 @@ def strict_parallel_batched_logits(
         outputs: list[tuple[np.ndarray, np.ndarray]] = []
         with torch.no_grad():
             for positions in assigned_jobs:
-                batch_features, batch_context, market_batch, relation_history_features = _batch_inputs(positions)
-                market_inputs = (
-                    None
-                    if market_batch is None
-                    else market_batch_to_torch(torch, market_batch, torch.device("cpu"))
-                )
+                batch_features, batch_context, relation_history_features = _batch_inputs(positions)
                 relation_history_tensor = (
                     None
                     if relation_history_features is None
@@ -383,7 +303,6 @@ def strict_parallel_batched_logits(
                     replica,
                     torch.from_numpy(batch_features),
                     torch.from_numpy(batch_context),
-                    market_inputs,
                     output_head=output_head,
                     relation_history_tensor=relation_history_tensor,
                 ).cpu().numpy().copy()
@@ -404,7 +323,6 @@ def strict_parallel_batched_logits(
     return logits_np
 
 
-
 def strict_unique_group_batched_logits(
     torch: Any,
     model: Any,
@@ -414,7 +332,6 @@ def strict_unique_group_batched_logits(
     batch_size: int,
     workers: int,
     execution_plan: TorchExecutionPlan | None = None,
-    market_set_bank: IndexedMarketSetBank | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Infer each shared feature group once and return event-row broadcast indices.
 
@@ -466,15 +383,12 @@ def strict_unique_group_batched_logits(
         batch_size=batch_size,
         workers=workers,
         execution_plan=execution_plan,
-        market_set_bank=market_set_bank,
-        market_group_indices=np.asarray(unique_group_indices, dtype=np.int64),
     )
     return group_logits, np.asarray(event_to_group, dtype=np.int64)
 
 
 __all__ = [
     "forward_breakout_quality_model",
-    "market_batch_to_torch",
     "materialize_indexed_feature_inputs",
     "strict_parallel_batched_logits",
     "strict_unique_group_batched_logits",

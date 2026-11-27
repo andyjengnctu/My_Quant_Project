@@ -178,26 +178,26 @@ class PositiveNetPnlContractCases(TestCase):
                 self.assertTrue(all(spec['left'] not in retired and spec['right'] not in retired
                                     for spec in robustness.paired_contrasts))
         self.assertTrue({'C142', 'C143', 'C144'}.isdisjoint(active))
-        self.assertIn('C144', settings.arms)  # Immutable historical strategy ID.
-        # Retirement removes current strategy consumers but never model specs,
-        # registered strategies or their historical FIT/Replay identities.
-        from core.breakout_quality_registry import get_continuous_ranker_research_spec
+        # Historical IDs and evidence remain reserved in the Experiment Registry;
+        # removed implementations must not re-enter executable registrations.
         from core.strategy_compare_registry import STRATEGY_COMPARE_ARMS
         from config.research_summary import RESEARCH_SUMMARY_ROWS
-        for arm_id in ('C135', 'C136'):
-            self.assertIn(arm_id, settings.arms)
-            self.assertIn(arm_id, STRATEGY_COMPARE_ARMS)
-            self.assertTrue(any(not row.get('enabled', True)
-                                and any(b.get('arm_id') == arm_id for b in row.get('bindings', ()))
-                                for row in RESEARCH_SUMMARY_ROWS))
+        for arm_id in ('C135', 'C136', 'C144'):
+            self.assertNotIn(arm_id, settings.arms)
+            self.assertNotIn(arm_id, STRATEGY_COMPARE_ARMS)
+            self.assertFalse(any(row.get('enabled', True)
+                                 and any(b.get('arm_id') == arm_id for b in row.get('bindings', ()))
+                                 for row in RESEARCH_SUMMARY_ROWS))
         for model_id, profile in (
             ('MR-13CU', 'true_daily_universal_mintrade_fullcycle_netpnl_full_list_ndcg_pairwise'),
             ('MR-13CT', 'true_daily_universal_mintrade_fullcycle_netpnl_positive_binary'),
         ):
-            self.assertEqual(get_continuous_ranker_research_spec(profile).model_research_id, model_id)
-        self.assertIn('CONT13CW_ROLL', STRATEGY_DL_SOURCES)  # Historical PIT source ID.
-        self.assertEqual(get_continuous_ranker_research_spec(
-            DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_POSITIVE_PROFILE).model_research_id, 'MR-13CW')
+            with self.subTest(retired_model=model_id), self.assertRaises(ValueError):
+                get_continuous_ranker_research_spec(profile)
+        self.assertNotIn('CONT13CW_ROLL', STRATEGY_DL_SOURCES)
+        with self.assertRaises(ValueError):
+            get_continuous_ranker_research_spec(
+                DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_POSITIVE_PROFILE)
         definition = get_formal_oracle_definition(get_active_audit_module_id())
         historical = definition.source['historical_only_oracle_targets']
         self.assertIn('T40_Positive', historical)
@@ -890,8 +890,6 @@ class IndependentPositiveClassifierCases(TestCase):
             profile = get_breakout_quality_experiment_profile(name)
             with self.subTest(profile=name):
                 self.assertFalse(legacy.calibration_enabled(profile))
-                self.assertEqual(legacy.checkpoint_calibration_payload(None, profile), {})
-                self.assertEqual(legacy.calibrated_score_columns(None, profile, []), {})
                 with self.assertRaisesRegex(ValueError, "[Rr]etired"):
                     replace(profile, score_calibration=POSITIVE_RANK_CALIBRATION)
                 with self.assertRaisesRegex(ValueError, "Retired"):
@@ -1108,7 +1106,6 @@ class ScoreOutputCompletenessCases(TestCase):
                 max_positions=10, evaluation_mode="rolling", ranking_policy="test", ranking_options={},
                 replay_policy={}, score_contract=None, source_contract=None, dataset_inputs=None,
                 execution_gate="fullcycle_reference_net_pnl_strictly_positive_v1")
-
 
 
 if __name__ == '__main__':

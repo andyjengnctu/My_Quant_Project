@@ -345,8 +345,6 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-
-
 def _file_record(path: Path) -> dict[str, Any]:
     return {
         "path": str(path.name),
@@ -392,7 +390,6 @@ def _predict_scores(torch, model, bundle, rows, *, args, execution_plan) -> np.n
         batch_size=int(args.evaluation_batch_size),
         workers=int(args.evaluation_workers),
         execution_plan=execution_plan,
-        market_set_bank=None,
     )
     with torch.no_grad():
         return (
@@ -431,7 +428,6 @@ def _train_fold(torch, bundle, fold, ids, *, args, execution_plan, fold_dir: Pat
         torch,
         X=bundle.features,
         C=bundle.context,
-        market_set_bank=None,
         y=bundle.labels,
         events=bundle.events,
         train_idx=train_rows,
@@ -459,13 +455,11 @@ def _train_fold(torch, bundle, fold, ids, *, args, execution_plan, fold_dir: Pat
         parallel_split_evaluation=bool(args.parallel_split_evaluation),
         train_prefetch_batches=int(args.train_prefetch_batches),
         execution_plan=execution_plan,
-        pretrained_encoder_state=None,
     )
     final_fit = train_impl._fit_full_selection(
         torch,
         X=bundle.features,
         C=bundle.context,
-        market_set_bank=None,
         y=bundle.labels,
         events=bundle.events,
         train_idx=final_rows,
@@ -491,7 +485,6 @@ def _train_fold(torch, bundle, fold, ids, *, args, execution_plan, fold_dir: Pat
         evaluation_workers=int(args.evaluation_workers),
         train_prefetch_batches=int(args.train_prefetch_batches),
         execution_plan=execution_plan,
-        pretrained_encoder_state=None,
     )
     model = final_fit["model"]
     model.eval()

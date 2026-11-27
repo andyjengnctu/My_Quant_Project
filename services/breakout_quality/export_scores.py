@@ -90,7 +90,6 @@ from filters.breakout_quality.workflow_io import (
     discover_dataset_csv_inputs,
     load_dataset_frame,
     load_validated_dataset_bundle,
-    load_validated_market_set_bank,
     write_json,
 )
 
@@ -153,14 +152,6 @@ def _date_range(values: pd.Series) -> dict[str, str | None]:
     if dates.empty:
         return {"start": None, "end": None}
     return {"start": str(dates.min().date()), "end": str(dates.max().date())}
-
-
-def _validate_export_scope_model_support(scope: str, model_spec) -> None:
-    if str(scope) in {RUNTIME_SCOPE_FORWARD_OOS, RUNTIME_SCOPE_WORKFLOW} and bool(model_spec.requires_market_set):
-        raise ValueError(
-            "Market Set architecture 目前只允許 research score export；"
-            "Stage 0/1 尚未建立正式 scanner forward market-bank 契約"
-        )
 
 
 def _resolve_forward_export_write_paths(
@@ -438,7 +429,6 @@ def _build_score_record(
     return score_record
 
 
-
 def _run_daily_continuous_workflow_export(*, root: Path, args, profile) -> int:
     """Export the accepted daily-universal frozen ranker through the current data tail.
 
@@ -540,7 +530,7 @@ def _run_daily_continuous_workflow_export(*, root: Path, args, profile) -> int:
         model_spec=expected_spec,
     )
     model.load_state_dict(checkpoint["model_state_dict"])
-    from filters.breakout_quality.positive_rank_calibration import restore_score_calibration, calibrated_score_columns
+    from filters.breakout_quality.positive_rank_calibration import restore_score_calibration
     restore_score_calibration(model, profile, checkpoint)
     model.to(execution_plan.device)
     model.eval()
@@ -570,8 +560,6 @@ def _run_daily_continuous_workflow_export(*, root: Path, args, profile) -> int:
     scored["ticker"] = scored["ticker"].astype(str)
     scored["date"] = pd.to_datetime(scored["date"], errors="raise").dt.strftime("%Y-%m-%d")
     scored["model_score"] = np.asarray(scores, dtype=np.float32)
-    for column, values in calibrated_score_columns(model, profile, scores).items():
-        scored[column] = values
     scored = scored.sort_values(["ticker", "date"], kind="mergesort").reset_index(drop=True)
     if scored.duplicated(["ticker", "date"]).any():
         raise ValueError("workflow runtime daily score ticker/date必須唯一")
@@ -775,26 +763,11 @@ def run_export(*, project_root: str | Path = PROJECT_ROOT, argv=None) -> int:
         raise ValueError("model checkpoint 缺少 model_spec")
     checkpoint_spec = model_spec_from_manifest(checkpoint_spec_payload)
     validate_model_sequence_length(checkpoint_spec, sequence_length)
-    _validate_export_scope_model_support(args.scope, checkpoint_spec)
-    market_set_bank = (
-        load_validated_market_set_bank(
-            args.filter_id,
-            dataset_summary=dataset_summary,
-            expected_model_spec=checkpoint_spec,
-        )
-        if bool(checkpoint_spec.requires_market_set)
-        else None
-    )
     if args.scope == RUNTIME_SCOPE_RESEARCH:
         split_record = manifest.get("split_assignments")
         if not isinstance(split_record, dict):
             raise ValueError("model manifest 缺少 split_assignments")
-        expected_market_artifacts = (
-            dataset_summary.get("market_set_artifacts")
-            if bool(checkpoint_spec.requires_market_set)
-            else None
-        )
-        if split_record.get("source_market_set_artifacts") != expected_market_artifacts:
+        if split_record.get("source_market_set_artifacts") is not None:
             raise ValueError(
                 "research export 的 market-set dataset 與模型 split assignment 不一致；"
                 "請完整重建並重新訓練該 filter_id"
@@ -887,7 +860,6 @@ def run_export(*, project_root: str | Path = PROJECT_ROOT, argv=None) -> int:
             batch_size=inference_batch_size,
             workers=inference_workers,
             execution_plan=execution_plan,
-            market_set_bank=market_set_bank,
         )
         with torch.no_grad():
             group_pass_probabilities = (
@@ -911,7 +883,6 @@ def run_export(*, project_root: str | Path = PROJECT_ROOT, argv=None) -> int:
             batch_size=inference_batch_size,
             workers=inference_workers,
             execution_plan=execution_plan,
-            market_set_bank=market_set_bank,
         )
         pass_probabilities = np.empty((len(events),), dtype=np.float32)
         with torch.no_grad():
@@ -1035,11 +1006,7 @@ def run_export(*, project_root: str | Path = PROJECT_ROOT, argv=None) -> int:
                 "workers": (1 if execution_plan.device_type == "cuda" else inference_workers),
                 "torch_execution": execution_plan.as_manifest_payload(),
                 "feature_bank_preloaded": preload_feature_bank,
-                "market_set_input": (
-                    dataset_summary.get("market_set_contract")
-                    if bool(checkpoint_spec.requires_market_set)
-                    else None
-                ),
+                "market_set_input": None,
                 "inference_unit": (
                     "unique_ticker_date_feature_group"
                     if shared_group_score_broadcast

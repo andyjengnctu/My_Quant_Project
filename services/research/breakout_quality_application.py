@@ -163,7 +163,6 @@ from filters.breakout_quality.continuous_target import (
     resolve_continuous_target_dir,
 )
 from filters.breakout_quality.models.active import get_active_model_spec
-from filters.breakout_quality.market_set import market_set_contract_payload
 from filters.breakout_quality.dataset_store import (
     DATASET_STORAGE_FORMAT,
     DATASET_STORAGE_SCHEMA_VERSION,
@@ -224,8 +223,6 @@ from core.console_report import (
 )
 
 
-
-
 COMMAND_MODULES = {
     "build-dataset": "services.breakout_quality.dataset_builder",
     "train": "services.breakout_quality.train",
@@ -260,7 +257,6 @@ _forward_source_provenance_issues = partial(
     dataset=INTERACTIVE_DATASET_PROFILE, max_tickers=INTERACTIVE_MAX_TICKERS,
 )
 INTERACTIVE_EVALUATE_OOS = True
-
 
 
 COMMAND_DESCRIPTIONS = {
@@ -375,11 +371,6 @@ def _continuous_ranker_simple_report_payload(
         PROJECT_ROOT, filter_id, architecture, profile
     )
     return load_json_object_or_none(output_dir / CONTINUOUS_RANKER_REPORT_FILENAME) or {}
-
-
-
-
-
 
 
 def _model_sop_view(payload: dict, *, include_legacy_extension_evidence: bool = False) -> dict:
@@ -611,7 +602,6 @@ def _render_model_contract_table(
     return "\n".join([header, separator, *body])
 
 
-
 def _render_model_comparison_specific_extensions(views: list[dict], *, target: str) -> list[str]:
     """Compatibility endpoint for read-only Model-specific Extension inspection.
 
@@ -626,7 +616,6 @@ def _render_model_comparison_specific_extensions(views: list[dict], *, target: s
         views, target=target, allowed_ids=allowed_ids,
         render_table=_render_model_contract_table,
     )
-
 
 
 def _render_continuous_ranker_simple_console(payload: dict) -> str:
@@ -669,16 +658,6 @@ def _render_model_comparison_contract_table(
         delta_style=delta_style,
         best_worst_style=best_worst_style,
     )
-
-
-def _comparison_evidence_issues(payload: dict, settings) -> tuple[str, ...]:
-    """Read-only historical evidence status, not a current readiness requirement."""
-    from services.audit.model_extension_compat import historical_comparison_evidence_issues
-
-    return historical_comparison_evidence_issues(
-        payload, settings, view_builder=_model_sop_view,
-    )
-
 
 
 def _standard_model_comparison_views(models: list[dict]) -> list[dict]:
@@ -811,8 +790,6 @@ def _robustness_specific_comparison_rows(views: list[dict]) -> list[dict]:
             "joint_quality_std": robustness.get("oos_top10_joint_quality_std"),
         })
     return rows
-
-
 
 
 def _render_standard_model_comparison(models: list[dict], *, target: str) -> str:
@@ -1707,8 +1684,6 @@ def _read_dataset_summary(filter_id: str) -> dict | None:
     return payload if isinstance(payload, dict) else None
 
 
-
-
 def _dataset_refresh_plan(
     filter_id: str,
     dataset: str,
@@ -1755,10 +1730,6 @@ def _dataset_refresh_step(
     else:
         label = "完整建立 indexed feature bank dataset"
     return refresh_mode, refresh_reasons, ("build-dataset", build_args, label)
-
-
-
-
 
 
 def _parse_workflow_args(argv=None, *, program_name: str = "apps/research.py model") -> argparse.Namespace:
@@ -2136,8 +2107,6 @@ def _run_workflow(args: argparse.Namespace, *, program_name: str) -> int:
     return 0
 
 
-
-
 def _prompt_bool(label: str, default: bool) -> bool:
     default_text = "Y" if default else "N"
     while True:
@@ -2163,8 +2132,6 @@ def _prompt_int(label: str, default: int, *, minimum: int | None = None) -> int:
             print(f"輸入無效，數值必須 >= {minimum}。")
             continue
         return value
-
-
 
 
 def _policy_train_settings(filter_id: str) -> argparse.Namespace:
@@ -2202,8 +2169,6 @@ def _policy_train_settings(filter_id: str) -> argparse.Namespace:
         deterministic_algorithms=bool(defaults.deterministic_algorithms),
         allow_tf32=bool(defaults.allow_tf32),
     )
-
-
 
 
 def _print_artifact_status(
@@ -2270,24 +2235,6 @@ def _print_artifact_status(
                 ("Events", summary.get("event_count")),
                 ("Date Range", summary.get("event_date_range")),
             )))
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def _model_display_id(profile_name: str) -> str:
@@ -2531,8 +2478,6 @@ def _print_workflow_status(settings=None) -> None:
         )
     )
     print(render_table(("狀態", "項目"), status_rows))
-
-
 
 
 def _trade_path_train_request(workflow_settings) -> argparse.Namespace:
@@ -3083,8 +3028,6 @@ def _prepare_continuous_research_inputs(
     return 0
 
 
-
-
 def _rolling_mode_point_in_time_dir(settings, mode) -> Path | None:
     model_output_dir = resolve_filter_model_output_dir(
         PROJECT_ROOT, settings.filter_id, settings.model_architecture, settings.experiment_profile
@@ -3092,7 +3035,6 @@ def _rolling_mode_point_in_time_dir(settings, mode) -> Path | None:
     if mode.point_in_time_dirname in (None, ""):
         return None
     return model_output_dir / str(mode.point_in_time_dirname)
-
 
 
 def _rolling_publication_dir(settings, mode) -> Path:
@@ -3103,9 +3045,6 @@ def _rolling_publication_dir(settings, mode) -> Path:
         PROJECT_ROOT, str(settings.filter_id), str(settings.model_architecture),
         str(settings.experiment_profile),
     ).resolve()
-
-
-
 
 
 def _version_rebuild_required(settings, *, rolling: bool, publication_dir: Path) -> bool:
@@ -3216,10 +3155,6 @@ def _probe_continuous_fitted_candidates(
     except ValueError:
         # Unregistered synthetic profiles have no legal path; producer validates legality.
         return None
-
-
-
-
 
 
 @contextmanager
@@ -3629,7 +3564,6 @@ def _run_continuous_pit_profile(
             forced_args.extend(["--checkpoint-cache-root", str(Path(cache_dir).resolve())])
             return _run_build_and_audit(forced_args)
     return _run_build_and_audit(build_args)
-
 
 
 def repair_missing_fit_origin_using_forward(

@@ -67,17 +67,9 @@ def validate_score_calibration(payload: Mapping[str, Any]) -> MonotonicCurve:
     return MonotonicCurve(x, y)
 
 
-def checkpoint_calibration_payload(model, profile) -> dict[str, Any]:
-    calibration_enabled(profile)
-    return {}
-
-
 def restore_score_calibration(model, profile, checkpoint) -> None:
     calibration_enabled(profile)
     if checkpoint.get(PAYLOAD_KEY) is not None:
         raise ValueError("Retired single-ranker Positive calibration cannot supply current FIT scores")
 
 
-def calibrated_score_columns(model, profile, scores) -> dict[str, np.ndarray]:
-    calibration_enabled(profile)
-    return {}

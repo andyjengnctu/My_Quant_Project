@@ -18,7 +18,6 @@ except ModuleNotFoundError as exc:
 
 import config.breakout_quality as policy
 from filters.breakout_quality import inference
-from filters.breakout_quality.market_set import IndexedMarketSetBank, MARKET_SET_FEATURE_COLUMNS
 from filters.breakout_quality.torch_runtime import resolve_torch_execution_plan
 
 
@@ -90,28 +89,6 @@ class CudaInferencePrefetchTest(unittest.TestCase):
             after = self.run_inference(True)
         self.assertEqual(before.tobytes(), after.tobytes())
 
-    def test_market_set_uses_existing_path(self):
-        class MarketModel(_Model):
-            requires_market_set = True
-
-            def forward(self, features, context, market_inputs):
-                sequences, history_mask, valid_stock_mask, event_to_market = market_inputs
-                market_value = sequences[:, :, :, 0].sum(dim=(1, 2))
-                return super().forward(features, context) + market_value[event_to_market, None]
-
-        self.model = MarketModel().to(self.plan.device)
-        rng = np.random.default_rng(194)
-        bank = IndexedMarketSetBank(
-            rng.normal(size=(7, 2, len(MARKET_SET_FEATURE_COLUMNS))).astype(np.float32),
-            np.ones((7, 2), dtype=bool), np.arange(7, dtype=np.int64),
-            np.arange(137, dtype=np.int64) % 6 + 1,
-            history_bars=2, max_dates_per_batch=2,
-        )
-        groups = np.array([5, 1, 5, 136, 0, 33, 80, 11, 20])
-        with patch.object(inference, "_iter_prefetched_cuda_inputs", side_effect=AssertionError("unexpected prefetch")):
-            before = self.run_inference(False, market_set_bank=bank, market_group_indices=groups)
-            after = self.run_inference(True, market_set_bank=bank, market_group_indices=groups)
-        self.assertEqual(before.tobytes(), after.tobytes())
 
     def test_materialization_failure_is_propagated_and_worker_drained(self):
         class BrokenBank:

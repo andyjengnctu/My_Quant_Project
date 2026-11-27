@@ -135,8 +135,6 @@ def _handoff_key(
                              default=str).encode("utf-8")).hexdigest()
 
 
-
-
 def load_continuous_ranker_data(
     *,
     filter_id: str,
@@ -236,14 +234,10 @@ def load_continuous_ranker_data(
     return bundle
 
 
-
-
 def primary_audit_metric_scope(bundle: ContinuousRankerDataBundle) -> str:
     if bundle.profile.training_sample_scope == TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS:
         return "all_valid_target"
     return "pass_only_target"
-
-
 
 
 def calculate_descriptive_rank_quality(
@@ -454,12 +448,11 @@ def predict_score_output_payload(
             extras[decision_column] = payoff_trade_decisions(logits)
         return probs[:, int(training_policy.categorical_primary_class)].copy(), extras
     if output_policy is None:
-        from filters.breakout_quality.positive_rank_calibration import calibrated_score_columns
         primary = predict_scores(
             torch, model, bundle, group_ids,
             batch_size=int(batch_size), plan=plan,
         )
-        return primary, calibrated_score_columns(model, bundle.profile, primary)
+        return primary, {}
 
     ids = np.asarray(group_ids, dtype=np.int64)
     logits = strict_parallel_batched_logits(
@@ -607,9 +600,7 @@ def build_checkpoint_payload(
 ) -> dict[str, Any]:
     trainable_parameter_count = count_trainable_parameters(model)
     total_parameter_count = sum(int(parameter.numel()) for parameter in model.parameters())
-    from filters.breakout_quality.positive_rank_calibration import checkpoint_calibration_payload
     return {
-        **checkpoint_calibration_payload(model, bundle.profile),
         "model_state_dict": {
             key: value.detach().cpu() for key, value in model.state_dict().items()
         },

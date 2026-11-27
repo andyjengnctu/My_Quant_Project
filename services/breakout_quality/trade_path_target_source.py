@@ -124,7 +124,6 @@ def _fullcycle_loader(outcome_metric: str):
     return load
 
 
-
 def _full_loader(*, project_root: str | Path, seed: int, authorized_build: bool):
     from services.breakout_quality.formal_fulltrade_training_source import (
         resolve_fulltrade_loader_kwargs,
@@ -154,16 +153,6 @@ def _full_history_execute(*, project_root: str | Path, seed: int):
     return prepare_full_history(project_root=project_root, seed=seed, authorized=True)
 
 
-
-
-
-
-
-
-
-
-
-
 def _daily_full_p20_loader(*, project_root: str | Path, seed: int, authorized_build: bool):
     from services.breakout_quality.daily_full_p20_training_source import resolve_loader_kwargs
     return resolve_loader_kwargs(project_root=project_root, seed=seed,
@@ -188,11 +177,6 @@ def _daily_full_p20_current_inspect(*, project_root: str | Path, seed: int):
 def _daily_full_p20_current_execute(*, project_root: str | Path, seed: int):
     from services.breakout_quality.daily_full_p20_training_source import execute_current
     return execute_current(project_root=project_root, seed=seed)
-
-
-def _teacher_callback(module: str, method: str, **kwargs):
-    """Resolve a declared teacher capability without model-name dispatch."""
-    return getattr(import_module(module), method)(**kwargs)
 
 
 _TRADE_PATH_SOURCES: dict[str, TradePathSource] = {

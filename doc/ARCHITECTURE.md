@@ -194,6 +194,8 @@ project/
 
 ## 正式入口
 
+- 現行 Breakout Quality 訓練與推論只消費已註冊架構。二元訓練共用原始邏輯批次與預取流程，保留樣本順序、配重與尾批次；不建立 Market Set、載入退役 encoder pretraining 或產生 Positive calibration 空欄位。歷史 dataset 工件的定位、內容驗證與研究報表唯讀能力仍由原 owner 提供；退役識別碼與決策由 Experiment Registry 保存，不構成可執行註冊。
+
 - `apps/research.py`：Research 單一選單；`[1] Summary`、`[2] Target 驗證`、`[3] 模型訓練／驗證`、`[4] 策略參數最佳化`、`[5] 策略組合比較`，其餘工作依序延後。
 - Summary 的 `[V] 一鍵驗證並補齊結果` 依序委派模型 Rolling、策略 Rolling、模型 Rolling Robustness、策略 Rolling Robustness、Target 驗證，再重新讀取 Summary。每步使用目前共用清單與原有 producer 的完整身分驗證／補件規則，精簡顯示執行階段並在完成時輸出原正式結果報表，失敗即停止後續工作。批次入口 `summary verify` 使用相同流程。
 - Research 互動確認：模型比較／模型 Robustness 與策略 Robustness 先完成 canonical 前置檢查並列出 REUSE／BUILD 狀態，再提供 Enter 執行、0／EOF 返回。確認後重新解析當下依賴，讀取範圍及來源驗證結果不跨使用者輸入持有；相同計畫不重複列印。Summary 一鍵驗證與非互動批次入口維持既有流程。
