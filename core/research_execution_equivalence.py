@@ -1398,7 +1398,7 @@ _REVIEWED_SOURCE_INVENTORIES["mintrade_source_graph"]["current"]["filters/breako
 # Active position models still bind their own producer, gate, seed and FIT SHA.
 for _scope in ("portfolio_candidates", "replay_numerics"):
     _REVIEWED_SOURCE_INVENTORIES[_scope]["current"]["core/position_exit_policy.py"] = (
-        "030051db858a09815563ccc66dd9660d927a5bcff7d90e91ff27b6e756575be6")
+        "8d459a316ec12f9d0cc7cb7584bea647a5236bbd8e6aaec4dc52d572c512a25f")
 
 
 def _reviewed_source_group(scope: str):
