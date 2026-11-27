@@ -529,6 +529,10 @@ def reviewed_calculation_sha256(relative: str, file_sha256: str, syntax_sha256: 
 # Native bytes and raw source parts accept only these exact encoding variants.
 # The benchmark cache correctness fix is deliberately excluded: its live source
 # changes Replay/candidate identity and is never mapped to the erroneous cache.
+# AI: Full/P17 retains its original numerical contracts. Daily-only
+# descriptor changes were compared in 95 independent frozen/current cases;
+# evidence: outputs/validation/full_project_refactor_20261128/.
+# Only exact current pins change; historical baseline pins remain immutable.
 _REVIEWED_SOURCE_INVENTORIES = {'oracle_daily_provider': {'current': {'filters/breakout_quality/daily_ranker_data.py': ('e2b61e98476854365099f2cddb7ce3bbb5c100110589e73bcfaab698628abbd3',
                                                                                          'e2b61e98476854365099f2cddb7ce3bbb5c100110589e73bcfaab698628abbd3',
                                                                                          'fe6fb8ae03e76037974822d286eb3e31e3af83542fe25a2bef7b2ddb18a45b78'),
@@ -751,12 +755,12 @@ _REVIEWED_SOURCE_INVENTORIES = {'oracle_daily_provider': {'current': {'filters/b
                                      'services/optimizer/strategy_param_service.py': ('101edb44502a467b72b9e5f6fec46e29f8637d849718194a4f49976783d819ce',
                                                                                       '101edb44502a467b72b9e5f6fec46e29f8637d849718194a4f49976783d819ce',
                                                                                       'd1b7171126b546b1b2dc9cea497a6d820817bf1fb045c3d899c1c0085c9ce97e'),
-                                     'services/optimizer/strategy_param_training.py': ('d8afe8fb44a734aa996a31aab531d46bcea197688b275fab4a932eb33acafc3d',
-                                                                                       'c8538ceb13ecf497f8bb29539908e58e3eced10458e0aa8ec34d8f9d27ee05d6',
-                                                                                       'd8afe8fb44a734aa996a31aab531d46bcea197688b275fab4a932eb33acafc3d'),
-                                     'services/optimizer/strategy_param_contracts.py': ('4611f0888b8e5507189d6dc9998168fd98987e8eb4c7498879f1c7d669dc2bbb',
-                                                                                        '4611f0888b8e5507189d6dc9998168fd98987e8eb4c7498879f1c7d669dc2bbb',
-                                                                                        '65bee9800244a82eb572e9845f026409020bb25251321f7f5fdf5615e762cdf7')},
+                                     'services/optimizer/strategy_param_training.py': ('bc8c27bc80194d7914483c6ce0865780c9deead3a923d3edbb854cf6b8f59cbc',
+                                                                                    '6a1c5a0c7568e617059c6748b332ec6c5d7bad34817e46d15d394abc256f2ad0',
+                                                                                    'bc8c27bc80194d7914483c6ce0865780c9deead3a923d3edbb854cf6b8f59cbc'),
+                                     'services/optimizer/strategy_param_contracts.py': ('77b0f4eabe5e92f368220d6a7f153bfc9958029d06834db82e5c585f27328e80',
+                                                                                    '77b0f4eabe5e92f368220d6a7f153bfc9958029d06834db82e5c585f27328e80',
+                                                                                    'dfb29eac88ec6709b78e12d15d21100e50d08b39b967bdd9053882fd8806bf4c')},
                          'baseline': {'services/audit/fulltrade_oracle_truth.py': ('9364926c2e44ae2187f960949150a91726594f95cac827d6059119e9d84585c0',
                                                                                    '9364926c2e44ae2187f960949150a91726594f95cac827d6059119e9d84585c0',
                                                                                    'e7dd953b0f5da048e478b029ec1950c6f4b96e0ec9112de29554abb31be342dc'),

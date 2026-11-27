@@ -1305,6 +1305,8 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
     )
 
     app_source = (project_root / "services" / "research" / "breakout_quality_application.py").read_text(encoding="utf-8")
+    import inspect
+    report_source = inspect.getsource(inspect.getmodule(research_app._model_sop_view))
     # A stable work-type table may be reused by every configured research scope;
     # this test deliberately checks behavioral membership rather than the source
     # spelling of each render_menu_item call.
@@ -1344,8 +1346,8 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         "model_workflow_ui_uses_mr_identity_one_status_table_and_inline_daily_target_progress",
         'print("Training Model：" + _model_identity_text(_model_display_id(settings.experiment_profile)))' in app_source
         and 'print(f"Training Profile：{settings.experiment_profile}")' not in app_source
-        and 'def _model_identity_text(value: object, *, target: str = "console")' in app_source
-        and 'paint(text, "cyan"' in app_source
+        and 'def _model_identity_text(value: object, *, target: str = "console")' in report_source
+        and 'paint(text, "cyan"' in report_source
         and 'def _print_model_action_status(' in app_source
         and app_source.count('_print_model_action_status(') >= 5
         and 'paint("工件狀態", "cyan"' in app_source
@@ -1359,8 +1361,8 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
     )
     check_true(
         "model_comparison_direct_run_palette_seed_progress_and_pit_inline_refresh",
-        'return paint(str(label), "light_yellow", enabled=color, bold=True)' in app_source
-        and 'return f"### {markdown_tone(label, \'light_yellow\', bold=True)}"' in app_source
+        'return paint(str(label), "light_yellow", enabled=color, bold=True)' in report_source
+        and 'return f"### {markdown_tone(label, \'light_yellow\', bold=True)}"' in report_source
         and 'f"seed={int(seed)} ({int(index)}/{int(total)})"' in app_source
         # Phase 7 pairs each source with its canonical per-seed dependency plan.
         # Verify strict alignment and the actual per-seed progress label,
@@ -1550,7 +1552,7 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         and "if not inputs_prepared:" in app_source
         and '"audit-point-in-time-scores"' in app_source
         and "aggregate_robustness_row_extension" in app_source
-        and "comparison_extension_aggregation" in app_source,
+        and "comparison_extension_aggregation" in report_source,
         note=(
             "Rolling comparison/robustness must treat model-specific evidence staleness as "
             "audit/report lifecycle only once canonical PIT score+manifest are valid"

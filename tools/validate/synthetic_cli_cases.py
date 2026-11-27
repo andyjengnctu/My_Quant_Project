@@ -727,7 +727,9 @@ def validate_breakout_quality_app_simple_report_contract_case(_base_params):
             and "Actual Round-trip R" not in conditional_markdown
             and "conditional_mfe_true_hs" in conditional_payload["hs_conditional_mfe_evaluation"]["oos"],
         )
-        with patch.object(app_breakout_quality, "console_color_enabled", return_value=True):
+        import inspect
+        report_owner = inspect.getmodule(app_breakout_quality._model_sop_view)
+        with patch.object(report_owner, "console_color_enabled", return_value=True):
             colored_model_console = app_breakout_quality._render_continuous_ranker_simple_console(
                 conditional_payload
             )
