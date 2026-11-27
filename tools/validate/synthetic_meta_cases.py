@@ -4794,6 +4794,7 @@ def _model_report_color_alignment_checks(app):
     regressions both the colored Markdown report and the ANSI console view.
     """
     from core.display_common import C_GREEN, C_RED
+    from services.research import model_reporting
 
     def view(*, higher: bool, mode: str):
         return {
@@ -4850,7 +4851,7 @@ def _model_report_color_alignment_checks(app):
             {"model_id": "TEST_LOW", "view": view(higher=False, mode=mode)},
         ]
         with patch.object(app, "_standard_model_comparison_views", return_value=views), \
-             patch.object(app, "console_color_enabled", return_value=True):
+             patch.object(model_reporting, "console_color_enabled", return_value=True):
             md = app._render_standard_model_comparison([{}, {}], target="markdown")
             console = app._render_standard_model_comparison([{}, {}], target="console")
         with patch.object(app, "_standard_model_comparison_views", return_value=views[:1]):
@@ -4919,7 +4920,7 @@ def _model_report_color_alignment_checks(app):
             scoped_views.append({**item, "view": scoped_view})
         with patch.object(app, "_standard_model_comparison_views", return_value=scoped_views):
             scoped_report = app._render_standard_model_comparison([{}, {}], target="markdown")
-        scoped_rows = app._robustness_specific_comparison_rows(scoped_views)
+            scoped_rows = model_reporting._robustness_specific_comparison_rows(scoped_views)
         results.append((f"{mode}_robustness_joint_quality_mean_survives_human_scope",
                         len(scoped_rows) == 2
                         and [row["joint_quality_mean"] for row in scoped_rows] == [30.0, 20.0]
@@ -5841,7 +5842,7 @@ def validate_model_extension_architecture_contract_case(_base_params):
         == ("multi_head_learnability", "hs_conditional_mfe_gate"),
     )
 
-    app_source = (PROJECT_ROOT / "services/research/breakout_quality_application.py").read_text(encoding="utf-8")
+    app_source = (PROJECT_ROOT / "services/research/model_reporting.py").read_text(encoding="utf-8")
     train_source = (PROJECT_ROOT / "services/breakout_quality/train_daily_ranker.py").read_text(encoding="utf-8")
     sop_source = (PROJECT_ROOT / "services/breakout_quality/standard_model_sop.py").read_text(encoding="utf-8")
     check_true(

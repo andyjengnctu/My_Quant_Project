@@ -30,6 +30,7 @@ from threading import Lock
 import time
 from typing import Any, Callable
 from core.artifact_inspection import ArtifactInspection, InspectionStatus
+from services.breakout_quality.fitted_model_artifacts import current_default_fitting_settings
 
 import numpy as np
 import pandas as pd
@@ -38,21 +39,12 @@ from config.breakout_quality import (
     BREAKOUT_QUALITY_ALLOW_TF32,
     BREAKOUT_QUALITY_CONTINUOUS_RANKER_TRAIN_PREFETCH_BATCHES,
     BREAKOUT_QUALITY_CONTINUOUS_RANKER_PREFETCH_WORKERS,
-    BREAKOUT_QUALITY_DEFAULT_BATCH_SIZE,
-    BREAKOUT_QUALITY_DEFAULT_EPOCHS,
-    BREAKOUT_QUALITY_DEFAULT_GRADIENT_CLIP_NORM,
-    BREAKOUT_QUALITY_DEFAULT_LEARNING_RATE,
-    BREAKOUT_QUALITY_DEFAULT_WEIGHT_DECAY,
     BREAKOUT_QUALITY_DETERMINISTIC_ALGORITHMS,
-    BREAKOUT_QUALITY_EARLY_STOPPING_MIN_DELTA,
-    BREAKOUT_QUALITY_EARLY_STOPPING_PATIENCE,
     BREAKOUT_QUALITY_EVALUATION_BATCH_SIZE,
     BREAKOUT_QUALITY_FINAL_REFIT_MODE,
-    BREAKOUT_QUALITY_INNER_VALIDATION_MONTHS,
     BREAKOUT_QUALITY_MIXED_PRECISION_DTYPE,
     BREAKOUT_QUALITY_PRELOAD_FEATURE_BANK,
     BREAKOUT_QUALITY_TORCH_DEVICE,
-    BREAKOUT_QUALITY_USE_INNER_VALIDATION,
     BREAKOUT_QUALITY_USE_MIXED_PRECISION,
 )
 from core.breakout_quality_registry import (
@@ -2378,19 +2370,14 @@ def _point_in_time_training_policy_snapshot(
 
 
 def _continuous_training_defaults_snapshot() -> dict[str, Any]:
+    # AI: FIT owns the scientific settings; this envelope retains its published keys.
+    fitting = current_default_fitting_settings()
     return {
-        "epochs": int(BREAKOUT_QUALITY_DEFAULT_EPOCHS),
-        "batch_size": int(BREAKOUT_QUALITY_DEFAULT_BATCH_SIZE),
+        "epochs": fitting["max_epochs"],
+        **{key: value for key, value in fitting.items() if key != "max_epochs"},
         "evaluation_batch_size": int(BREAKOUT_QUALITY_EVALUATION_BATCH_SIZE),
         "train_prefetch_batches": int(BREAKOUT_QUALITY_CONTINUOUS_RANKER_TRAIN_PREFETCH_BATCHES),
         "train_prefetch_workers": int(BREAKOUT_QUALITY_CONTINUOUS_RANKER_PREFETCH_WORKERS),
-        "learning_rate": float(BREAKOUT_QUALITY_DEFAULT_LEARNING_RATE),
-        "weight_decay": float(BREAKOUT_QUALITY_DEFAULT_WEIGHT_DECAY),
-        "gradient_clip_norm": float(BREAKOUT_QUALITY_DEFAULT_GRADIENT_CLIP_NORM),
-        "use_inner_validation": bool(BREAKOUT_QUALITY_USE_INNER_VALIDATION),
-        "inner_validation_months": int(BREAKOUT_QUALITY_INNER_VALIDATION_MONTHS),
-        "early_stopping_patience": int(BREAKOUT_QUALITY_EARLY_STOPPING_PATIENCE),
-        "early_stopping_min_delta": float(BREAKOUT_QUALITY_EARLY_STOPPING_MIN_DELTA),
         "final_refit_mode": str(BREAKOUT_QUALITY_FINAL_REFIT_MODE),
         "device": str(BREAKOUT_QUALITY_TORCH_DEVICE),
         "mixed_precision": bool(BREAKOUT_QUALITY_USE_MIXED_PRECISION),

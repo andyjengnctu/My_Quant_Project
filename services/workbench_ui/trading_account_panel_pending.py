@@ -668,7 +668,8 @@ class TradingAccountPendingMixin:
             error = exc
             try:
                 fallback_constraints = self._pending_constraint_worker(request)
-            except Exception:
+            except Exception as constraint_error:
+                _warn_gui_fallback("Trading pending preview constraints", constraint_error)
                 fallback_constraints = None
         self._pending_preview_results.put((token, result, error, bool(silent), fallback_constraints))
 

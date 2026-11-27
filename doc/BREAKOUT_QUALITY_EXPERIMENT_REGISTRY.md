@@ -789,7 +789,7 @@ Audit 固定 read-only。Audit 結果可形成 `SR-*` 或 `MR-*` 假設，但 Au
 
 1. 編號前先讀本 Registry。
 2. 新 ID 必須先在 Registry 建立 identity，再出現在新程式註解、設計文件或 Experiment Log 的後續實驗名稱。
-3. 詳細設計、基準 ZIP／SHA256、唯一變更、固定條件、結果、採用／淘汰理由仍寫入 `doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`。
+3. 實測對照條件、關鍵數值、研究結果來源、採用／淘汰理由寫入 `doc/BREAKOUT_QUALITY_EXPERIMENT_LOG.md`；科學定義與身分由本 Registry 持有，工程打包及測試紀錄保留於 `outputs/`。
 4. Reject／Stop／legacy ID 不得刪除或回收。
 5. 程式若因相容性保留舊 alias，文件在可能歧義的情況下仍必須使用 canonical namespace。
 6. Registry 與 Experiment Log 衝突時，先停止新實驗，於同一輪完成 identity／狀態 reconciliation。
@@ -809,29 +809,16 @@ Audit 固定 read-only。Audit 結果可形成 `SR-*` 或 `MR-*` 假設，但 Au
 當前 `AUD-target-ground-truth-romd` 評估同正式 Research DL：`2021-01-01`～`2026-03-02`，全體 Target／C96／Seed 使用單一 Portfolio 終日；不可因 40D、60D、80D、100D 或完整週期預留 matured label 延後結算而縮短期間。MinTrade 結算取自然出場、H/無限、研究截止的最早有效事件；價格型 MFE/R40/T40/CG40 等保留各自公式，但尾端完整特徵且 supervised label 未成熟的樣本，僅以 `2026-03-02` 前可觀測 OHLCV 截斷計算 hindsight price score。正式 PIT 訓練標籤的成熟合法性完全不變。舊 `2025-12-22` Oracle RoMD、快取及其他歷史績效為追溯證據，不能作現行同期間可比較結果；目前 Report `audit.target_oracle_romd@v9`／schema 8 與既有 Target scientific IDs 不變，受影響 Replay 身分必須失效且不得在選單前重建真值以判定 REUSE。正式 Windows Bundle、四 Seed 市場 Replay 與 E13 parity 待驗收。
 
 
-### 2026-10-27 — 使用者全期間結果後的 Target 算法核對與工程修復（現行）
+### 2026-10-27 — Target 算法核對後的歷史結果有效性更正
 
 - **基準與結果狀態**：本輪唯一來源為 `test-branch-1_20261027_211502_47952b65.zip`，SHA256 `b1726582530a636cea49f13dec3d1894514a55e91e17dc1b38eb3fbe12d2ccfe`。使用者提供 2021-01-01～2026-03-02、630,589 common stock-days、4 Seeds、15 Oracle treatments＋C96 的完整顯示報告；60 筆 paired RoMD、15 組聚合與16組年度覆蓋在報表顯示精度內一致。此為 `USER_REPORTED` 的修復前結果，不能當作下列修復後的已認證績效；歷史數字保留在 Experiment Log。
 - **Price raw-label correctness**：MFE／R／T／T-MFE Oracle 直接消費正式 `compute_daily_opportunity_target_batch.target_raw_r` 的 float32 真值，再做既有每日 average-zero-based percentile。不得以已經 float32 化的 MFE/MAE component 重組 scalar Target，也不得以未量化的 float64 terminal return 打破正式同分。CG 保留 MFE／full-horizon MAE Safety 的50/50 rank geometry；尾端 component 精度與正式 Daily provider 一致。First-Breach provider 的路徑語義保留。
 - **MinTrade rolling execution correctness**：正式 single-member P16 的原始限價／風險／延續訂單數值參數固定於 origin；pending 新 setup 覆蓋、cleanup 與已成交持倉的 ATR／indicator signal context 必須使用當日生效 P16。40、60與無期限使用同一可選 date-effective resolver，不凍結整段 signals、不借未來參數；新 context 導致 superseded 時 maturity 採真正決策 session。途中 P16 缺期 fail closed。既有 A2 未傳 resolver 的行為不變。
 - **Current truth / REUSE**：price warm Replay 必須核對目前 formula SHA、共享 Daily source closure、label policy 與 Dataset summary SHA；MinTrade source closure 包含實際 signal／position／accounting／P16 owner，且 truth-cache／in-run cohort-cache／Replay 同步核對 Dataset summary。summary 的 `source_data_date_range.end` 能影響 feature eligibility，不能只核對行情。缺 current witness／來源已變的舊收據依既有單階段規劃為 RUN並保留歷史 bytes；同一身分衝突或損壞仍 BLOCKED。授權前只讀來源證據，沒有 Target producer 或 Portfolio precompute。
 - **修復影響**：本輪9個price treatments×4 Seeds＋6個MinTrade treatments×4 Seeds＝60組 scored Replay 需按新來源重建；C96不消費Target真值，只有自己的完整執行身分與 cohort相同才REUSE。無新SC／Target／Label／Report版號，無DL重訓、Optimizer、Trading／Selector／fee config變更。
-- **驗證狀態**：最終合併3個Target/MinTrade unittest modules 183/183 PASS；A2原路徑16/16 assertions PASS；獨立price公式2,402項、MinTrade Decimal/time/ranking15項全部PASS；rolling4種實際Portfolio差異案例及兩種P16 payload通過。Oracle與DL邊界同分數12組合成回放（292組每日狀態）一致，這不是本機4 Seeds全市場E13驗收。原ZIP647個Python AST PASS。附帶reduced9股／10,859成熟股票日抽查的4個scalar Target沒有rank變動，不能據合成反例推算全市場RoMD改變幅度。正式Windows Bundle與修復後全市場60組Replay待使用者本機驗收。
+- **當時有效性界線**：僅有reduced樣本與合成驗證，不能據此推算全市場RoMD變動或認證修復後的市場結果。原數值、有效性更正與其後實際結果統一見Experiment Log。
 
 Decision：`ENGINEERING_FIX / CANONICAL_RAW_TARGET_TIES / DATE_EFFECTIVE_MIN_SIGNALS / VERIFIED_CURRENT_SOURCE / HISTORICAL_RESULTS_RETAINED / POST_FIX_MARKET_REPLAY_PENDING`。
-
-
-### 2026-10-27 — 21:41 基準再確認：Oracle 單一執行 owner 與 Exact／Direct 真值快取收斂
-
-- **基準**：`test-branch-1_20261027_214149_cea9e135.zip`，SHA256 `86f8f66cc1276fe8bbf95a4e2c2e90849a4376a13b0cc8a41cd3f1006207ebb0`；本輪確認已包含上一輪price raw-label／Min rolling／來源證據修復。沒有新市場績效，前輪修復前USER_REPORTED結果仍保留歷史狀態。
-- **確定工程缺陷**：price source identity正確地不含Exact／Direct接收名稱，但舊快取保存當次selected panel名稱，造成合法R40→R40_Direct或反向切換命中相同真值後卻缺requested score而BLOCKED。現在唯一cache層保存canonical source keys、認證後正規化舊合法panel，再依本次plan aliases投影；同源矛盾拒絕，原bytes保留，不新增identity或重算相同真值。五個真實source/NPZ regression原版全FAIL、修後全PASS。
-- **確定退役**：`build_report()`所有合法互動／非互動caller統一走`_run_single_stage_oracle()`→`_execute_single_stage_missing()`。整段`_build_report_once`與專屬eligibility／score-matrix helper退役；兩階段truth-miss renderer/payload、無runtime caller的score wrapper、靜態comparison工程鏡像／render fallback一併移除。v9報表直接宣告current sections，移除v2組裝物件；現行payload／fingerprint／Console／Markdown輸出完全相同。
-- **共同保護**：非互動strict input-drift=False與互動既有授權True沿用同一ReplayStore判定。唯讀source probe只比較已驗證inputs，不能猜未產生score/cohort，更不能自行授權REUSE；完整identity仍由既有owner驗證。Daily profile/Target/Label與Seed/P16/current-source/summary/cohort在cold與warm共用邊界驗證，避免移除舊executor時丟失原保護。
-- **身份與REUSE保持**：7個price公式函式、28個shared Daily source與34個Min source owners逐bytes未變；16 arms×4 Seeds的64組合法合成metadata之policy／Replay identity逐值相同。已完成且來源相同的current工件不因本輪清理強制RUN；最初修復前結果仍須遵守前輪必要重算，不因本輪不改identity而被重新追認。無新SC／Target／Label／Report版號或模型重訓。
-- **複核結果**：最終Target/MinTrade三模組191/191 PASS（9.658s），Audit入口30/30 assertions PASS；新random seed的price手算2,402項PASS；MinTrade180條正式Portfolio differential（162完成、18NULL，含跨期／缺bars／零量）全部一致；647個Python AST PASS。正式程式淨減555行，沒有整檔刪除。Windows formal Bundle及完整四Seed市場E13逐日驗收尚未在GPT端執行。
-- **保留邊界**：已退役MinTrade event名稱與MR13CL的reserved identity／拒啟guard保留；A2/P2仍有正式callers；歷史signed-cache normalization、cohort equivalence與純工件存在盤點保留，它們不執行舊Target算法。scalar數學reference與低階非正式score-key選項不成為current producer，不能為純瘦身擴大真值來源失效；沒有新增queue或重新啟用已退役研究。
-
-Decision：`SINGLE_ORACLE_EXECUTOR / CANONICAL_SOURCE_SCORE_CACHE / LEGAL_IDENTITY_PRESERVED / DEAD_EXECUTION_PATHS_RETIRED / CURRENT_TARGET_FORMULAS_UNCHANGED`。
 
 
 ### 2026-10-29 — Research [1] MinTrade 買訊／延續單修補後結果：最新狀態（不改研究身分）

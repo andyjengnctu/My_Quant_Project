@@ -170,7 +170,6 @@ Selection Precision 升至 62.61%、Lift 升至 +7.80 pp，但 OOS 全面退步�
 | 判定 | AdamW 沒有提升 OOS，且主要指標多數退步；退回 Adam |
 | 下一步 | 6B 使用 Adam，只加入 step-based warmup＋cosine schedule |
 
-Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失敗 1 項：互動式 report 已正確傳遞 `--experiment-profile`，但 synthetic CLI contract 仍使用重構前的舊 expected argv。已將測試 fixture 隔離覆寫為 `baseline`，並把 expected argv 同步為 `--filter-id synthetic_quality --experiment-profile baseline --include-oos`。這是 validator 契約同步修正，不改 runtime、模型、Dataset 或 6A 學習條件；其後 6A Full OOS 已完成並判定 `REJECTED`。
 
 #### 3.8 LR Schedule 6B：Adam + step-based warmup／cosine（2026-07-22）
 
@@ -634,7 +633,6 @@ Formal bundle 閉環紀錄：2026-07-22 本地正式測試的 consistency 僅失
 | 歷史契約銜接 | 2026-07-24曾為保留舊event-row batch下的同checkpoint末位數值而退回unique-group export；本次在策略層驗證前正式改以「同ticker/date只有一個canonical score」為優先契約。重新匯出的9A score可能因推論batch單位改變而與舊表有微小差異，屬明確execution contract變更，不可混用新舊score或要求末位數值完全相同 |
 | 下一步 | 重新匯出修正後9A score並確認同ticker/date完全一致，之後以固定策略參數執行no-filter vs 9A threshold 0.5經濟效果比較 |
 
-Formal bundle閉環（2026-07-26 13:26）：來源程式ZIP `test-branch-1_20260726_132542_f054eb2.zip`，SHA256 `59be5c15356b681461ca78cd0fb5164d4d9d232b8cf816ca6ede13ac13c92b8c`；bundle `to_chatgpt_bundle_20260726_132656_a0fd8473.zip`，SHA256 `5f3431e922780847ccecdeb68cb90f2237da38f052e27404ef265bfc851176f7`。quick gate、chain checks與ML smoke均PASS；consistency僅`default_primary_param_fallback_filename`失敗，meta quality也只因同一synthetic case連帶FAIL。根因是`resolve_default_primary_param_source_record()`在缺少optional `models/run_best_params.json`時，錯把第一個現存的`base_best.json`當成預設runtime來源，違反既有ARCHITECTURE與B163契約。已修正為：只有`V16_RUN_BEST_PARAMS_PATH`可覆寫；沒有override時永遠解析至`models/run_best_params.json`，其他現存工件只可由`discover_model_param_sources()`供互動選擇，不得靜默改變預設來源。此閉環不改9A模型、score inference、Dataset、Label、threshold、年度指標或策略邏輯。
 
 
 #### 3.35 Unique-group重跑確認與固定9A策略對照入口（2026-07-26）
@@ -1700,10 +1698,6 @@ A9是在原signal event評分一次，但同一策略VALID event可在後續多�
 3. false-positive events對全部PASS candidate-days與C12 selected PASS的占比放大倍率；
 4. 不使用Future Target改runtime，不建立age threshold；只有確認persistence amplification後，才設計「DL quality每日更新或加入合法current-state資訊」的模型實驗。
 
-#### Audit讀檔警告修正
-
-正式執行出現兩個`pandas DtypeWarning`，分別來自orderable candidates中本Audit不使用的mixed-type欄位，以及Dataset events的ticker型別推斷。本輪只把Audit CSV讀取改為讀取所需欄位、ticker／candidate_type明確string dtype與`low_memory=False`；不改任何Audit數值口徑、策略、Dataset、Label、模型或runtime。
-
 ### 2026-08-07 — A9 PASS Persistence正式Audit結果：false-positive persistence amplification成立；下一步改為C13策略使用語意
 
 #### 狀態
@@ -2150,14 +2144,7 @@ N=20與N=40代表性50-case benchmark的total slowdown分別約1.26×與1.42×�
 
 Strategy Compare summary新增selector CPU timing：calls、total ms、median ms、p95 ms、max ms；並新增C18 seed-fallback、feasible-ascent days／steps／evaluations、1-swap local-optimum days。正式本機replay後以同一run內C17／C18 timing作最終真實成本比較。
 
-#### Direct synthetic / 判定
-
-`validate_strategy_compare_config_driven_app_contract_case`新增C18固定案例：
-
-1. C17 minimum-repair得到次佳合法basket時，C18會在相同K／R0下找到更高DL quality的1-swap feasible improvement。
-2. C17 seed原本fallback Min ROOS時，C18仍從該合法seed繼續DL ascent，不把fallback當終點。
-
-目前direct synthetic共32項全部PASS。GPT未執行`apps/test_suite.py`。
+#### 當時研究狀態
 
 C18狀態固定`IMPLEMENTED / RESULT_PENDING`。取得正式forward結果前不得把engineering timing、random benchmark或C17 headline績效當成C18採用證據；也不得依forward結果調single-swap規則、score cutoff、resource floor或任何numeric selector參數。
 
@@ -2183,7 +2170,6 @@ C18狀態固定`IMPLEMENTED / RESULT_PENDING`。取得正式forward結果前不�
 
 1. `policy is None`時直接回傳canonical default diagnostics，`selector_elapsed_ns=0`；DL-off baseline不再宣稱執行Max-DL selector。
 2. shared-baseline equality明確排除全部`resource_aware_selector_timing_*`；Return／MDD／EV／trade count／resource deterministic diagnostics仍維持exact一致性檢查。
-3. direct synthetic新增timing-only mismatch可聚合案例，並保留`total_return_pct`不同必須拒絕的原案例；目前`validate_strategy_compare_config_driven_app_contract_case`為33/33 PASS。
 
 #### 下一步
 
@@ -3054,13 +3040,6 @@ Forward active contrasts固定為`C1-C3 / C20-C3 / C29-C3 / C29-C20`。
 4. MR-12B/C20在相同post-fix期間仍有正selection R與更高RoMD，因此維持current Forward strategy anchor；MR-13A標記`FORWARD_OOS_STRATEGY_FAIL / NOT_PROMOTED`，但daily-universal方向本身仍可作後續研究，不回退或覆寫MR-13A identity。
 5. 下一個立即可執行步驟先跑既有`Multiple-seed robustness`，判斷C20/C29差異是systematic model-semantic差異或seed variance；不得挑best seed或做ensemble。若MR-13A跨seed仍普遍負selection R／低RoMD，再做changed-order／swap-boundary attribution與Selection→Forward分布漂移診斷，才建立下一個新的`MR-*`假設。
 
-#### 本輪完整檢查追加修正：Robustness摘要reference改為config-driven
-
-- 發現`strategy_multi_seed_robustness.py`計算RoMD「勝Min／勝Full」時以顯示名稱字串`Min ROOS`／`Full ROOS`尋找fixed baseline。這違反專案「摘要對象由config／registry／active settings驅動」契約；改名或切換profile時可能得到錯誤reference。
-- `config/strategy_compare.py`的`STRATEGY_COMPARE_MULTI_SEED_ROBUSTNESS`新增`romd_reference_baselines`，以`param_source + rule_policy`描述Min／Full語意reference，不另列active C-ID，也不依賴display name。
-- `StrategyMultiSeedRobustnessSettings`新增typed mapping與唯一匹配validator；robustness contract保存resolved reference arm identity，summary只依contract的arm_id取baseline。Robustness schema bump `1 → 2`，只影響尚未產生結果的robustness fingerprint，不影響Selection／Forward pair cache或策略回放語意。
-- synthetic contract同步改為讀取目前config的profile、seed count／generator seed、arm names與reference semantics，不再把`forward_oos`、8 seeds或目前四個顯示名稱當成唯一合法設定。
-- Scientific identity：不新增MR／DL／SR ID，不改model、Target、loss、score、selector、K/R0、交易會計或本次C20/C29結果。
 
 ### 2026-08-11 — Multiple-seed Forward robustness首批結果：單一seed結論重開、報表matched-pair契約補齊
 
@@ -3130,14 +3109,9 @@ Forward active contrasts固定為`C1-C3 / C20-C3 / C29-C3 / C29-C20`。
 3. 兩個stochastic arms的DL選擇R Mean都仍為負值（MR-12B `-105.34R`、MR-13A `-54.70R`）；MR-13A相對MR-12B的Mean改善`+50.64R`尚不能回答是否在相同training seed下穩定改善。這是下一個判讀所缺的唯一主要統計，不應再啟動新的模型訓練或擴seed。
 4. 若同seedΔDL選擇R多數為正、但ΔRoMD仍4/8附近，下一步應做portfolio translation attribution；若同seedΔDL選擇R本身亦正負混雜，則問題主要仍在training-seed ranking stability，才設計下一個MR假設。
 
-#### Report schema v5實作
+#### 配對比較的有效範圍
 
-- `filters/breakout_quality/strategy_multi_seed_robustness.py`新增泛化same-seed metric comparison helper；RoMD與DL選擇R共用同一pivot／distribution邏輯，不複製統計實作。
-- `direct_selection_r`只有兩個stochastic arms的`param_source`與`rule_policy`完全相同時才允許matched comparison，遵守既有same-param attribution universe契約。
-- `robustness_summary.json`新增`direct_selection_r_same_seed_comparison`；console與Markdown新增「DL選擇R同seed配對比較」，輸出雙方勝數、tie與Δ Mean/Median/Std/Min/P25/P75/Max。
-- report schema `4 → 5`；scientific fingerprint不包含report schema，因此不觸發模型重訓或strategy replay。
-- 「查看最新報表」若偵測既有summary為舊schema且同run `seed_results.csv`仍在，會只用永久raw seed aggregate重建衍生matched-pair欄位與Markdown；不需要重跑8×2 observations，也不讀已清除checkpoint／score／replay details。
-- direct synthetic contract同步覆蓋DL選擇R matched-pair；formal double check仍由使用者本機`apps/run_bundle.py`完成，GPT不執行formal suite。
+DL選擇R的same-seed比較僅適用於兩個stochastic arms具有相同`param_source`及`rule_policy`的情況。既有研究的配對數值須來自同run永久保存的`seed_results.csv`；不能由跨seed平均或已刪除的暫存工件猜補。
 
 #### 狀態與下一步
 
@@ -3438,7 +3412,6 @@ Forward active contrasts固定為`C1-C3 / C20-C3 / C29-C3 / C29-C20`。
 - Selection current matrix由schema `31 → 32`，並依研究生命週期把已REJECT的C46/C47及其contrasts移到`config/compatibility/strategy_compare_history.py`。Current active=`C32 / C23 / C42 / C48`；contrasts=`C32-C23 / C42-C23 / C42-C32 / C48-C42`。Forward仍=`C1 / C3 / C44`，robustness與production candidate仍固定C42/C44，不因C48 implementation改動。
 - `validate_strategy_compare_config_driven_app_contract_case`新增C48 exhaustive oracle：小型K=2案例完整枚舉所有canonical cash-feasible baskets，獨立求score endpoint、capital endpoint與normalized-product global optimum，要求runtime C48選解、normalization端點與certificate完全一致；本輪implementation階段狀態只能是`IMPLEMENTED / SELECTION_PIT_PENDING / NO_FORWARD_YET / ROBUSTNESS_OFF`。
 - C48 decision gate：先只跑Selection `C48-C42`。只有C48能在Exposure不再崩塌的前提下，至少接近／超過C42的Return、RoMD與EV，才另輪建立Forward；若仍明顯輸C42，停止No-R0 allocator路線，不繼續試lambda或其他Score×Capital變形。
-- Implementation validation（非正式策略結果）：config-driven contract=`118/118 PASS`、Strategy Compare=`45/45 PASS`、readable report=`6/6 PASS`、Daily PIT runtime=`9/9 PASS`、MR-13E source gate=`4/4 PASS`、Runtime Integration=`13/13 PASS`；另以48組隨機小型universe逐組完整枚舉全部合法basket，三pass C48 runtime與獨立exhaustive oracle=`48/48`一致。依`PROJECT_SETTINGS`未執行`apps/run_bundle.py`或`apps/test_suite.py`。
 
 ### 2026-08-16 — SR-C48 Selection result closure / No-R0 allocator line stopped
 
@@ -3758,7 +3731,7 @@ Forward active contrasts固定為`C1-C3 / C20-C3 / C29-C3 / C29-C20`。
 - 同一formal Audit identity維持`AUD-mr13r-joint-capital-drawdown`，不新增Audit、不新增C75。output schema升為v2；Joint terminal/report新增S5×M5 upper-right `N`、完整5×5 `N / actual HM/HS%`、Safety quintile `N / Conditional-MFE→actual-MFE Dailyρ / High-MFE / HM/HS`及joint-product→HM/HS Dailyρ。
 - Drawdown改用canonical Equity peak EOD→trough EOD的**true position MTM Δ**：由既有`score_ranking_trades.csv`實際買賣cashflow、pair `strategy_comparison.json`封存fee/tax contract、canonical cleaned OHLCV Close與核心long-sell tick/accounting規則重建每筆trade account value；交易在trough後的final realized R/PnL完全不參與contribution。
 - 每個episode硬性要求`Σ position MTM Δ == Equity(trough)-Equity(peak)`（毫級容許誤差，失配即BLOCK），並分別標記peak-held、drawdown期間entry、期間exit、trough-held，再按HM/HS、HM/LS、LM/HS、LM/LS彙總MTM contribution；future truth只在MTM完成後作post-replay分組。詳細逐position輸出新增`drawdown_position_contributions.csv`。
-- Synthetic新增反例：三筆trade最終`realized_r`合計=`+2R`，但portfolio peak=`1000`→trough=`950`；修正版得到`ΣMTM=-50`、Equity Δ=`-50`、reconcile Δ=`0`，HM/HS/HM/LS/LM/HS contribution=`-20/-20/-10`，證明已封住舊語意。Audit framework targeted synthetic=`15/15 PASS`。
+- Synthetic新增反例：三筆trade最終`realized_r`合計=`+2R`，但portfolio peak=`1000`→trough=`950`；修正版得到`ΣMTM=-50`、Equity Δ=`-50`、reconcile Δ=`0`，HM/HS/HM/LS/LM/HS contribution=`-20/-20/-10`，證明已封住舊語意。
 - Diagnostic boundary仍為**READ_ONLY / NO_STRATEGY_REPLAY / NO_FUTURE_TRUTH_RUNTIME_USE / NO_THRESHOLD_FIT / NO_MODEL_TRAINING**；正式實機schema-v2結果仍待使用者重跑同一Audit後審閱，再依既定Case 1/2/3決策。
 - Status：**ACTIVE / IMPLEMENTED_SCHEMA_V2 / RESULT_PENDING / OLD_OVERLAP_SUM_R_INVALIDATED**。
 
@@ -4124,7 +4097,6 @@ MR-13AC同樣是PIT-safe兩階段conditional residual設計，但方向為Predic
 - **Audit design**：一次性Audit固定比較同一`CONT13AH_ROLL`的C80 exact `preserve_k_r0=True`與C81 `preserve_k=False/preserve_r0=False`。輸出：(1) unconditional +1/+2/+3R reached；(2) canonical risk、all stop、initial stop、raised stop before first passage；(3) winner median MFE capture與giveback；(4) C80-only/C81-only/common planned cohorts；(5) C80 direct-infeasible日Raw Top-K dropped vs constrained-added MFE×Safety geometry與K/R0 binding；(6) MFE×Adverse→Realized EV matrix；(7) exact peak-EOD→trough-EOD MTM quadrant contribution。
 - **Attribution boundary**：C80的K、R0與canonical cash feasibility/exact basket search是joint contract；沒有K-only/R0-only counterfactual前不得宣稱單一K或單一R0因果。Future truth只作post-replay diagnosis，不進runtime selection。
 - **Stop rule**：OOS與Rolling若能共同定位membership substitution→path conversion→drawdown contributor，即停止Audit並做下一步決策；不得為補證據重訓模型、backfill sidecar或strategy replay。
-- **GPT端工程驗證**：Audit config/catalog/handler contract PASS；`AUDIT_FRAMEWORK` dedicated synthetic=`23 checks / 0 FAIL`；新增deep first-passage/MFE×Adverse helper synthetic PASS；C80 Raw Top-K→exact K/R0 substitution synthetic PASS；drawdown quadrant key mapping PASS；修改Python檔`py_compile` PASS。使用者本機completed Strategy sidecars/market Close未包含於交付程式ZIP，因此真正Audit result仍維持`RESULT_PENDING`，不得預標機制成立。
 
 ### 2026-08-30 — MR-13AJ Seed42 Forward Model Gate result / STOP / MR-13H Standard SOP v2 BASE comparison next
 
@@ -4468,7 +4440,7 @@ Decision：`POST_CLOSURE_EVIDENCE_ONLY / SCC_ROLLING_CONFIRMS_FAIL / ORIGINAL_BQ
 - **Relational primitive**：每個交易日的AO shared latent形成`N×d` nodes；graph branch固定stop-gradient，`A=softmax(XW)`產生`N×16` learned soft incidence。Hyperedge state=`A^T X / membership_mass`，stock relational state=`A E`。`concat(detached X, X_rel)`經`Linear(2d→d)+ReLU`與learned sigmoid gate後，產生2-logit Safety residual。Final residual projection weight/bias固定zero-init；因此same-seed step-0 Raw Safety與MFE logits皆與AO bitwise exact。AO base Safety仍正常對shared encoder反傳；graph branch本身不得對encoder latent反傳。Conditional-MFE只讀原shared latent，不讀graph state。
 - **Date coherence / PIT**：training generic date-coherent batcher在model宣告`requires_same_date_relations`時固定one complete date per batch；不因configured batch size切斷同日universe。Inference generic engine新增date-label capability，relational model缺少date labels即fail-fast，且同日rows即使超過batch size也保持完整單date job。Graph只用該decision date合法300-bar node representations，不使用future return/correlation、breakout outcome、portfolio state或跨date static graph。
 - **Scope intentionally excluded**：第一輪不做Hawkes/event intensity、relation-trend、pairwise graph、sector/static relation prior、HGAT/multi-head/multi-layer、hyperedge-count sweep或external data。只有BS先對Safety產生material signal才允許第二階段研究relation change / tail-event。
-- **Independent GPT checks**：reusable model component contract=`87/87 PASS`；policy SSOT=`13/13 PASS`；true-HS pair/qualification/boundary=`7/7 / 8/8 / 6/6 PASS`。Same-seed AO↔BS所有common state tensors exact，新增params=`35,459`且只屬hypergraph branch；zero-init step-0 Safety/MFE logits bitwise exact。Stop-gradient synthetic確認latent無gradient且incidence有gradient；date-coherent training/inference synthetic PASS。真實2-date、12-row、one-epoch optimization smoke loss=`0.693863` finite，residual projection與incidence皆完成非零update。Python compile/import PASS。GPT未執行`apps/run_bundle.py`或`apps/test_suite.py`。
+- **控制條件核對**：Same-seed AO↔BS所有common state tensors exact，新增params=`35,459`且只屬hypergraph branch；zero-init step-0 Safety/MFE logits bitwise exact。這只證明受控起點，不構成Forward市場效果。
 - **Forward Gate**：先只跑Seed42 Forward並直接對MR-13AO。成功要求Raw Safety Daily/Global/Pair共同material改善、Pred-HS true-LS與P45-P55明確改善、Breakout同方向，Conditional-MFE不可material退化。若仍只有小幅rho／Pair增量則直接STOP，不做graph architecture sweep；只有material positive才進relation-trend/tail-event。
 
 Decision：`MR13BS_IMPLEMENTED_RESULT_PENDING / AO_SUPERVISED_CONTRACT_EXACT / SAME_DATE_LOW_RANK_DYNAMIC_HYPERGRAPH / K16_FIXED / DETACHED_RELATIONAL_LATENT / ZERO_INIT_GATED_SAFETY_RESIDUAL / MFE_PATH_NO_GRAPH_INPUT / DATE_COHERENT_TRAIN_AND_INFERENCE / FORWARD_GATE_FIRST`。
@@ -4484,7 +4456,7 @@ Decision：`MR13BS_IMPLEMENTED_RESULT_PENDING / AO_SUPERVISED_CONTRACT_EXACT / S
 - **BT only treatment**：對每個current decision date，另外materialize前一交易日**完整score-eligible universe**的canonical 300×10 windows；不能從current normalized window切片偽造previous-day input，因價格anchor與volume median/IQR normalization均依完整window重算。Current與prior relation-only views以同一shared encoder在`no_grad + encoder eval`下建立，因此不更新AO BatchNorm running state也不回傳encoder gradient。兩日共用同一incidence projection錨定16 latent hyperedge identity；固定`edge_change=current_edge_state-previous_edge_state`，再用current membership映回stock，經獨立projection + learned gate + zero-init 2-logit residual只修正Safety。最早無prior完整date時change residual精確為0，不建立missingness shortcut。
 - **PIT / batching**：canonical `same_date_relations.py`唯一持有previous-trading-date index semantics；prior ids從完整group-date universe解析，必須strictly earlier。Training current graph仍one complete date per batch；previous relation tensor讀完整prior-date features。Inference即使configured batch size切斷日期，也按完整current date job並對應完整prior date。
 - **Scope excluded**：不加入Hawkes/event intensity、pairwise graph、sector/static prior、EMA/lag-length、k、layer、head、detach、graph topology sweep。BT若仍marginal，即`CROSS_STOCK_OHLCV_RELATIONAL_CEILING_NOT_BROKEN`並終止整family。
-- **Independent GPT checks**：same-seed BS→BT所有BS-common state tensors bitwise exact；BT只新增6個`relation_change_*` tensors。Zero-init step-0 Safety/MFE logits與BS bitwise exact。Synthetic previous-date planner確認`D_t→full D_{t-1}`且首日empty；relation-change current/previous latent stop-gradient，incidence/change projection具gradient；relation-only encoder view不改BS-common BatchNorm running buffers；strict batched inference與manual current+previous-date forward exact。Reusable model component contract=`94/94 PASS`。真實3-date×6-stock、one-epoch training smoke使用正式full-list ΔNDCG reduction，loss=`0.700168` finite，relation-change residual weight由0更新至norm=`0.009785`。GPT未執行`apps/run_bundle.py`或`apps/test_suite.py`。
+- **控制條件核對**：Same-seed BS→BT所有BS-common state tensors bitwise exact；BT只新增6個`relation_change_*` tensors，zero-init step-0 Safety/MFE logits與BS bitwise exact。Relation-only encoder view不改BS-common BatchNorm running buffers；current／previous latent皆stop-gradient。這只界定新增treatment與共同條件。
 
 Decision：`MR13BT_IMPLEMENTED_RESULT_PENDING / BS_STATE_CONTROL_EXACT / PREVIOUS_TRADING_DATE_RELATION_CHANGE_ONLY / FULL_PRIOR_DATE_CANONICAL_300X10 / SHARED_INCIDENCE_EDGE_IDENTITY / NO_GRAD_NO_BN_STATE_RELATION_VIEWS / SECOND_ZERO_INIT_GATED_SAFETY_RESIDUAL / MFE_UNTOUCHED / FINAL_OHLCV_RELATIONAL_GATE / FORWARD_FIRST`。
 
@@ -4629,7 +4601,7 @@ Assessment: `USER_REPORTED_ROLLING_RESULT_AVAILABLE / FULL_HORIZON_MAE_SMALL_PAI
 - **Completed six folds:** fit 6 new fold checkpoints, no reused fits, 630,589 / 630,589 PIT scores, 2021-01-01 through 2026-03-02, elapsed `58:51.2`, selected epoch sequence `2/1/1/2/1/1`. Real selection-stage, pre-refit independent Validation daily rho by fold `0.0082, -0.0161, 0.0254, -0.0142, 0.0120, -0.0001`. The displayed Rolling Standard SOP `validation` Daily rho=`0.5957` is **after the final model was refit on train plus original validation samples**: `point_in_time_scores._train_fold` calls `select_epoch(train_ids, validation_ids)`, then `fit_final(final_ids)`, then scores `validation_ids` using the refitted model; `point_in_time_audit` concatenates the resulting `validation_scores.csv`. This is an in-sample descriptive statistic, **not the independent epoch-selection Validation score**, and its delta against OOS cannot alone establish independent validation-to-OOS generalization. No proof of OOS contamination from this behavior; historical Standard SOP report schema is frozen and unchanged.
 - **Actual mature OOS:** 608,204 legal stock-days; target is signed `U40=MFE40-D40`, with 40-day full-horizon R scaling. Primary daily/global Spearman=`0.0002 / -0.0182`; Pair=`50.03%`, mean daily Top10 minus Bottom10 **U40**=`-0.3548R`. Breakout subset 17,346 stock-days daily/global rho=`-0.0109 / -0.0722`, Pair=`49.55%`, Top-Bottom U40=`-0.9020R`, Top-K Lift=`-0.1516R`. Five evaluable mature years 2021-2025: primary yearly rho positive `4/5` but only `2/5` positive Top-Bottom; drift=`YES` (`1.3303 pooled sigma`). Model Gate=`FAIL`; **no strategy performance test or Trading promotion authorized**. Sixth fold includes 2026 score coverage but contributes no extra evaluable mature annual quality evidence.
 - **Interpreting other reported numbers:** CE own raw-U40 Top10 Target=`0.4012R`, Bottom10=`0.7560R` on OOS, consistent with negative spread; post-refit in-sample Validation Top-Bottom=`+5.2685R` is not a held-out control. CE Top10 original MFE=`1.3982R` versus AO=`2.5680R`, although this is not a full matched-U40 test. AO's main Standard SOP Target uses its original scientific objective, so direct comparison between AO's `Top10 Target` and CE's `Top10 Target` would be **different-truth** and scientifically invalid. Original `Low-Adverse` metric is pre-peak adverse, not full D40.
-- **Code-contract review, without changing scientific semantics:** `compute_daily_opportunity_target_batch` correctly subtracts the full 40-bar D40/R and retains negative U40. Raw-R training uses the signed two-logit `PASS−REJECT` margin with Huber delta=1R; validation epoch selection prioritizes holdout Huber loss, then rho, and inference returns that signed margin. Point-in-time selection/final refit separation follows existing canonical behavior. The dedicated direct-U40 target/CPU Huber regression synthetic, signed PIT/Forward producer/reader/audit regression and approved persistent report contract fingerprints pass. Nothing in the provided source proves a wrong target, scoring-domain regression or PIT future-label leak sufficient to explain the observed OOS collapse; poor generalization of this Huber-fit **is directly observed**, whereas causal attribution among target noise, regression loss, distribution shifts or model capacity requires controlled evidence.
+- **Code-contract review, without changing scientific semantics:** `compute_daily_opportunity_target_batch` correctly subtracts the full 40-bar D40/R and retains negative U40. Raw-R training uses the signed two-logit `PASS−REJECT` margin with Huber delta=1R; validation epoch selection prioritizes holdout Huber loss, then rho, and inference returns that signed margin. Point-in-time selection/final refit separation follows existing canonical behavior. Nothing in the provided source proves a wrong target, scoring-domain regression or PIT future-label leak sufficient to explain the observed OOS collapse; poor generalization of this Huber-fit **is directly observed**, whereas causal attribution among target noise, regression loss, distribution shifts or model capacity requires controlled evidence.
 - **Scientific disposition:** `ROLLING_RESULT_AVAILABLE / DIRECT_U40_HUBER_OOS_SORTING_FAIL / MODEL_GATE_FAIL / RESEARCH_ONLY / NOT_PROMOTED`. Preserve model identity/checkpoint/artifact fingerprints and current H/AH/AK/AO/CE compare config unchanged. This is a failure of **this single U40 numerical Huber learning formulation**, not proof that U40 itself has no forecastability. Minimal next read-only decision evidence: score the frozen AO and CE rankings against the same matured true U40 on the identical PIT stock-days/dates, reporting only Top10 U40, MFE40, D40 and paired per-year differences. That result can decide whether the U40 target is useful under an existing ranking model versus needing a new explicitly authorized rank-oriented U40 objective. Do **not** alter CE Loss, validation, fitted artifacts or permanent Standard SOP after inspecting the current OOS evidence; any new training semantics need a fresh registered MR identity and user research decision.
 
 ### 2026-10-15 -- MR-13CF | User-reported six-fold Rolling U40 RankNet result and AO/CE/CF common-truth decision
@@ -4661,7 +4633,7 @@ Assessment: `USER_REPORTED_ROLLING_RESULT_AVAILABLE / FULL_HORIZON_MAE_SMALL_PAI
 - **20D own-target Rolling model evidence:** Evaluated OOS stock-days `608,204`, CH 20D daily rho=`0.4326`, global rho=`0.3399`, pairwise correctness=`65.03%`, Top10–Bottom10 target spread=`+1.2106R`; Breakout slice daily rho=`0.4096`, pair=`66.28%`, NDCG@K=`0.8235`; full-universe NDCG@K=`0.7678`; `5/5` positive-rho mature years, `5/5` positive-spread mature years, score drift=`NO`, **Model Gate PASS**. This passes the *model* threshold, not strategy/Trading validation. The labels, loss, metric and report describe a **20D target**; these cannot be read as evidence that CH dominates CG or AO on 40D U40, nor as an untested 20D-vs-40D economic comparison.
 - **Comparison exception after successful fits:** Research `[1] → [4]` then raised `ValueError: D40 paired model comparison混入不同continuous target id` while building `full_horizon_mae_common_truth` before standard model comparison output. Canonical D40 extension previously selected all models having the same dual-head objective and a Raw Safety column; CH uses this objective but Raw Safety supervises **D20**, with a separate `daily_20bar_full_horizon_pure_mfe_r_v1` target. CH legitimately has a different target identity; this is not a PIT/model training error or missing trained checkpoint.
 - **Scope-limited engineering repair:** The D40-only Extension now selects its anchor from registered full-horizon MAE-supervised models with the canonical **40D pure-MFE target**, then includes only models sharing that 40D target and training objective. It skips CH's D20 Raw Safety score instead of evaluating it as D40. Any mismatched `settings.continuous_target_id` versus validated score-contract identity remains fail-closed, as do same-target filter mismatches; only compatible 40D score frames are read. AO/CG retain paired D40/P45–P55 rows; CH remains in the user-authorized current H/AH/AK/AO/CG/CH Model Compare list and in the **separate** matched U20 and U40 utility Extensions. Model-specific extension contracts, Standard SOP six sections, approved fingerprints, U20/U40 cohort logic and scientific fitting identities are not changed.
-- **GPT-side verification / remaining evidence:** The original D40 AO/CC Forward/Rolling synthetic contracts pass, plus new AO/CG/CH mixed-target Forward/Rolling cases showing correct CH exclusion, D40 anchor selection, and malformed CH contract fail-fast. Existing U40 paired and D40 primitive tests and approved report fingerprints pass; Continuous Ranker capability cases `67/67`, PIT Builder `33/33`, Research reverse-conditional route `16/16`, and syntax compilation of `642` Python sources all pass independently. **No Windows formal run_bundle PASS or actual AO/CG/CH Top10 U20/U40 numbers are claimed.** Re-run Research `[1] → [4]` using existing scored model artifacts to generate those results without retraining CH.
+- **當時證據限制**：當時尚未取得AO／CG／CH在相同成熟stock-days的Top10 U20／U40比較數值，不能由CH自己的20D Model Gate推論跨模型40D優勢。後續實際比較見下一節。
 - **Decision:** `CH_ROLLING_6FOLD_REPORTED / MODEL_GATE_PASS / D40_ONLY_COMPARE_MIXED_TARGET_BUG_FIXED / AO_CG_CH_SAME_TRUTH_U20_U40_PENDING / NO_PROMOTION / RESEARCH_ONLY / NOT_TRADING`. Evaluation OOS remains iterative research evidence, not untouched holdout.
 
 ### 2026-10-15 — MR-13CH | Full AO/CG/CH matched U20 and U40 Rolling result, after D40 extension fix
@@ -4673,7 +4645,6 @@ Assessment: `USER_REPORTED_ROLLING_RESULT_AVAILABLE / FULL_HORIZON_MAE_SMALL_PAI
 - **Mature-year U40 CH-minus-CG consistency:** All-market 2021=`−0.0038R`, 2022=`+0.0498R`, 2023=`+0.0399R`, 2024=`+0.0067R`, 2025=`+0.0107R`; CH beats CG in `4/5` mature years, but gains are small. Breakout 2021=`−0.2063R`, 2022=`−0.2476R`, 2023=`+0.0472R`, 2024=`−0.0107R`, 2025=`+0.0362R`; CH beats CG in only `2/5` years. U20 CH-vs-CG likewise positive `4/5` all-market and `2/5` Breakout years. Annual means share the same iterative research OOS and are **not independent repeated-seed confirmations**.
 - **Model-quality context and reporting caveat:** CH's already verified *20D own-target* six-fold Rolling Gate remains `PASS`: Daily rho=`0.4326`, Pair=`65.03%`, five mature positive-rho/spread years, score drift=`NO`. CG's reported `0.4044` Daily rho relates to the *40D target*; cross-horizon Daily rho values and original Standard SOP Target columns cannot be treated as directly comparable target truth. CH model Gate PASS does not establish a superior strategy or positive realized broker-cash payoff.
 - **Decision and authorization:** `MR13CH_ROLLING_6FOLD_MODEL_GATE_PASS / MATCHED_U20_U40_AVAILABLE / ALL_MARKET_SMALL_GAIN_VS_CG / BREAKOUT_NO_GAIN_VS_CG / SINGLE_SEED42 / ITERATIVE_OOS / FORWARD_NOT_SUPPLIED / ROBUSTNESS_PENDING / NO_PROMOTION / NO_TRADING`. Retain both CG and CH as Research candidates, keep existing Research `[1]` training identity and H/AH/AK/AO/CG/CH Compare/Test membership unchanged. No OOS-derived optimization of risk weights/horizon/threshold or post hoc winner promotion. Confirm multi-seed repeatability and, only if warranted, identical-rule strategy economics before any replacement decision. This report is sufficient to characterize this specific 20D-versus-40D Seed42 contrast; further Audit is not required absent a concrete blocker.
-- **GPT-side scope verification:** Current U20/U40 paired comparison producer is read-only and preserves independently frozen 20D/40D target contracts, shared matured cohort, matching OOS fold identities and Top10 quotas. Dedicated paired U20/U40 synthetic Forward/Rolling cases and full-horizon D40 controlled cases PASS. This turn only records official evidence; no model, loss, PIT, training, menu, Standard SOP, strategy or Trading code is changed.
 
 ### 2026-10-16 — Research [1] Rolling OOS Robustness | H/AH/AK/AO/CG/CH four-seed reported results
 
@@ -4851,7 +4822,7 @@ Assessment: `USER_REPORTED_ROLLING_RESULT_AVAILABLE / FULL_HORIZON_MAE_SMALL_PAI
 - **唯一評估時間／母體**：Oracle Registry 的 `oracle_evaluation_end_date=2025-12-22` 是此 Research DL 受控同窗比較的固定評估截止，起始 `2021-01-01`，與目前有多少 Target、最長 H 或是否只選 Direct **無關**。研究資料可向後觀測至 `2026-03-02` 計算每個歷史股票日的 Target 結果。原本 `2025-11-24` 的 60D 最長成熟截止條件、以 target maturity 刪除較晚股票日、讓 40D / C96 跟著整批改期間均屬本次修復的**不合規工程缺陷**，不是另立 Target 科學身分的理由。
 - **現行清單**：四 Seed，`C96` 加 **15 個 Target（8 Exact／7 Direct）**，其中既有 MinTrade40、MinTrade60，以及新增無期限 `DailyUniversal_MinTrade_NetR` 與 `DailyUniversal_MinTrade_NetR_Direct`。同 Seed Exact/Direct 真值來源、排名與分數 SHA 一致；Portfolio 持有期限、現金、K/R0 Selector、P16 有效期、掛單與費稅不因 Target 期限改動。任意 H（例如 87D）只需在 Registry 宣告新的合法 Target 名稱與 H，並不需加新的 Producer 分支。
 - **失效／追溯**：2026-10-26 先前 60D-mature 跨 Target 同窗結果及其縮短期間 40D Replay 是歷史不合規實作 evidence，不可視為現行同期間績效，也不得當成可用快取強行 REUSE；原始結果保留、標記為 `SUPERSEDED_BY_UNIFIED_CUTOFF_BUG_FIX`。此次現行 Output／Cache 必須按實際真值、評估日期、cohort、價格 SHA、Seed/P16 及 Selector 完整身分檢查，不能把舊答案直接重貼；**既有正確且同一實際身份的 40D 歷史工件應按原規則依法 REUSE**，其重算治理留在下一輪獨立處理。
-- **工程驗收**：獨立 Synthetic 驗證自然出場／H 期限／Research 期末結算，40／60／73／87／100／全週期單一演算法，晚於資料截止價格不得被使用，沒有可交易下一日不捏造結果；40D → 40+60D → 40+60D+完整週期三階段保持相同 Portfolio 期間／共同母體，僅新 Target Arm 需新增回放；Direct-only 可共用完整週期真值而不偷偷執行 Exact。相關 `unittest` **130/130 PASS**（獨立合成測試，非 Windows formal double check）。ZIP 未包含本機完整 `data/full`、全市場 P16 工件及完整 Portfolio Replay sidecars，故**尚未認證真實市場四 Seed RoMD 或逐日 E13 parity，也沒有產生新績效數字**。Report `audit.target_oracle_romd@v9`／payload schema 8 均維持既有正式欄位與格式。
+- **當時有效性界線**：該次僅有獨立合成測試，沒有完整市場資料、全市場 P16 工件及 Portfolio Replay sidecars；**尚未認證真實市場四 Seed RoMD 或逐日 E13 parity，也沒有產生新績效數字**。Report `audit.target_oracle_romd@v9`／payload schema 8 維持既有正式欄位與格式。
 
 ### 2026-10-27 — 全期間結果後 Target 算法獨立審查與修復（同一既有科學契約）
 
@@ -4869,12 +4840,8 @@ Assessment: `USER_REPORTED_ROLLING_RESULT_AVAILABLE / FULL_HORIZON_MAE_SMALL_PAI
 
 #### 獨立驗證與限制
 
-- 最終合併：`python3 -m unittest tools.validate.synthetic_target_oracle_cases tools.validate.synthetic_daily_trade40_oracle_cases tools.validate.synthetic_daily_trade40_cases -q`，183/183 PASS，6.729s。這不是`apps/run_bundle.py`或`apps/test_suite.py`，兩者均未執行。
-- 既有`validate_breakout_quality_trade_path_label_contract_case(None)`直接驗證16/16 assertions PASS：A2 continuation、partial TP、fee/risk、natural/forced exit、blocked/unfilled及optional deadline保持。
-- 獨立price手算2,402次精確float32比對PASS：H=1/2/7/40/60、四scalar formulas、排除information OHLC、峰後MAE、one-bar clip；不是將production函式當成expected。
-- 獨立MinTrade Decimal/time/ranking15項PASS：948股買100/stop90/賣103，淨損益2278、initial net risk9991、NetR=.22800520468421578；partial TP總淨損益6526、NetR=.653187869082174；自然stop=-1R、entry-day不能當沖、不可結算NULL、H40/60/87/100/None、cutoff後行情不影響、NULL-last/ties。另6組stock/ETF Decimal fee-min-tax案例PASS；現行raw fee=.001425，無自動6折/72%回饋，未變更fee config。
-- 真實Portfolio engine合成Oracle／DL score-boundary parity：3情境（首OOS資訊缺分、跨年effective參數、cutoff inference rows）×2獨立sizing fixtures×Exact/Direct＝12 pairs／24 replays；292組每日cash/positions/equity/params狀態、168筆execution配對、24筆trades配對一致。兩組fixtures不是本機真實4 Seeds的P16；僅排除刻意不同的score來源provenance欄位；無numba環境走既有reference fallback。
-- 原ZIP647個Python files AST parse PASS。附帶reduced9股（排0050）、10,859成熟stock-days的MFE/R/T/T-MFE新舊daily rank差異為0。這不涵蓋全市場630,589 feature cohort，也不含CG尾端；因此不能聲稱報表所有數值必變，更不能估計新RoMD。
+- 修復驗證當時只有合成資料與下述reduced樣本，不能代替全市場、真實4 Seeds的E13逐日等價證據；修復後市場Replay仍待驗收。
+- 附帶reduced9股（排0050）、10,859成熟stock-days的MFE/R/T/T-MFE新舊daily rank差異為0。這不涵蓋全市場630,589 feature cohort，也不含CG尾端；因此不能聲稱報表所有數值必變，更不能估計新RoMD。
 - 0050是feature benchmark、沒有DL score；Portfolio正式缺分fallback仍可選它，不能因Oracle自行排除。Exact/Direct共用同一Target分數，但Selector按各自既有契約；C96未加Direct語義或Target依賴。
 
 #### 本輪決策與待驗收
@@ -4971,7 +4938,7 @@ Assessment: `USER_REPORTED_ROLLING_RESULT_AVAILABLE / FULL_HORIZON_MAE_SMALL_PAI
 | DailyUniversal_MinTrade_NetR_Direct | 207.48 | 81.11 | 98.59 | 103.87 |
 
 - **結果解讀**：Exact 的最高四 Seed 平均 RoMD 為 `DailyUniversal_MinTrade60_NetR=25.60 (SD 3.37)`，與 `T40=25.57 (SD 6.35)` 僅差 `0.03`，不足以視為穩健的統計優勢。Direct 最高為 `DailyUniversal_MinTrade40_NetR_Direct=164.00 (SD 106.79)`，四 Seed `322.34/88.47/120.88/124.31` 差異很大；Direct 使用另一種既有 Selector（No-K/No-R0），不應把全部 RoMD 差異歸因於 Target 的可學性或 DL 自身提升。皆為迭代研究 OOS 的事後比較，不作模型選擇或 Trading promotion。
-- **附加驗證與未完成項**：先前使用者 `report.json` 之正式 DL 兩 Provider 與 Oracle 母體 `630,589/630,589` 逐股票日相同、`cache_minus_formal=0`／`formal_minus_cache=0`；舊 `643,617` 母體原始鍵集合仍未取得，不能斷定其差異根因。新 ZIP 的 Oracle／MinTrade 167 個獨立合成 unittest 於 GPT 端 PASS，**非** Windows 正式 `apps/run_bundle.py`／`apps/test_suite.py` 及非使用者完整市場逐日 E13 parity；本 ZIP 不含全部原市場 Replay 逐筆帳本／逐日 cash、positions、equity 工件，不能僅憑總 RoMD 相同與 `REUSE 64` 宣告端到端等價驗收完成。舊 Oracle/修復前數值、所有歷史 identity／Log 仍保留且不可倒填為當前有效結果；輸出真理仍是原 `outputs/audit/breakout_quality/reusable/target_oracle_romd/latest/audit.md`／對應正式 artifacts。
+- **附加驗證與未完成項**：先前使用者 `report.json` 之正式 DL 兩 Provider 與 Oracle 母體 `630,589/630,589` 逐股票日相同、`cache_minus_formal=0`／`formal_minus_cache=0`；舊 `643,617` 母體原始鍵集合仍未取得，不能斷定其差異根因。當時的獨立合成檢查不構成完整市場逐日 E13 parity；本 ZIP 不含全部原市場 Replay 逐筆帳本／逐日 cash、positions、equity 工件，不能僅憑總 RoMD 相同與 `REUSE 64` 宣告端到端等價驗收完成。舊 Oracle/修復前數值、所有歷史 identity／Log 仍保留且不可倒填為當前有效結果；輸出真理仍是原 `outputs/audit/breakout_quality/reusable/target_oracle_romd/latest/audit.md`／對應正式 artifacts。
 - **處置**：`USER_REPORTED_REAL_MARKET_REPLAY_COMPLETED / CURRENT_CANONICAL_REUSE_64_RUN_0_BLOCKED_0 / FOUR_SEED_AGGREGATES_VERIFIED_AT_DISPLAY_PRECISION / E13_FULL_MARKET_DAILY_PARITY_NOT_YET_CERTIFIED / HINDSIGHT_NON_PIT / ITERATIVE_OOS / NO_NEW_SCIENTIFIC_ID / NO_PROMOTION`。本次只登錄結果與同步 Registry 現況，不修改 Target、策略、費稅、計算程序、REUSE 判定或正式報表版型。
 
 ### 2026-10-28 — MinTrade Oracle 單股交易事件／延續單 SSOT 對齊修復（實作驗證，市場結果待重跑）
@@ -4979,9 +4946,8 @@ Assessment: `USER_REPORTED_ROLLING_RESULT_AVAILABLE / FULL_HORIZON_MAE_SMALL_PAI
 - **既有要求／錯誤定性**：40D／60D／完整週期 MinTrade Net-R 與完整週期 NetPnL 的原始問題是「依正式單股 Min 交易路徑，以完美事後分數評價每個 DL 可評分股票日的合法候選」，而不是每日創造一筆不存在的新單。舊 Producer 在所有股票日以當日 Close+ATR 新造訂單，沒有要求正式突破買訊，也未繼承原始延續單的限價／shadow；導致同一股票資訊日可能將正式賺錢的延續單評為虧損。原先以 Registry 的 daily-fresh 語句認定其正確，未能符合使用者已要求的單股交易對齊。此為 **E13 既有契約的實作修復**，不新增 Target 科學身分，不變動 Exact／Direct Selector、不追加 `NetPnL>0` 門檻，也不觸碰 Trading。
 - **唯一交易路徑／修復方式**：`filters/breakout_quality/daily_trade40_target.py::compute_counterfactual_trade40_batch()` 依正式 P16 生效日期的 `build_signal_cache()`，用 `core.extended_signals` 的 canonical `create_signal_tracking_state()`／`should_clear_extended_signal()` 維持尚未被投組選擇成交的單股有效訊號；正式買訊時建立原始狀態，延續日沿用原始買訊日期、原始限價、原參數與 shadow，無訊號記 NULL（不另造 0R／0 元）。`trade_path_label.py::simulate_realized_trade_path_label()` 只新增接受 decision-time signal-state snapshot 的可選入口，後續成交、停損、出場、風控 sizing、費稅、毫元帳務及 closeout 繼續呼叫既有 canonical owner。40／60 交易所日、自然出場、Research 截止 2026-03-02 三種期限仍依原本最早規則，Full-Cycle 無固定 H；DL 可評分股票日母體不縮小。正式 Portfolio 仍擁有現金、已有持倉與 Selector 選股競爭。
 - **SSOT 精確邊界**：同股票資訊日可能沒有可執行 Min 訊號，這時雖有合法 DL Score 鍵，**不能**宣稱存在一筆可獲利交易；記 NULL 並排在已合法成交經濟結果之後。延續評價以「此前尚未因投組選擇而成交」為單股條件，不使用 Portfolio 過往實際現金／持倉／成交來決定監督標籤。固定單股參考本金只隔離投組資金差異，仍使用同一入場規劃與精確帳本；NetPnL 不等同動態 Portfolio 實際投入金額。PIT／模型訓練一律不可把事後淨利或未來成交資訊作輸入。
-- **獨立驗收證據（本輪）**：`synthetic_daily_trade40_cases`、`synthetic_daily_trade40_oracle_cases`、`synthetic_target_oracle_cases` 共 **197／197 PASS**。另有直接使用正式 `core.portfolio_engine.run_portfolio_timeline()` 的真實合成買訊驗收：新單與延續單的原買訊／成交／出場、NetPnL、Net-R 同步一致；延續單來源價格與原限價不被新資訊日重建。沒有買訊時 Target 保持 NULL；跨年 P16 原參數凍結與新有效訊號、錯誤快照 fail-fast 也通過。另非正式測試，不等同使用者 Windows Formal Suite 或全市場 E13 每日交易／現金／權益逐筆等價。
 - **對舊正式績效的處理／REUSE**：之前 `2026-10-28` 已登錄的 MinTrade 40D／60D／Full-Cycle Net-R 及 Full-Cycle NetPnL 的四 Seed RoMD **全部保留為歷史 daily-fresh 錯誤實作證據，不再視為本次修復後現行有效結果**。因 Net-R 與 NetPnL 共用的單股起始交易身分確實改變，兩者 Producer 來源 SHA 必須更新，舊 8 targets × 4 seeds = 32 個正式 Portfolio Replay 在新的身份下原則應 **RUN 32**；價格型 9 × 4 及 C96 4 × 1 的 40 組不受本修正，預期保持 **REUSE 40**（以使用者本地正式規劃為準）。**禁止**使用先前為「僅加 NetPnL 輸出」建立的 Net-R 舊 SHA compatibility attestation；新的歷史成果不得由舊 daily-fresh receipt 直接補簽。原研究問題、報表 `audit.target_oracle_romd@v9` 及 payload schema 8 保持不變。
-- **交付狀態**：`IMPLEMENTATION_CORRECTED / 197_SYNTHETIC_PASS / REAL_MARKET_32_REPLAYS_NOT_RUN_HERE / E13_FULL_MARKET_DAILY_PARITY_PENDING / HISTORICAL_DAILY_FRESH_RESULTS_ARCHIVED_NOT_CURRENT / NO_DL_FIT / NO_OPTIMIZER / TRADING_UNCHANGED`。
+- **交付狀態**：`IMPLEMENTATION_CORRECTED / REAL_MARKET_32_REPLAYS_NOT_RUN_HERE / E13_FULL_MARKET_DAILY_PARITY_PENDING / HISTORICAL_DAILY_FRESH_RESULTS_ARCHIVED_NOT_CURRENT / NO_DL_FIT / NO_OPTIMIZER / TRADING_UNCHANGED`。
 
 ### 2026-10-29 — 修正正式買訊／延續單後的 MinTrade Oracle 四 Seed 市場報表登錄（使用者提供）
 
@@ -5027,7 +4993,7 @@ Assessment: `USER_REPORTED_ROLLING_RESULT_AVAILABLE / FULL_HORIZON_MAE_SMALL_PAI
 
 - **重要讀法**：Full-Cycle NetPnL Direct `131.66`，相對 Full-Cycle Net-R Direct `114.26`，四 Seed 分別增加 `18.33 / 7.26 / 25.44 / 18.57`，**4/4 Seed 同向**；在本次 17 組 Oracle treatment 中四 Seed 平均 RoMD 最高。但 NetPnL Direct 對價格型 `T40-MFE_Direct=123.34` 並非 4/4 都領先；Direct 的 NetPnL RoMD SD `74.11`，不應解讀為穩健可部署的模型或全期間資金最優。Exact 的四 Seed 平均為 `25.81` 對 `24.63`，但同 Seed 僅 **2/4** 較好；本次 Exact 全表最高為 `MinTrade40_NetR=27.51`。
 - **舊結果的解讀修正**：修補前 `MinTrade40_NetR_Direct=164.00`，修補後為 `99.96`；因 Target 起點從「每日假設新單」改為「實際 Min 買訊／延續狀態」，這些績效不可當作同算法的純參數或 Target 排名提升／退步。C96 `9.18` 與價格型 `T40-MFE_Direct=123.34` 維持原顯示值，是有限的非 MinTrade 同窗對照，**不能替代** signed source／score／Replay 身分核對。
-- **驗證狀態**：直接解析報表 18 列（C96＋17 treatments），17 組 treatment ×4 Seed 的 RoMD mean 與樣本 SD 全部在 `±0.015` 的兩位數顯示精度容許範圍內一致；上節 197/197 合成與單股引擎對照係修補交付時工程證據，不是本次的真實市場逐日 E13 驗收。此 ZIP 無完整 receipt/ledger/position/equity sidecars；不得宣稱使用者 Windows Formal Test Suite PASS、72/72 REUSE、或正式 DL／Oracle score 入口逐日獨立 parity PASS。
+- **驗證狀態**：直接解析報表 18 列（C96＋17 treatments），17 組 treatment ×4 Seed 的 RoMD mean 與樣本 SD 全部在 `±0.015` 的兩位數顯示精度容許範圍內一致；這項報表數字一致性核對不等同真實市場逐日 E13 驗收。此 ZIP 無完整 receipt/ledger/position/equity sidecars；不得宣稱使用者 Windows Formal Test Suite PASS、72/72 REUSE、或正式 DL／Oracle score 入口逐日獨立 parity PASS。
 - **現行處置**：`USER_REPORTED_POST_SIGNAL_STATE_FOUR_SEED_RESULTS_AVAILABLE / EIGHT_MINTRADE_TREATMENTS_REPORTED / OLD_DAILY_FRESH_RESULTS_HISTORICAL_INVALID_FOR_CURRENT / REUSE_72_NOT_INDEPENDENTLY_ATTESTED / E13_FULL_MARKET_DAILY_PARITY_PENDING / NON_PIT / ITERATIVE_OOS / NO_SCIENTIFIC_ID_CHANGE / NO_REPORT_VERSION_CHANGE / NO_PROMOTION`。本次只登錄結果與同步 Registry，**不**修改正式 Target、交易核心、選單、Report Contract、費稅、模型、Replay 工件或 `doc/CMD.md`。
 
 ## 4. 2026-10-29～30 Oracle 最新實測與 Positive Gate 歸因（歷史 NON-PIT）

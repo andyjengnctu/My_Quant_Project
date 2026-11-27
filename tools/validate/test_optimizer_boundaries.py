@@ -221,6 +221,38 @@ class OptimizerBoundaryTests(unittest.TestCase):
                 self.assertEqual(result["sha256"], canonical_json_sha256(expected))
                 self.assertEqual(result["reference_type"], "canonical_daily_min_roos_fixed_defaults")
 
+    def test_daily_profile_names_do_not_define_family_or_fixed_rules(self):
+        from config.strategy_params import STRATEGY_PARAM_PROFILES
+        from core.strategy_param_policy import get_strategy_param_training_profile
+        from services.optimizer.strategy_param_contracts import build_min_roos_adaptation_contract
+
+        for original, descriptor in tuple(DAILY_SEARCH_PROFILES.items()):
+            with self.subTest(profile=original):
+                alias = "opaque_name" if descriptor["filter_profile"] == "full" else "common_filters_in_an_unrelated_name"
+                raw = next(deepcopy(v) for v in STRATEGY_PARAM_PROFILES.values()
+                           if v.get("daily_search_profile") == original)
+                raw["daily_search_profile"] = alias
+                kwargs = dict(arm_id="CONTROL", training_dl_enabled=False, strategy_id="daily")
+                expected = build_min_roos_adaptation_contract(**kwargs, daily_search_profile=original)
+                with (patch.dict(DAILY_SEARCH_PROFILES, {alias: deepcopy(descriptor)}),
+                      patch.dict(STRATEGY_PARAM_PROFILES, {"synthetic_profile": raw})):
+                    resolved = get_strategy_param_training_profile("synthetic_profile")
+                    self.assertEqual(resolved.filter_profile, descriptor["filter_profile"])
+                    actual = build_min_roos_adaptation_contract(**kwargs, daily_search_profile=alias)
+                    self.assertEqual(actual, expected)
+                    self.assertEqual(self.schedule(strategy_id="daily", daily_search_profile=alias),
+                                     self.schedule(strategy_id="daily", daily_search_profile=original))
+
+    def test_daily_profile_requires_declared_family_and_fixed_rules(self):
+        from strategies.daily.search_space import resolve_daily_search_profile
+
+        for field in ("filter_profile", "fixed_rule_contract"):
+            incomplete = deepcopy(next(iter(DAILY_SEARCH_PROFILES.values())))
+            incomplete.pop(field)
+            with self.subTest(field=field), patch.dict(DAILY_SEARCH_PROFILES, {"incomplete": incomplete}):
+                with self.assertRaises(ValueError):
+                    resolve_daily_search_profile("incomplete")
+
     def test_min_and_full_validation_never_write_even_when_migration_is_needed(self):
         path = self.write_payload()
         before = path.read_bytes(), path.stat().st_mtime_ns

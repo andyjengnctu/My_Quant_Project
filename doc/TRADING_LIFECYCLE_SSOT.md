@@ -1,12 +1,12 @@
 # Trading／Research 生命週期的唯一責任歸屬
 
-本文件說明程式責任與資料契約，不建立第二份策略規格。最高治理文件仍為 `doc/PROJECT_SETTINGS.md`；帳務、價格／tick、投組選擇與 Optimizer 參數真理維持既有 owner。本輪不變更 BQ 科學身分或正式報表契約。
+本文件說明程式責任與資料契約，不建立第二份策略規格。最高治理文件仍為 `doc/PROJECT_SETTINGS.md`；帳務、價格／tick、投組選擇與 Optimizer 參數真理維持既有 owner。BQ 科學身分與正式報表契約由各自的 canonical owner 持有。
 
 ## 規則與使用者決策權
 
 策略參考方案、使用者確認的帳戶意圖、實際成交是三種不同資料。使用者可以在策略與帳戶資源上限內調降股數，也可以先選較低排名的合法候選，而不必先買較高排名候選。選擇順序是輸入；驗證、資金預留與計算規則不是 UI 自行實作的例外。
 
-`core/entry_plans.py::accept_entry_quantity_decision` 持有股數接受規則。Research 沿用既有自動選擇政策；Trading 提交使用者的明確決策。自動同步不能把使用者股數改回 Scanner 建議，也不能放寬日期、tick、資金預留、禁止當日買賣或禁止盤中資金重用的既有約束。本輪沒有新增任意修改 frozen 策略規則的權限。
+`core/entry_plans.py::accept_entry_quantity_decision` 持有股數接受規則。Research 沿用既有自動選擇政策；Trading 提交使用者的明確決策。自動同步不能把使用者股數改回 Scanner 建議，也不能放寬日期、tick、資金預留、禁止當日買賣或禁止盤中資金重用的既有約束。修改 frozen 策略規則須另有明確授權。
 
 ## 唯一 owner 與依賴方向
 

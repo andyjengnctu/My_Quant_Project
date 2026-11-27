@@ -36,6 +36,7 @@ from services.optimizer.param_cache import build_full_evaluation_cache_key, buil
 from services.optimizer.trial_inputs import prepare_trial_inputs
 from services.optimizer.walk_forward import evaluate_walk_forward
 from services.optimizer.score_display import format_optimizer_score_for_display
+from services.optimizer.outer_rolling_formatting import _fmt_duration_compact
 from services.optimizer.scientific_runtime import (
     resolve_session_dominant_year_policy,
     resolve_session_inner_validation_policy,
@@ -770,20 +771,6 @@ class _FinalistProgressBoard:
         self.progress_min_interval_sec = _resolve_local_min_progress_min_interval_sec()
         self._last_progress_render_at = 0.0
 
-    def _format_duration(self, seconds) -> str:
-        if seconds is None:
-            return "N/A"
-        total = max(0, int(float(seconds)))
-        h, rem = divmod(total, 3600)
-        m, s = divmod(rem, 60)
-        return f"{h:02d}:{m:02d}:{s:02d}"
-
-    def _format_duration_compact(self, seconds) -> str:
-        text = self._format_duration(seconds)
-        if text.startswith("00:"):
-            return text[3:]
-        return text
-
     def _emit_progress_event(self, idx: int, *, current_neighbor: int, total_neighbors: int, current_local_min, status_text: str):
         if not self.finalists:
             return
@@ -1019,9 +1006,9 @@ class _FinalistProgressBoard:
         readable_status = str(status_text).strip()
         compact_status = readable_status.replace(" early_stop", " early").replace(" cache", " cache")
         best_compact = best_text.replace(" #", "#")
-        elapsed_text = self._format_duration_compact(elapsed)
-        eta_stage_text = self._format_duration_compact(eta_stage)
-        eta_total_text = self._format_duration_compact(eta_total)
+        elapsed_text = _fmt_duration_compact(elapsed)
+        eta_stage_text = _fmt_duration_compact(eta_stage)
+        eta_total_text = _fmt_duration_compact(eta_total)
         line = choose_inline_progress_message((
             (
                 f"[{int(ctx.get('fold_idx', 0) or 0)}/{int(ctx.get('fold_count', 0) or 0)}] "

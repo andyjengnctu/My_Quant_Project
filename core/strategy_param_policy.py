@@ -401,7 +401,7 @@ def get_strategy_param_training_profile(profile_id: str) -> StrategyParamTrainin
             raise ValueError("daily_search_profile requires a Daily strategy")
         from strategies.daily.search_space import resolve_daily_search_profile
         resolved = resolve_daily_search_profile(daily_search_profile)
-        expected_family = "full" if "common_filters" in daily_search_profile else "min"
+        expected_family = resolved["filter_profile"]
         if values["filter_profile"] != expected_family:
             raise ValueError("Daily search profile / filter family mismatch")
     return StrategyParamTrainingProfile(

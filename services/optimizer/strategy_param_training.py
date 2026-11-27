@@ -977,10 +977,14 @@ def _run_optimizer_arm(*, root, args, settings, baseline_contract, model_artifac
         base_policy = build_rolling_base_policy(root=root, baseline_contract=baseline_contract)
         base_policy.update({"adaptation_scope": f"binary_dl_filter_min_roos_{arm_id.lower()}", "evaluation_scope": "rolling_selection_diagnostic"})
         strategy_id = str(getattr(args, "strategy_id", "breakout"))
+        filter_profile = canonical_family or "min"
+        if strategy_id == "daily" and getattr(args, "daily_search_profile", None) is not None:
+            from strategies.daily.search_space import resolve_daily_search_profile
+            filter_profile = resolve_daily_search_profile(args.daily_search_profile)["filter_profile"]
         runtime_scientific_contract = build_strategy_param_runtime_scientific_contract(
             root,
             strategy_id=strategy_id,
-            filter_profile=("full" if getattr(args, "daily_search_profile", None) == "full_common_filters_v2" else (canonical_family or "min")),
+            filter_profile=filter_profile,
             parameter_policy=str(args.param_policy),
             dataset_profile=str(args.dataset),
             schedule_start_date=str(baseline_contract["meta"]["first_oos_date"]),

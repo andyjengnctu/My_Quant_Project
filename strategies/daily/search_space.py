@@ -13,6 +13,7 @@ from core.portfolio_entry_policy import (
 
 DAILY_SEARCH_PROFILES = {
     "min_close_ema_only_v1": {
+        "filter_profile": "min",
         "fields": (
             "atr_len", "atr_times_init", "atr_times_trail",
             "breakout_ema_len",
@@ -25,6 +26,7 @@ DAILY_SEARCH_PROFILES = {
         "fixed_rule_contract": "daily_min_close_ema_always_on_v1",
     },
     "min_close_ema_volume_v1": {
+        "filter_profile": "min",
         "fields": (
             "atr_len", "atr_times_init", "atr_times_trail",
             "vol_long_len", "vol_breakout_mult", "breakout_ema_len",
@@ -37,10 +39,14 @@ DAILY_SEARCH_PROFILES = {
         "fixed_rule_contract": "daily_min_close_ema_volume_always_on_v1",
     },
     "min_atr_limit_v2": {
+        "filter_profile": "min",
+        "fixed_rule_contract": "all_rule_filters_off",
         "fields": ("atr_len", "atr_buy_tol", "atr_times_init", "atr_times_trail"),
         "execution_contract": DAILY_EXECUTION_ATR_LIMIT,
     },
     "full_common_filters_v2": {
+        "filter_profile": "full",
+        "fixed_rule_contract": "daily_common_filters_search_v2",
         "fields": (
             "atr_len", "atr_buy_tol", "atr_times_init", "atr_times_trail",
             "use_bb", "bb_len", "bb_mult", "use_kc", "kc_len", "kc_mult",
@@ -62,6 +68,8 @@ def resolve_daily_search_profile(profile: str | None):
     """None preserves the historical PARAM-P18 contract byte-for-byte."""
     if profile in (None, ""):
         return {
+            "filter_profile": "min",
+            "fixed_rule_contract": "all_rule_filters_off",
             "fields": ("atr_len", "atr_times_init", "atr_times_trail"),
             "execution_contract": DAILY_EXECUTION_LEGACY,
         }
@@ -69,6 +77,10 @@ def resolve_daily_search_profile(profile: str | None):
         result = DAILY_SEARCH_PROFILES[str(profile)]
     except KeyError as exc:
         raise ValueError(f"Unknown Daily search profile: {profile!r}") from exc
+    if result.get("filter_profile") not in {"min", "full"}:
+        raise ValueError("Daily search profile must declare its filter family")
+    if not isinstance(result.get("fixed_rule_contract"), str) or not result["fixed_rule_contract"].strip():
+        raise ValueError("Daily search profile must declare its fixed rule contract")
     if len(set(result["fields"])) != len(result["fields"]):
         raise ValueError("Duplicate Daily optimizer dimensions")
     if any(field not in BREAKOUT_OPTIMIZER_SEARCH_SPACE for field in result["fields"]):
