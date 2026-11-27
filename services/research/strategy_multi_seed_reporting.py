@@ -239,22 +239,5 @@ def render_multi_seed_robustness_report(
             "- Extending-Window Rolling robustness只評估config既定scientific condition；不得依結果回頭調整training semantics或使用future fold結果擬合當下模型。",
         )),
     ])
-    from core.score_permutation_observation import render_permutation_appendix
-    for arm_id, item in dict(summary.get("score_permutations") or {}).items():
-        gate = item["gate"]
-        sections.append(f"同日候選分數置換｜{arm_id} vs {item['control_arm_id']}｜"
-                        + ("主要檢驗" if item["primary"] else "Direct 輔助檢驗"))
-        if gate["status"] == "INCOMPLETE":
-            sections.append("四 seed 判定：INCOMPLETE（須完整四 seed×99 次與原分數對照）")
-        else:
-            sections.append(
-                f"四 seed 判定：{gate['status']}｜真實平均 RoMD {gate['real_mean_romd']:.4f}｜"
-                f"置換平均 RoMD P95 {gate['null_mean_romd_distribution']['p95']:.4f}\n"
-                f"置換 ≥ 真實：{gate['null_ge_real_count']}/99（至多 4）｜"
-                f"勝過各 seed 置換中位數：{gate['individual_seed_median_wins']}/4（至少 3）\n"
-                f"平均 MDD：真實 {gate['real_mean_mdd']:.4f}%／置換 {gate['null_mean_mdd']:.4f}%（真實不得增加）")
-        sections.extend(render_permutation_appendix(bundle) for bundle in item["seeds"])
-    if summary.get("score_permutations"):
-        sections.append("主要 Exact 門檻：99 個四 seed 平均中至多 4 個 ≥ 真實平均、至少 3/4 seed 高於各自置換中位數、真實平均 MDD 不增加。Direct 另行判定，不抵銷 Exact 結果；這是迭代研究篩選，非顯著性保證。")
     return "\n\n".join(section for section in sections if section).rstrip() + "\n"
 

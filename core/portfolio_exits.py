@@ -24,7 +24,6 @@ from core.price_utils import (
 )
 from core.portfolio_fast_data import (
     get_fast_close,
-    get_fast_dates,
     get_fast_management_session_values,
     get_fast_pos,
     get_fast_value,
@@ -387,17 +386,10 @@ def settle_portfolio_positions(
             y_atr, y_ind_sell, y_close, y_high, t_open, t_high, t_low,
             t_close, t_volume,
         ) = get_fast_management_session_values(fast_df, t_pos)
-        from core.position_exit_policy import request_position_early_exit
-        model_exit = request_position_early_exit(
-            ticker=ticker, position=pos,
-            information_date=get_fast_dates(fast_df)[y_pos], execution_date=today,
-            completed_atr=y_atr, completed_high=y_high, params=pos_params,
-            natural_exit=bool(y_ind_sell),
-        )
         pos, freed_cash_milli, _pnl_realized_milli, events = execute_bar_step(
             pos,
             y_atr,
-            bool(y_ind_sell) or model_exit,
+            bool(y_ind_sell),
             y_close,
             t_open,
             t_high,

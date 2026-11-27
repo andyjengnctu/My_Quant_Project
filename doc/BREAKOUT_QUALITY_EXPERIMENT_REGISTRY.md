@@ -4,6 +4,12 @@
 
 本文件是 `breakout_quality` 的**實驗 identity、命名、版本語意、namespace、目前基準與 ID 佔用狀態**單一真理來源。
 
+### 2026-11-28 使用者指定退役實作：C203／C204、HV1／HV2
+
+C203／C204 不再測試，現況為 `CANCELLED / IMPLEMENTATION_RETIRED / MARKET_RESULTS_INCOMPLETE / HISTORICAL_ID_RESERVED`；既有 2/99 部分 checkpoint 仍只代表未完成觀察，不作 PASS／FAIL 結論。HV1／C205／C206 與 HV2／C207／C208 維持既有退役及 NO_ADVANCEMENT 決策，專屬模型、出場掛鉤、準備／重用／報表分支、runtime registration 與專屬測試一併退出現行程式。下列舊節的入口與 producer 說明僅記錄當時實作，不再代表可執行能力。
+
+歷史研究定義、FIT／Replay 版本、原始模型工件、決策紀錄、成果及必要驗證證據保留；原始結果與 Experiment Log 不回寫，編號不回收。現行 CO C123／C124、C106、其餘策略、共用交易／停損停利、FIT 與 Replay 科學契約維持不變；本次不重訓、不執行新的市場實驗。
+
 ### 2026-11-27 同日候選分數置換：歸入一次性 Audit，C203／C204 退出正式比較
 
 原使用者核准 Replay-only 設計：`SR-C203` 為原 CO 同日候選分數置換後的 Exact K/R0，`SR-C204` 為同一規則的 Direct No-K/No-R0，Replay v1。兩列沿用 `CONT13CO_ROLL`，不新增 MR／模型、Target、FIT、Optimizer 或 Trading 模型；對照為 C123／C124，保留 C106 與其餘現行對照。C201／C202 繼續退役。

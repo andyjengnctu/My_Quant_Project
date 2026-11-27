@@ -1105,6 +1105,10 @@ def _validate_strategy_comparison_arm_runtime(settings: StrategyComparisonSettin
                 f"allowed={SUPPORTED_STRATEGY_DL_RUNTIME_MODES}"
             )
         options = dict(arm.dl_runtime_options or {})
+        # AI: Retired execution options must fail instead of silently running a different strategy.
+        retired = {"candidate_score_permutation", "position_exit_model"}.intersection(options)
+        if retired:
+            raise ValueError(f"arm {key} uses retired runtime options: {sorted(retired)}")
         if ranking_policy_has_validation(arm.dl_runtime_mode, 'stale_guard'):
             raw_max_age = options.get('stale_score_membership_guard_max_age_days')
             if isinstance(raw_max_age, bool) or not isinstance(raw_max_age, int) or raw_max_age < 0:

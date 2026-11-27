@@ -331,8 +331,6 @@ def render_status(
     display_overall_status = current_status["overall_status"]
 
     artifact_rows = []
-    for key, row in current_status.get("position_models", {}).items():
-        artifact_rows.append((key, row["reason"], row["action"], row["path"]))
     for source_id, row in current_status["parameters"].items():
         artifact_rows.append((f"param:{source_id}", row["status"], row["action"], row["path"]))
         if row.get("identity_manifest_path"):
@@ -551,9 +549,6 @@ def _load_direct_selection_r(
     baseline_trade_count: int | float | None = None,
     active_trade_count: int | float | None = None,
 ) -> float:
-    if (pair_dir / "score_permutation.json").is_file():
-        from core.score_permutation_observation import load_bundle
-        return float(load_bundle(pair_dir, root=root)["mean_metrics"]["direct_selection_r"])
     path = pair_dir / "trade_attribution.json"
     if path.is_file():
         payload = _read_json(path)
@@ -984,11 +979,6 @@ def _render_report(
         execution_summary=execution_summary,
         target=target,
     )
-    from core.score_permutation_observation import is_permutation_payload, render_permutation_appendix
-    for item in pair_payloads.values():
-        payload = item["payload"]
-        if is_permutation_payload(payload):
-            report += render_permutation_appendix(payload["score_permutation"])
     return report
 
 
@@ -1361,10 +1351,6 @@ def run_strategy_comparison(
 
         def _pair_progress(event: str, detail: dict[str, Any]) -> None:
             nonlocal active_wall_started
-            if event == "permutation_repeat_done":
-                print(f"[{'REUSE' if detail['reused'] else 'DONE'}] {on_arm.arm_id} "
-                      f"seed={detail['seed']} 同日置換 {detail['repeat_id']}/{detail['repeats']}")
-                return
             now = time.perf_counter()
             if event == "baseline_start" and not baseline_already_accounted:
                 if quiet:

@@ -97,8 +97,7 @@ def completed_pair_file_integrity_matches(
         )
         if result_record is None and manifest_record is None:
             # Historical, explicitly unpinned run; do not invalidate legacy REUSE.
-            # Repeated observations are new and always require pinned evidence.
-            return not (Path(pair_dir) / "score_permutation.json").exists()
+            return True
         if not isinstance(result_record, dict) or result_record != manifest_record:
             return False
         if type(result_record.get("schema_version")) is not int or result_record["schema_version"] != PAIR_FILE_INTEGRITY_SCHEMA_VERSION:
@@ -132,12 +131,6 @@ def completed_pair_file_integrity_matches(
             if not is_sha256_hex(digest):
                 return False
             if detail_sha256(path, file_hasher=file_hasher) != str(digest).strip().lower():
-                return False
-        if "score_permutation.json" in actual_files:
-            from core.score_permutation_observation import load_bundle
-            bundle = load_bundle(pair_dir, root=Path(__file__).resolve().parents[2])
-            pair = load_json_object_or_none(pair_dir / _PRIMARY_PAIR_JSON)
-            if pair is None or pair.get("score_permutation") != bundle:
                 return False
         return True
     except (OSError, RuntimeError, ValueError, TypeError):

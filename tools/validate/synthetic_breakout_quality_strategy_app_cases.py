@@ -1098,8 +1098,7 @@ def validate_strategy_compare_config_driven_app_contract_case(_base_params):
         and "def _comparison_period_from_status(" in robustness_source
         and "status = collect_preparation_status(" in robustness_source
         and "resolve_planned_comparison_period_from_upstream(" not in robustness_source
-        and "rows = [*upstream_rows, *param_rows, *benchmark_rows, *position_rows]" in robustness_source
-        and "ensure_position_models(root=PROJECT_ROOT, settings=settings, seeds=cfg.resolved_seeds)" in robustness_source
+        and "rows = [*upstream_rows, *param_rows, *benchmark_rows]" in robustness_source
         and "int(item.execution_priority)" in comparison_source,
     )
 

@@ -70,11 +70,6 @@ def scientific_unit_signature(
             signature["arm"][key] = arm[key]
     if model:
         signature["training_defaults"] = dict(contract.get("training_defaults") or {})
-    if dict(arm.get("dl_runtime_options") or {}).get("position_exit_model"):
-        position_source = dict(arm.get("position_model_sources") or {}).get(str(seed))
-        if not position_source or not position_source.get("manifest_sha256"):
-            return None
-        signature["position_model_source"] = position_source
     return signature
 
 
@@ -226,10 +221,6 @@ def model_observation_provenance_matches(
     All declared heads must be present and covered by the observation's SHA.
     """
     arm = dict(signature.get("arm") or {})
-    if signature.get("position_model_source") is not None:
-        if (attribution.get("position_model_identity") != signature["position_model_source"]
-                or "position_decisions" not in dict(attribution.get("files") or {})):
-            return False
     declared = {str(source.get("dl_id") or "")
                 for source in arm.get("runtime_dl_sources", ())}
     actual = dict(attribution.get("runtime_training_identities") or {})

@@ -1380,26 +1380,18 @@ _REVIEWED_SOURCE_INVENTORIES["oracle_daily_provider"]["current"][
      "4e8aec6100e7d73ed1cda98a448ea43f968166097f1ab343da2267dec8c5af64")
 
 
-# AI: 2026-11-27 independent frozen/current probes preserve all 61 original
-# score/selection/order/equity/trade observations after removing the retired
-# permutation hook and adding an optional completed-bar holding observer.
-# Evidence: outputs/validation/holding_value_20261127/*_receipt.json.
-# This exact full closure is a no-provider equivalence proof; HV1 observations
-# separately bind the position-model manifest/weights, seed and runtime option.
-for _scope, _graph_sha in (('portfolio_candidates', '3e82b0fdd2d910fa658c62c74ff1717be0be6360198360b2e954e5f452e1305e'), ('replay_numerics', '59e7cd37ef27d7bd7b1abe827715208509453e271630da9fad08f5829d787683')):
-    _REVIEWED_SOURCE_INVENTORIES[_scope]["current"].update({'core/portfolio_day_candidates.py': '2052e3d64568b26721483e4b7855b37cc5d8f484b0235a7c7658b97e517a3d37', 'core/portfolio_exits.py': '9103c6f0cb28ce050f1abb36212144f55b49fecd48d1288bc63e0c2bf9db594c', 'core/position_exit_policy.py': 'ad91727fb4c29d9f697d3cb3e4b835d8b81ba5caee94568ad2f4f8a72329fe88'})
-    _REVIEWED_SOURCE_INVENTORIES[_scope]["current"]["@execution_sources"] = _graph_sha
+# AI: The independent frozen/current 61-case proof preserves score, selection,
+# order, equity and trade observations after retiring optional holding exits.
+# Evidence: outputs/validation/retired_capabilities_20261128/*_receipt.json.
+# Keep exact current pins and the original pre-refactor identity projection;
+# an unknown helper change still invalidates the complete source-group proof.
+for _scope in ("portfolio_candidates", "replay_numerics"):
+    _REVIEWED_SOURCE_INVENTORIES[_scope]["current"].update({
+        "core/portfolio_day_candidates.py": "2052e3d64568b26721483e4b7855b37cc5d8f484b0235a7c7658b97e517a3d37",
+        "core/portfolio_exits.py": "d7b55c7664080921a97ed98d24524f771fffb175828a0d5c0fdd74917fc36b1b",
+    })
 
 _REVIEWED_SOURCE_INVENTORIES["mintrade_source_graph"]["current"]["filters/breakout_quality/trade_path_label.py"] = ('48417c248b092f97d91a51f7049593db44bbd5243d8804f469c36e36f3941ed6', '48417c248b092f97d91a51f7049593db44bbd5243d8804f469c36e36f3941ed6', '95da26f67620e72a6faac4b22734fb24f0496802b6efaba1c01e65eb50a75b82')
-
-# AI: The independently executed 61-case frozen/current observation proof in
-# outputs/validation/holding_policy_20261127/current_receipt.json verifies that
-# typed probability decisions preserve every original no-provider replay path.
-# Active position models still bind their own producer, gate, seed and FIT SHA.
-for _scope in ("portfolio_candidates", "replay_numerics"):
-    _REVIEWED_SOURCE_INVENTORIES[_scope]["current"]["core/position_exit_policy.py"] = (
-        "8d459a316ec12f9d0cc7cb7584bea647a5236bbd8e6aaec4dc52d572c512a25f")
-
 
 def _reviewed_source_group(scope: str):
     proof = _REVIEWED_SOURCE_INVENTORIES.get(scope)

@@ -118,7 +118,6 @@ _PARAMETER_RUNTIME = (
     "core/file_integrity.py", "core/scientific_runtime_context.py",
 )
 _PORTFOLIO_SUPPORT = (
-    "core/position_exit_policy.py",
     "core/breakout_reentry.py", "core/breakout_quality_ranking_context.py",
     "core/positive_score_admission.py", "core/positive_netpnl_contract.py",
     "core/config.py", "core/training_policy.py", "config/training_policy.py",

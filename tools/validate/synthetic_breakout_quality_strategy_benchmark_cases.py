@@ -823,11 +823,6 @@ def append_robustness_benchmark_plan_checks(
             "services.research.strategy_multi_seed_robustness._trade_path_seed_plan",
             return_value=([], []),
         ),
-        patch(
-            "services.research.position_model_dependency.inspect_holding_model",
-            return_value={"ready": True, "path": "isolated/holding_manifest.json",
-                          "reason": "isolated verified position dependency", "sha256": "c" * 64},
-        ),
     ):
         fitted_param_plan, fitted_param_payload = _render_robustness_execution_plan(
             cfg=rolling_robustness,

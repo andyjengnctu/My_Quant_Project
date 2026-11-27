@@ -236,6 +236,7 @@ SCIENTIFIC_OBSERVATIONS_MANIFEST_FILENAME = "scientific_observations_manifest.js
 LATEST_FILENAME = "latest.json"
 ATTRIBUTION_SOURCE_DIRNAME = "attribution_source"
 ATTRIBUTION_SOURCE_SCHEMA_VERSION = 2
+_ATTRIBUTION_ROLES = ("trades", "equity", "daily_capacity", "selected_buys", "execution")
 SCIENTIFIC_OBSERVATIONS_SCHEMA_VERSION = 1
 DURABLE_RESULT_FILENAMES = {
     "seed_results": SEED_RESULTS_FILENAME,
@@ -1857,13 +1858,7 @@ def _render_robustness_execution_plan(
         settings=settings, status=status, required_sources=required_sources
     )
     upstream_rows, upstream_blockers = _model_upstream_rows(status)
-    from services.research.position_model_dependency import append_position_model_actions
-    position_actions = []
-    append_position_model_actions(root=PROJECT_ROOT, settings=settings,
-                                  actions=position_actions, identities={}, seeds=cfg.resolved_seeds)
-    position_rows = [(a.action, a.artifact_key, a.description) for a in position_actions]
-    blockers = [*param_blockers, *upstream_blockers,
-                *(a.description for a in position_actions if a.action == "BLOCKED")]
+    blockers = [*param_blockers, *upstream_blockers]
     upstream_pending = any(row[0] in {"BUILD", "REBUILD", "RESUME"} for row in upstream_rows)
     # A missing optimizer Target teacher cannot erase an independently known
     # comparison period.  The shared Strategy preparation owner has already
@@ -1907,10 +1902,10 @@ def _render_robustness_execution_plan(
     blockers.extend(benchmark_blockers)
     pending_work = any(
         row[0] in {"BUILD", "REBUILD", "RESUME", "CHECK", "REPAIR"}
-        for row in (*param_rows, *benchmark_rows, *upstream_rows, *position_rows)
+        for row in (*param_rows, *benchmark_rows, *upstream_rows)
     )
     overall = "BLOCKED" if blockers else "PREPARABLE" if pending_work else "READY"
-    rows = [*upstream_rows, *param_rows, *benchmark_rows, *position_rows]
+    rows = [*upstream_rows, *param_rows, *benchmark_rows]
     robustness_unit_states: dict[tuple[str, int], dict[str, Any]] = {
         unit: resolve_strategy_result_state(
             verified_evidence={
@@ -2301,10 +2296,6 @@ def _render_robustness_execution_plan(
             contract=robustness_contract, bindings=resolved_bindings,
             reused=registered_scientific_reuse, model_artifacts=model_source_artifacts,
         )
-    from services.research.position_model_dependency import render_position_model_status
-    position_status = render_position_model_status(root=PROJECT_ROOT, settings=settings, seeds=cfg.resolved_seeds)
-    if position_status:
-        rendered_plan += "\n\n" + position_status
     return rendered_plan, {
         "overall_status": overall,
         "blockers": blockers,
@@ -2533,12 +2524,6 @@ def build_multi_seed_robustness_contract(
                 "dl_runtime_options": dict(arm.dl_runtime_options or {}),
                 "runtime_dl_sources": [source_contract(dl_id) for dl_id in resolve_arm_runtime_dl_source_ids(settings, arm)],
             })
-            if dict(arm.dl_runtime_options or {}).get("position_exit_model"):
-                from services.research.position_model_dependency import position_model_identity
-                payload["position_model_sources"] = {
-                    str(seed): position_model_identity(root=PROJECT_ROOT, settings=settings, arm=arm, seed=seed)
-                    for seed in seeds
-                }
         return payload
 
     scientific = {
@@ -2759,21 +2744,6 @@ def _write_compact_attribution_source(
         "selected_buys": pair_dir / f"{prefix}_selected_buys.csv",
         "execution": pair_dir / f"{prefix}_execution.csv",
     }
-    position_identity = None
-    if dict(arm.dl_runtime_options or {}).get("position_exit_model"):
-        position_path = pair_dir / "position_model_decisions.json"
-        decisions = _read_json(position_path)
-        if int(decisions["seed"]) != int(job["seed"]) or len(decisions["model_manifest_sha256"]) != 64:
-            raise ValueError("Holding decision provenance differs from replication")
-        source_files["position_decisions"] = position_path
-        position_identity = {"model_id": decisions["contract"]["model_id"], "seed": int(job["seed"]),
-                             "manifest_sha256": decisions["model_manifest_sha256"]}
-    from core.candidate_score_permutation_contract import permutation_spec
-    repetition = permutation_spec(arm.dl_runtime_options)
-    if repetition is not None:
-        from core.score_permutation_observation import load_bundle
-        load_bundle(pair_dir, root=PROJECT_ROOT)
-        source_files = {"permutations": pair_dir / "score_permutation.json"}
     missing = [path.name for path in source_files.values() if not path.is_file()]
     if missing:
         raise FileNotFoundError(
@@ -2795,8 +2765,7 @@ def _write_compact_attribution_source(
             "source_filename": source.name,
             "source_sha256": compute_file_sha256(source),
             "sha256": compute_file_sha256(destination),
-            "row_count": (len(decisions["decisions"]) if role == "position_decisions" else
-                          repetition["repeats"] if repetition is not None else _csv_row_count(source)),
+            "row_count": _csv_row_count(source),
         }
     payload = {
         "schema_version": ATTRIBUTION_SOURCE_SCHEMA_VERSION,
@@ -2839,10 +2808,6 @@ def _write_compact_attribution_source(
         },
         "files": files,
     }
-    if repetition is not None:
-        payload["observation_kind"] = "fixed_candidate_score_permutations_v1"
-    if position_identity is not None:
-        payload["position_model_identity"] = position_identity
     _write_json(destination_dir / MANIFEST_FILENAME, payload)
     return payload
 
@@ -2871,7 +2836,7 @@ def _read_attribution_unit_manifest(
         if require_verified and str(validation.get("status") or "") != "VERIFIED":
             return None
         files = dict(payload.get("files") or {})
-        for role in _attribution_roles(payload):
+        for role in _ATTRIBUTION_ROLES:
             item = dict(files.get(role) or {})
             relative = str(item.get("path") or "")
             if not relative:
@@ -2886,30 +2851,9 @@ def _read_attribution_unit_manifest(
             expected_sha = str(item.get("sha256") or "").strip().lower()
             if expected_sha and compute_file_sha256(file_path).lower() != expected_sha:
                 return None
-        if payload.get("observation_kind") == "fixed_candidate_score_permutations_v1":
-            _read_permutation_attribution(payload)
         return payload
     except (OSError, ValueError, json.JSONDecodeError, KeyError, TypeError):
         return None
-
-
-def _attribution_roles(payload):
-    if payload.get("observation_kind") == "fixed_candidate_score_permutations_v1":
-        return ("permutations",)
-    base = ("trades", "equity", "daily_capacity", "selected_buys", "execution")
-    return (*base, "position_decisions") if dict(payload.get("dl_runtime_options") or {}).get("position_exit_model") else base
-
-
-def _read_permutation_attribution(payload):
-    from core.score_permutation_observation import validate_bundle
-    item = payload["files"]["permutations"]
-    path = (PROJECT_ROOT / item["path"]).resolve()
-    path.relative_to(PROJECT_ROOT)
-    with gzip.open(path, "rt", encoding="utf-8") as stream:
-        bundle = json.load(stream)
-    if bundle["seed"] != int(payload["seed"]):
-        raise ValueError("Permutation attribution seed mismatch")
-    return validate_bundle(bundle, root=PROJECT_ROOT)
 
 
 def _mark_attribution_unit_verified(
@@ -3991,7 +3935,7 @@ def _reference_registered_model_attribution(
         }:
             return
         raise RuntimeError("cross-run attribution destination has different or unverified evidence")
-    for role in _attribution_roles(source_manifest):
+    for role in _ATTRIBUTION_ROLES:
         item = dict(source_files.get(role) or {})
         source_file = (PROJECT_ROOT / str(item.get("path") or "")).resolve()
         source_file.relative_to(PROJECT_ROOT)
@@ -4818,8 +4762,6 @@ def _replay_one_unit(job: dict[str, Any]) -> dict[str, Any]:
     start = str(job["comparison_start"]); end = str(job["comparison_end"])
     pair_dir = Path(str(job["pair_dir"])).resolve()
     baseline_dir = None if job.get("replay_active_only") else Path(str(job["baseline_dir"])).resolve()
-    from core.candidate_score_permutation_contract import permutation_spec
-    repetition = permutation_spec(arm.dl_runtime_options)
     if pair_dir.exists(): shutil.rmtree(pair_dir)
     started = time.perf_counter()
     runtime_spec = _arm_runtime_spec(arm)
@@ -4846,8 +4788,6 @@ def _replay_one_unit(job: dict[str, Any]) -> dict[str, Any]:
         # Selection future-target join是post-replay離線診斷；daily-universal profile
         # 會重建完整daily stock-day target universe，不能在每個seed replay重做。
         capture_selection_target_diagnostics=False,
-        repetition_baseline_trades_path=(job.get("baseline_trade_path")
-                                         if repetition is not None else None),
     )
     metrics = dict(payload.get("score_ranking") or {})
     # Active-only deliberately does not publish no_filter_trades.csv under the
@@ -5396,27 +5336,6 @@ def _robustness_summary(
         seed_yearly_frame=seed_yearly_frame,
         run_root=run_root,
     )
-    from core.candidate_score_permutation_contract import permutation_spec
-    from core.score_permutation_observation import evaluate_permutation_control
-    repeated = {}
-    for arm in stochastic:
-        spec = permutation_spec(arm.dl_runtime_options)
-        if spec is None:
-            continue
-        bundles = []
-        for seed in contract["resolved_seeds"]:
-            manifest = (_read_attribution_unit_manifest(
-                run_root, arm_id=arm.arm_id, seed=int(seed),
-                expected_fingerprint=str(contract["fingerprint"])) if run_root is not None else None)
-            if manifest is not None:
-                bundles.append(_read_permutation_attribution(manifest))
-        control_rows = seed_frame[seed_frame["arm_id"] == spec["control_arm_id"]]
-        real = {int(row["seed"]): row for row in control_rows.to_dict("records")}
-        repeated[arm.arm_id] = {"control_arm_id": spec["control_arm_id"], "seeds": bundles,
-                                "gate": evaluate_permutation_control(bundles, real),
-                                "primary": arm.dl_runtime_options.get("preserve_k_r0") is True}
-    if repeated:
-        payload["score_permutations"] = repeated
     return payload
 
 
@@ -5833,8 +5752,6 @@ def run_multi_seed_robustness(
         comparison_start=str(comparison_start), comparison_end=str(comparison_end),
         reusable_observations=registered_scientific_reuse,
     )
-    from services.research.position_model_dependency import ensure_position_models
-    ensure_position_models(root=PROJECT_ROOT, settings=settings, seeds=cfg.resolved_seeds)
     status = dict(status)
     status["comparison_period"] = {"start": comparison_start, "end": comparison_end}
     final_text, final_plan = _render_robustness_execution_plan(

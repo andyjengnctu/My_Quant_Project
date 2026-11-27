@@ -1021,9 +1021,6 @@ def render_strategy_pair_markdown(payload: dict[str, Any]) -> str:
         yearly,
         diagnostics,
     )
-    from core.score_permutation_observation import is_permutation_payload, render_permutation_appendix
-    if is_permutation_payload(payload):
-        report += render_permutation_appendix(payload["score_permutation"])
     return report
 
 def materialize_strategy_pair_readable_report(

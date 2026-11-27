@@ -122,11 +122,25 @@ def validate_breakout_quality_strategy_comparison_contract_case(_base_params):
     composition_results, _ = run_unittest_capability_cases(
         case_id, "rank_score_composition", [RankScoreCompositionTests])
     results.extend(composition_results)
-    from .test_holding_value import HoldingValueTests
-    from .test_holding_policy import HoldingPolicyTests
-    holding_results, _ = run_unittest_capability_cases(case_id, "holding_value", [HoldingValueTests, HoldingPolicyTests])
-    results.extend(holding_results)
     check, check_true = bind_checks(results, "synthetic_breakout_quality", case_id)
+
+    # AI: An archived treatment must never silently fall back to ordinary replay.
+    from core.strategy_compare_policy import get_strategy_comparison_settings
+    from core.strategy_comparison import validate_strategy_comparison_settings
+    settings = get_strategy_comparison_settings()
+    active = next(arm for arm in settings.enabled_arms if arm.dl_enabled)
+    for option in ("candidate_score_permutation", "position_exit_model"):
+        treatment = replace(active, dl_runtime_options={
+            **dict(active.dl_runtime_options or {}), option: {},
+        })
+        try:
+            validate_strategy_comparison_settings(replace(
+                settings, arms={**settings.arms, active.arm_id: treatment},
+            ))
+            rejected = False
+        except ValueError as exc:
+            rejected = "retired runtime options" in str(exc) and option in str(exc)
+        check_true(f"retired_runtime_option_rejected_{option}", rejected)
 
     # Summary needs dormant selector witnesses as well as enabled Replay arms.
     # Exercise the real current dependency closure without loading artifacts.

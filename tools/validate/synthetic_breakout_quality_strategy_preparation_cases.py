@@ -248,11 +248,7 @@ def append_strategy_compare_preparation_contract_checks(
             source = active_settings.dl_sources[active_arm.dl_id]
             if str(source.score_source) != "selection_point_in_time":
                 continue
-            from contextlib import nullcontext
-            with patch.object(execution_module, "run_comparison", return_value={}) as replay, patch(
-                "services.breakout_quality.position_models.holding_model_runtime",
-                side_effect=lambda *args, **kwargs: nullcontext(),
-            ) as holding_runtime:
+            with patch.object(execution_module, "run_comparison", return_value={}) as replay:
                 execution_module.run_strategy_compare_active_arm(
                     settings=active_settings, arm=active_arm,
                     project_root=project_root, params_path="synthetic.json",
@@ -261,7 +257,7 @@ def append_strategy_compare_preparation_contract_checks(
                     param_evaluation_mode="rolling",
                 )
             kwargs = dict(replay.call_args.kwargs)
-            repeat_ok = holding_runtime.call_count == int(bool(active_arm.dl_runtime_options.get("position_exit_model")))
+            replay_once = replay.call_count == 1
             expected_override = resolve_strategy_compare_selection_pit_contract_override(
                 root=project_root, source=source,
             )
@@ -328,7 +324,7 @@ def append_strategy_compare_preparation_contract_checks(
                 loader_ok = loader_ok and resolved.ranking_source["rank_composition_scores"] is composed
                 loader_ok = loader_ok and resolved.ranking_source["ranking_options"] == kwargs["ranking_options"]
                 loader_ok = loader_ok and composition_loader.call_args.kwargs["options"] == kwargs["ranking_options"]
-            recorded.append(paths_ok and loader_ok and repeat_ok)
+            recorded.append(paths_ok and loader_ok and replay_once)
     add_check(
         results, "synthetic_breakout_quality", case_id,
         "current_suite_all_pit_arms_replay_through_matching_ready_audit_contract",

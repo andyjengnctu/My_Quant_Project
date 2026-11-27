@@ -1472,12 +1472,6 @@ def collect_preparation_status(
         comparison_end=comparison_end,
     )
 
-    from services.research.position_model_dependency import append_position_model_actions
-    from config.research import RESEARCH_SINGLE_SEED
-    position_rows = append_position_model_actions(
-        root=root, settings=settings, actions=actions, identities=artifact_identities,
-        seeds=(int(RESEARCH_SINGLE_SEED),) if include_seed_dependencies else (),
-    )
     plan = ResearchArtifactPlan.from_actions(actions)
     overall_status = plan.overall_status
     dataset_generation_identity = None
@@ -1491,7 +1485,6 @@ def collect_preparation_status(
         "dl_sources": dl_rows,
         "expected_r_calibrations": expected_r_rows,
         "expected_excess_r_calibrations": expected_excess_r_rows,
-        "position_models": position_rows,
         "artifact_identities": artifact_identities,
         "research_dataset_generation_identity": dataset_generation_identity,
         "resolved_parameter_paths": resolved_parameter_paths,
