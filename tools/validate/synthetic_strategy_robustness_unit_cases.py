@@ -588,7 +588,7 @@ class StrategyRobustnessUnitCases(unittest.TestCase):
                     baseline_trades_path=baseline,
                 )
 
-    def test_active_only_rejects_changed_same_seed_baseline_bytes(self):
+    def test_active_only_rejects_changed_baseline_and_publishes_verified_metrics(self):
         from services.research import strategy_multi_seed_robustness as robust
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -615,6 +615,34 @@ class StrategyRobustnessUnitCases(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "SHA"):
                     robust._replay_one_unit(job)
             self.assertFalse((root / "result.json").exists())
+
+            # AI: Also exercise the successful publication path after provenance
+            # validation, including ordinary fitted-model prediction metrics.
+            baseline.write_bytes(b"\xef\xbb\xbf\n")
+            (baseline.parent / "strategy_comparison.json").write_text(
+                json.dumps({"no_filter": {"trade_count": 0}}), encoding="utf-8",
+            )
+            metric = robust.MODEL_PREDICTION_METRIC_KEYS[0]
+            job.update({
+                "baseline_trade_sha256": robust.compute_file_sha256(baseline),
+                "model_prediction_metrics": {metric: 0.375, "continuous_target_id": "fixture_target"},
+            })
+
+            def completed_replay(**kwargs):
+                pair = Path(kwargs["output_dir"])
+                pair.mkdir(parents=True)
+                (pair / "score_ranking_trades.csv").write_bytes(b"\xef\xbb\xbf\n")
+                return {"score_ranking": {"trade_count": 0, "return_over_max_drawdown": 1.5}}
+
+            with (patch.object(robust, "PROJECT_ROOT", new=root),
+                  patch.object(robust, "run_strategy_compare_active_arm", side_effect=completed_replay) as replay):
+                result = robust._replay_one_unit(job)
+            replay.assert_called_once()
+            self.assertEqual(result[metric], 0.375)
+            self.assertEqual(result["continuous_target_id"], "fixture_target")
+            self.assertEqual(result["direct_selection_r"], 0.0)
+            self.assertEqual(result["return_over_max_drawdown"], 1.5)
+            self.assertEqual(result, json.loads((root / "result.json").read_text(encoding="utf-8")))
 
     def test_signed_baseline_context_rebuild_is_not_scientific_replay(self):
         from services.research import strategy_multi_seed_robustness as robust

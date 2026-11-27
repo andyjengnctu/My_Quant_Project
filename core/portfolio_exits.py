@@ -440,8 +440,6 @@ def settle_portfolio_positions(
             total_pnl = milli_to_money(total_pnl_milli) if is_training else pos['realized_pnl']
             total_r = calc_ratio_from_milli(pos.get('realized_pnl_milli', 0), pos.get('initial_risk_total_milli', 0))
             t_type = '全倉結算(停損)' if 'STOP' in events else '全倉結算(指標)'
-            if 'STOP' not in events and model_exit:
-                t_type = '全倉結算(模型提前出場)'
             exit_context = stop_context if 'STOP' in events else ind_sell_context
             closed_trades_stats.append(
                 _build_closed_trade_stat(

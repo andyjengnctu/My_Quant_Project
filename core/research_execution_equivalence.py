@@ -1388,7 +1388,7 @@ _REVIEWED_SOURCE_INVENTORIES["oracle_daily_provider"]["current"][
 for _scope in ("portfolio_candidates", "replay_numerics"):
     _REVIEWED_SOURCE_INVENTORIES[_scope]["current"].update({
         "core/portfolio_day_candidates.py": "2052e3d64568b26721483e4b7855b37cc5d8f484b0235a7c7658b97e517a3d37",
-        "core/portfolio_exits.py": "d7b55c7664080921a97ed98d24524f771fffb175828a0d5c0fdd74917fc36b1b",
+        "core/portfolio_exits.py": "0548cc8929b2d4f6f72f12ed35cfd1ac52c815ec774ee6a435e8556dcda9f3c8",
     })
 
 _REVIEWED_SOURCE_INVENTORIES["mintrade_source_graph"]["current"]["filters/breakout_quality/trade_path_label.py"] = ('48417c248b092f97d91a51f7049593db44bbd5243d8804f469c36e36f3941ed6', '48417c248b092f97d91a51f7049593db44bbd5243d8804f469c36e36f3941ed6', '95da26f67620e72a6faac4b22734fb24f0496802b6efaba1c01e65eb50a75b82')

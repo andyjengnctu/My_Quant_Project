@@ -4820,7 +4820,7 @@ def _replay_one_unit(job: dict[str, Any]) -> dict[str, Any]:
     from core.rank_score_composition import rank_score_composition
     # AI: Constituent predictions remain in source artifacts. A frozen runtime
     # blend has no independently fitted Target/rho/epoch-selection experiment.
-    model_prediction = ({} if rank_score_composition(arm.dl_runtime_options) or repetition is not None
+    model_prediction = ({} if rank_score_composition(arm.dl_runtime_options)
                         else dict(job.get("model_prediction_metrics") or {}))
     result = {
         "arm_id": arm.arm_id, "name": arm.name, "seed": int(job["seed"]),
