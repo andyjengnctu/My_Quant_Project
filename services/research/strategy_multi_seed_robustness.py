@@ -2295,6 +2295,10 @@ def _render_robustness_execution_plan(
             contract=robustness_contract, bindings=resolved_bindings,
             reused=registered_scientific_reuse, model_artifacts=model_source_artifacts,
         )
+    from services.research.position_model_dependency import render_position_model_status
+    position_status = render_position_model_status(root=PROJECT_ROOT, settings=settings, seeds=cfg.resolved_seeds)
+    if position_status:
+        rendered_plan += "\n\n" + position_status
     return rendered_plan, {
         "overall_status": overall,
         "blockers": blockers,

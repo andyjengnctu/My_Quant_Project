@@ -29,7 +29,8 @@ def append_position_model_actions(*, root, settings, actions, identities, seeds)
                 has_builder=True, auto_prepare=policy.auto_prepare,
                 reuse_ready_artifacts=policy.reuse_ready_artifacts,
                 rebuild_stale_artifacts=policy.rebuild_stale_artifacts,
-                resume_partial_artifacts=True, resumable=not status["ready"],
+                resume_partial_artifacts=True,
+                resumable=any(Path(status["path"]).parent.glob("fold_*.pt")),
             )
             key = f"position_model:{model_id}:{seed}"
             actions.append(ResearchArtifactAction(
@@ -63,3 +64,13 @@ def position_model_identity(*, root, settings, arm, seed):
     if not result["ready"]:
         return {"status": "NOT_READY", "reason": result["reason"]}
     return {"model_id": MODEL_ID, "seed": int(seed), "manifest_sha256": result["sha256"]}
+
+
+def render_position_model_status(*, root, settings, seeds):
+    lines = []
+    for model_id, config in position_model_bindings(settings).items():
+        states = [(seed, inspect_holding_model(root, seed=int(seed), config=config)) for seed in seeds]
+        reuse = [str(seed) for seed, status in states if status["ready"]]
+        pending = [str(seed) for seed, status in states if not status["ready"]]
+        lines.append(f"持倉模型 {model_id}｜REUSE seeds: {', '.join(reuse) or '無'}｜需訓練 seeds: {', '.join(pending) or '無'}")
+    return "\n".join(lines)

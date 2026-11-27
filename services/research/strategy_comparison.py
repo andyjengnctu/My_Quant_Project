@@ -331,6 +331,8 @@ def render_status(
     display_overall_status = current_status["overall_status"]
 
     artifact_rows = []
+    for key, row in current_status.get("position_models", {}).items():
+        artifact_rows.append((key, row["reason"], row["action"], row["path"]))
     for source_id, row in current_status["parameters"].items():
         artifact_rows.append((f"param:{source_id}", row["status"], row["action"], row["path"]))
         if row.get("identity_manifest_path"):

@@ -426,7 +426,7 @@ RESEARCH_SUMMARY_ROWS = (
                    'rank_model': ('MR-13CG',
                                   'daily_universal_shared_full_d40_safety_hs_conditional_mfe_full_list_ndcg_pairwise')},)},
     # Independent position decisions have no approved holding-policy Oracle.
-    {"display_target": "Formal MinTrade Full-cycle NetPnL",
+    {"display_target": "MinTrade_NetPnL",
      "oracle_contract_status": "CONTRACT_UNRESOLVED",
      "oracle_contract_reason": "HV1 conditions on actual holding state; entry-rank CO Oracle cannot represent a discretionary exit policy.",
      "bindings": tuple({"arm_id": arm_id, "rank_model": (
