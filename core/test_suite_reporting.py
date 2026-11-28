@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from typing import Any, Dict, Iterable, Mapping
+from pathlib import Path
+
+from core.path_utils import project_relative_display_path
 
 TEST_SUITE_STEP_LABELS = {
     "quick_gate": "quick gate",
@@ -18,6 +21,14 @@ def _is_dataset_prepare_required(selected_steps: set[str], dataset_required_step
     if not selected_steps:
         return True
     return any(name in dataset_required_steps for name in selected_steps)
+
+
+def _safe_display_path(value: Any) -> str:
+    # AI: Human summaries use the existing project-relative display contract.
+    text = _safe_display_text(value)
+    if text == "(none)":
+        return text
+    return project_relative_display_path(text, project_root=Path(__file__).resolve().parents[1])
 
 
 def _safe_display_text(value: Any, *, default: str = "(none)") -> str:
@@ -274,8 +285,8 @@ def print_test_suite_human_summary(
         print(f"dataset prep: {dataset_status} | {dataset_detail}")
     retention = result.get("retention", {})
     print(f"bundle 模式 : {result.get('bundle_mode', 'unknown')}")
-    print(f"歷史 bundle : {_safe_display_text(result.get('archived_bundle'))}")
-    print(f"根目錄 bundle : {_safe_display_text(result.get('root_bundle_copy'))}")
+    print(f"歷史 bundle : {_safe_display_path(result.get('archived_bundle'))}")
+    print(f"根目錄 bundle : {_safe_display_path(result.get('root_bundle_copy'))}")
     print(f"bundle 檔數 : {len(result.get('bundle_entries', []))}")
     print(f"retention  : removed={retention.get('removed_count', 0)} | bytes={retention.get('removed_bytes', 0)}")
 
