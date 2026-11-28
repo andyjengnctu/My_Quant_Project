@@ -760,6 +760,7 @@ _OPTIMIZER_STUDY_DB_ERROR_PROBE = r'''
 import contextlib
 import io
 import json
+import os
 import sqlite3
 import sys
 from pathlib import Path
@@ -768,7 +769,7 @@ from apps import research as research_app
 from core.dataset_profiles import get_dataset_generation_namespace
 from core.runtime_utils import run_cli_entrypoint
 from services.optimizer import application as optimizer_app
-from services.optimizer import session_factory as session_factory
+from services.optimizer.execution_settings import OPTIMIZER_OUTPUT_DIR_ENV_VAR
 
 probe_root = Path(sys.argv[1]).resolve()
 rows = {}
@@ -778,8 +779,8 @@ for case_name, state in (
     ("export_only_empty_db", "empty"),
 ):
     output_dir = probe_root / case_name / "ml_optimizer"
-    optimizer_app.OUTPUT_DIR = str(output_dir)
-    session_factory.OUTPUT_DIR = str(output_dir)
+    # AI: Exercise the real per-run storage boundary, including reused imports.
+    os.environ[OPTIMIZER_OUTPUT_DIR_ENV_VAR] = str(output_dir)
     generation_namespace = get_dataset_generation_namespace(
         optimizer_app.PROJECT_ROOT, "reduced"
     )
