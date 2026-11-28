@@ -145,9 +145,13 @@ def validate_research_fit_lifecycle_architecture_case(_base_params):
     )
     from .check_result_utils import run_unittest_capability_cases
     from .test_forward_publication import ForwardAdmissionTests, ForwardPublicationTests
+    from .synthetic_scientific_contract_version_cases import (
+        ScientificVersionCases, SummaryRobustnessEvidenceCases,
+    )
     fit_checks, fit_details = run_unittest_capability_cases(
         case_id, "meta_architecture_contract", (
             RealizedTargetFitIdentityCases, ForwardAdmissionTests, ForwardPublicationTests,
+            ScientificVersionCases, SummaryRobustnessEvidenceCases,
         ),
     )
     results.extend(fit_checks)

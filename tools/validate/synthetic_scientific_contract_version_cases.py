@@ -141,6 +141,83 @@ class ScientificVersionCases(TestCase):
             self.assertEqual(published_fit_contract_version_state(
                 experiment_profile=VERSIONED_PROFILE, publication_dir=path, rolling=True)[0], "BLOCKED")
 
+    def test_rolling_upgrade_rejects_other_fold_conflicts_in_either_order(self):
+        current = _manifest_settings(VERSIONED_PROFILE)
+        legacy = _manifest_settings(VERSIONED_PROFILE, legacy=True)
+        defects = {
+            "future_version": {"experiment_settings": {**current, "fit_contract_version": 3}},
+            "missing_settings": {},
+            "invalid_version": {"experiment_settings": {**current, "fit_contract_version": None}},
+            "wrong_profile": {"experiment_profile": UNAFFECTED_PROFILE, "experiment_settings": current},
+            "same_version_conflict": {"experiment_settings": {**current, "unexpected_setting": True}},
+            "missing_manifest": None,
+            "corrupt_manifest": "{broken",
+        }
+        for defect, defective_record in defects.items():
+            for stale_first in (True, False):
+                with self.subTest(defect=defect, stale_first=stale_first), tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    records = [
+                        {"experiment_profile": VERSIONED_PROFILE, "experiment_settings": legacy},
+                        ({"experiment_profile": VERSIONED_PROFILE, **defective_record}
+                         if isinstance(defective_record, dict) else defective_record),
+                    ]
+                    if not stale_first:
+                        records.reverse()
+                    folds = [{"fold_id": f"fold_{index}"} for index in range(len(records))]
+                    _write_json(root / "selection_point_in_time_manifest.json", {
+                        "experiment_profile": VERSIONED_PROFILE, "folds": folds,
+                    })
+                    for fold, record in zip(folds, records):
+                        path = root / "folds" / fold["fold_id"] / "manifest.json"
+                        if isinstance(record, dict):
+                            _write_json(path, record)
+                        elif isinstance(record, str):
+                            path.parent.mkdir(parents=True, exist_ok=True)
+                            path.write_text(record, encoding="utf-8")
+                    before = {path: path.read_bytes() for path in root.rglob("*.json")}
+                    self.assertEqual(published_fit_contract_version_state(
+                        experiment_profile=VERSIONED_PROFILE, publication_dir=root, rolling=True,
+                    )[0], "BLOCKED")
+                    with self.assertRaisesRegex(RuntimeError, "FIT contract unverified"):
+                        application._version_rebuild_required(
+                            SimpleNamespace(experiment_profile=VERSIONED_PROFILE),
+                            rolling=True, publication_dir=root,
+                        )
+                    self.assertEqual({path: path.read_bytes() for path in root.rglob("*.json")}, before)
+
+    def test_rolling_version_probe_rejects_incomplete_fold_inventory(self):
+        valid = {"fold_id": FOLD}
+        for inventory in (None, "invalid", {"fold_id": FOLD}, [valid, None], [valid, valid]):
+            with self.subTest(inventory=inventory), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                _write_rolling(root, VERSIONED_PROFILE, legacy=True)
+                _write_json(root / "selection_point_in_time_manifest.json", {
+                    "experiment_profile": VERSIONED_PROFILE, "folds": inventory,
+                })
+                self.assertEqual(published_fit_contract_version_state(
+                    experiment_profile=VERSIONED_PROFILE, publication_dir=root, rolling=True,
+                )[0], "BLOCKED")
+
+    def test_complete_mixed_version_inventory_allows_upgrade_in_either_order(self):
+        for stale_first in (True, False):
+            with self.subTest(stale_first=stale_first), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                folds = [{"fold_id": "fold_1"}, {"fold_id": "fold_2"}]
+                _write_json(root / "selection_point_in_time_manifest.json", {
+                    "experiment_profile": VERSIONED_PROFILE, "folds": folds,
+                })
+                for index, fold in enumerate(folds):
+                    _write_json(root / "folds" / fold["fold_id"] / "manifest.json", {
+                        "experiment_profile": VERSIONED_PROFILE,
+                        "experiment_settings": _manifest_settings(
+                            VERSIONED_PROFILE, legacy=(index == 0) == stale_first,
+                        ),
+                    })
+                self.assertEqual(published_fit_contract_version_state(
+                    experiment_profile=VERSIONED_PROFILE, publication_dir=root, rolling=True,
+                )[0], "UPGRADE_REQUIRED")
+
     def test_unreadable_existing_manifest_cannot_look_like_missing_publication(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "rolling"
@@ -316,7 +393,13 @@ class ScientificVersionCases(TestCase):
         evidence = ((target,), ({"target": target, "positive_output": True, "selector": "exact"},),
                     {target: "daily_formal_mintrade_fullcycle_netpnl_per_seed_v1"},
                     {target: {"oracle_romd": 90.84, "win_rate_pct": 99.88}}, {})
+        summary_scope = tuple(
+            group for group in overview.get_research_summary_rows()
+            if "oracle" in group and overview.oracle_comparison_key(group["oracle"]) == target
+        )
+        self.assertTrue(summary_scope)
         with tempfile.TemporaryDirectory() as tmp, \
+             patch.object(overview, "get_research_summary_rows", return_value=summary_scope), \
              patch.object(overview, "load_report_contract_versions", return_value={}), \
              patch.object(overview, "get_formal_oracle_definition",
                           return_value=SimpleNamespace(source=source)), \
@@ -652,8 +735,9 @@ class ScientificVersionCases(TestCase):
                 )[0], "UPGRADE_REQUIRED" if scenario == "producer_failure" else "CURRENT")
                 self.assertEqual(render.call_count, 1 if scenario == "success" else 0)
 
-    def test_forward_version_rebuild_verifies_after_backup_is_removed(self):
+    def test_forward_version_rebuild_verifies_after_producer_commit(self):
         from core.breakout_quality_policy import get_breakout_quality_workflow_settings
+        from services.breakout_quality.forward_publication import ForwardPublication
 
         settings = get_breakout_quality_workflow_settings(experiment_profile=VERSIONED_PROFILE)
         with tempfile.TemporaryDirectory() as tmp:
@@ -668,11 +752,23 @@ class ScientificVersionCases(TestCase):
 
             def fake_command(command, args, **kwargs):
                 self.assertEqual(command, "train-continuous-ranker")
-                self.assertTrue((root / ".model.superseded_fit_backup").exists())
-                _write_json(model_dir / "manifest.json", {
-                    "experiment_profile": VERSIONED_PROFILE, "experiment_settings": _manifest_settings(VERSIONED_PROFILE),
-                })
-                report_dir.mkdir()
+                self.assertNotIn("--reuse-fitted-model", args)
+                # AI: Forward now delegates atomic FIT/evaluation publication to the
+                # trainer owner; Research must not move its live roots aside.
+                self.assertFalse((root / ".model.superseded_fit_backup").exists())
+                before = (model_dir / "manifest.json").read_bytes()
+                with ForwardPublication(model_dir, report_dir) as publication:
+                    (publication.model_stage / "model.pt").write_bytes(b"synthetic v2 FIT")
+                    _write_json(publication.model_stage / "manifest.json", {
+                        "experiment_profile": VERSIONED_PROFILE,
+                        "experiment_settings": _manifest_settings(VERSIONED_PROFILE),
+                    })
+                    publication.commit_fit(checkpoint_validator=lambda path: self.assertEqual(
+                        path.read_bytes(), b"synthetic v2 FIT"))
+                    self.assertEqual((model_dir / "manifest.json").read_bytes(), before)
+                    publication.commit_evaluation(lambda *_args: None)
+                self.assertFalse(publication.model_stage.exists())
+                self.assertFalse(publication.output_stage.exists())
                 return 0
 
             def fake_loader(_settings):

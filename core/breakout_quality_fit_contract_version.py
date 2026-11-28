@@ -66,8 +66,12 @@ def published_fit_contract_version_state(
             return ("BLOCKED", "Rolling manifest unreadable") if top_path.exists() else ("MISSING", "Rolling manifest missing")
         if str(top.get("experiment_profile") or "") != str(experiment_profile):
             return "BLOCKED", "Rolling experiment_profile conflicts with registered FIT owner"
-        fold_ids = [str(row.get("fold_id") or "") for row in top.get("folds", []) if isinstance(row, Mapping)]
-        if not fold_ids or any(
+        folds = top.get("folds")
+        if (not isinstance(folds, list) or not folds
+                or any(not isinstance(row, Mapping) for row in folds)):
+            return "BLOCKED", "Rolling fold inventory is missing/invalid"
+        fold_ids = [str(row.get("fold_id") or "") for row in folds]
+        if len(set(fold_ids)) != len(fold_ids) or any(
             not fid or fid in {".", ".."} or "/" in fid or "\\" in fid
             for fid in fold_ids
         ):
@@ -79,6 +83,7 @@ def published_fit_contract_version_state(
         if record is None:
             return ("BLOCKED", "Forward model manifest unreadable") if model_manifest_path.exists() else ("MISSING", "Forward model manifest missing")
         records = [record]
+    oldest_version = expected
     for record in records:
         if not isinstance(record, dict):
             return "BLOCKED", "FIT manifest missing/corrupt; version cannot be proven"
@@ -96,8 +101,13 @@ def published_fit_contract_version_state(
         if actual > expected:
             return "BLOCKED", f"FIT contract downgrade refused: published=v{actual}, current=v{expected}"
         if actual < expected:
-            return "UPGRADE_REQUIRED", f"FIT contract version changed: published=v{actual}, current=v{expected}"
+            oldest_version = min(oldest_version, actual)
+            continue
         if dict(published) != profile.as_manifest_payload():
             return "BLOCKED", "same FIT version but experiment settings changed without version bump"
+    # AI: A stale fold cannot authorize replacing a later unverified/conflicting FIT.
+    # Validate the whole publication before granting a whole-model rebuild.
+    if oldest_version < expected:
+        return "UPGRADE_REQUIRED", f"FIT contract version changed: published=v{oldest_version}, current=v{expected}"
     return "CURRENT", f"FIT contract v{expected} verified"
 

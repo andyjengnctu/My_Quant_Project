@@ -8249,7 +8249,8 @@ def validate_trading_operational_safety_ssot_contract_case(base_params):
     import unittest
     from .test_trading_snapshot_tasks import SnapshotTests, BackgroundTaskTests
     from .test_trading_publication_boundaries import JournalGateTests, ConsumerPublicationTests, AccountingRefreshTests
-    for test_class in (SnapshotTests, BackgroundTaskTests, JournalGateTests, ConsumerPublicationTests, AccountingRefreshTests):
+    from .test_market_data_dataset_state_concurrency import DatasetStateConcurrencyTests
+    for test_class in (SnapshotTests, BackgroundTaskTests, JournalGateTests, ConsumerPublicationTests, AccountingRefreshTests, DatasetStateConcurrencyTests):
         for method in unittest.defaultTestLoader.getTestCaseNames(test_class):
             test = test_class(method)
             outcome = unittest.TestResult()

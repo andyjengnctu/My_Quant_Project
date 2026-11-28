@@ -103,10 +103,11 @@ project/
 │  ├─ console_report.py               # 全專案簡易console格式SSOT
 │  ├─ path_utils.py                   # 跨平台path判定／project-relative顯示path SSOT
 │  ├─ file_integrity.py               # file／canonical-JSON hash SSOT
-│  ├─ process_lock.py                 # local process-owned SQLite mutex；跨 thread/process 的 non-blocking critical section
+│  ├─ process_lock.py                 # local process-owned SQLite mutex；跨 thread/process，預設不等待，可選有限等待
 │  ├─ serialization_utils.py          # 共用output text／JSON-native serialization SSOT
 │  ├─ runtime_utils.py                # 共用runtime／environment flag helper
-│  ├─ model_paths.py                  # models 目錄與預設參數來源解析
+│  ├─ model_storage_paths.py          # models 儲存根目錄與隔離覆寫；參數工件及來源發現共用
+│  ├─ model_paths.py                  # 預設參數來源與使用者可選工件解析
 │  ├─ output_paths.py                 # outputs/<category> 目錄正規化與建立 helper
 │  ├─ output_retention.py         # outputs retention 規則與唯讀候選計畫
 │  └─ display.py                      # 顯示 façade
@@ -290,3 +291,11 @@ project/
 - `trade_decision_context.py` 持有決策時可知的 numeric input schema／PIT publication 及還原價縮放不變規則，消費 Target 所綁的 canonical same-seed teacher，不產生第二套參數、訊號或交易結果。
 - Architecture descriptor 的 `trade_decision_context` capability 委派通用 data provider；條件缺值採 mask，不改原模型的股票日／Target membership。InceptionTime 的雙線性交互基底讓同日共同政策可以調整不同個股 latent 的排序權重。
 - `FitDataDependencies` 在新 capability 出現時才增加 context contract 與 ordered FIT values 證據；原模型的 source／FIT payload 不變。Scientific identities、狀態與實驗範圍由 Experiment Registry 持有，績效只由 Experiment Log 持有。
+
+### 正式驗證與狀態隔離
+
+Optimizer 的 execution settings 持有每次執行不可變的儲存路徑；main 在獨立 context 內傳遞至工作階段與發布 helper，同程序重跑、threads 或重用 worker 都不沿用前次路徑，也不暫時改寫 module globals。
+
+ML smoke 使用每次執行獨立的 models 與 Optimizer output 目錄，Study DB、參數發布及清理都限制在該工作區。測試固定自己的 Study fixture，不改現行 config；重現性由實際完成試驗的參數／objective 證據判定，有合格候選時另驗證 canonical base 與 manifest。零合格候選只在資料庫證據完整且沒有發布參數時成立。
+
+Trading Market Data 的 dataset state 由同一 owner 序列化讀取、修改與發布；UI freshness 設定與背景同步共用短 thread／process 鎖，下載及 archive validation 不持有此鎖。鎖資料庫採穩定路徑，不能在執行期間移除。

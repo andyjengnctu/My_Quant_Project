@@ -2,10 +2,15 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from functools import wraps
+import os
+import threading
+from weakref import WeakValueDictionary
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from core.file_integrity import atomic_write_json, canonical_json_sha256, load_json_strict
+from core.process_lock import try_process_lock
 from core.market_data_bootstrap_requests import build_registry_fingerprint
 from core.market_data_dataset_registry import get_market_dataset_spec, get_market_dataset_specs
 from core.market_data_dataset_readiness import (
@@ -50,6 +55,46 @@ TRADING_MARKET_DATA_DATASET_STATE_LEGACY_SCHEMA_VERSION = 1
 VALIDATION_STATUS_NOT_EVALUATED = "NOT_EVALUATED"
 VALIDATION_STATUS_UNKNOWN = "UNKNOWN"
 PREVIOUS_MARKET_DATA_DATASET_VALIDATION_CONTRACT_VERSION = 2
+
+
+# AI: A JSON replace is atomic, but a read/modify/replace is not. Scheduler
+# evidence and the UI's freshness preference share this short mutation boundary.
+# Provider requests and archive validation remain outside it.
+_DATASET_STATE_MUTATION_TIMEOUT_SECONDS = 30
+_DATASET_STATE_LOCKS_GUARD = threading.Lock()
+_DATASET_STATE_THREAD_LOCKS = WeakValueDictionary()
+_DATASET_STATE_OWNED_LOCKS = threading.local()
+
+
+def _serialized_dataset_state_mutation(function):
+    @wraps(function)
+    def wrapped(project_root, *args, **kwargs):
+        path = resolve_trading_market_data_v2_dataset_state_path(project_root).with_suffix(".mutation.sqlite3")
+        key = os.path.normcase(os.path.realpath(os.fspath(path)))
+        with _DATASET_STATE_LOCKS_GUARD:
+            mutex = _DATASET_STATE_THREAD_LOCKS.get(key)
+            if mutex is None:
+                mutex = threading.RLock()
+                _DATASET_STATE_THREAD_LOCKS[key] = mutex
+        if not mutex.acquire(timeout=_DATASET_STATE_MUTATION_TIMEOUT_SECONDS):
+            raise RuntimeError("Trading Market Data dataset state 正在更新，請重試")
+        try:
+            owned = getattr(_DATASET_STATE_OWNED_LOCKS, "keys", None)
+            if owned is None:
+                owned = _DATASET_STATE_OWNED_LOCKS.keys = set()
+            if key in owned:
+                return function(project_root, *args, **kwargs)
+            with try_process_lock(path, timeout=_DATASET_STATE_MUTATION_TIMEOUT_SECONDS) as acquired:
+                if not acquired:
+                    raise RuntimeError("Trading Market Data dataset state 正在由其他程序更新，請重試")
+                owned.add(key)
+                try:
+                    return function(project_root, *args, **kwargs)
+                finally:
+                    owned.remove(key)
+        finally:
+            mutex.release()
+    return wrapped
 
 
 def _effective_trading_data_ids(dataset: str) -> tuple[str, ...]:
@@ -216,6 +261,7 @@ def load_market_data_dataset_state(project_root, *, required: bool = False) -> d
     return _validate_state_payload(payload)
 
 
+@_serialized_dataset_state_mutation
 def publish_market_data_dataset_state(project_root, payload: Mapping[str, object]) -> dict[str, Any]:
     state = dict(payload)
     state["schema_version"] = TRADING_MARKET_DATA_DATASET_STATE_SCHEMA_VERSION
@@ -282,6 +328,7 @@ def _prior_ready_validation_can_self_heal(
     )
 
 
+@_serialized_dataset_state_mutation
 def record_market_data_sync_success(
     project_root,
     *,
@@ -554,6 +601,7 @@ def record_market_data_sync_success(
 
 
 
+@_serialized_dataset_state_mutation
 def schedule_market_data_auto_update_outcomes(
     project_root,
     *,
@@ -683,6 +731,7 @@ def schedule_market_data_auto_update_outcomes(
     )
 
 
+@_serialized_dataset_state_mutation
 def refresh_market_data_due_state(
     project_root,
     *,
@@ -758,6 +807,7 @@ def build_market_data_due_plan(
     )
 
 
+@_serialized_dataset_state_mutation
 def set_market_data_scan_freshness_mode(
     project_root,
     *,

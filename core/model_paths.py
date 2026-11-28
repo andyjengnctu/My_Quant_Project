@@ -6,7 +6,7 @@ from core.output_paths import build_output_dir
 from core.strategy_param_artifacts import STRATEGY_PARAM_STATE_FILENAME_BY_NAME
 from core.rolling_oos_params import is_rolling_oos_param_set_file, load_json_file
 
-MODELS_DIR_ENV_VAR = "V16_MODELS_DIR"
+from core.model_storage_paths import MODELS_DIR_ENV_VAR, resolve_models_dir, _resolve_override_path
 RUN_BEST_PARAMS_PATH_ENV_VAR = "V16_RUN_BEST_PARAMS_PATH"
 CANDIDATE_BEST_PARAMS_PATH_ENV_VAR = "V16_CANDIDATE_BEST_PARAMS_PATH"
 CANDIDATE_RETENTION_BEST_PARAMS_PATH_ENV_VAR = "V16_CANDIDATE_RETENTION_BEST_PARAMS_PATH"
@@ -22,23 +22,6 @@ CANONICAL_PARAM_FILENAME_LABELS = {
     "candidate_val_score_best_params.json": "candidate_val_score_best_params.json",
 }
 CANONICAL_PARAM_FILENAME_ORDER = tuple(CANONICAL_PARAM_FILENAME_LABELS.keys())
-
-
-def _resolve_override_path(project_root: str, raw_value: str) -> str:
-    resolved = str(raw_value).strip()
-    if resolved == "":
-        raise ValueError("models 路徑覆寫不可為空白")
-    if os.path.isabs(resolved):
-        return os.path.abspath(resolved)
-    return os.path.abspath(os.path.join(project_root, resolved))
-
-
-def resolve_models_dir(project_root: str, environ: Optional[Mapping[str, str]] = None) -> str:
-    env = os.environ if environ is None else environ
-    override = str(env.get(MODELS_DIR_ENV_VAR, "")).strip()
-    if override != "":
-        return _resolve_override_path(project_root, override)
-    return os.path.abspath(os.path.join(project_root, "models"))
 
 
 def _resolve_named_strategy_param_state_path(

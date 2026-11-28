@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 import sqlite3
 import time
@@ -13,10 +14,17 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-ML_OPTIMIZER_OUTPUT_DIR = PROJECT_ROOT / "outputs" / "ml_optimizer"
-
 from core.active_param_ensemble import is_active_param_ensemble_payload, build_active_param_ensemble_schedule
-from core.model_paths import MODELS_DIR_ENV_VAR, RUN_BEST_PARAMS_PATH_ENV_VAR
+from core.model_paths import (
+    MODELS_DIR_ENV_VAR, RUN_BEST_PARAMS_PATH_ENV_VAR,
+    CANDIDATE_BEST_PARAMS_PATH_ENV_VAR, CANDIDATE_RETENTION_BEST_PARAMS_PATH_ENV_VAR,
+    CANDIDATE_VAL_SCORE_BEST_PARAMS_PATH_ENV_VAR,
+)
+from core.strategy_param_artifacts import (
+    resolve_strategy_param_artifact_path, resolve_strategy_param_manifest_path,
+    compute_strategy_param_file_sha256, compute_strategy_param_scientific_sha256,
+)
+from services.optimizer.execution_settings import OPTIMIZER_OUTPUT_DIR_ENV_VAR
 from core.runtime_utils import PeakProcessMemoryTracker, parse_no_arg_cli, run_cli_entrypoint
 from services.optimizer.study_utils import MIN_QUALIFIED_TRIAL_VALUE, OPTIMIZER_SEED_ENV_VAR
 from tools.local_regression.common import ensure_dir, ensure_reduced_dataset, load_manifest, resolve_run_dir, run_command, write_json, write_text
@@ -44,7 +52,7 @@ def _read_db_metrics(db_path: Path) -> Dict[str, Any]:
     qualified_trial_count = 0
     best_trial_value = None
     try:
-        conn = sqlite3.connect(db_path)
+        conn = sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True)
         try:
             cursor = conn.execute("SELECT COUNT(*) FROM trials")
             trial_count = int(cursor.fetchone()[0])
@@ -140,31 +148,6 @@ def _parse_seed_ensemble_progress_from_stdout(stdout: str) -> Dict[str, Any]:
         "trial_total_per_seed": int(max_trial_total),
     }
 
-def _derive_trial_count_from_ensemble_summary(summary_payload: Dict[str, Any], member_count: int) -> int:
-    if not isinstance(summary_payload, dict):
-        return 0
-    try:
-        trials_per_seed = int(summary_payload.get("trials_per_seed", 0) or 0)
-    except (TypeError, ValueError):
-        trials_per_seed = 0
-    try:
-        seed_count = int(summary_payload.get("seed_count", member_count) or member_count or 0)
-    except (TypeError, ValueError):
-        seed_count = int(member_count or 0)
-    if trials_per_seed <= 0 or seed_count <= 0:
-        return 0
-    return int(trials_per_seed * seed_count)
-
-def _discover_optimizer_db_paths(models_dir: Path, legacy_db_path: Path) -> list[Path]:
-    paths = []
-    if legacy_db_path.exists():
-        paths.append(legacy_db_path)
-    ensemble_dir = models_dir / "seed_ensemble"
-    if ensemble_dir.exists():
-        paths.extend(sorted(path for path in ensemble_dir.glob("*.db") if path.is_file()))
-    return paths
-
-
 def _load_params_payload(params_path: Path) -> Dict[str, Any]:
     params_read_error = ""
     payload: Dict[str, Any] = {}
@@ -232,12 +215,12 @@ def _canonical_payload_digest(payload: Dict[str, Any]) -> str:
     return hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
 
 
-def _collect_optimizer_profile_summaries() -> Dict[str, Path]:
-    if not ML_OPTIMIZER_OUTPUT_DIR.exists():
+def _collect_optimizer_profile_summaries(output_dir: Path) -> Dict[str, Path]:
+    if not output_dir.exists():
         return {}
     return {
         path.name: path
-        for path in ML_OPTIMIZER_OUTPUT_DIR.glob("optimizer_profile_summary_*.json")
+        for path in output_dir.glob("optimizer_profile_summary_*.json")
         if path.is_file()
     }
 
@@ -271,11 +254,90 @@ def _read_latest_profile_metrics(new_paths: Dict[str, Path]) -> Dict[str, Any]:
         }
 
 
+def _read_study_trial_evidence(db_paths: list[Path], expected_trials: int) -> Dict[str, Any]:
+    """AI: Bind reproducibility to actual completed trial inputs and outcomes."""
+    observations = []
+    result = {"study_trial_digest": "", "study_trial_error": ""}
+    try:
+        for path in db_paths:
+            connection = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
+            try:
+                for trial_id, number, state in connection.execute("SELECT trial_id, number, state FROM trials ORDER BY number"):
+                    params = connection.execute("SELECT param_name, param_value, distribution_json FROM trial_params WHERE trial_id=? ORDER BY param_name", (trial_id,)).fetchall()
+                    values = connection.execute("SELECT objective, value, value_type FROM trial_values WHERE trial_id=? ORDER BY objective", (trial_id,)).fetchall()
+                    if state != "COMPLETE" or not params or len(values) != 1:
+                        raise ValueError("Study trial is incomplete or missing parameters/objectives")
+                    objective, value, value_type = values[0]
+                    if objective != 0 or value_type != "FINITE" or not isinstance(value, (int, float)) or not math.isfinite(value):
+                        raise ValueError("Study trial objective is not a finite completed result")
+                    observations.append({"number": number, "state": state, "params": params, "values": values})
+            finally:
+                connection.close()
+        if not observations or len(observations) != expected_trials:
+            raise ValueError("Study completed trial count does not match requested smoke trials")
+        result["study_trial_digest"] = _canonical_payload_digest({"trials": observations})
+    except (OSError, sqlite3.Error, ValueError, TypeError) as exc:
+        result["study_trial_error"] = f"{type(exc).__name__}: {exc}"
+    return result
+
+
+def _inspect_study_artifacts(models_dir: Path, *, required: bool = True) -> Dict[str, Any]:
+    """AI: A smoke run must prove its own published Study artifact and manifest."""
+    storage = models_dir / "strategy_params"
+    params_path = resolve_strategy_param_artifact_path(
+        PROJECT_ROOT, family="full", evaluation_mode="study", policy="base", strategy_params_root=storage,
+    )
+    manifest_path = resolve_strategy_param_manifest_path(
+        PROJECT_ROOT, family="full", evaluation_mode="study", strategy_params_root=storage,
+    )
+    result = {"study_params_path": str(params_path), "study_manifest_path": str(manifest_path),
+              "study_scientific_digest": "", "study_artifact_error": "",
+              "study_artifact_status": "REQUIRED" if required else "NO_QUALIFIED_TRIAL"}
+    if not required:
+        if params_path.exists() or manifest_path.exists():
+            result["study_artifact_error"] = "Unqualified Study unexpectedly published an artifact"
+        return result
+    try:
+        payload = json.loads(params_path.read_text(encoding="utf-8"))
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict) or not isinstance(manifest, dict):
+            raise ValueError("Study artifact and manifest must be JSON objects")
+        if (manifest.get("schema_type") != "canonical_strategy_parameter_artifact_set"
+                or manifest.get("producer") != "optimizer" or manifest.get("family") != "full"
+                or manifest.get("evaluation_mode") != "study"):
+            raise ValueError("Study manifest identity mismatch")
+        record = dict(manifest.get("artifacts") or {}).get("base")
+        if not isinstance(record, dict):
+            raise ValueError("Study manifest missing base artifact")
+        recorded_path = Path(str(record.get("path") or ""))
+        if not recorded_path.is_absolute():
+            recorded_path = PROJECT_ROOT / recorded_path
+        if recorded_path.resolve() != params_path.resolve():
+            raise ValueError("Study manifest base path mismatch")
+        digest = compute_strategy_param_scientific_sha256(params_path)
+        if record.get("sha256") != compute_strategy_param_file_sha256(params_path) or record.get("scientific_sha256") != digest:
+            raise ValueError("Study manifest base hash mismatch")
+        parsed = _load_params_payload(params_path)
+        if parsed["params_read_error"] or parsed["missing_keys"] or parsed["ensemble_member_count"] != 1:
+            raise ValueError("Study base parameter contract invalid")
+        summary = dict(payload.get("summary") or {})
+        if int(summary.get("seed") or 0) != ML_SMOKE_REPRO_SEED:
+            raise ValueError("Study base seed mismatch")
+        result["study_scientific_digest"] = digest
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        result["study_artifact_error"] = f"{type(exc).__name__}: {exc}"
+    return result
+
+
 def _run_single_optimizer_smoke(*, label: str, parent_run_dir: Path, manifest: Dict[str, Any]) -> Dict[str, Any]:
     with PeakProcessMemoryTracker() as tracker:
         started = time.perf_counter()
         label_dir = ensure_dir(parent_run_dir / label)
-        models_dir = ensure_dir(label_dir / "models")
+        # AI: Every invocation owns fresh storage, including repeated diagnostic runs.
+        import tempfile
+        sandbox = Path(tempfile.mkdtemp(prefix="optimizer_", dir=label_dir))
+        models_dir = ensure_dir(sandbox / "models")
+        optimizer_output_dir = ensure_dir(sandbox / "outputs" / "ml_optimizer")
         params_path = models_dir / "run_best_params.json"
         candidate_params_path = models_dir / "candidate_best_params.json"
         candidate_summary_path = models_dir / "candidate_best_summary.json"
@@ -284,16 +346,20 @@ def _run_single_optimizer_smoke(*, label: str, parent_run_dir: Path, manifest: D
         db_path = models_dir / "portfolio_ai_10pos_overnight_reduced.db"
         failures = []
 
-        before_profile_summaries = _collect_optimizer_profile_summaries()
+        before_profile_summaries = _collect_optimizer_profile_summaries(optimizer_output_dir)
 
         outcome = run_command(
-            [sys.executable, "apps/research.py", "optimizer", "--dataset", "reduced"],
+            [sys.executable, "apps/research.py", "optimizer", "--dataset", "reduced", "--model", "study", "--study-scope", "full"],
             timeout=int(manifest["ml_smoke_timeout_sec"]),
             env={
                 "V16_OPTIMIZER_TRIALS": str(int(manifest["ml_smoke_trials"])),
                 OPTIMIZER_SEED_ENV_VAR: str(ML_SMOKE_REPRO_SEED),
                 MODELS_DIR_ENV_VAR: str(models_dir),
                 RUN_BEST_PARAMS_PATH_ENV_VAR: str(params_path),
+                CANDIDATE_BEST_PARAMS_PATH_ENV_VAR: str(candidate_params_path),
+                CANDIDATE_RETENTION_BEST_PARAMS_PATH_ENV_VAR: str(candidate_retention_params_path),
+                CANDIDATE_VAL_SCORE_BEST_PARAMS_PATH_ENV_VAR: str(models_dir / "candidate_val_score_best_params.json"),
+                OPTIMIZER_OUTPUT_DIR_ENV_VAR: str(optimizer_output_dir),
             },
         )
         write_text(
@@ -315,7 +381,7 @@ def _run_single_optimizer_smoke(*, label: str, parent_run_dir: Path, manifest: D
             ),
         )
 
-        after_profile_summaries = _collect_optimizer_profile_summaries()
+        after_profile_summaries = _collect_optimizer_profile_summaries(optimizer_output_dir)
         new_profile_summaries = {
             name: path for name, path in after_profile_summaries.items() if name not in before_profile_summaries
         }
@@ -326,7 +392,9 @@ def _run_single_optimizer_smoke(*, label: str, parent_run_dir: Path, manifest: D
         elif outcome["returncode"] != 0:
             failures.append("optimizer_exit_nonzero")
 
-        db_paths = _discover_optimizer_db_paths(models_dir, db_path)
+        db_paths = sorted((optimizer_output_dir / "study_db").glob("*.db"))
+        if db_paths:
+            db_path = db_paths[0]
         missing_optimizer_db = False
         if not db_paths:
             missing_optimizer_db = True
@@ -343,6 +411,13 @@ def _run_single_optimizer_smoke(*, label: str, parent_run_dir: Path, manifest: D
                 failures.append("optimizer_db_unreadable")
             elif db_metrics["trial_count"] < 1:
                 failures.append("no_trials_recorded")
+
+        study_trials = _read_study_trial_evidence(db_paths, int(manifest["ml_smoke_trials"]))
+        if study_trials["study_trial_error"]:
+            failures.append("invalid_study_trials:" + study_trials["study_trial_error"])
+        study_artifacts = _inspect_study_artifacts(models_dir, required=bool(db_metrics["qualified_trial_count"]))
+        if study_artifacts["study_artifact_error"]:
+            failures.append("invalid_study_artifacts:" + study_artifacts["study_artifact_error"])
 
         candidate_params_info = _load_params_payload(candidate_params_path)
         embedded_candidate_summary = {}
@@ -370,39 +445,7 @@ def _run_single_optimizer_smoke(*, label: str, parent_run_dir: Path, manifest: D
 
         seed_ensemble_progress = _parse_seed_ensemble_progress_from_stdout(outcome.get("stdout", ""))
         if missing_optimizer_db:
-            derived_trial_count = _derive_trial_count_from_ensemble_summary(
-                candidate_summary_payload,
-                int(candidate_params_info.get("ensemble_member_count", 0) or 0),
-            )
-            if bool(candidate_params_info.get("is_active_param_ensemble", False)) and derived_trial_count > 0:
-                db_metrics["trial_count"] = int(derived_trial_count)
-                db_metrics["qualified_trial_count"] = int(candidate_params_info.get("ensemble_member_count", 0) or 0)
-                db_metrics["best_trial_value"] = None
-                db_metrics["trial_count_source"] = "active_param_ensemble_summary"
-            elif bool(seed_ensemble_progress.get("detected", False)) and outcome["returncode"] == 0:
-                seed_count = int(seed_ensemble_progress.get("seed_count", 0) or 0)
-                trial_total_per_seed = int(seed_ensemble_progress.get("trial_total_per_seed", 0) or 0)
-                if seed_count <= 0:
-                    seed_count = 1
-                if trial_total_per_seed <= 0:
-                    trial_total_per_seed = int(manifest.get("ml_smoke_trials", 0) or 0)
-                db_metrics["trial_count"] = int(max(0, seed_count) * max(0, trial_total_per_seed))
-                db_metrics["qualified_trial_count"] = 0
-                db_metrics["best_trial_value"] = None
-                db_metrics["trial_count_source"] = "seed_ensemble_in_memory_progress"
-                db_metrics["db_count"] = 0
-            elif (
-                outcome["returncode"] == 0
-                and not profile_metrics.get("optimizer_profile_read_error")
-                and int(profile_metrics.get("optimizer_profile_trial_count", 0) or 0) > 0
-            ):
-                db_metrics["trial_count"] = int(profile_metrics["optimizer_profile_trial_count"])
-                db_metrics["qualified_trial_count"] = 1 if candidate_best_available else 0
-                db_metrics["best_trial_value"] = None
-                db_metrics["trial_count_source"] = "optimizer_profile_summary"
-                db_metrics["db_count"] = 0
-            else:
-                failures.append("missing_optimizer_db")
+            failures.append("missing_optimizer_db")
 
         if not params_path.exists():
             if run_best_params_required:
@@ -415,6 +458,8 @@ def _run_single_optimizer_smoke(*, label: str, parent_run_dir: Path, manifest: D
         payload_digest = _canonical_payload_digest(params_info["payload"]) if params_info["payload"] else ""
         candidate_payload_digest = _canonical_payload_digest(candidate_params_info["payload"]) if candidate_params_info["payload"] else ""
         result = {
+            **study_artifacts,
+            **study_trials,
             "label": label,
             "status": "PASS" if not failures else "FAIL",
             "db_path": str(db_path),
@@ -489,7 +534,24 @@ def _build_repro_summary(first_run: Dict[str, Any], second_run: Dict[str, Any]) 
         "candidate_best_available_match": first_run.get("candidate_best_available", False) == second_run.get("candidate_best_available", False),
         "optimizer_profile_trial_count_match": first_run["optimizer_profile_trial_count"] == second_run["optimizer_profile_trial_count"],
     }
-    if random_seed_ensemble_mode:
+    if "study_scientific_digest" in first_run or "study_scientific_digest" in second_run:
+        first_study = first_run.get("study_scientific_digest", "")
+        second_study = second_run.get("study_scientific_digest", "")
+        comparisons.update({
+            "both_runs_pass": first_run["status"] == second_run["status"] == "PASS",
+            "both_runs_record_trials": first_run["db_trial_count"] >= 1 and second_run["db_trial_count"] >= 1,
+            "study_trial_digest_match": bool(first_run.get("study_trial_digest")) and first_run.get("study_trial_digest") == second_run.get("study_trial_digest"),
+            "study_artifact_status_match": first_run.get("study_artifact_status") == second_run.get("study_artifact_status"),
+            "study_scientific_digest_match": (
+                bool(first_study) and first_study == second_study
+                if first_run.get("study_artifact_status") != "NO_QUALIFIED_TRIAL"
+                else not first_study and not second_study and first_run["qualified_trial_count"] == second_run["qualified_trial_count"] == 0
+            ),
+            "qualified_trial_count_match": first_run["qualified_trial_count"] == second_run["qualified_trial_count"],
+            "best_trial_value_match": first_run["best_trial_value"] == second_run["best_trial_value"],
+        })
+        all_match = all(comparisons.values())
+    elif random_seed_ensemble_mode:
         comparisons.update({
             "random_seed_ensemble_mode": True,
             "both_runs_pass": first_run["status"] == second_run["status"] == "PASS",
@@ -506,18 +568,21 @@ def _build_repro_summary(first_run: Dict[str, Any], second_run: Dict[str, Any]) 
             "qualified_trial_count_match": first_run["qualified_trial_count"] == second_run["qualified_trial_count"],
             "best_trial_value_match": first_run["best_trial_value"] == second_run["best_trial_value"],
             "candidate_best_params_digest_match": first_run.get("candidate_best_params_digest", "") == second_run.get("candidate_best_params_digest", ""),
-            "run_best_params_digest_match": first_digest == second_digest,
+            "run_best_params_digest_match": bool(first_digest) and first_digest == second_digest,
         })
         all_match = all(comparisons.values()) and first_run["status"] == second_run["status"] == "PASS"
     return {
         "enabled": True,
         "run_count": ML_SMOKE_REPRO_RUN_COUNT,
         "seed": ML_SMOKE_REPRO_SEED,
-        "mode": "random_seed_ensemble_contract" if random_seed_ensemble_mode else "deterministic_single_seed_repro",
+        "mode": "deterministic_study_repro" if "study_scientific_digest" in first_run else ("random_seed_ensemble_contract" if random_seed_ensemble_mode else "deterministic_single_seed_repro"),
         "all_match": all_match,
         "comparisons": comparisons,
         "runs": [
             {
+                "study_scientific_digest": first_run.get("study_scientific_digest", ""),
+                "study_trial_digest": first_run.get("study_trial_digest", ""),
+                "study_artifact_status": first_run.get("study_artifact_status", ""),
                 "label": first_run["label"],
                 "status": first_run["status"],
                 "db_count": first_run.get("db_count", 0),
@@ -535,6 +600,9 @@ def _build_repro_summary(first_run: Dict[str, Any], second_run: Dict[str, Any]) 
                 "duration_sec": first_run.get("duration_sec", 0.0),
             },
             {
+                "study_scientific_digest": second_run.get("study_scientific_digest", ""),
+                "study_trial_digest": second_run.get("study_trial_digest", ""),
+                "study_artifact_status": second_run.get("study_artifact_status", ""),
                 "label": second_run["label"],
                 "status": second_run["status"],
                 "db_count": second_run.get("db_count", 0),
@@ -579,6 +647,13 @@ def main(argv=None) -> int:
 
         summary = {
             "status": "PASS" if not failures else "FAIL",
+            "study_params_path": first_run.get("study_params_path", ""),
+            "study_manifest_path": first_run.get("study_manifest_path", ""),
+            "study_scientific_digest": first_run.get("study_scientific_digest", ""),
+            "study_artifact_error": first_run.get("study_artifact_error", ""),
+            "study_trial_digest": first_run.get("study_trial_digest", ""),
+            "study_trial_error": first_run.get("study_trial_error", ""),
+            "study_artifact_status": first_run.get("study_artifact_status", ""),
             "dataset": manifest["dataset"],
             "dataset_info": dataset_info,
             "db_path": first_run["db_path"],

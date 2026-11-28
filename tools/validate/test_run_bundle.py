@@ -201,6 +201,70 @@ class RunBundleTests(unittest.TestCase):
                     package_zip.finalize_frozen_package(snapshot, attestation=certificate, evidence_files=records)
                 self.assertEqual(self.package.read_bytes(), self.original_zip)
 
+    def formal_child_summary(self, payload, **outcome_overrides):
+        from tools.local_regression import run_all
+        summary_path = self.root / "child_summary.json"
+        summary_path.write_text(json.dumps(payload), encoding="utf-8")
+        outcome = {"returncode": 0, "duration_sec": 0.01, "timed_out": False, **outcome_overrides}
+        return run_all._build_script_summary(
+            run_dir=self.root, name="probe", summary_name=summary_path.name, run_result=outcome,
+        )
+
+    def test_formal_pass_label_cannot_hide_failure_evidence(self):
+        from tools.local_regression import run_all
+        contradictions = (
+            ("fail_count", 1), ("failed_count", "1"), ("failure_count", 1),
+            ("blocked_count", 1), ("fail_count", -1), ("fail_count", 0.5),
+            ("fail_count", "unknown"), ("fail_count", True),
+            ("failures", ["assertion failed"]), ("failures", "assertion failed"),
+            ("failures", 1), ("failed_steps", ["replay"]),
+            ("failed_packages", ["numpy"]), ("blocked", ["missing evidence"]),
+            ("error_type", "RuntimeError"), ("error_message", "failed replay"),
+            ("runtime_error", "failed replay"), ("summary_write_error", "disk full"),
+        )
+        for key, value in contradictions:
+            with self.subTest(key=key, value=value):
+                payload = {"status": "PASS", key: value}
+                result = self.formal_child_summary(payload)
+                self.assertEqual(result["reported_status"], "PASS")
+                self.assertEqual(result["returncode"], 0)
+                self.assertEqual(result["status"], "FAIL")
+                self.assertTrue(any(reason.startswith(key + "=") for reason in result["failure_reasons"]))
+                self.assertEqual(result["failure_reasons"], run_all._payload_failure_reasons(payload))
+        result = self.formal_child_summary({"status": "PASS", "error_message": " ", "runtime_error": "crash"})
+        self.assertEqual(result["status"], "FAIL")
+
+    def test_formal_pass_preserves_empty_zero_and_advisory_diagnostics(self):
+        from tools.local_regression import run_all
+        for empty_failures in (None, [], "", 0):
+            with self.subTest(failures=empty_failures):
+                payload = {
+                    "status": "PASS", "failures": empty_failures, "failed_steps": None,
+                    "failed_packages": [], "blocked": [], "fail_count": 0,
+                    "failed_count": "0", "failure_count": None, "blocked_count": 0,
+                    "error_type": None, "error_message": "", "runtime_error": " ",
+                    "summary_write_error": None, "skip_count": 3, "warn_count": 1,
+                    "warnings": ["shared host timing"],
+                    "results": [{"status": "WARN"}, {"status": "SKIP"}],
+                }
+                self.assertEqual(run_all._payload_failure_reasons(payload), [])
+                self.assertEqual(self.formal_child_summary(payload)["status"], "PASS")
+        self.assertEqual(self.formal_child_summary({"status": "PASS"})["status"], "PASS")
+        self.assertEqual(self.formal_child_summary({"status": "PASS", "fail_count": " "})["status"], "PASS")
+
+    def test_formal_required_step_still_rejects_incomplete_or_failed_process(self):
+        for status in ("FAIL", "BLOCKED", "SKIP", "WARN", ""):
+            with self.subTest(status=status):
+                result = self.formal_child_summary({"status": status})
+                self.assertEqual(result["status"], "FAIL")
+        for override in ({"returncode": 1}, {"timed_out": True}, {"error_type": "OSError"}):
+            with self.subTest(override=override):
+                result = self.formal_child_summary({"status": "PASS", "fail_count": 0}, **override)
+                self.assertEqual(result["status"], "FAIL")
+        for payload in (None, [], ["PASS"], "PASS"):
+            with self.subTest(payload=payload):
+                self.assertEqual(self.formal_child_summary(payload)["status"], "FAIL")
+
     def orchestration_tree(self):
         tree = ast.parse(Path(run_bundle.__file__).read_text(encoding="utf-8"))
         main = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "main")

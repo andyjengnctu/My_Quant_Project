@@ -7,8 +7,8 @@ import sqlite3
 
 
 @contextmanager
-def try_process_lock(path: str | Path):
-    """Yield whether this caller exclusively owns the lock until context exit.
+def try_process_lock(path: str | Path, *, timeout: float = 0):
+    """Yield whether this caller owns the lock after at most ``timeout`` seconds.
 
     AI: Keep the lock database at a stable path. Never unlink it: a second inode
     would let two processes own different locks with the same filename. SQLite
@@ -18,7 +18,7 @@ def try_process_lock(path: str | Path):
 
     target = Path(path).resolve()
     target.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(str(target), timeout=0, isolation_level=None)
+    connection = sqlite3.connect(str(target), timeout=timeout, isolation_level=None)
     acquired = False
     try:
         try:

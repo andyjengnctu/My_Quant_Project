@@ -83,16 +83,6 @@ def _write_isolated_formal_primary_param_source(run_dir: Path) -> Path:
     return param_path
 
 
-def _format_optional_int_detail(key: str, raw_value: Any) -> str:
-    try:
-        return f"{key}={int(raw_value)}"
-    except (TypeError, ValueError) as exc:
-        raw_preview = repr(raw_value)
-        if len(raw_preview) > 80:
-            raw_preview = raw_preview[:77] + "..."
-        return f"{key}=INVALID({type(exc).__name__}:{raw_preview})"
-
-
 def _normalize_selected_steps(selected_steps: Optional[List[str]]) -> List[str]:
     if not selected_steps:
         return list(STEP_NAMES)
@@ -232,6 +222,8 @@ def _safe_read_json_with_error(path: Path) -> Dict[str, Any]:
 
 
 def _payload_failure_reasons(payload: Dict[str, Any]) -> List[str]:
+    if not isinstance(payload, dict):
+        return [f"invalid_summary_type={type(payload).__name__}"]
     if not payload:
         return ["missing_summary_file"]
 
@@ -243,18 +235,41 @@ def _payload_failure_reasons(payload: Dict[str, Any]) -> List[str]:
     if reported_status != "PASS":
         reasons.append(f"reported_status={reported_status or 'missing'}")
 
-    error_type = str(payload.get("error_type", "") or "").strip()
-    if error_type:
-        reasons.append(f"error_type={error_type}")
-    error_message = str(payload.get("error_message", "") or payload.get("runtime_error", "") or "").strip()
-    if error_message:
-        reasons.append(f"error_message={error_message}")
-    failed_packages = [str(item).strip() for item in payload.get("failed_packages", []) if str(item).strip()]
-    if failed_packages:
-        reasons.append("failed_packages=" + ",".join(failed_packages))
-    summary_write_error = str(payload.get("summary_write_error", "") or "").strip()
-    if summary_write_error:
-        reasons.append(f"summary_write_error={summary_write_error}")
+    # AI: A producer's PASS label cannot override its own failure evidence.
+    # Optional empty fields remain legal; WARN/SKIP diagnostics are not failures.
+    for key in ("error_type", "error_message", "runtime_error", "summary_write_error"):
+        detail = str(payload.get(key) or "").strip()
+        if detail:
+            reasons.append(f"{key}={detail}")
+    for key in ("failed_packages", "failed_steps", "failures", "blocked"):
+        value = payload.get(key)
+        if value is None:
+            continue
+        if isinstance(value, (list, tuple)):
+            detail = ",".join(str(item).strip() for item in value if item is not None and str(item).strip())
+        elif isinstance(value, str):
+            detail = value.strip()
+        elif key == "failures" and isinstance(value, (int, float)) and not isinstance(value, bool):
+            detail = str(value) if value != 0 else ""
+        else:
+            detail = f"INVALID({type(value).__name__}:{value!r})"
+        if detail:
+            reasons.append(f"{key}={detail}")
+    for key in ("fail_count", "failed_count", "failure_count", "blocked_count"):
+        value = payload.get(key)
+        if value is None or (isinstance(value, str) and not value.strip()):
+            continue
+        try:
+            if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+                raise TypeError("failure count must be an integer")
+            count = int(value)
+            if isinstance(value, float) and value != count:
+                raise ValueError("failure count must be an integer")
+        except (TypeError, ValueError, OverflowError) as exc:
+            reasons.append(f"{key}=INVALID({type(exc).__name__}:{value!r})")
+            continue
+        if count != 0:
+            reasons.append(f"{key}={count}")
     return reasons
 
 
@@ -742,40 +757,21 @@ def _build_script_summary(*, run_dir: Path, name: str, summary_name: str, run_re
     except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
         summary_payload = {}
         summary_read_error = f"{type(exc).__name__}: {exc}"
-    reported_status = summary_payload.get("status", "") if summary_payload else ""
-    effective_status = "PASS"
+    reported_status = summary_payload.get("status", "") if isinstance(summary_payload, dict) else ""
     failure_reasons: List[str] = []
     if not summary_exists:
-        effective_status = "FAIL"
         failure_reasons.append("missing_summary_file")
-    if summary_read_error:
-        effective_status = "FAIL"
+    elif summary_read_error:
         failure_reasons.append("summary_unreadable")
+    else:
+        failure_reasons.extend(_payload_failure_reasons(summary_payload))
     if run_result["timed_out"]:
-        effective_status = "FAIL"
         failure_reasons.append("timed_out")
     if run_result["returncode"] != 0:
-        effective_status = "FAIL"
         failure_reasons.append(f"returncode={run_result['returncode']}")
-    if reported_status != "PASS":
-        effective_status = "FAIL"
-        failure_reasons.append(f"reported_status={reported_status or 'missing'}")
-        failed_steps = [str(item).strip() for item in summary_payload.get("failed_steps", []) if str(item).strip()]
-        if failed_steps:
-            failure_reasons.append("failed_steps=" + ",".join(failed_steps))
-        failures = [str(item).strip() for item in summary_payload.get("failures", []) if str(item).strip()]
-        if failures:
-            failure_reasons.append("summary_failures=" + ",".join(failures))
-        runtime_error = str(summary_payload.get("runtime_error", "") or summary_payload.get("error_message", "") or "").strip()
-        if runtime_error:
-            failure_reasons.append(f"summary_error={runtime_error}")
-        if "fail_count" in summary_payload:
-            failure_reasons.append(_format_optional_int_detail("fail_count", summary_payload.get("fail_count", 0)))
-        if "failed_count" in summary_payload:
-            failure_reasons.append(_format_optional_int_detail("failed_count", summary_payload.get("failed_count", 0)))
     if run_result.get("error_type"):
-        effective_status = "FAIL"
         failure_reasons.append(f"launch_error={run_result['error_type']}")
+    effective_status = "FAIL" if failure_reasons else "PASS"
     return {
         "name": name,
         "status": effective_status,

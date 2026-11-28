@@ -23,6 +23,7 @@ from core.active_param_ensemble import (
     resolve_active_param_ensemble_mode,
 )
 from core.file_integrity import canonical_json_sha256, load_json_strict
+from core.model_storage_paths import resolve_models_dir
 from core.raw_universe_contract import resolve_raw_universe_required_min_rows
 from core.rolling_oos_params import build_active_param_schedule, is_rolling_oos_param_set_payload
 from core.seed_ensemble_policy import normalize_seed_ensemble_members
@@ -194,7 +195,7 @@ def _canonical_dir(
     root = (
         Path(strategy_params_root).resolve()
         if strategy_params_root is not None
-        else Path(project_root).resolve() / STRATEGY_PARAM_ROOT_RELATIVE
+        else Path(resolve_models_dir(str(project_root))) / STRATEGY_PARAM_ROOT_RELATIVE.name
     )
     return root / STRATEGY_PARAM_CANONICAL_DIRNAME
 
@@ -335,8 +336,8 @@ def resolve_strategy_param_benchmark_dir(
     normalize_strategy_param_family(family)
     normalize_strategy_param_evaluation_mode(evaluation_mode)
     return (
-        Path(project_root).resolve()
-        / STRATEGY_PARAM_ROOT_RELATIVE
+        Path(resolve_models_dir(str(project_root)))
+        / STRATEGY_PARAM_ROOT_RELATIVE.name
         / STRATEGY_PARAM_BENCHMARK_DIRNAME
         / normalize_strategy_param_benchmark_id(benchmark_id)
     )

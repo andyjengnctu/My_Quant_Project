@@ -18,6 +18,8 @@ from filters.breakout_quality import runtime as _breakout_quality_runtime_adapte
 from services.optimizer.execution_settings import (
     OptimizerExecutionSettings,
     isolate_optimizer_process_environment,
+    resolve_optimizer_output_dir, OptimizerStoragePaths,
+    current_optimizer_storage_paths, optimizer_storage_scope,
 )
 
 from core.dataset_profiles import (
@@ -124,7 +126,7 @@ def _print_profile_summary_compatible(profile_recorder, *, emit_console: bool):
         return
     print_summary()
 
-OUTPUT_DIR = build_output_dir(PROJECT_ROOT, "ml_optimizer")
+OUTPUT_DIR = resolve_optimizer_output_dir(PROJECT_ROOT)
 MODELS_DIR = resolve_models_dir(PROJECT_ROOT)
 RUN_BEST_PARAMS_PATH = resolve_run_best_params_path(PROJECT_ROOT)
 CANDIDATE_BEST_PARAMS_PATH = resolve_candidate_best_params_path(PROJECT_ROOT)
@@ -149,10 +151,31 @@ COLORS = {
 }
 
 
+
+def _optimizer_storage_paths() -> OptimizerStoragePaths:
+    scoped = current_optimizer_storage_paths()
+    if scoped is not None:
+        return scoped
+    # AI: Standalone helper callers retain their established explicit overrides;
+    # an application run uses its immutable context without changing globals.
+    return OptimizerStoragePaths(
+        output_dir=OUTPUT_DIR,
+        models_dir=MODELS_DIR,
+        run_best_params_path=RUN_BEST_PARAMS_PATH,
+        candidate_best_params_path=CANDIDATE_BEST_PARAMS_PATH,
+        candidate_best_summary_path=CANDIDATE_BEST_SUMMARY_PATH,
+        candidate_retention_best_params_path=CANDIDATE_RETENTION_BEST_PARAMS_PATH,
+        candidate_retention_best_summary_path=CANDIDATE_RETENTION_BEST_SUMMARY_PATH,
+        candidate_val_score_best_params_path=CANDIDATE_VAL_SCORE_BEST_PARAMS_PATH,
+        candidate_val_score_best_summary_path=CANDIDATE_VAL_SCORE_BEST_SUMMARY_PATH,
+        run_best_summary_path=RUN_BEST_SUMMARY_PATH,
+    )
+
+
 def ensure_runtime_dirs():
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    os.makedirs(MODELS_DIR, exist_ok=True)
-    os.makedirs(os.path.dirname(CANDIDATE_BEST_PARAMS_PATH), exist_ok=True)
+    os.makedirs(_optimizer_storage_paths().output_dir, exist_ok=True)
+    os.makedirs(_optimizer_storage_paths().models_dir, exist_ok=True)
+    os.makedirs(os.path.dirname(_optimizer_storage_paths().candidate_best_params_path), exist_ok=True)
 
 
 def _write_json_file(path: str, payload: dict):
@@ -419,14 +442,14 @@ def _summary_is_trade_mode(summary: dict | None) -> bool:
 
 
 def _load_candidate_params_payload_for_promote():
-    candidate_params = _load_json_file_or_none(CANDIDATE_BEST_PARAMS_PATH)
+    candidate_params = _load_json_file_or_none(_optimizer_storage_paths().candidate_best_params_path)
     if candidate_params is None:
-        print(f"{C_RED}❌ 找不到 candidate_best 參數檔: {_project_relative_path(CANDIDATE_BEST_PARAMS_PATH)}{C_RESET}", file=sys.stderr)
+        print(f"{C_RED}❌ 找不到 candidate_best 參數檔: {_project_relative_path(_optimizer_storage_paths().candidate_best_params_path)}{C_RESET}", file=sys.stderr)
         return None
     if is_active_param_ensemble_payload(candidate_params):
         return candidate_params
     from core.params_io import load_params_from_json, params_to_json_dict
-    return params_to_json_dict(load_params_from_json(CANDIDATE_BEST_PARAMS_PATH))
+    return params_to_json_dict(load_params_from_json(_optimizer_storage_paths().candidate_best_params_path))
 
 
 def _first_params_from_payload(payload: dict | None) -> dict:
@@ -533,14 +556,14 @@ def _promote_candidate_to_run_best(*, session=None, emit_output: bool = True):
     candidate_params = _load_candidate_params_payload_for_promote()
     if candidate_params is None:
         return 1
-    candidate_summary = _load_params_summary_or_legacy_sidecar(CANDIDATE_BEST_PARAMS_PATH, CANDIDATE_BEST_SUMMARY_PATH)
+    candidate_summary = _load_params_summary_or_legacy_sidecar(_optimizer_storage_paths().candidate_best_params_path, _optimizer_storage_paths().candidate_best_summary_path)
     if candidate_summary is None:
-        print(f"{C_RED}❌ 找不到 candidate_best summary: {_project_relative_path(CANDIDATE_BEST_PARAMS_PATH)}{C_RESET}", file=sys.stderr)
+        print(f"{C_RED}❌ 找不到 candidate_best summary: {_project_relative_path(_optimizer_storage_paths().candidate_best_params_path)}{C_RESET}", file=sys.stderr)
         return 1
     selector = _resolve_trade_run_best_selector()
     candidate_selector_score = _selector_score_from_summary(candidate_summary, selector)
-    run_best_payload = _load_json_file_or_none(RUN_BEST_PARAMS_PATH)
-    run_best_summary = _load_params_summary_or_legacy_sidecar(RUN_BEST_PARAMS_PATH, RUN_BEST_SUMMARY_PATH)
+    run_best_payload = _load_json_file_or_none(_optimizer_storage_paths().run_best_params_path)
+    run_best_summary = _load_params_summary_or_legacy_sidecar(_optimizer_storage_paths().run_best_params_path, _optimizer_storage_paths().run_best_summary_path)
     if not _summary_is_trade_mode(candidate_summary):
         result = _build_promote_result_payload(
             status="candidate_only",
@@ -578,10 +601,10 @@ def _promote_candidate_to_run_best(*, session=None, emit_output: bool = True):
         )
         promoted_payload = dict(candidate_params) if isinstance(candidate_params, dict) else {}
         promoted_payload["summary"] = promoted_summary
-        _write_json_file(RUN_BEST_PARAMS_PATH, promoted_payload)
+        _write_json_file(_optimizer_storage_paths().run_best_params_path, promoted_payload)
         _refresh_trade_state_manifest()
         if bool(emit_output):
-            _print_optimizer_output_files("✅ run_best 已進版", [("run_best", RUN_BEST_PARAMS_PATH)])
+            _print_optimizer_output_files("✅ run_best 已進版", [("run_best", _optimizer_storage_paths().run_best_params_path)])
         return 0
 
     if not _summaries_have_compatible_policy(candidate_summary=candidate_summary, run_best_summary=run_best_summary):
@@ -602,10 +625,10 @@ def _promote_candidate_to_run_best(*, session=None, emit_output: bool = True):
         )
         promoted_payload = dict(candidate_params) if isinstance(candidate_params, dict) else {}
         promoted_payload["summary"] = promoted_summary
-        _write_json_file(RUN_BEST_PARAMS_PATH, promoted_payload)
+        _write_json_file(_optimizer_storage_paths().run_best_params_path, promoted_payload)
         _refresh_trade_state_manifest()
         if bool(emit_output):
-            _print_optimizer_output_files("✅ run_best 已進版", [("run_best", RUN_BEST_PARAMS_PATH)])
+            _print_optimizer_output_files("✅ run_best 已進版", [("run_best", _optimizer_storage_paths().run_best_params_path)])
         return 0
 
     score_delta = float(candidate_replay_score) - float(run_best_replay_score)
@@ -628,15 +651,15 @@ def _promote_candidate_to_run_best(*, session=None, emit_output: bool = True):
     )
     promoted_payload = dict(candidate_params) if isinstance(candidate_params, dict) else {}
     promoted_payload["summary"] = promoted_summary
-    _write_json_file(RUN_BEST_PARAMS_PATH, promoted_payload)
+    _write_json_file(_optimizer_storage_paths().run_best_params_path, promoted_payload)
     _refresh_trade_state_manifest()
     try:
-        if os.path.exists(RUN_BEST_SUMMARY_PATH):
-            os.remove(RUN_BEST_SUMMARY_PATH)
+        if os.path.exists(_optimizer_storage_paths().run_best_summary_path):
+            os.remove(_optimizer_storage_paths().run_best_summary_path)
     except OSError as exc:
-        print(f"{C_YELLOW}⚠️ 無法移除舊 run_best summary sidecar：{_project_relative_path(RUN_BEST_SUMMARY_PATH)}｜{type(exc).__name__}: {exc}{C_RESET}")
+        print(f"{C_YELLOW}⚠️ 無法移除舊 run_best summary sidecar：{_project_relative_path(_optimizer_storage_paths().run_best_summary_path)}｜{type(exc).__name__}: {exc}{C_RESET}")
     if bool(emit_output):
-        _print_optimizer_output_files("✅ run_best 已進版", [("run_best", RUN_BEST_PARAMS_PATH)])
+        _print_optimizer_output_files("✅ run_best 已進版", [("run_best", _optimizer_storage_paths().run_best_params_path)])
     return 0
 
 
@@ -772,7 +795,7 @@ def _export_selected_candidate_artifacts(
         selection_rule=selection_rule,
         compare_only=compare_only,
     )
-    if os.path.abspath(summary_path) == os.path.abspath(CANDIDATE_BEST_SUMMARY_PATH):
+    if os.path.abspath(summary_path) == os.path.abspath(_optimizer_storage_paths().candidate_best_summary_path):
         _embed_summary_in_params_file(params_path, candidate_summary, remove_summary_sidecar=summary_path)
     else:
         _embed_summary_in_params_file(params_path, candidate_summary)
@@ -1264,7 +1287,7 @@ def _run_nonrolling_seed_ensemble_member_process_task(task: dict) -> dict | None
         study = None
         member_session = build_optimizer_session(
             walk_forward_policy=walk_forward_policy,
-            output_dir=str(task.get("output_dir") or OUTPUT_DIR),
+            output_dir=str(task.get("output_dir") or _optimizer_storage_paths().output_dir),
             execution_settings=(task.get("execution_settings")
                                 or OptimizerExecutionSettings.from_environ(task.get("environ"))),
         )
@@ -1614,7 +1637,7 @@ def _write_static_seed_ensemble_policy_paramsets(
 
     first_class_policy_names = get_optimizer_paramset_policy_names(model_mode=selected_model_mode)
     replay_policy_names = first_class_policy_names
-    _remove_stale_policy_paramset_files(str(models_dir or MODELS_DIR))
+    _remove_stale_policy_paramset_files(str(models_dir or _optimizer_storage_paths().models_dir))
     paths: dict[str, str] = {}
     payloads: dict[str, dict] = {}
     first_class_policy_set = set(first_class_policy_names)
@@ -1777,13 +1800,13 @@ def _write_static_seed_ensemble_candidate(
     summary["policy_paramsets"] = dict(policy_paramset_paths)
     payload["summary"] = dict(summary)
     if bool(write_candidate_best):
-        _write_json_file(CANDIDATE_BEST_PARAMS_PATH, payload)
+        _write_json_file(_optimizer_storage_paths().candidate_best_params_path, payload)
         _refresh_trade_state_manifest()
         try:
-            if os.path.exists(CANDIDATE_BEST_SUMMARY_PATH):
-                os.remove(CANDIDATE_BEST_SUMMARY_PATH)
+            if os.path.exists(_optimizer_storage_paths().candidate_best_summary_path):
+                os.remove(_optimizer_storage_paths().candidate_best_summary_path)
         except OSError as exc:
-            print(f"{C_YELLOW}⚠️ 無法移除舊 candidate_best summary sidecar：{_project_relative_path(CANDIDATE_BEST_SUMMARY_PATH)}｜{type(exc).__name__}: {exc}{C_RESET}")
+            print(f"{C_YELLOW}⚠️ 無法移除舊 candidate_best summary sidecar：{_project_relative_path(_optimizer_storage_paths().candidate_best_summary_path)}｜{type(exc).__name__}: {exc}{C_RESET}")
     return payload, summary, policy_paramset_payloads
 
 
@@ -2078,8 +2101,8 @@ def _run_nonrolling_random_seed_ensemble_training(
         and parallel_backend == "process"
         and raw_data_loader_path is not None
     )
-    runtime_output_dir = str(output_dir or OUTPUT_DIR)
-    runtime_models_dir = str(models_dir or MODELS_DIR)
+    runtime_output_dir = str(output_dir or _optimizer_storage_paths().output_dir)
+    runtime_models_dir = str(models_dir or _optimizer_storage_paths().models_dir)
     process_log_dir = os.path.join(runtime_output_dir, "seed_ensemble_logs", get_taipei_now().strftime("%Y%m%d_%H%M%S_%f"))
     process_log_paths: dict[int, str] = {}
     progress_lock = threading.Lock()
@@ -2596,9 +2619,9 @@ def _run_nonrolling_random_seed_ensemble_training(
             promote_status = _promote_candidate_to_run_best(session=dashboard_session, emit_output=False)
             if promote_status != 0:
                 return int(promote_status)
-        output_entries = [("candidate_best", CANDIDATE_BEST_PARAMS_PATH)]
-        if os.path.exists(RUN_BEST_PARAMS_PATH):
-            output_entries.append(("run_best", RUN_BEST_PARAMS_PATH))
+        output_entries = [("candidate_best", _optimizer_storage_paths().candidate_best_params_path)]
+        if os.path.exists(_optimizer_storage_paths().run_best_params_path):
+            output_entries.append(("run_best", _optimizer_storage_paths().run_best_params_path))
         _print_optimizer_output_files("💾 輸出檔案", output_entries)
         return 0
     visible_policy_paths = _visible_policy_paramset_paths(dict((_ensemble_summary or {}).get("policy_paramsets") or {}), model_mode=selected_model_mode)
@@ -3056,6 +3079,12 @@ def resolve_optimizer_model_mode(argv, environ, *, default_model: str = DEFAULT_
 @isolate_optimizer_process_environment
 @optimizer_runtime_model_mode_scope()
 def main(argv=None, environ=None):
+    paths = OptimizerStoragePaths.from_environ(PROJECT_ROOT, environ)
+    with optimizer_storage_scope(paths):
+        return _run_main(argv, environ)
+
+
+def _run_main(argv=None, environ=None):
     enable_line_buffered_stdout()
     argv = sys.argv if argv is None else argv
     environ = os.environ if environ is None else environ
@@ -3082,7 +3111,7 @@ def main(argv=None, environ=None):
                 argv=argv,
                 environ=environ,
                 project_root=PROJECT_ROOT,
-                output_dir=build_output_dir(PROJECT_ROOT, 'ml_optimizer'),
+                output_dir=_optimizer_storage_paths().output_dir,
                 workers=timing_fold_workers,
             )
         worker_count = int(timing_fold_workers[0])
@@ -3181,6 +3210,7 @@ def main(argv=None, environ=None):
     execution_settings = OptimizerExecutionSettings.from_environ(environ)
     session = build_optimizer_session(
         walk_forward_policy=walk_forward_policy, execution_settings=execution_settings,
+        output_dir=_optimizer_storage_paths().output_dir,
     )
     best_trial_resolver = build_local_min_score_best_trial_resolver(session=session, objective_mode=objective_mode)
 
@@ -3192,7 +3222,7 @@ def main(argv=None, environ=None):
 
     timing_mode = bool(cli_run_request and cli_run_request.get("timing_mode"))
     db_file = _resolve_optimizer_db_file_for_mode(
-        output_dir=OUTPUT_DIR,
+        output_dir=_optimizer_storage_paths().output_dir,
         dataset_profile_key=dataset_profile_key,
         selected_model_mode=selected_model_mode,
         selected_study_scope=selected_study_scope,
@@ -3259,6 +3289,7 @@ def main(argv=None, environ=None):
         objective_mode = str(walk_forward_policy.get('objective_mode', 'split_train_romd'))
         session = build_optimizer_session(
             walk_forward_policy=walk_forward_policy, execution_settings=execution_settings,
+            output_dir=_optimizer_storage_paths().output_dir,
         )
         session.n_trials = int(requested_trials)
         session.run_action = requested_action
@@ -3269,7 +3300,7 @@ def main(argv=None, environ=None):
                 session.requested_study_db_action = requested_study_db_action
         best_trial_resolver = build_local_min_score_best_trial_resolver(session=session, objective_mode=objective_mode)
         db_file = _resolve_optimizer_db_file_for_mode(
-            output_dir=OUTPUT_DIR,
+            output_dir=_optimizer_storage_paths().output_dir,
             dataset_profile_key=dataset_profile_key,
             selected_model_mode=selected_model_mode,
             selected_study_scope=selected_study_scope,
@@ -3293,7 +3324,7 @@ def main(argv=None, environ=None):
             argv=argv,
             environ=environ,
             project_root=PROJECT_ROOT,
-            output_dir=OUTPUT_DIR,
+            output_dir=_optimizer_storage_paths().output_dir,
             base_policy=optimizer_policy_base,
             selected_data_dir=selected_data_dir,
             dataset_label=dataset_label,
@@ -3483,8 +3514,8 @@ def main(argv=None, environ=None):
                 study=study,
                 finalists=finalists,
                 selected_trial=selected_trial,
-                params_path=CANDIDATE_BEST_PARAMS_PATH,
-                summary_path=CANDIDATE_BEST_SUMMARY_PATH,
+                params_path=_optimizer_storage_paths().candidate_best_params_path,
+                summary_path=_optimizer_storage_paths().candidate_best_summary_path,
                 fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT,
                 colors=COLORS,
                 objective_mode=objective_mode,
@@ -3502,9 +3533,9 @@ def main(argv=None, environ=None):
                 promote_status = _promote_candidate_to_run_best(session=session, emit_output=False)
                 if promote_status != 0:
                     return int(promote_status)
-            output_entries = [("candidate_best", CANDIDATE_BEST_PARAMS_PATH)]
-            if os.path.exists(RUN_BEST_PARAMS_PATH):
-                output_entries.append(("run_best", RUN_BEST_PARAMS_PATH))
+            output_entries = [("candidate_best", _optimizer_storage_paths().candidate_best_params_path)]
+            if os.path.exists(_optimizer_storage_paths().run_best_params_path):
+                output_entries.append(("run_best", _optimizer_storage_paths().run_best_params_path))
             _print_optimizer_output_files("💾 輸出檔案", output_entries)
             return 0
         finally:
@@ -3667,7 +3698,7 @@ def main(argv=None, environ=None):
                 timing_sampler_kind=sampler_kind,
             )
             timing_summary_path = write_timing_summary(
-                output_dir=OUTPUT_DIR,
+                output_dir=_optimizer_storage_paths().output_dir,
                 session_ts=session.session_ts,
                 payload=timing_payload,
             )
@@ -3736,8 +3767,8 @@ def main(argv=None, environ=None):
                             study=study,
                             finalists=finalists,
                             selected_trial=selected_trial,
-                            params_path=CANDIDATE_BEST_PARAMS_PATH,
-                            summary_path=CANDIDATE_BEST_SUMMARY_PATH,
+                            params_path=_optimizer_storage_paths().candidate_best_params_path,
+                            summary_path=_optimizer_storage_paths().candidate_best_summary_path,
                             fixed_tp_percent=OPTIMIZER_FIXED_TP_PERCENT,
                             colors=COLORS,
                             objective_mode=objective_mode,
@@ -3755,9 +3786,9 @@ def main(argv=None, environ=None):
                             promote_status = _promote_candidate_to_run_best(session=session, emit_output=False)
                             if promote_status != 0:
                                 return int(promote_status)
-                        output_entries = [("candidate_best", CANDIDATE_BEST_PARAMS_PATH)]
-                        if os.path.exists(RUN_BEST_PARAMS_PATH):
-                            output_entries.append(("run_best", RUN_BEST_PARAMS_PATH))
+                        output_entries = [("candidate_best", _optimizer_storage_paths().candidate_best_params_path)]
+                        if os.path.exists(_optimizer_storage_paths().run_best_params_path):
+                            output_entries.append(("run_best", _optimizer_storage_paths().run_best_params_path))
                         _print_optimizer_output_files("💾 輸出檔案", output_entries)
                     elif selected_model_mode == 'study':
                         status = _finalize_single_seed_study_outputs(

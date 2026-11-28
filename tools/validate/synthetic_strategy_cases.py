@@ -1669,6 +1669,9 @@ def validate_optimizer_interrupt_export_contract_case(_base_params):
         caller_environ = {
             "OPTIMIZER_PREP_CACHE_MAX_ITEMS": "7",
             "OPTIMIZER_FULL_EVAL_CACHE_MAX_ITEMS": "9",
+            "OPTIMIZER_OUTPUT_DIR": str(tmp_root / "outputs"),
+            "V16_MODELS_DIR": str(tmp_root / "models"),
+            "V16_RUN_BEST_PARAMS_PATH": str(best_params_path),
         }
         expected_environ = dict(caller_environ)
         process_environ_before = dict(os.environ)
@@ -1686,9 +1689,10 @@ def validate_optimizer_interrupt_export_contract_case(_base_params):
                 self._session.current_session_trial = 2
                 raise KeyboardInterrupt()
 
-        def _fake_build_optimizer_session(*, walk_forward_policy, execution_settings):
+        def _fake_build_optimizer_session(*, walk_forward_policy, execution_settings, output_dir):
             _ = walk_forward_policy
             fake_session.execution_settings = execution_settings
+            fake_session.output_dir = output_dir
             return fake_session
 
         def _fake_resolve_trial_count_or_exit(session, *, environ, resolve_optimizer_trial_count, colors):
@@ -1707,9 +1711,6 @@ def validate_optimizer_interrupt_export_contract_case(_base_params):
         stdout_buffer = io.StringIO()
         stderr_buffer = io.StringIO()
         with ExitStack() as stack:
-            stack.enter_context(patch.object(optimizer_main, "OUTPUT_DIR", str(tmp_root / "outputs")))
-            stack.enter_context(patch.object(optimizer_main, "MODELS_DIR", str(tmp_root / "models")))
-            stack.enter_context(patch.object(optimizer_main, "RUN_BEST_PARAMS_PATH", str(best_params_path)))
             stack.enter_context(patch.object(optimizer_main, "OPTIMIZER_RANDOM_SEED_ENSEMBLE_ENABLED", False))
             stack.enter_context(patch.object(optimizer_main, "ensure_runtime_dirs", return_value=None))
             stack.enter_context(patch.object(optimizer_main, "configure_optuna_logging", return_value=None))

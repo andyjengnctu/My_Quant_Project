@@ -54,7 +54,213 @@ def _policy_member_in_fresh_worker(mode):
         return _policy_member_fixture(mode)[1]
 
 
+def _capture_main_storage_in_worker(project_root, environ):
+    # Import before the per-run override, including in a reused spawn worker.
+    from dataclasses import asdict
+    from services.optimizer import application, outer_rolling_timing_sweep as sweep
+    captured = {}
+    def capture(**kwargs):
+        captured.update(paths=asdict(application._optimizer_storage_paths()), output_dir=kwargs["output_dir"])
+        with patch.object(application.os, "makedirs") as mkdir:
+            application.ensure_runtime_dirs()
+        captured["created_dirs"] = [call.args[0] for call in mkdir.call_args_list]
+        return 0
+    before = application._optimizer_storage_paths()
+    process_environment = dict(os.environ)
+    with (patch.object(application, "PROJECT_ROOT", str(project_root)),
+          patch.object(application, "enable_line_buffered_stdout"),
+          patch.object(sweep, "run_outer_rolling_timing_worker_sweep", side_effect=capture)):
+        result = application.main(
+            ["optimizer", "--timing", "--outer-oos", "--timing-fold-workers", "1,2"], environ=environ,
+        )
+    captured["result"] = result
+    captured["fallback_unchanged"] = application._optimizer_storage_paths() == before
+    captured["environment_restored"] = dict(os.environ) == process_environment
+    return captured
+
+
 class OptimizerBoundaryTests(unittest.TestCase):
+    def storage_environment(self, label):
+        root = self.root / label
+        return {
+            "OPTIMIZER_OUTPUT_DIR": str(root / "outputs"), "V16_MODELS_DIR": str(root / "models"),
+            "V16_RUN_BEST_PARAMS_PATH": str(root / "active.json"),
+            "V16_CANDIDATE_BEST_PARAMS_PATH": str(root / "candidate.json"),
+            "V16_CANDIDATE_RETENTION_BEST_PARAMS_PATH": str(root / "retention.json"),
+            "V16_CANDIDATE_VAL_SCORE_BEST_PARAMS_PATH": str(root / "score.json"),
+        }
+
+    def test_imported_main_resolves_every_storage_path_on_each_sequential_and_spawn_run(self):
+        from concurrent.futures import ProcessPoolExecutor
+        from dataclasses import asdict
+        import multiprocessing
+        from services.optimizer.execution_settings import OptimizerStoragePaths
+        environments = [self.storage_environment(label) for label in ("first", "second")]
+        local = [_capture_main_storage_in_worker(str(self.root), env) for env in environments]
+        with ProcessPoolExecutor(max_workers=1, mp_context=multiprocessing.get_context("spawn")) as pool:
+            spawned = [pool.submit(_capture_main_storage_in_worker, str(self.root), env).result(timeout=20) for env in environments]
+        for observed, env in zip(local + spawned, environments + environments):
+            expected = OptimizerStoragePaths.from_environ(self.root, env)
+            self.assertEqual(observed["paths"], asdict(expected))
+            self.assertEqual(observed["output_dir"], expected.output_dir)
+            self.assertEqual(observed["created_dirs"], [expected.output_dir, expected.models_dir, str(Path(expected.candidate_best_params_path).parent)])
+            self.assertEqual(observed["result"], 0)
+            self.assertTrue(observed["fallback_unchanged"])
+            self.assertTrue(observed["environment_restored"])
+
+    def test_threaded_main_storage_is_scoped_without_changing_unlocked_helper_paths(self):
+        from concurrent.futures import ThreadPoolExecutor
+        from dataclasses import asdict
+        from threading import Event
+        from services.optimizer import application, outer_rolling_timing_sweep as sweep
+        from services.optimizer.execution_settings import OptimizerStoragePaths
+        entered, release, second_started, second_finished = Event(), Event(), Event(), Event()
+        first_env, second_env = self.storage_environment("first"), self.storage_environment("second")
+        before = application._optimizer_storage_paths()
+        process_environment = dict(os.environ)
+        def capture(**kwargs):
+            paths = application._optimizer_storage_paths()
+            if paths.output_dir == first_env["OPTIMIZER_OUTPUT_DIR"]:
+                entered.set()
+                if not release.wait(10):
+                    raise TimeoutError("optimizer storage scope barrier")
+            return asdict(paths), kwargs["output_dir"]
+        def invoke(env, second=False):
+            if second:
+                second_started.set()
+            try:
+                return application.main(["optimizer", "--timing", "--outer-oos", "--timing-fold-workers", "1,2"], environ=env)
+            finally:
+                if second:
+                    second_finished.set()
+        with (patch.object(application, "PROJECT_ROOT", str(self.root)),
+              patch.object(application, "enable_line_buffered_stdout"),
+              patch.object(sweep, "run_outer_rolling_timing_worker_sweep", side_effect=capture)):
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                first = pool.submit(invoke, first_env)
+                try:
+                    self.assertTrue(entered.wait(5))
+                    self.assertEqual(application._optimizer_storage_paths(), before)
+                    second = pool.submit(invoke, second_env, True)
+                    self.assertTrue(second_started.wait(5))
+                    self.assertFalse(second_finished.wait(0.1))
+                finally:
+                    release.set()
+                results = [first.result(timeout=5), second.result(timeout=5)]
+        for result, env in zip(results, (first_env, second_env)):
+            expected = OptimizerStoragePaths.from_environ(self.root, env)
+            self.assertEqual(result, (asdict(expected), expected.output_dir))
+        self.assertEqual(application._optimizer_storage_paths(), before)
+        self.assertEqual(dict(os.environ), process_environment)
+
+    def test_standalone_helpers_retain_explicit_legacy_path_injection(self):
+        from services.optimizer import application
+        with (patch.object(application, "OUTPUT_DIR", str(self.root / "outputs")),
+              patch.object(application, "MODELS_DIR", str(self.root / "models")),
+              patch.object(application, "RUN_BEST_PARAMS_PATH", str(self.root / "active.json"))):
+            paths = application._optimizer_storage_paths()
+            self.assertEqual(paths.output_dir, str(self.root / "outputs"))
+            self.assertEqual(paths.models_dir, str(self.root / "models"))
+            self.assertEqual(paths.run_best_params_path, str(self.root / "active.json"))
+
+    def test_model_storage_override_reaches_every_strategy_artifact_owner(self):
+        from core import model_paths, strategy_param_artifacts as artifacts
+        from services.optimizer.execution_settings import resolve_optimizer_output_dir, OPTIMIZER_OUTPUT_DIR_ENV_VAR
+        for override in ("", "sandbox/models", str(self.root / "external_models")):
+            with self.subTest(override=override), patch.dict(os.environ, {model_paths.MODELS_DIR_ENV_VAR: override}):
+                models = Path(model_paths.resolve_models_dir(str(self.root)))
+                canonical = models / "strategy_params" / "canonical"
+                self.assertEqual(artifacts.resolve_strategy_param_dir(self.root, family="min", evaluation_mode="rolling"), canonical)
+                self.assertEqual(artifacts.resolve_strategy_param_artifact_path(self.root, family="full", evaluation_mode="study", policy="base").parent, canonical)
+                self.assertEqual(artifacts.resolve_strategy_param_manifest_path(self.root, family="full", evaluation_mode="study").parent, canonical)
+                self.assertEqual(str(artifacts.resolve_strategy_param_state_path(self.root, artifact="candidate_best")), model_paths.resolve_candidate_best_params_path(str(self.root), environ={model_paths.MODELS_DIR_ENV_VAR: override}))
+                self.assertEqual(artifacts.resolve_strategy_param_benchmark_dir(self.root, benchmark_id="fixture", seed=7, family="min", evaluation_mode="rolling"), models / "strategy_params" / "benchmark" / "fixture")
+                explicit = self.root / "explicit"
+                self.assertEqual(artifacts.resolve_strategy_param_manifest_path(self.root, family="full", evaluation_mode="study", strategy_params_root=explicit).parent, explicit / "canonical")
+        self.assertEqual(resolve_optimizer_output_dir(self.root, {OPTIMIZER_OUTPUT_DIR_ENV_VAR: "sandbox/outputs"}), str(self.root / "sandbox" / "outputs"))
+        self.assertEqual(resolve_optimizer_output_dir(self.root, {}), str(self.root / "outputs" / "ml_optimizer"))
+
+    def test_study_publication_and_cleanup_are_confined_to_overridden_storage(self):
+        from contextlib import redirect_stdout
+        import io
+        from core import strategy_param_artifacts as artifacts
+        from core.strategy_params import V16StrategyParams, strategy_params_to_dict
+        from services.optimizer import application
+        from tools.local_regression import run_ml_smoke as smoke
+        real = self.root / "models" / "strategy_params" / "canonical"
+        real.mkdir(parents=True)
+        sentinels = {name: real / name for name in ("full_study_ensemble_base.json", "full_study_local_finalists_agree.json", "full_study_manifest.json")}
+        for name, path in sentinels.items():
+            path.write_text(name, encoding="utf-8")
+        before = {name: path.read_bytes() for name, path in sentinels.items()}
+        models = self.root / "sandbox" / "models"
+        with (patch.dict(os.environ, {"V16_MODELS_DIR": str(models)}),
+              patch.object(application, "PROJECT_ROOT", str(self.root)),
+              patch.object(smoke, "PROJECT_ROOT", self.root), redirect_stdout(io.StringIO())):
+            stale = artifacts.resolve_strategy_param_artifact_path(self.root, family="full", evaluation_mode="study", policy="local")
+            stale.parent.mkdir(parents=True); stale.write_text("stale", encoding="utf-8")
+            result = application._finalize_single_seed_study_base_only_outputs(
+                best_trial=SimpleNamespace(number=0, value=2.0, user_attrs={}), optimizer_seed=smoke.ML_SMOKE_REPRO_SEED,
+                objective_mode="full", walk_forward_policy={"model_mode": "study", "study_scope": "full", "train_start_year": 2020, "search_train_end_year": 2021},
+                dataset_label="fixture", selected_model_mode="study", trials_per_seed=1,
+                build_best_params_payload_from_trial=lambda *args, **kwargs: strategy_params_to_dict(V16StrategyParams()),
+            )
+            self.assertEqual(result, 0)
+            self.assertFalse(stale.exists())
+            inspected = smoke._inspect_study_artifacts(models)
+            self.assertEqual(inspected["study_artifact_error"], "")
+            self.assertTrue(inspected["study_scientific_digest"])
+            manifest_path = Path(inspected["study_manifest_path"])
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["artifacts"]["base"]["sha256"] = "wrong"
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            self.assertIn("hash mismatch", smoke._inspect_study_artifacts(models)["study_artifact_error"])
+            manifest_path.unlink()
+            self.assertTrue(smoke._inspect_study_artifacts(models)["study_artifact_error"])
+        self.assertEqual({name: path.read_bytes() for name, path in sentinels.items()}, before)
+
+    def test_smoke_repro_requires_real_matching_scientific_artifacts(self):
+        from tools.local_regression.run_ml_smoke import _build_repro_summary
+        first = dict(label="first", status="PASS", db_count=1, db_trial_count=1,
+                     qualified_trial_count=1, best_trial_value=2.0, optimizer_profile_trial_count=1,
+                     optimizer_profile_avg_objective_wall_sec=0.1, failures=[], study_scientific_digest="abc", study_trial_digest="trial", study_artifact_status="REQUIRED")
+        for digest, status, expected in (("abc", "PASS", True), ("", "PASS", False), ("different", "PASS", False), ("abc", "FAIL", False)):
+            with self.subTest(digest=digest, status=status):
+                second = {**first, "label": "second", "status": status, "study_scientific_digest": digest}
+                self.assertEqual(_build_repro_summary(first, second)["all_match"], expected)
+        empty = {**first, "study_scientific_digest": ""}
+        self.assertFalse(_build_repro_summary(empty, empty)["all_match"])
+        negative = {**first, "study_scientific_digest": "", "study_artifact_status": "NO_QUALIFIED_TRIAL", "qualified_trial_count": 0, "best_trial_value": None}
+        self.assertTrue(_build_repro_summary(negative, negative)["all_match"])
+        self.assertFalse(_build_repro_summary(negative, {**negative, "study_trial_digest": "different"})["all_match"])
+        missing = {**negative, "study_trial_digest": ""}
+        self.assertFalse(_build_repro_summary(missing, missing)["all_match"])
+
+    def test_smoke_trial_evidence_requires_completed_rows_with_inputs_and_outcomes(self):
+        import sqlite3
+        from tools.local_regression.run_ml_smoke import _read_study_trial_evidence, _inspect_study_artifacts
+        path = self.root / "study.db"
+        connection = sqlite3.connect(path)
+        connection.executescript("CREATE TABLE trials(trial_id, number, state); CREATE TABLE trial_params(trial_id, param_name, param_value, distribution_json); CREATE TABLE trial_values(trial_id, objective, value, value_type);")
+        self.assertTrue(_read_study_trial_evidence([path], 1)["study_trial_error"])
+        connection.executescript("INSERT INTO trials VALUES(1,0,'COMPLETE'); INSERT INTO trial_params VALUES(1,'atr_len',14,'{}'); INSERT INTO trial_values VALUES(1,0,-9999,'FINITE');")
+        connection.commit()
+        evidence = _read_study_trial_evidence([path], 1)
+        self.assertEqual(evidence["study_trial_error"], "")
+        self.assertTrue(evidence["study_trial_digest"])
+        connection.execute("UPDATE trial_params SET param_value=20"); connection.commit()
+        self.assertNotEqual(_read_study_trial_evidence([path], 1)["study_trial_digest"], evidence["study_trial_digest"])
+        connection.execute("UPDATE trial_values SET value=NULL, value_type='NAN'"); connection.commit()
+        self.assertTrue(_read_study_trial_evidence([path], 1)["study_trial_error"])
+        connection.execute("UPDATE trial_values SET value=-9999, value_type='FINITE'"); connection.commit()
+        connection.execute("UPDATE trials SET state='FAIL'"); connection.commit()
+        self.assertTrue(_read_study_trial_evidence([path], 1)["study_trial_error"])
+        connection.close()
+        models = self.root / "models"
+        self.assertEqual(_inspect_study_artifacts(models, required=False)["study_artifact_error"], "")
+        self.assertTrue(_inspect_study_artifacts(models, required=True)["study_artifact_error"])
+
+
     def test_policy_members_follow_explicit_mode_across_threads_and_spawn(self):
         import multiprocessing
         from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
@@ -312,7 +518,7 @@ class OptimizerBoundaryTests(unittest.TestCase):
         self.assertEqual(list(self.root.iterdir()), [])
 
     def test_environment_is_snapshot_based_pickle_safe_and_restored_after_failure(self):
-        incoming = {"OPTIMIZER_PREP_CACHE_MAX_ITEMS": "7"}
+        incoming = {"OPTIMIZER_PREP_CACHE_MAX_ITEMS": "7", "OPTIMIZER_OUTPUT_DIR": str(self.root / "isolated_output")}
         settings = OptimizerExecutionSettings.from_environ(incoming)
         incoming["OPTIMIZER_PREP_CACHE_MAX_ITEMS"] = "99"
         self.assertEqual(pickle.loads(pickle.dumps(settings)), settings)
@@ -364,11 +570,11 @@ class OptimizerBoundaryTests(unittest.TestCase):
             pass
 
         captured = {}
-        def capture(*, walk_forward_policy, execution_settings):
-            captured.update(walk_forward_policy=walk_forward_policy, execution_settings=execution_settings)
+        def capture(*, walk_forward_policy, execution_settings, output_dir):
+            captured.update(walk_forward_policy=walk_forward_policy, execution_settings=execution_settings, output_dir=output_dir)
             raise CapturedSession()
 
-        incoming = {"OPTIMIZER_PREP_CACHE_MAX_ITEMS": "7"}
+        incoming = {"OPTIMIZER_PREP_CACHE_MAX_ITEMS": "7", "OPTIMIZER_OUTPUT_DIR": str(self.root / "isolated_output")}
         before = dict(os.environ)
         with (patch.object(application, "build_optimizer_session", side_effect=capture),
               patch.object(application, "load_walk_forward_policy", return_value={}),
@@ -386,7 +592,10 @@ class OptimizerBoundaryTests(unittest.TestCase):
         self.assertEqual(resolved["OPTIMIZER_ROLLING_FOLD_WORKERS"], "3")
         self.assertEqual(resolved["OPTIMIZER_SINGLE_FOLD_SEARCH_PARALLEL_TRIALS"], "1")
         self.assertNotIn("execution_settings", captured["walk_forward_policy"])
-        self.assertEqual(incoming, {"OPTIMIZER_PREP_CACHE_MAX_ITEMS": "7"})
+        self.assertEqual(incoming, {"OPTIMIZER_PREP_CACHE_MAX_ITEMS": "7", "OPTIMIZER_OUTPUT_DIR": str(self.root / "isolated_output")})
+        self.assertEqual(captured["output_dir"], str(self.root / "isolated_output"))
+        from services.optimizer.execution_settings import current_optimizer_storage_paths
+        self.assertIsNone(current_optimizer_storage_paths())
         self.assertEqual(dict(os.environ), before)
 
     def test_ambient_snapshot_waits_for_the_previous_run_to_restore(self):
