@@ -4,15 +4,17 @@
 
 本文件是 `breakout_quality` 的**實驗 identity、命名、版本語意、namespace、目前基準與 ID 佔用狀態**單一真理來源。
 
-### 2026-11-29 T40 Breakout-to-Breakout pair supervision（MR-13DU／C215／C216；使用者核准）
+### 2026-11-29 T40 Breakout-to-Breakout pair supervision（MR-13DU／C215／C216；前置 Audit 更正後撤回）
 
-前置一次性唯讀 PIT Audit 已完成，使用者明確選擇 **原模型診斷的固定 high_len 突破聯集**，不是 P16 正常／續掛候選。`build_candidate_event_positions` 的既有固定清單與原 High／Close crossover 公式按資訊日重建 B_t，交集 CJ 原 daily-universal 合法股票日；不使用優化後的 high_len、Target／label、OOS 分數或回放候選。2,075,176 股票日、4,114 次跨六折邊界的逐股票前綴檢查通過。既有診斷快取與 PIT 重建有 27 筆尾端差異，但六折成熟 FIT 差異皆為 0；新的訓練資格直接重建，不能把全期快取當 PIT 來源。Audit 不占 MR／C 編號；已完成 evidence 為 `outputs/audit/breakout_quality/one_time/breakout_pair_pit_20261129/result.md` 與同目錄 JSON／逐日、年度表。
+**目前狀態：`BLOCKED_PIT_AUDIT / INITIAL_GO_RETRACTED / IMPLEMENTATION_WITHDRAWN / ROLLING_ABORTED / NO_VALID_MARKET_RESULT / STRATEGY_NOT_RUN / FOUR_SEED_NOT_RUN / HISTORICAL_ID_RESERVED / NO_TRADING`。** 初步 Audit 只證明候選訊號與 cohort 自身成熟，漏查百分位來源；補核發現六折 inner-train percentile pool 各有 `[84,49,58,22,48,25]` 筆在 validation start 仍未成熟的同日標籤。合法 train gains 與 candidate pair 正規化權重因此有實際差異，前置 GO 撤回。發現後立即停止 Rolling（02:23:43，台灣時間），只發布 1/6 Fold；沒有完整模型 SOP、新策略績效或 Contrast。DU 專屬 profile／spec／source／arms／Summary／contrasts、pair-membership composition／adapter 及專用測試全數實際移除；共用既有 pair-partition primitive 保留，Training Model 恢復 CJ。原 CJ 及 DT 歷史數據／模型不更改，不能把此問題當作新假說的負績效結果，也不聲稱 outer OOS labels 被用於 FIT。中止工件保留；已在中間工程 commit 使用的 MR-13DU／C215／C216 永久保留，不回收。證據：同目錄 `percentile_maturity_proof.json`、`interrupted_rolling_evidence.json` 及更正後 `result.md`。以下是當時已授權但因前置檢查不完整而錯誤啟動的設計，僅作歷史定義。
+
+初始候選資格盤點中，使用者明確選擇 **原模型診斷的固定 high_len 突破聯集**，不是 P16 正常／續掛候選。`build_candidate_event_positions` 的既有固定清單與原 High／Close crossover 公式按資訊日重建 B_t，交集 CJ 原 daily-universal 合法股票日；不使用優化後的 high_len、Target／label、OOS 分數或回放候選。2,075,176 股票日、4,114 次跨六折邊界的逐股票前綴檢查通過。既有診斷快取與 PIT 重建有 27 筆尾端差異，但六折成熟 FIT 差異皆為 0；新的訓練資格直接重建，不能把全期快取當 PIT 來源。Audit 不占 MR／C 編號；已完成 evidence 為 `outputs/audit/breakout_quality/one_time/breakout_pair_pit_20261129/result.md` 與同目錄 JSON／逐日、年度表。
 
 `MR-13DU`，profile=`daily_universal_terminal_mae_gated_t40_full_list_ndcg_pairwise_breakout_pairs`，沿用 `ARCH-inception_time_v1`，獨立 FIT v1，唯一模型控制為原 `MR-13CJ`。T40、300×10 OHLCV+0050、daily-universal 樣本／排序、InceptionTime、Adam、Seed42、六折與 inner validation、Daily Spearman epoch selector、原 early-stop/min_delta、selected-epochs refit、P16、Exact／Direct、費稅與截止 2026-03-02 全部不變。**唯一變因是有效 pair 資格：同日兩端都在 PIT B_t 才監督。** 先依原全日榜單建立 percentile gains、predicted ranks／discounts／IDCG，再沿既有 scalar pair-partition primitive 遮罩；分子、分母同時乘該 mask，仍為同一原 batch 的 `sum(mask*w*softplus)/sum(mask*w)`，不改日期權重、不用候選子榜單重算、不增加 K／閾值。零 pair 日期無 supervision；整個 batch 無 pair 不更新 optimizer，仍保留原全母體 forward／batch 順序。CJ、所有既有 profile／policy 序列化、FIT／Replay 版本及科學契約保持原值。
 
-`SR-C215` 是同 P16 的 Exact K/R0（控制 C107）；`SR-C216` 是同一 `DL-CONT13DU-ROLL`／`CONT13DU_ROLL` FIT／PIT scores 的 Direct No-K/No-R0（控制 C109），各 Replay v1。共用原 Summary roster、Model Compare/Test、Forward／Rolling 與既有 Compare Suite；不開新選單／報表版本／ABC 比較器。Contrast `C107-C215` 設 left=C107/right=C215、`C109-C216` 設 left=C109/right=C216，遵守正式 **right−left**，正值才是 DU 增量；不由名稱猜差值方向。Training Model 指向 DU；DT 已退役，不回收 MR-13DT／C213／C214。
+`SR-C215` 是同 P16 的 Exact K/R0（控制 C107）；`SR-C216` 是同一 `DL-CONT13DU-ROLL`／`CONT13DU_ROLL` FIT／PIT scores 的 Direct No-K/No-R0（控制 C109），各 Replay v1。共用原 Summary roster、Model Compare/Test、Forward／Rolling 與既有 Compare Suite；不開新選單／報表版本／ABC 比較器。Contrast `C107-C215` 設 left=C107/right=C215、`C109-C216` 設 left=C109/right=C216，遵守正式 **right−left**，正值才是 DU 增量；不由名稱猜差值方向。當時實作曾將 Training Model 指向 DU；撤回後已恢復 CJ。DT 已退役，不回收 MR-13DT／C213／C214。
 
-現況 `IMPLEMENTED / PIT_AUDIT_PASS / SEED42_ROLLING_AUTHORIZED / MARKET_RESULTS_PENDING / FOUR_SEED_NOT_RUN / RESEARCH_ONLY / NO_TRADING`。先執行模型 Seed42 Rolling 並核對原 SOP Gate，再執行依 Gate 合法的策略 Rolling／Summary。若新模型 Gate FAIL、主要 Exact ΔRoMD≤0 或 MDD 增加，即停止，不跑四 Seed；通過亦先回傳實測結果及下一步，不自行進入四 Seed、不重算 Target Oracle、不 promotion。2021 起是迭代研究 OOS，不能回饋 FIT／選模或稱為 untouched holdout。市場結果另據實登錄。
+初始（現已撤回）的狀態曾為 `IMPLEMENTED / PIT_AUDIT_PASS / SEED42_ROLLING_AUTHORIZED / MARKET_RESULTS_PENDING`，不是 current GO。原定先執行模型 Seed42 Rolling 並核對原 SOP Gate，再執行依 Gate 合法的策略 Rolling／Summary；目前已因完整前置 Audit FAIL 提前停止，不能進入策略或四 Seed。若新模型 Gate FAIL、主要 Exact ΔRoMD≤0 或 MDD 增加，即停止，不跑四 Seed；通過亦先回傳實測結果及下一步，不自行進入四 Seed、不重算 Target Oracle、不 promotion。2021 起是迭代研究 OOS，不能回饋 FIT／選模或稱為 untouched holdout。市場結果另據實登錄。
 
 ### 2026-11-28 T40 選模指標隔離研究（MR-13DT／C213／C214；使用者核准）
 
@@ -65,6 +67,7 @@
 | MR-13DR, SR-C209, SR-C210 | RETIRED | REMOVED |
 | MR-13DS, SR-C211, SR-C212 | RETIRED | REMOVED (descriptor, replacement input path, centered-volume helper and dedicated tests deleted) |
 | MR-13DT, SR-C213, SR-C214 | RETIRED | REMOVED (profile, spec, source, arms, Summary, contrasts, NDCG epoch selector/helper and dedicated tests deleted) |
+| MR-13DU, SR-C215, SR-C216 | CANCELLED | REMOVED (withdrawn declarations, source, arms, Summary, contrasts, new membership composition/adapter and tests deleted; interrupted artifacts retained) |
 | MR-10A | RETIRED | REMOVED |
 <!-- /implementation-lifecycle -->
 

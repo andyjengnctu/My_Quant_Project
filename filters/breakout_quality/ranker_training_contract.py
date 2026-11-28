@@ -428,9 +428,6 @@ def _extended_semantics(*, batching: str, **contracts: Any) -> dict[str, Any]:
 def _pairwise_contract_for_recipe(recipe) -> dict[str, Any]:
     contract = dict(PAIRWISE_TRAINING_CONTRACT)
     contract["pair_weighting"] = str(recipe.pairwise_reduction)
-    pair_partition = getattr(recipe.objective_policy, "pair_partition", None)
-    if pair_partition is not None:
-        contract["training_pair_partition"] = pair_partition.as_dict()
     context_policy = recipe.context_policy
     if context_policy.source == CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_UPSIDE:
         contract["predicted_upside_context_contract"] = get_predicted_upside_context_contract()

@@ -109,7 +109,7 @@ STRATEGY_COMPARE_SUITES = {
         # A compact connected contrast graph supports each selected model
         # versus C96 plus the matched CK/CJ label contrast. Historical AO/CH
         # contrasts remain registered and filter out with their inactive arms.
-        "contrast_ids": ('C107-C215', 'C109-C216', 'C189-C96', 'C190-C96', 'C189-C190', 'C189-C106', 'C190-C118', 'C186-C183', 'C97-C96', 'C98-C97', 'C98-C96', 'C103-C96', 'C106-C96', 'C107-C96', 'C109-C96', 'C111-C96', 'C112-C96', 'C118-C96', 'C123-C96', 'C124-C96', 'C125-C96', 'C126-C96', 'C109-C107', 'C111-C112', 'C106-C118', 'C123-C124', 'C125-C126', 'C123-C125', 'C124-C126', 'C147-C107', 'C148-C109', 'C147-C148', 'C153-C97', 'C154-C97', 'C153-C107', 'C154-C109', 'C154-C153', 'C155-C97', 'C156-C97', 'C155-C156', 'C155-C153', 'C156-C154', 'C157-C97', 'C158-C97', 'C157-C158', 'C157-C153', 'C158-C154'),
+        "contrast_ids": ('C189-C96', 'C190-C96', 'C189-C190', 'C189-C106', 'C190-C118', 'C186-C183', 'C97-C96', 'C98-C97', 'C98-C96', 'C103-C96', 'C106-C96', 'C107-C96', 'C109-C96', 'C111-C96', 'C112-C96', 'C118-C96', 'C123-C96', 'C124-C96', 'C125-C96', 'C126-C96', 'C109-C107', 'C111-C112', 'C106-C118', 'C123-C124', 'C125-C126', 'C123-C125', 'C124-C126', 'C147-C107', 'C148-C109', 'C147-C148', 'C153-C97', 'C154-C97', 'C153-C107', 'C154-C109', 'C154-C153', 'C155-C97', 'C156-C97', 'C155-C156', 'C155-C153', 'C156-C154', 'C157-C97', 'C158-C97', 'C157-C158', 'C157-C153', 'C158-C154'),
         "display_name_bases": {'C96': 'Min Base-Finalist-Best / Broker-Cash', 'C97': 'Full Base-Finalist-Best / Broker-Cash', 'C98': 'Full Corrected Same-Signal Agree 4x300 / Broker-Cash', 'C103': 'Min MR-13CG Exact K/R0 / Broker-Cash', 'C106': 'Min MR-13CI Exact K/R0 / Broker-Cash', 'C189': 'Min MR-13CI Rank + MR-13DL R40 Positive Exact K/R0 / Broker-Cash', 'C190': 'Min MR-13CI Rank + MR-13DL R40 Positive Direct No-K No-R0 / Broker-Cash', 'C107': 'Min MR-13CJ Exact K/R0 / Broker-Cash', 'C109': 'Min MR-13CJ T40 Direct No-K No-R0 / Broker-Cash', 'C111': 'Min MR-13K Pure-MFE Control Exact K/R0 / Broker-Cash', 'C112': 'Min MR-13K Pure-MFE Direct No-K No-R0 / Broker-Cash', 'C118': 'Min MR-13CI R40 Direct No-K No-R0 / Broker-Cash', 'C123': 'Min MR-13CO Formal MinTrade Full-cycle NetPnL Exact K/R0 / Broker-Cash', 'C124': 'Min MR-13CO Formal MinTrade Full-cycle NetPnL Direct No-K No-R0 / Broker-Cash', 'C125': 'Min MR-13CO Rank + MR-13CP Positive Exact K/R0 / Broker-Cash', 'C126': 'Min MR-13CO Rank + MR-13CP Positive Direct No-K No-R0 / Broker-Cash', 'C147': 'Min MR-13CX T40 Pairwise-Confidence Exact K/R0 / Broker-Cash', 'C148': 'Min MR-13CX T40 Pairwise-Confidence Direct No-K No-R0 / Broker-Cash', 'C153': 'Full MR-13CJ T40 Exact K/R0 / Broker-Cash', 'C154': 'Full MR-13CJ T40 Direct No-K No-R0 / Broker-Cash', 'C155': 'Full MR-13CZ Rank + MR-13DA Positive Exact K/R0 / Broker-Cash', 'C156': 'Full MR-13CZ Rank + MR-13DA Positive Direct No-K No-R0 / Broker-Cash', 'C157': 'Full MR-13CZ NetPnL Rank Exact K/R0 / Broker-Cash', 'C158': 'Full MR-13CZ NetPnL Rank Direct No-K No-R0 / Broker-Cash', 'C179': 'Daily (Min/P21) No DL / Default Selector / Broker-Cash'},
     },
     # Historical Round-10 suite retained unchanged for artifact interpretation/replay.
@@ -535,16 +535,6 @@ STRATEGY_DL_SOURCES = {
         "forward_scores_builder": {"enabled": True, "builder_type": "selection_pit_from_existing_folds",
                                    "options": {"resume": True, "allow_stale_source": False}},
     },
-    "CONT13DU_ROLL": {
-        "filter_id": "breakout_quality_v1",
-        "model_architecture": "inception_time_v1",
-        "experiment_profile": "daily_universal_terminal_mae_gated_t40_full_list_ndcg_pairwise_breakout_pairs",
-        "threshold": None, "score_source": "selection_point_in_time",
-        "single_seed_strategy_conversion_authorized": True,
-        "description": "MR-13DU: CJ-matched T40, PIT fixed-breakout pair supervision only.",
-        "forward_scores_builder": {"enabled": True, "builder_type": "selection_pit_from_existing_folds",
-                                   "options": {"resume": True, "allow_stale_source": False}},
-    },
     "CONT13CX_ROLL": {
         "filter_id": "breakout_quality_v1",
         "model_architecture": "inception_time_v1",
@@ -787,29 +777,6 @@ STRATEGY_COMPARE_ARMS = {
             "preserve_k": False, "preserve_r0": False,
             "selection_order": "model_score_desc_then_canonical_tie_v1",
             "selection_only": True,
-        },
-        "robustness_role": "off",
-    },
-    "C215": {
-        "name": "Min MR-13DU T40 Breakout Pairs Exact K/R0 / Broker-Cash",
-        "description": "SR-C215: DU PIT score with unchanged CJ C107 P16 Exact contract.",
-        "param_source": "min_best_broker_cash_rolling_experiment",
-        "param_policy": "base-finalist-best", "rule_policy": "all_off",
-        "dl_enabled": True, "dl_id": "CONT13DU_ROLL",
-        "dl_runtime_mode": "resource-aware-continuous-score-constrained-optimal",
-        "dl_runtime_options": {"preserve_k_r0": True, "constrained_solver": "exact_branch_and_bound_v1", "selection_only": True},
-        "robustness_role": "off",
-    },
-    "C216": {
-        "name": "Min MR-13DU T40 Breakout Pairs Direct No-K No-R0 / Broker-Cash",
-        "description": "SR-C216: same DU PIT scores/P16 as C215, matched to CJ C109 Direct.",
-        "param_source": "min_best_broker_cash_rolling_experiment",
-        "param_policy": "base-finalist-best", "rule_policy": "all_off",
-        "dl_enabled": True, "dl_id": "CONT13DU_ROLL",
-        "dl_runtime_mode": "resource-aware-continuous-score-no-k-no-r0",
-        "dl_runtime_options": {
-            "preserve_k": False, "preserve_r0": False,
-            "selection_order": "model_score_desc_then_canonical_tie_v1", "selection_only": True,
         },
         "robustness_role": "off",
     },
@@ -1250,8 +1217,6 @@ STRATEGY_COMPARE_CONTRASTS = {
     "C103-C96": {"left": "C103", "right": "C96", "description": "CG Exact K/R0 vs same-P16 broker-cash DL-off control"},
     "C106-C96": {"left": "C106", "right": "C96", "description": "CI Exact K/R0 vs same-P16 broker-cash DL-off control"},
     "C107-C96": {"left": "C107", "right": "C96", "description": "CJ Exact K/R0 vs same-P16 broker-cash DL-off control"},
-    "C107-C215": {"left": "C107", "right": "C215", "description": "DU minus CJ Exact: right-minus-left increment, identical P16 and selector"},
-    "C109-C216": {"left": "C109", "right": "C216", "description": "DU minus CJ Direct: right-minus-left increment, identical P16 and selector"},
 
     # Same-parameter Broker-Cash controls and score-vs-selector separations.
     "C109-C96": {"left": "C109", "right": "C96", "description": "CJ T40 Direct against matched P16 DL-off baseline"},

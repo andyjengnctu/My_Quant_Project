@@ -22,7 +22,6 @@ from config.execution_policy import (
     DEFAULT_PORTFOLIO_ROTATION,
 )
 from core.breakout_quality_runtime import (
-    TrainingPairPartition,
     FULLTRADE_FULLCYCLE_NETPNL_TARGET_ID,
     DAILY_MIN_P18_FULLCYCLE_NETPNL_TARGET_ID,
     DAILY_MIN_P19_FULLCYCLE_NETPNL_TARGET_ID,
@@ -340,7 +339,6 @@ DAILY_UNIVERSAL_SHARED_FULL_D20_SAFETY_HS_CONDITIONAL_MFE_PROFILE = (
 DAILY_UNIVERSAL_TERMINAL_R40_PAIRWISE_PROFILE = "daily_universal_terminal_r40_full_list_ndcg_pairwise"
 DAILY_UNIVERSAL_TERMINAL_R40_POSITIVE_PROFILE = "daily_universal_terminal_r40_positive_binary"
 DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_PAIRWISE_PROFILE = "daily_universal_terminal_mae_gated_t40_full_list_ndcg_pairwise"
-DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_BREAKOUT_PAIRWISE_PROFILE = "daily_universal_terminal_mae_gated_t40_full_list_ndcg_pairwise_breakout_pairs"
 DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_POSITIVE_PROFILE = "daily_universal_terminal_mae_gated_t40_positive_binary"
 DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_PROBABILISTIC_PROFILE = "daily_universal_terminal_mae_gated_t40_probabilistic_pairwise"
 DAILY_UNIVERSAL_FULL_HORIZON_MAE_GATED_MFE_T40_PAIRWISE_PROFILE = "daily_universal_full_horizon_mae_gated_mfe_t40_full_list_ndcg_pairwise"
@@ -814,18 +812,6 @@ _EXPERIMENT_PROFILES = {
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
         model_architecture="inception_time_v1",
     ),
-    DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_BREAKOUT_PAIRWISE_PROFILE: BreakoutQualityExperimentProfile(
-        name=DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_BREAKOUT_PAIRWISE_PROFILE,
-        optimizer_name="adam",
-        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
-        training_objective=TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
-        continuous_target_id="daily_terminal_mae_gated_t40_v1",
-        loss_name="pairwise_logistic",
-        epoch_selection_metric="mean_daily_spearman",
-        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
-        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
-        model_architecture="inception_time_v1",
-    ),
     DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_PROBABILISTIC_PROFILE: BreakoutQualityExperimentProfile(
         name=DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_PROBABILISTIC_PROFILE,
         optimizer_name="adam",
@@ -1139,21 +1125,6 @@ class ContinuousRankerResearchSpec:
         return payload
 
 
-@dataclass(frozen=True)
-class PartitionedPairwiseResearchSpec(ContinuousRankerResearchSpec):
-    """Declarative pair-membership composition without changing legacy spec payloads."""
-
-    pair_partition: TrainingPairPartition | None = None
-
-    def __post_init__(self) -> None:
-        super().__post_init__()
-        if not isinstance(self.pair_partition, TrainingPairPartition):
-            raise ValueError("Partitioned research needs a canonical training pair contract")
-
-    def as_dict(self) -> dict[str, Any]:
-        return {**super().as_dict(), "pair_partition": self.pair_partition.as_dict()}
-
-
 _CONTINUOUS_RANKER_RESEARCH_SPECS = {
     STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE: ContinuousRankerResearchSpec(
         profile_name=STRATEGY_ALIGNED_NO_TIME_ALL_EVENT_MSE_PROFILE,
@@ -1387,27 +1358,6 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         metric_scope="all_stock_days_terminal_mae_gated_t40",
         score_semantic_id="daily_terminal_mae_gated_t40_rank",
         pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
-        selection_pit_authorized=True,
-        current_time_validation_authorized=True,
-    ),
-    DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_BREAKOUT_PAIRWISE_PROFILE: PartitionedPairwiseResearchSpec(
-        profile_name=DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_BREAKOUT_PAIRWISE_PROFILE,
-        model_research_id="MR-13DU",
-        experiment_name="MR-13DU T40 Breakout-to-Breakout Pair Supervision",
-        phase="13DU",
-        trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
-        target_description="same-date rank of T40=(1-min(MAE40_R,1))*R40-min(MAE40_R,1)",
-        objective_description=(
-            "CJ-matched T40, daily-universal 300x10 InceptionTime, Adam, original "
-            "full-list Delta-NDCG geometry/normalization, Daily Spearman epoch selection "
-            "and refit. Only same-day pairs whose two endpoints belong to the PIT "
-            "fixed-high-len breakout crossover union contribute supervision. "
-            "No candidate sublist reranking, P16-fitted membership, OOS fitting or Trading."
-        ),
-        metric_scope="all_stock_days_terminal_mae_gated_t40",
-        score_semantic_id="daily_terminal_mae_gated_t40_rank",
-        pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
-        pair_partition=TrainingPairPartition(),
         selection_pit_authorized=True,
         current_time_validation_authorized=True,
     ),

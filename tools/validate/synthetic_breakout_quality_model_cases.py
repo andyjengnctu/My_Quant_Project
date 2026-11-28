@@ -1699,8 +1699,6 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
     # including ones not used by the active UI, must inherit the SAME mapping.
     # No experiment identity, architecture list, or fixed config value is pinned.
     _previous_epoch_impl = ranker_stage_owner._train_epoch
-    _previous_partition_impl = ranker_stage_owner.resolve_training_pair_membership
-    _partition_membership = np.asarray([True, False])
     _epoch_calls = []
     _epoch_provider = object()
     def _capture_ranker_epoch(*_args, **_kwargs):
@@ -1708,7 +1706,6 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         return 0.125
     try:
         ranker_stage_owner._train_epoch = _capture_ranker_epoch
-        ranker_stage_owner.resolve_training_pair_membership = lambda *_a, **_k: _partition_membership
         _stage_args = SimpleNamespace(
             seed=91, batch_size=13, gradient_clip_norm=1.5,
             train_prefetch_batches=2, train_prefetch_workers=3,
@@ -1752,10 +1749,6 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
                 "bf16_backward_retry_scales": _candidate_profile.bf16_backward_retry_scales,
                 "adaptive_horizon_target_provider": _epoch_provider,
             }
-            _partition = getattr(_candidate_recipe.objective_policy, "pair_partition", None)
-            if _partition is not None:
-                _expected.update(pair_partition_membership=_partition_membership,
-                                 pair_partition_relation=_partition.relation)
             if (
                 _loss != 0.125
                 or _observed != _expected
@@ -1771,7 +1764,6 @@ def validate_breakout_quality_continuous_ranker_contract_case(_base_params):
         )
     finally:
         ranker_stage_owner._train_epoch = _previous_epoch_impl
-        ranker_stage_owner.resolve_training_pair_membership = _previous_partition_impl
 
     # Both fitting stages retain the shared model/optimizer/scaler return contract.
     _stage_init_errors = []
@@ -2132,17 +2124,6 @@ def validate_breakout_quality_pairwise_ranker_contract_case(_base_params):
                     bool(torch.isfinite(good_margin.grad).all().item()),
                 ),
     )
-
-    from tools.validate.test_pair_partition_supervision import PairPartitionSupervisionTests
-    import io
-    import unittest
-    _partition_result = unittest.TextTestRunner(stream=io.StringIO()).run(
-        unittest.defaultTestLoader.loadTestsFromTestCase(PairPartitionSupervisionTests)
-    )
-    check("pair_partition_full_list_geometry_denominator_zero_pair_and_pit_invariants",
-          (5, 0, 0), (_partition_result.testsRun, len(_partition_result.failures), len(_partition_result.errors)))
-    if not _partition_result.wasSuccessful():
-        summary["pair_partition_errors"] = str(_partition_result.failures + _partition_result.errors)
 
     report_dates = np.asarray(["2024-02-01"] * 6 + ["2024-02-02"] * 6 + ["2024-02-05"] * 2)
     report_raw_target = np.asarray([6, 5, 4, 3, 2, 1, 12, 10, 8, 6, 4, 2, 100, -100], dtype=np.float64)

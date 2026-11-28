@@ -12,7 +12,7 @@ target/training/context/objective capabilities and is selected declaratively.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 import math
 from functools import lru_cache
 from typing import Any, Callable
@@ -1227,47 +1227,6 @@ SCORE_OUTPUT_POLICY_SAFETY_RAW_MFE_JOINT_MIN = ContinuousRankerScoreOutputPolicy
 
 
 @dataclass(frozen=True)
-class TrainingPairPartition:
-    """Supervision-only membership; full-list geometry and input universe stay intact."""
-
-    source: str = "fixed_breakout_crossover_union_v1"
-
-    def __post_init__(self) -> None:
-        if self.source != "fixed_breakout_crossover_union_v1":
-            raise ValueError(f"Unsupported training pair membership source: {self.source!r}")
-
-    @property
-    def relation(self) -> str:
-        return CONTINUOUS_RANKER_PAIR_PARTITION_RELATION_WITHIN_POSITIVE
-
-    def as_dict(self) -> dict[str, Any]:
-        return {
-            "source": self.source,
-            "relation": self.relation,
-            "role": "pair_eligibility_only_no_input_or_target_filter",
-            "list_geometry": "original_full_daily_list_gains_ranks_discounts_idcg",
-            "reduction": "sum_masked_weighted_loss_over_sum_masked_weights_across_original_batch",
-            "zero_pair_date": "no_supervision_keep_original_batch_and_forward",
-            "zero_pair_batch": "no_optimizer_update",
-        }
-
-
-@dataclass(frozen=True)
-class PartitionedPairwiseObjectivePolicy(ContinuousRankerObjectivePolicy):
-    """Opt-in composition; existing policy dataclass payloads are unchanged."""
-
-    pair_partition: TrainingPairPartition | None = None
-
-    def __post_init__(self) -> None:
-        super().__post_init__()
-        if not isinstance(self.pair_partition, TrainingPairPartition):
-            raise ValueError("Pair partition composition needs an explicit membership contract")
-        if (self.pairwise_reduction != CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG
-                or self.pair_target_schema != CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_SCALAR):
-            raise ValueError("Training membership currently requires scalar full-list Delta-NDCG")
-
-
-@dataclass(frozen=True)
 class ContinuousRankerExecutionRecipe:
     """Experiment-agnostic execution contract derived from canonical declarations.
 
@@ -2114,13 +2073,6 @@ def build_continuous_ranker_execution_recipe(
     target_policy = _resolve_continuous_ranker_target_policy(profile)
     training_policy = get_continuous_ranker_training_policy(profile.training_objective)
     objective_policy = _resolve_continuous_ranker_objective_policy(spec)
-    pair_partition = getattr(spec, "pair_partition", None)
-    if pair_partition is not None:
-        if training_policy.loss_handler != CONTINUOUS_RANKER_LOSS_HANDLER_SINGLE_PAIRWISE:
-            raise ValueError("Training pair partition requires a single scalar pairwise loss")
-        objective_policy = PartitionedPairwiseObjectivePolicy(
-            **asdict(objective_policy), pair_partition=pair_partition,
-        )
     context_policy = _resolve_continuous_ranker_context_policy(
         target_policy, objective_policy
     )

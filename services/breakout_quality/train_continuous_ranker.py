@@ -177,7 +177,6 @@ from filters.breakout_quality.hs_conditional_mfe import (
 from filters.breakout_quality.continuous_ranker_quality import (
     daily_top_k_metrics as shared_daily_top_k_metrics,
 )
-from filters.breakout_quality.pair_supervision import resolve_training_pair_membership
 from filters.breakout_quality.continuous_target import (
     STRATEGY_ALIGNED_TARGET_ID,
     TARGET_TRADE_MATCHES_CSV_FILENAME,
@@ -881,7 +880,6 @@ def _train_ranker_fitting_epoch(
     raw_r_loss_name,
     raw_r_delta,
     adaptive_horizon_target_provider,
-    group_table=None,
 ) -> float:
     """Single profile/recipe-to-epoch mapping for inner selection and final refit.
 
@@ -889,15 +887,6 @@ def _train_ranker_fitting_epoch(
     adapter only forwards execution settings; it never derives an objective,
     changes samples, or recomputes a fitting/artifact identity.
     """
-    partition = getattr(execution_recipe.objective_policy, "pair_partition", None)
-    partition_options = {}
-    if partition is not None:
-        partition_options = {
-            "pair_partition_membership": resolve_training_pair_membership(
-                partition, feature_bank, group_table,
-            ),
-            "pair_partition_relation": partition.relation,
-        }
     return _train_epoch(
         torch,
         model,
@@ -927,7 +916,6 @@ def _train_ranker_fitting_epoch(
         numerical_execution_policy=profile.numerical_execution_policy,
         bf16_backward_retry_scales=profile.bf16_backward_retry_scales,
         adaptive_horizon_target_provider=adaptive_horizon_target_provider,
-        **partition_options,
     )
 
 
@@ -2268,8 +2256,6 @@ def _train_epoch(
     numerical_execution_policy: str = NUMERICAL_EXECUTION_POLICY_ARCHITECTURE_DEFAULT,
     bf16_backward_retry_scales: tuple[float, ...] = (),
     adaptive_horizon_target_provider=None,
-    pair_partition_membership=None,
-    pair_partition_relation: str = CONTINUOUS_RANKER_PAIR_PARTITION_RELATION_ALL,
 ) -> float:
     model.train()
     training_policy = get_continuous_ranker_training_policy(training_objective)
@@ -2307,10 +2293,6 @@ def _train_epoch(
     weighted_loss_count = 0
     import torch.nn.functional as F
     group_dates_series = pd.Series(group_dates)
-    if pair_partition_membership is not None:
-        pair_partition_membership = np.asarray(pair_partition_membership, dtype=bool)
-        if pair_partition_membership.shape != (len(group_dates_series),):
-            raise ValueError("Training pair membership must align with the complete stock-day table")
     relation_history_plan = _same_date_relation_history_plan(
         model, group_dates_series, ids_all
     )
@@ -2466,10 +2448,6 @@ def _train_epoch(
                         group_dates_series.iloc[ids].to_numpy(),
                         reduction=str(pairwise_reduction),
                         pair_weight_policy=str(pair_weight_policy),
-                        pair_partition_membership=(
-                            None if pair_partition_membership is None else pair_partition_membership[ids]
-                        ),
-                        pair_partition_relation=pair_partition_relation,
                     )
                     if loss is None:
                         continue
@@ -4396,7 +4374,6 @@ def select_epoch(
             raw_r_loss_name=raw_r_loss_name,
             raw_r_delta=raw_r_delta,
             adaptive_horizon_target_provider=adaptive_horizon_target_provider,
-            group_table=group_table,
         )
         validation_evaluation = _evaluate_epoch_split(
             torch,
@@ -4888,7 +4865,6 @@ def fit_final(
             raw_r_loss_name=raw_r_loss_name,
             raw_r_delta=raw_r_delta,
             adaptive_horizon_target_provider=adaptive_horizon_target_provider,
-            group_table=group_table,
         )
         elapsed = time.perf_counter() - started
         history.append({"epoch": int(epoch), "batch_loss": float(loss), "elapsed_sec": round(float(elapsed), 3)})
