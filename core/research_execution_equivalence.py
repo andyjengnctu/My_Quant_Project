@@ -1528,7 +1528,20 @@ _REVIEWED.setdefault('filters/breakout_quality/models/architectures.py', {"revie
 ].update({
     '2b8a0a772f5955251d03fabc4af224a35bd6ae63fe199fe10a7dfacdcf146594': '7759ecf25673d4e1709376f19f1dffb885e00fa8294b3275d718d1dda473f302',
     'a87a9cb43690923dd47405f4dbf051a6fc36c71f5b2effe8ceca69f7aaf2dbdc': '7759ecf25673d4e1709376f19f1dffb885e00fa8294b3275d718d1dda473f302',
+    # AI 2026-11-28: DR descriptor was replaced by the opt-in DS descriptor.
+    # The four unchanged Oracle price-provider profiles and runtime recipes
+    # have byte-equivalent effective contracts; no retired DR descriptor is
+    # reachable from those providers. Unrecognized architecture edits retain
+    # their physical source identity and invalidate any historical REUSE.
+    '6e85cc9bba52aeed24772877b0961f390feb51a7a70f5ed068f5e6b7b5fa7908': '7759ecf25673d4e1709376f19f1dffb885e00fa8294b3275d718d1dda473f302',
 })
 _REVIEWED_SOURCE_INVENTORIES["oracle_daily_provider"]["current"][
     'filters/breakout_quality/daily_ranker_data.py'
-] = ('21f77074a7ba30c6c80ae1e43cd7beb03db5fc2a988e69e5af95694d0c4804c5', '21f77074a7ba30c6c80ae1e43cd7beb03db5fc2a988e69e5af95694d0c4804c5', 'b836dcb0b1b9379f63be246685fce0f496b4842455fc5970f595abb2e03659b6')
+] = (
+    # AI 2026-11-28: Hard retirement deleted the unused DR 300x12 branch.
+    # Only opt-in centered-volume calculations changed; all existing Oracle
+    # providers use centered_log_volume=False and unchanged data contracts.
+    'c33e92f593e8592052b766f2931a39fe4eee9a1abacf07bf11ec63b3373c23a5',
+    'c33e92f593e8592052b766f2931a39fe4eee9a1abacf07bf11ec63b3373c23a5',
+    '6a0c1e9e12101d275c3d4240319f8ecaae4907bc77fd7e125ce7aeb9f716a5ce',
+)
