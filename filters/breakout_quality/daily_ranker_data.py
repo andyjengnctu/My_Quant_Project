@@ -194,7 +194,8 @@ class LazyDailyFeatureBank:
             if self._feature_quote_mask else
             (*FEATURE_COLUMNS, *TRADE_COUNT_FEATURE_NAMES)
             if self._trade_count_enabled else
-            (*FEATURE_COLUMNS, *CENTERED_LOG_VOLUME_FEATURE_COLUMNS)
+            (*FEATURE_COLUMNS[:4], CENTERED_LOG_VOLUME_FEATURE_COLUMNS[0],
+             *FEATURE_COLUMNS[5:9], CENTERED_LOG_VOLUME_FEATURE_COLUMNS[1])
             if self._centered_log_volume else FEATURE_COLUMNS
         )
         # Preserve legacy manifest byte semantics for existing AO/BX artifacts;
@@ -328,7 +329,8 @@ class LazyDailyFeatureBank:
         if self._centered_log_volume:
             length = int(self._policy.feature_window_bars)
             volume = self._benchmark_feature_array[position - length + 1:position + 1, 4]
-            feature = np.column_stack((feature, centered_log_volume_windows(volume[None, :])[0]))
+            amplitude = centered_log_volume_windows(volume[None, :])[0]
+            feature[:, 4] = amplitude
         if self._trade_count_enabled:
             length = int(self._policy.feature_window_bars)
             start = position - length + 1
@@ -719,7 +721,7 @@ class LazyDailyFeatureBank:
             raise RuntimeError("daily feature window產生non-finite value")
         output[:, :, :5] = stock_features
         if self._centered_log_volume:
-            output[:, :, 10] = centered_log_volume_windows(stock_windows[:, :, 4])
+            output[:, :, 4] = centered_log_volume_windows(stock_windows[:, :, 4])
         if self._feature_quote_mask:
             output[:, :, 10] = stock_masks.astype(np.float32)
         if self._trade_count_enabled:
@@ -735,8 +737,6 @@ class LazyDailyFeatureBank:
             local = np.flatnonzero(benchmark_positions == int(benchmark_pos))
             benchmark_feature = self._benchmark_feature(int(benchmark_pos))
             output[local, :, 5:10] = benchmark_feature[:, :5]
-            if self._centered_log_volume:
-                output[local, :, 11] = benchmark_feature[:, 5]
             if self._feature_quote_mask:
                 output[local, :, 11] = benchmark_feature[:, 5]
             if self._trade_count_enabled:

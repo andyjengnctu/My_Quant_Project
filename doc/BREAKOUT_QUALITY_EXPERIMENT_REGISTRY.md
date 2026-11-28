@@ -4,6 +4,14 @@
 
 本文件是 `breakout_quality` 的**實驗 identity、命名、版本語意、namespace、目前基準與 ID 佔用狀態**單一真理來源。
 
+### 2026-11-28 T40 成交量幅度取代輸入研究（MR-13DS／C211／C212；使用者核准）
+
+`MR-13DS`，profile=`daily_universal_terminal_mae_gated_t40_full_list_ndcg_pairwise_centered_log_volume_replace`，`ARCH-inception_time_centered_log_volume_replace_v1`，獨立 FIT v1。沿用 `MR-13CJ` 的 T40 真值、PIT 合法訓練股票日／40D 成熟、InceptionTime trunk／head、Adam、full-list Delta-NDCG、日期批次、Validation／epoch selection、種子及訓練窗口。**唯一實驗變數是 Volume 表示替換**：個股第 5 欄與 0050 第 10 欄原 IQR-normalized log-volume 改為同歷史 300-bar 視窗的 `log1p(max(Volume,0)) − median_window(log1p(max(Volume,0)))`，不除 IQR；其餘八個 OHLC 通道位元等價維持，輸入長寬均為 **300×10**。原基準 CJ 的 FIT／Replay 完全不變，新的 feature manifest 明確區分兩條 Volume 語意。此替換重用已存在的 centered-volume primitive，並不重新啟用已退役 DR 的 300×12 附加模式；不引入外部資料、技術指標、全零控制組、額外模型分支或獨立策略比較器。
+
+`SR-C211` 是 P16 Exact K/R0（配對 C107），`SR-C212` 是 P16 Direct No-K/No-R0（配對 C109），各 Replay v1，兩者共用 `DL-CONT13DS-ROLL`／`CONT13DS_ROLL` 的同一模型／PIT 分數，沒有兩套 DL。正式 Summary T40 Exact／Direct、Model Compare、Forward／Rolling、四種 benchmark seed Robustness 與 Oracle binding 皆由既有共通 Research roster 派生；Compare Suite 對照為 `C211-C107`、`C212-C109`、`C211-C212`。原 CJ 保留，DR 的 C209／C210、模型與 Source 已退出現行名單但歷史編號不回收。Seed42 用於先行 Rolling 評估；只有取得正式四 seed 證據才能判定四 seed 晉級（Exact 配對 ΔRoMD 均值／中位數皆正、至少 3/4 改善、平均 MDD 不增加；Direct 是交叉檢驗）。無新的 Target／Oracle 公式、Trading promotion、OOS FIT 或專用選單。
+
+目前狀態：`REGISTERED / IMPLEMENTED / MARKET_RESULTS_PENDING / RESEARCH_ONLY / NO_TRADING`。不得把 DR 未完成的 seed 回放或任一歷史工件改名為 DS；舊的合法 FIT／Replay 依完整 identity REUSE。2021-01-01～2026-03-02 是反覆使用的迭代研究 OOS，不宣稱 untouched holdout。
+
 ### 2026-11-28 T40 centered log-volume 輸入研究（使用者核准）
 
 `MR-13DR`，profile=`daily_universal_terminal_mae_gated_t40_full_list_ndcg_pairwise_centered_log_volume`，`ARCH-inception_time_centered_log_volume_v1`，FIT v1。對照為原 `MR-13CJ`。原個股＋0050 的 300×10 每欄保留原值，只在最後加入個股與0050各一條 `a_t=log1p(max(Volume_t,0))−median_window(log1p(max(Volume,0)))`，成為 300×12；新通道不除以 IQR，保留原量能正規化移除的窗內幅度。兩標的各使用自己原有的 300 根合法歷史視窗，終點為資訊日；零量是有效觀察，缺值／非有限量不得補零。只用既有 canonical FinMind 還原 OHLCV，不新增外部資料、技術指標、全零控制組或獨立比較流程。
@@ -13,6 +21,8 @@
 `SR-C209` 是 P16 Exact K/R0，對照 C107；`SR-C210` 是 P16 Direct No-K/No-R0，對照 C109，皆 Replay v1。兩列共用 `DL-CONT13DR-ROLL`／`CONT13DR_ROLL` 的同一 FIT／PIT score，Selectors 不另行訓練。原 Summary roster 的 T40 Exact／Direct group 加入兩列；Model Compare/Test、Forward／Rolling、四 seed Robustness、Target binding 與 Summary 由同一清單派生。原 Compare Suite 啟用 C209-C107、C210-C109、C209-C210；不新增 Target／Oracle 公式或報表版本，沿用同條件的 T40 Oracle recipe。
 
 先以既有模型 SOP 的排序／高分端指標檢查輸入是否改善學習，再以同 seed 策略對照判讀；Exact 為主要、Direct 為次要證據。沿用既有四 seed 晉級規則：配對 ΔRoMD 均值與中位數皆正、至少 3/4 改善且平均 MDD 不增加；Direct 不能抵銷 Exact 未通過。2021-01-01～2026-03-02 為迭代研究 OOS，不能用其統計 FIT／調參。狀態為 `REGISTERED / IMPLEMENTED / MARKET_RESULTS_PENDING / RESEARCH_ONLY / NO_TRADING`；Training Model 選 DR，CJ 與其他現行對照保留，合法既有工件依完整身分 REUSE。尚無市場 FIT／Rolling／Robustness 結果，不新增 Experiment Log 成績或自動 promotion。
+
+**2026-11-28 後續結果及退役決策：** 上述 DR 的 MARKET_RESULTS_PENDING 是其首輪登錄時狀態；使用者其後回報完整 Seed42 Rolling，但四個 Robustness seeds 尚未完成即人工中止。C209 Exact 對 C107 Rolling RoMD=7.43 vs 11.05，MDD=14.31% vs 13.01%；C210 Direct 對 C109 Rolling RoMD=3.82 vs 7.19，MDD=15.32% vs 13.78%。MR-13DR 的 Global Daily ρ=0.1860 vs CJ 0.2194，Breakout Daily ρ=0.1936 vs 0.1941；雖 Global ρ 與部分 Top-Bottom 有局部改善，未轉換成策略正增益。使用者明確指定 **MR-13DR、C209、C210 退役**，退出現行模型／策略比較、Summary／Oracle binding、訓練選擇與 Robustness 自動依賴；依專案退役即刪除原則，DR 的 300×12 architecture descriptor、輸入附加分支及專屬測試已從執行程式刪除；centered-volume 函式為 DS 共用 primitive 而保留，DR 歷史 scientific identity／結果與工件仍保留。保留 DR 舊研究定義、Rolling 紀錄、尚未完成的 Robustness 中斷證據與既有工件；狀態 `RETIRED / ROLLING_NEGATIVE / ROBUSTNESS_INCOMPLETE / NO_ADVANCEMENT / HISTORICAL_ID_RESERVED / NO_TRADING`。詳見 2026-11-28 Experiment Log 結果追加。
 
 ### 2026-11-28 退役研究的實作生命週期
 
@@ -30,6 +40,7 @@
 | SR-C203, SR-C204 | CANCELLED | REMOVED |
 | SR-C205, SR-C206, HV1 | RETIRED | REMOVED |
 | SR-C207, SR-C208, HV2 | RETIRED | REMOVED |
+| MR-13DR, SR-C209, SR-C210 | RETIRED | REMOVED (DR descriptor and 300x12 execution path deleted; centered-volume primitive retained for DS) |
 | MR-10A | RETIRED | REMOVED |
 <!-- /implementation-lifecycle -->
 

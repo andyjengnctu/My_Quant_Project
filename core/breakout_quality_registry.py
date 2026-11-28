@@ -339,8 +339,8 @@ DAILY_UNIVERSAL_SHARED_FULL_D20_SAFETY_HS_CONDITIONAL_MFE_PROFILE = (
 DAILY_UNIVERSAL_TERMINAL_R40_PAIRWISE_PROFILE = "daily_universal_terminal_r40_full_list_ndcg_pairwise"
 DAILY_UNIVERSAL_TERMINAL_R40_POSITIVE_PROFILE = "daily_universal_terminal_r40_positive_binary"
 DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_PAIRWISE_PROFILE = "daily_universal_terminal_mae_gated_t40_full_list_ndcg_pairwise"
-DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_CENTERED_LOG_VOLUME_PROFILE = (
-    "daily_universal_terminal_mae_gated_t40_full_list_ndcg_pairwise_centered_log_volume"
+DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_CENTERED_LOG_VOLUME_REPLACE_PROFILE = (
+    "daily_universal_terminal_mae_gated_t40_full_list_ndcg_pairwise_centered_log_volume_replace"
 )
 DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_POSITIVE_PROFILE = "daily_universal_terminal_mae_gated_t40_positive_binary"
 DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_PROBABILISTIC_PROFILE = "daily_universal_terminal_mae_gated_t40_probabilistic_pairwise"
@@ -982,11 +982,11 @@ _EXPERIMENT_PROFILES = {
     ),
 }
 
-# AI: Inherit the approved T40 fitting recipe; only input representation changes.
-_EXPERIMENT_PROFILES[DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_CENTERED_LOG_VOLUME_PROFILE] = replace(
+# AI: One independent replacement-input experiment; historical DR is not executable.
+_EXPERIMENT_PROFILES[DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_CENTERED_LOG_VOLUME_REPLACE_PROFILE] = replace(
     _EXPERIMENT_PROFILES[DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_PAIRWISE_PROFILE],
-    name=DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_CENTERED_LOG_VOLUME_PROFILE,
-    model_architecture="inception_time_centered_log_volume_v1",
+    name=DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_CENTERED_LOG_VOLUME_REPLACE_PROFILE,
+    model_architecture="inception_time_centered_log_volume_replace_v1",
 )
 
 SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES = tuple(_EXPERIMENT_PROFILES)
@@ -1617,18 +1617,19 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
     ),
 }
 
-_CONTINUOUS_RANKER_RESEARCH_SPECS[DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_CENTERED_LOG_VOLUME_PROFILE] = replace(
+_CONTINUOUS_RANKER_RESEARCH_SPECS[DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_CENTERED_LOG_VOLUME_REPLACE_PROFILE] = replace(
     _CONTINUOUS_RANKER_RESEARCH_SPECS[DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_PAIRWISE_PROFILE],
-    profile_name=DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_CENTERED_LOG_VOLUME_PROFILE,
-    model_research_id="MR-13DR",
-    experiment_name="MR-13DR T40 Centered Log-Volume Full-list Ranker",
-    phase="13DR",
+    profile_name=DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_CENTERED_LOG_VOLUME_REPLACE_PROFILE,
+    model_research_id="MR-13DS",
+    experiment_name="MR-13DS T40 Centered Log-Volume Replacement Full-list Ranker",
+    phase="13DS",
     objective_description=(
-        "Same T40 truth, mature daily stock-days, InceptionTime trunk/head, Adam, "
-        "full-list Delta-NDCG, folds and epoch selection as CJ. Append stock and "
-        "0050 log1p(max(Volume,0)) minus each historical window's median, without "
-        "IQR division, to the unchanged 300x10 inputs. One independent 300x12 FIT "
-        "and PIT score source serves P16 Exact and Direct. No OOS fitting or Trading promotion."
+        "Same T40 truth, maturity, PIT cohort, InceptionTime topology, Adam, "
+        "full-list Delta-NDCG, folds and epoch selection as CJ. Replace only the "
+        "stock and 0050 IQR-normalized log-volume columns with log1p(max(Volume,0)) "
+        "minus each historical window median. Preserve all eight normalized price "
+        "channels and 300x10 width. One independent FIT/PIT score source serves "
+        "P16 Exact and Direct. No OOS fitting or Trading promotion."
     ),
 )
 

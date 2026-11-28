@@ -5650,3 +5650,23 @@ Seed42 中，買進當天續抱優於下一可成交出場的 episodes 占 39.68
 此外 soft 訓練與 hard 部署不同：每天 p＝0.01 在 50 個可決策日累積約 39.50% 的隨機出場機率，但固定 p≥0.5 的實際規則完全不賣。三折 train 在初始 soft 政策下平均至少出場一次的機率為 28.16%／30.82%／32.62%，hard 政策皆為 0。有限訓練下，soft objective 改善不保證 hard 首次出場收益改善。現有選模 fallback 正確擋下沒有增益的政策；這是本版目標鬆弛、模型與資料共同的研究限制，不藉由降閾值或延長 epochs 改寫原 REJECT，也不能由此推論量價完全沒有預測資訊。
 
 新增證據：`outputs/validation/holding_policy_retirement_20261127/diagnosis.json` 保存三折曲線摘要、初始化 objective／bias 導數、來源 SHA、樣本核驗與限制。下一步僅在回覆提出具體設計，未寫入研究排程、建立新模型或預占編號。
+
+## 2026-11-28 MR-13DR 補回量能幅度：Seed42 Rolling 負結果、四 Seed 未完成、使用者退役
+
+**實驗來源與限制。** 使用者貼出 Research [1] → Summary → [V] 一鍵驗證的主控台紀錄（`貼上的文字 (1)(20261128-084934).txt`），時段 2021-01-01～2026-03-02，Breakout Min/P16、Seed42 Rolling。`MR-13DR` 採個股與0050 300×12 的原 10 欄加兩條 centered log-volume，T40 真值／模型其他訓練規則同 `MR-13CJ`；C209 Exact 對照 C107、C210 Direct 對照 C109。此為**使用者回報控制台數字**，本輪未取得原始 FIT／Replay／四 Seed JSON 自行驗證，不宣稱獨立重算或完整四 Seed。
+
+| 指標 | C107 CJ Exact | C209 DR Exact | C109 CJ Direct | C210 DR Direct |
+| --- | ---: | ---: | ---: | ---: |
+| Rolling RoMD | 11.05 | 7.43 | 7.19 | 3.82 |
+| 總報酬 | +143.78% | +106.25% | +99.09% | +58.59% |
+| MDD | 13.01% | 14.31% | 13.78% | 15.32% |
+| 勝率 | 40.95% | 38.72% | 38.65% | 37.31% |
+| EV(A) | +0.76R | +0.61R | +0.45R | +0.41R |
+| 成交筆數 | 359 | 359 | 401 | 402 |
+
+Seed42 Rolling 的 DR−CJ RoMD：Exact **−3.62**、Direct **−3.37**；MDD 分別 **+1.30pp／+1.54pp**。模型 SOP：CJ／DR Global Daily ρ=`0.2194/0.1860`，Global ρ=`0.1081/0.1602`，Global Pair=`58.04%/57.02%`；Breakout Daily ρ=`0.1941/0.1936`，Global ρ=`0.1308/0.2054`，Pair=`57.56%/57.44%`。DR 的 Breakout Top-Bottom Target=`+0.2179` 對 CJ `−0.1360`，但 DR 前十分位 Target `−0.1307` vs CJ `−0.1802`、後十分位 `−0.3487` vs CJ `−0.0442`，差距增加主要來自底端降低；不等同可交易 Top-K 改善。DR 正 Top-Bottom 年份 `1/5`、漂移警示 YES；CJ `2/5`、NO。
+
+**Robustness 未完成。** [V] 自動補件時 `693545351` 和 `2014432738` 顯示 PIT 3/6、正在跑 fold 4/6，`104504529` 與 `762252050` 尚未開始。其後使用者中止流程，並非四 Seed 驗證 FAIL；Summary 的 C209 7.43／C210 3.82 僅為 Rolling 值，不能當成四 Seed 均值，Oracle 同值不能當成 DR 的新預測效果。2021 起 OOS 為反覆研究，沒有 untouched holdout。
+
+**決策。** 使用者明確要求「登錄結果、退役13dr、進行新的」。本輪登錄 `NO_ADVANCEMENT / RETIRED_FROM_CURRENT_RESEARCH / ROBUSTNESS_INCOMPLETE`，原 DR/C209/C210 編號、研究定義與已存在工件永久保留；現行比較／訓練／Summary 退出 DR。研究假說「量能幅度無效」不被全面否定，因 DR 同時增加 input width 至 12，無法分離新增資訊與重複表示影響。下一個獨立假說為 `MR-13DS`：固定 **300×10**，只用相同 centered log-volume 取代兩條舊 Volume，Exact／Direct 採 C211／C212，仍用原 Research SOP 與四 Seed pairing；此段**只是新研究註冊，不是 DS 已有成績**。
+

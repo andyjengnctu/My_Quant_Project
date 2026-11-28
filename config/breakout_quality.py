@@ -111,10 +111,10 @@ BREAKOUT_QUALITY_WORKFLOW_EXPERIMENT_PROFILE = "daily_universal_no_time_full_lis
 # Original AO/CC, CG and direct U40 CE/CF fitting identities remain frozen.
 # MR-13CL label was retired: it used a separate P2/P16 parameter teacher, not
 # the same per-seed formal Min ROOS execution truth being compared by Oracle.
-# AI: User-authorized T40 input experiment; existing CJ remains a comparison control.
+# AI: Replacement-input T40 treatment; CJ is the frozen reference, DR is retired.
 BREAKOUT_QUALITY_MODEL_RESEARCH_MODEL_PROFILE = (
-    "MR-13DR",
-    "daily_universal_terminal_mae_gated_t40_full_list_ndcg_pairwise_centered_log_volume",
+    "MR-13DS",
+    "daily_universal_terminal_mae_gated_t40_full_list_ndcg_pairwise_centered_log_volume_replace",
 )
 # Compatibility alias for call sites that only need the executable profile slug.
 BREAKOUT_QUALITY_MODEL_RESEARCH_EXPERIMENT_PROFILE = (
