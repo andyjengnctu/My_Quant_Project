@@ -326,6 +326,7 @@ def _verify_review(root: Path, path: Path, inventory, revisions) -> dict[str, An
     baseline_inventory = dict(baseline["source_inventory"])
     if not baseline_inventory or source_inventory_digest(baseline_inventory) != baseline.get("source_digest"):
         raise OracleBuildBlockedError("Oracle baseline source inventory mismatch")
+    baseline_attestation = None
     with zipfile.ZipFile(snapshot) as archive:
         from services.research.oracle_numerical_sources import oracle_build_source_parts_from_reader
         baseline_parts = oracle_build_source_parts_from_reader(archive.read)
@@ -336,6 +337,11 @@ def _verify_review(root: Path, path: Path, inventory, revisions) -> dict[str, An
                              "syntax_sha256": sha256(baseline_parts[name].encode("utf-8")).hexdigest()}
             if reconstructed != record:
                 raise OracleBuildBlockedError("Oracle baseline source does not match its snapshot")
+        if review.get("legacy_origins") and review.get("legacy_baseline_attestation") is not None:
+            try:
+                baseline_attestation = json.loads(archive.read(ATTESTATION_RELATIVE_PATH).decode("utf-8-sig"))
+            except KeyError as exc:
+                raise OracleBuildBlockedError("Oracle baseline snapshot has no certified origin proof") from exc
     evidence_files = {}
     def retain(name, source, digest):
         file_name = Path(name)
@@ -398,7 +404,24 @@ def _verify_review(root: Path, path: Path, inventory, revisions) -> dict[str, An
     if covered_sources != changed_sources:
         raise OracleBuildBlockedError("Oracle changed numerical sources lack scoped parity evidence")
     origins = dict(review.get("legacy_origins") or {})
-    if origins:
+    inherited_origins = set()
+    inherited_reference = None
+    if origins and review.get("legacy_baseline_attestation") is not None:
+        reference = dict(review["legacy_baseline_attestation"])
+        previous = _read_pinned_json(reference, relative_to=path.parent)
+        _validate_certificate(previous)
+        if (previous != baseline_attestation
+                or previous.get("source_digest") != baseline["source_digest"]
+                or previous.get("component_revisions") != old_revisions
+                or any(dict(previous.get("legacy_origins") or {}).get(name) != record
+                       for name, record in origins.items())):
+            raise OracleBuildBlockedError("Oracle inherited origins differ from the certified baseline")
+        previous_path = Path(reference["path"])
+        if not previous_path.is_absolute():
+            previous_path = path.parent / previous_path
+        inherited_reference = retain("baseline_attestation.json", previous_path, reference["sha256"])
+        inherited_origins = set(origins)
+    elif origins:
         audit_reference = dict(review.get("legacy_audit_receipt") or {})
         audit = _read_pinned_json(audit_reference, relative_to=path.parent)
         audited_origins = dict(audit.get("validated_origins") or {})
@@ -419,7 +442,13 @@ def _verify_review(root: Path, path: Path, inventory, revisions) -> dict[str, An
                                     for component, value in relevant.items())):
                 raise OracleBuildBlockedError("Legacy origin has changed or unproven component revisions")
         receipt = root / _relative_path(name)
-        if not receipt.resolve().is_relative_to(root) or sha256(receipt.read_bytes()).hexdigest() != record.get("sha256"):
+        if not receipt.resolve().is_relative_to(root):
+            raise OracleBuildBlockedError("Oracle legacy origin escapes the artifact root")
+        # AI: A code-only delivery may omit already certified market artifacts.
+        # Keep their exact pins through the reviewed baseline; every actual read
+        # still verifies the file and numerical binding in oracle_legacy_admission.
+        if ((name not in inherited_origins or receipt.exists())
+                and sha256(receipt.read_bytes()).hexdigest() != record.get("sha256")):
             raise OracleBuildBlockedError("Oracle legacy origin receipt changed")
     return {
         "kind": review_kind, "review_sha256": sha256(path.read_bytes()).hexdigest(),
@@ -429,6 +458,7 @@ def _verify_review(root: Path, path: Path, inventory, revisions) -> dict[str, An
         "proofs": retained_proofs, "baseline_snapshot": baseline_reference,
         "structurally_unchanged_sources": sorted((set(baseline_inventory) & set(inventory)) - changed_sources),
         "legacy_origins": origins, "evidence_files": evidence_files,
+        **({"legacy_baseline_attestation": inherited_reference} if inherited_reference else {}),
         **({"revision_changes": changes, "decision_kind": review["decision_kind"],
             "decision_reference": review["decision_reference"]} if changes else {}),
     }

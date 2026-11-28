@@ -275,6 +275,144 @@ class OracleBuildAttestationTests(unittest.TestCase):
             self.write_review()
             with self.assertRaises(owner.OracleBuildBlockedError):
                 owner.prepare_oracle_build_candidate(self.root)
+
+    def _review_with_certified_origins(self):
+        origin_name = "outputs/research/legacy_receipt.json"
+        reference = self.write_json(origin_name, {"immutable": True})
+        origins = {origin_name: {"sha256": reference["sha256"],
+                                "identity_sha256": "f" * 64,
+                                "result_contract_sha256": "d" * 64}}
+        self.review["legacy_origins"] = origins
+        self.review["legacy_audit_receipt"] = self.write_json("origin_audit.json", {
+            "status": "PASS", "source_digest": self.review["baseline"]["source_digest"],
+            "snapshot_sha256": self.review["baseline"]["snapshot_sha256"],
+            "process_token": "independent-baseline", "validated_origins": origins,
+        })
+        self.write_review()
+        previous = self.publish()
+        previous_reference = self.write_json("baseline_attestation.json", previous)
+        certified_snapshot = self.root / "certified_baseline.zip"
+        with zipfile.ZipFile(certified_snapshot, "w") as archive:
+            archive.writestr("calculation.py", self.source.read_bytes())
+            archive.writestr(owner.ATTESTATION_RELATIVE_PATH,
+                             (self.root / owner.ATTESTATION_RELATIVE_PATH).read_bytes())
+        self.snapshot = certified_snapshot
+        self.source.write_text("def calculate(x=1):\n    return x + 1\n\nUNUSED = 1\n")
+        self.current = owner.capture_oracle_source_inventory(self.root)
+        self.review = self.make_review()
+        self.review.update(legacy_origins=origins, legacy_baseline_attestation=previous_reference)
+        self.write_review()
+        return previous, origins
+
+    def test_certified_origin_pins_survive_code_only_delivery_but_actual_reads_stay_strict(self):
+        from services.research.oracle_legacy_admission import verified_legacy_origin_pin
+        _previous, origins = self._review_with_certified_origins()
+        name, record = next(iter(origins.items()))
+        receipt = self.root / name
+        original = receipt.read_bytes()
+        receipt.unlink()
+        candidate = owner.prepare_oracle_build_candidate(self.root)
+        self.assertEqual(candidate["legacy_origins"], origins)
+        self.assertIn("legacy_baseline_attestation", candidate["equivalence_evidence"])
+        payload = self.publish()
+        self.assertTrue(owner.inspect_oracle_build_attestation(self.root).ready)
+        def read_pin():
+            return verified_legacy_origin_pin(
+                self.root, receipt, payload, identity_sha256=record["identity_sha256"],
+                result_contract_sha256=record["result_contract_sha256"])
+        self.assertIsNone(read_pin())
+        receipt.write_bytes(original)
+        self.assertEqual(read_pin(), record)
+        receipt.write_text("changed")
+        self.assertIsNone(read_pin())
+
+    def test_inherited_origin_requires_intact_certificate_for_the_exact_baseline(self):
+        previous, _origins = self._review_with_certified_origins()
+        variants = []
+        changed = deepcopy(previous)
+        changed["status"] = "UNVERIFIED"
+        variants.append(owner._sealed_payload(changed))
+        changed = deepcopy(previous)
+        changed["component_revisions"]["replay"] = 99
+        variants.append(owner._sealed_payload(changed))
+        changed = deepcopy(previous)
+        changed["source_inventory"]["calculation.py"]["syntax_sha256"] = "e" * 64
+        changed["source_digest"] = owner.source_inventory_digest(changed["source_inventory"])
+        changed["equivalence_evidence"]["current_source_digest"] = changed["source_digest"]
+        variants.append(owner._sealed_payload(changed))
+        changed = deepcopy(previous)
+        changed["attestation_sha256"] = "e" * 64
+        variants.append(changed)
+        for variant in variants:
+            with self.subTest(variant=variant.get("source_digest")):
+                self.review["legacy_baseline_attestation"] = self.write_json("wrong_baseline.json", variant)
+                self.write_review()
+                with self.assertRaises(owner.OracleBuildBlockedError):
+                    owner.prepare_oracle_build_candidate(self.root)
+
+    def test_inherited_origin_reference_and_pin_cannot_be_replaced_or_extended(self):
+        previous, origins = self._review_with_certified_origins()
+        original = deepcopy(self.review)
+        for altered in (
+            {name: {**record, "sha256": "a" * 64} for name, record in origins.items()},
+            {**origins, "outputs/research/unproved.json": next(iter(origins.values()))},
+        ):
+            self.review = deepcopy(original)
+            self.review["legacy_origins"] = altered
+            self.write_review()
+            with self.assertRaises(owner.OracleBuildBlockedError):
+                owner.prepare_oracle_build_candidate(self.root)
+        self.review = deepcopy(original)
+        self.review["legacy_baseline_attestation"]["sha256"] = "a" * 64
+        self.write_review()
+        with self.assertRaises(owner.OracleBuildBlockedError):
+            owner.prepare_oracle_build_candidate(self.root)
+        # Resealing a rewritten predecessor cannot replace the certificate in
+        # the independent frozen baseline, even when its numerical source agrees.
+        forged = deepcopy(previous)
+        next(iter(forged["legacy_origins"].values()))["sha256"] = "a" * 64
+        self.review = deepcopy(original)
+        self.review["legacy_origins"] = deepcopy(forged["legacy_origins"])
+        self.review["legacy_baseline_attestation"] = self.write_json(
+            "forged_predecessor.json", owner._sealed_payload(forged))
+        self.write_review()
+        with self.assertRaises(owner.OracleBuildBlockedError):
+            owner.prepare_oracle_build_candidate(self.root)
+        self.review = deepcopy(original)
+        uncertified = self.root / "source_only_baseline.zip"
+        with zipfile.ZipFile(self.snapshot) as archive:
+            code = archive.read("calculation.py")
+        with zipfile.ZipFile(uncertified, "w") as archive:
+            archive.writestr("calculation.py", code)
+        self.review["baseline"].update(snapshot_path=str(uncertified),
+                                       snapshot_sha256=sha256(uncertified.read_bytes()).hexdigest())
+        self.write_review()
+        with self.assertRaisesRegex(owner.OracleBuildBlockedError, "snapshot has no certified origin"):
+            owner.prepare_oracle_build_candidate(self.root)
+
+    def test_inherited_origin_still_rejects_present_tampered_receipt(self):
+        _previous, origins = self._review_with_certified_origins()
+        (self.root / next(iter(origins))).write_text("changed")
+        with self.assertRaisesRegex(owner.OracleBuildBlockedError, "receipt changed"):
+            owner.prepare_oracle_build_candidate(self.root)
+
+    def test_inherited_origins_do_not_replace_source_parity_or_revision_proof(self):
+        _previous, _origins = self._review_with_certified_origins()
+        original = deepcopy(self.review)
+        self.review["proofs"] = []
+        self.write_review()
+        with self.assertRaises(owner.OracleBuildBlockedError):
+            owner.prepare_oracle_build_candidate(self.root)
+        self.review = deepcopy(original)
+        self.revisions["replay"] = 2
+        self.review["current"]["component_revisions"] = dict(self.revisions)
+        self.review.update(kind="revision_change", revision_changes={"replay": {"from": 1, "to": 2}},
+                           decision_kind="correctness_fix", decision_reference="existing execution contract")
+        self.review["proofs"][0]["kind"] = "independent_component_parity"
+        self.write_review()
+        with self.assertRaisesRegex(owner.OracleBuildBlockedError, "changed or unproven component"):
+            owner.prepare_oracle_build_candidate(self.root)
+
     def test_revision_increase_is_explicit_and_unaffected_components_are_proved(self):
         self.revisions = {"replay": 2, "observation": 1}
         self.review["current"]["component_revisions"] = dict(self.revisions)
