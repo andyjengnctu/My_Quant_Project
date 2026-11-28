@@ -97,6 +97,28 @@ def _normalize_volume_window(volume: np.ndarray) -> np.ndarray:
     return ((log_volume - median) / iqr).astype(np.float32)
 
 
+CENTERED_LOG_VOLUME_FEATURE_COLUMNS = (
+    "Stock_Centered_Log_Volume",
+    "Benchmark_Centered_Log_Volume",
+)
+
+
+def centered_log_volume_windows(volume: np.ndarray) -> np.ndarray:
+    """Preserve within-window log-volume amplitude without dividing by IQR.
+
+    AI: Each row is one already selected historical window. No statistics from
+    other stock-days, fitting subsets or future bars enter this representation.
+    Missing observations are rejected rather than encoded as genuine zero volume.
+    """
+    values = np.asarray(volume, dtype=np.float64)
+    if values.ndim != 2 or values.shape[1] == 0:
+        raise ValueError("centered log-volume windows必須是 [batch, bars>0]")
+    if not bool(np.isfinite(values).all()):
+        raise ValueError("centered log-volume windows不得包含缺值或非有限成交量")
+    logs = np.log1p(np.maximum(values, 0.0))
+    return (logs - np.median(logs, axis=1, keepdims=True)).astype(np.float32)
+
+
 def _normalize_ohlcv_window(window: pd.DataFrame, anchor_close: float) -> np.ndarray:
     values = window[["Open", "High", "Low", "Close", "Volume"]].to_numpy(
         dtype=np.float64,

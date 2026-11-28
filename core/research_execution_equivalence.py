@@ -1499,3 +1499,36 @@ def reviewed_replay_predecessor_sources(parts, *, project_root):
             return {}
         restored[relative] = (predecessor, proof["predecessor_module_calculation_sha256"])
     return restored
+
+
+# AI: Independent frozen 87bb05b2/current processes preserve all 28 existing
+# profile contracts, original inputs, CJ optimizer weights, daily loader rows/
+# targets and four complete Portfolio observations (37 engineering cases).
+# Evidence: outputs/validation/centered_log_volume_20261128/*_preservation.json.
+# These exact pins preserve only unchanged Oracle/default input semantics;
+# the opt-in input model keeps its distinct architecture/profile/FIT identity.
+_REVIEWED.setdefault('core/breakout_quality_registry.py', {"reviewed_model_only_revisions": {}})[
+    "reviewed_model_only_revisions"
+].update({
+    '558e52b4a0b48c23dca6e50fae0a60568e31b2849959fcdc1b5820c5a28c017c': '310db0713692a8a335d8f7514e8026b05e0e921781b5a89412cd5d1d63f4aa5e',
+    '1b39bac8dbfcda7417ef0113583a6746c4a9c4d969a456128bb801bc79bdbc7f': '310db0713692a8a335d8f7514e8026b05e0e921781b5a89412cd5d1d63f4aa5e',
+})
+_REVIEWED.setdefault('filters/breakout_quality/features.py', {
+    "file_sha256": "acbc1574c7907478b4e545b14073d3719373a7b5702e61ce45be394e6a476fb9",
+    "original_file_sha256": "b642dba21cb806841ed2bb811592e3379fe6130831e559db68e09820bbd365a7",
+    "calculations": {}, "reviewed_model_only_revisions": {},
+})[
+    "reviewed_model_only_revisions"
+].update({
+    'acbc1574c7907478b4e545b14073d3719373a7b5702e61ce45be394e6a476fb9': 'b642dba21cb806841ed2bb811592e3379fe6130831e559db68e09820bbd365a7',
+    '173f11c00b916f91add7bb3df35ef1edfa19124d7f39233fb2dfb0ba9c3adcf2': '6e6b5189a2c1b52bb8d47bbbd769ae3ee266d8279575eb3b1c43b03084794070',
+})
+_REVIEWED.setdefault('filters/breakout_quality/models/architectures.py', {"reviewed_model_only_revisions": {}})[
+    "reviewed_model_only_revisions"
+].update({
+    '2b8a0a772f5955251d03fabc4af224a35bd6ae63fe199fe10a7dfacdcf146594': '7759ecf25673d4e1709376f19f1dffb885e00fa8294b3275d718d1dda473f302',
+    'a87a9cb43690923dd47405f4dbf051a6fc36c71f5b2effe8ceca69f7aaf2dbdc': '7759ecf25673d4e1709376f19f1dffb885e00fa8294b3275d718d1dda473f302',
+})
+_REVIEWED_SOURCE_INVENTORIES["oracle_daily_provider"]["current"][
+    'filters/breakout_quality/daily_ranker_data.py'
+] = ('21f77074a7ba30c6c80ae1e43cd7beb03db5fc2a988e69e5af95694d0c4804c5', '21f77074a7ba30c6c80ae1e43cd7beb03db5fc2a988e69e5af95694d0c4804c5', 'b836dcb0b1b9379f63be246685fce0f496b4842455fc5970f595abb2e03659b6')

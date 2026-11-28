@@ -4,6 +4,16 @@
 
 本文件是 `breakout_quality` 的**實驗 identity、命名、版本語意、namespace、目前基準與 ID 佔用狀態**單一真理來源。
 
+### 2026-11-28 T40 centered log-volume 輸入研究（使用者核准）
+
+`MR-13DR`，profile=`daily_universal_terminal_mae_gated_t40_full_list_ndcg_pairwise_centered_log_volume`，`ARCH-inception_time_centered_log_volume_v1`，FIT v1。對照為原 `MR-13CJ`。原個股＋0050 的 300×10 每欄保留原值，只在最後加入個股與0050各一條 `a_t=log1p(max(Volume_t,0))−median_window(log1p(max(Volume,0)))`，成為 300×12；新通道不除以 IQR，保留原量能正規化移除的窗內幅度。兩標的各使用自己原有的 300 根合法歷史視窗，終點為資訊日；零量是有效觀察，缺值／非有限量不得補零。只用既有 canonical FinMind 還原 OHLCV，不新增外部資料、技術指標、全零控制組或獨立比較流程。
+
+唯一研究變數為上述輸入表示；CJ 的 T40 原始真值、成熟／合法股票日、歷史邊界、InceptionTime trunk／head 拓樸、Adam、full-list Delta-NDCG、日期批次、Validation／epoch selection、Seed42、四個既有 benchmark seeds、P16、交易與帳務契約保持一致。輸入寬度增加所需的首層／shortcut 參數是此表示變更的一部分，不宣稱已分離輸入資訊與容量效果。新模型獨立 FIT，不以 CJ 權重初始化、不改 CJ FIT／Replay 版本或覆寫原工件。
+
+`SR-C209` 是 P16 Exact K/R0，對照 C107；`SR-C210` 是 P16 Direct No-K/No-R0，對照 C109，皆 Replay v1。兩列共用 `DL-CONT13DR-ROLL`／`CONT13DR_ROLL` 的同一 FIT／PIT score，Selectors 不另行訓練。原 Summary roster 的 T40 Exact／Direct group 加入兩列；Model Compare/Test、Forward／Rolling、四 seed Robustness、Target binding 與 Summary 由同一清單派生。原 Compare Suite 啟用 C209-C107、C210-C109、C209-C210；不新增 Target／Oracle 公式或報表版本，沿用同條件的 T40 Oracle recipe。
+
+先以既有模型 SOP 的排序／高分端指標檢查輸入是否改善學習，再以同 seed 策略對照判讀；Exact 為主要、Direct 為次要證據。沿用既有四 seed 晉級規則：配對 ΔRoMD 均值與中位數皆正、至少 3/4 改善且平均 MDD 不增加；Direct 不能抵銷 Exact 未通過。2021-01-01～2026-03-02 為迭代研究 OOS，不能用其統計 FIT／調參。狀態為 `REGISTERED / IMPLEMENTED / MARKET_RESULTS_PENDING / RESEARCH_ONLY / NO_TRADING`；Training Model 選 DR，CJ 與其他現行對照保留，合法既有工件依完整身分 REUSE。尚無市場 FIT／Rolling／Robustness 結果，不新增 Experiment Log 成績或自動 promotion。
+
 ### 2026-11-28 退役研究的實作生命週期
 
 本表區分研究決策與工程移除狀態，僅記錄已明確退役的對象；未啟用、共用依賴或 Oracle 對照不因此視為可刪。後續退役先登錄 `PENDING_DEPENDENCY_REVIEW`，完成依賴檢查並移除專屬 registration、implementation、呼叫與測試後改為 `REMOVED`。既有維護掃描將本表與可執行註冊比對，只提出 REVIEW 候選。

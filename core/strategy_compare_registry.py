@@ -6,6 +6,8 @@ It is not a user settings surface and contains no runtime resolver functions.
 
 from __future__ import annotations
 
+from copy import deepcopy
+
 from core.research_summary import get_research_summary_strategy_arm_ids
 
 from config.breakout_quality import (
@@ -107,7 +109,7 @@ STRATEGY_COMPARE_SUITES = {
         # A compact connected contrast graph supports each selected model
         # versus C96 plus the matched CK/CJ label contrast. Historical AO/CH
         # contrasts remain registered and filter out with their inactive arms.
-        "contrast_ids": ('C189-C96', 'C190-C96', 'C189-C190', 'C189-C106', 'C190-C118', 'C186-C183', 'C97-C96', 'C98-C97', 'C98-C96', 'C103-C96', 'C106-C96', 'C107-C96', 'C109-C96', 'C111-C96', 'C112-C96', 'C118-C96', 'C123-C96', 'C124-C96', 'C125-C96', 'C126-C96', 'C109-C107', 'C111-C112', 'C106-C118', 'C123-C124', 'C125-C126', 'C123-C125', 'C124-C126', 'C147-C107', 'C148-C109', 'C147-C148', 'C153-C97', 'C154-C97', 'C153-C107', 'C154-C109', 'C154-C153', 'C155-C97', 'C156-C97', 'C155-C156', 'C155-C153', 'C156-C154', 'C157-C97', 'C158-C97', 'C157-C158', 'C157-C153', 'C158-C154'),
+        "contrast_ids": ('C209-C107', 'C210-C109', 'C209-C210', 'C189-C96', 'C190-C96', 'C189-C190', 'C189-C106', 'C190-C118', 'C186-C183', 'C97-C96', 'C98-C97', 'C98-C96', 'C103-C96', 'C106-C96', 'C107-C96', 'C109-C96', 'C111-C96', 'C112-C96', 'C118-C96', 'C123-C96', 'C124-C96', 'C125-C96', 'C126-C96', 'C109-C107', 'C111-C112', 'C106-C118', 'C123-C124', 'C125-C126', 'C123-C125', 'C124-C126', 'C147-C107', 'C148-C109', 'C147-C148', 'C153-C97', 'C154-C97', 'C153-C107', 'C154-C109', 'C154-C153', 'C155-C97', 'C156-C97', 'C155-C156', 'C155-C153', 'C156-C154', 'C157-C97', 'C158-C97', 'C157-C158', 'C157-C153', 'C158-C154'),
         "display_name_bases": {'C96': 'Min Base-Finalist-Best / Broker-Cash', 'C97': 'Full Base-Finalist-Best / Broker-Cash', 'C98': 'Full Corrected Same-Signal Agree 4x300 / Broker-Cash', 'C103': 'Min MR-13CG Exact K/R0 / Broker-Cash', 'C106': 'Min MR-13CI Exact K/R0 / Broker-Cash', 'C189': 'Min MR-13CI Rank + MR-13DL R40 Positive Exact K/R0 / Broker-Cash', 'C190': 'Min MR-13CI Rank + MR-13DL R40 Positive Direct No-K No-R0 / Broker-Cash', 'C107': 'Min MR-13CJ Exact K/R0 / Broker-Cash', 'C109': 'Min MR-13CJ T40 Direct No-K No-R0 / Broker-Cash', 'C111': 'Min MR-13K Pure-MFE Control Exact K/R0 / Broker-Cash', 'C112': 'Min MR-13K Pure-MFE Direct No-K No-R0 / Broker-Cash', 'C118': 'Min MR-13CI R40 Direct No-K No-R0 / Broker-Cash', 'C123': 'Min MR-13CO Formal MinTrade Full-cycle NetPnL Exact K/R0 / Broker-Cash', 'C124': 'Min MR-13CO Formal MinTrade Full-cycle NetPnL Direct No-K No-R0 / Broker-Cash', 'C125': 'Min MR-13CO Rank + MR-13CP Positive Exact K/R0 / Broker-Cash', 'C126': 'Min MR-13CO Rank + MR-13CP Positive Direct No-K No-R0 / Broker-Cash', 'C147': 'Min MR-13CX T40 Pairwise-Confidence Exact K/R0 / Broker-Cash', 'C148': 'Min MR-13CX T40 Pairwise-Confidence Direct No-K No-R0 / Broker-Cash', 'C153': 'Full MR-13CJ T40 Exact K/R0 / Broker-Cash', 'C154': 'Full MR-13CJ T40 Direct No-K No-R0 / Broker-Cash', 'C155': 'Full MR-13CZ Rank + MR-13DA Positive Exact K/R0 / Broker-Cash', 'C156': 'Full MR-13CZ Rank + MR-13DA Positive Direct No-K No-R0 / Broker-Cash', 'C157': 'Full MR-13CZ NetPnL Rank Exact K/R0 / Broker-Cash', 'C158': 'Full MR-13CZ NetPnL Rank Direct No-K No-R0 / Broker-Cash', 'C179': 'Daily (Min/P21) No DL / Default Selector / Broker-Cash'},
     },
     # Historical Round-10 suite retained unchanged for artifact interpretation/replay.
@@ -668,6 +670,14 @@ STRATEGY_DL_SOURCES = {
 # Historical profile的arm集合仍可由profile-local arm_ids指定；current Extending profiles只引用Compare Suite。
 # Arm definition本身不保存第二份enabled/mode membership；current matrix不得在profile或robustness重複列出。
 
+# AI: The input experiment shares CJ's score/publication contract and selectors.
+STRATEGY_DL_SOURCES["CONT13DR_ROLL"] = {
+    **deepcopy(STRATEGY_DL_SOURCES["CONT13CJ_ROLL"]),
+    "model_architecture": "inception_time_centered_log_volume_v1",
+    "experiment_profile": "daily_universal_terminal_mae_gated_t40_full_list_ndcg_pairwise_centered_log_volume",
+    "description": "MR-13DR T40 with stock/0050 centered log-volume; one PIT source for Exact/Direct.",
+}
+
 STRATEGY_COMPARE_ARMS = {
     "C96": {
         "name": "Min Base-Finalist-Best / Broker-Cash",
@@ -1165,6 +1175,21 @@ STRATEGY_COMPARE_ARMS = {
     },
 }
 
+STRATEGY_COMPARE_ARMS.update({
+    "C209": {
+        **deepcopy(STRATEGY_COMPARE_ARMS["C107"]),
+        "name": "Min MR-13DR T40 Centered Log-Volume Exact K/R0 / Broker-Cash",
+        "description": "SR-C209: centered log-volume input treatment, matched to C107 T40/P16 Exact.",
+        "dl_id": "CONT13DR_ROLL",
+    },
+    "C210": {
+        **deepcopy(STRATEGY_COMPARE_ARMS["C109"]),
+        "name": "Min MR-13DR T40 Centered Log-Volume Direct No-K No-R0 / Broker-Cash",
+        "description": "SR-C210: same DR PIT scores as C209, matched to C109 T40/P16 Direct.",
+        "dl_id": "CONT13DR_ROLL",
+    },
+})
+
 # AI: Materialize mode-specific parameter-source overrides from the canonical
 # arm definitions, after those definitions exist. This keeps Full P17 and Min
 # P16 in the same generic Compare Suite without per-arm dispatch exceptions.
@@ -1186,6 +1211,9 @@ for _mode in ("oos", "rolling"):
 # Contrast 是否啟用只由 STRATEGY_COMPARE_PROFILES[*]["contrast_ids"] 決定。
 
 STRATEGY_COMPARE_CONTRASTS = {
+    "C209-C107": {"left": "C209", "right": "C107", "description": "Same T40/P16 Exact: centered log-volume inputs versus CJ"},
+    "C210-C109": {"left": "C210", "right": "C109", "description": "Same T40/P16 Direct: centered log-volume inputs versus CJ"},
+    "C209-C210": {"left": "C209", "right": "C210", "description": "Same DR T40 score/P16: Exact versus Direct"},
     "C189-C96": {"left": "C189", "right": "C96", "description": "CI R40 rank plus DL Positive Exact versus same-P16 no-DL control"},
     "C190-C96": {"left": "C190", "right": "C96", "description": "CI R40 rank plus DL Positive Direct versus same-P16 no-DL control"},
     "C189-C190": {"left": "C189", "right": "C190", "description": "Same CI R40 rank and independent DL Positive: Exact versus Direct"},

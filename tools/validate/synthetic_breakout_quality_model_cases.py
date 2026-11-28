@@ -2839,11 +2839,103 @@ def validate_breakout_quality_full_horizon_target_components_contract_case(_base
     )
     return _finish_case(results, summary)
 
+def _check_centered_log_volume_input(check_true):
+    """AI: Numerical invariants for the optional window representation primitive."""
+    from filters.breakout_quality.daily_ranker_data import LazyDailyFeatureBank
+    from filters.breakout_quality.features import centered_log_volume_windows
+    from filters.breakout_quality.models.architectures import ARCHITECTURE_DESCRIPTORS
+    from filters.breakout_quality.models.spec import get_model_spec
+
+    length = int(DEFAULT_LABEL_POLICY.feature_window_bars)
+    count = length + 20
+    index = pd.bdate_range("2017-01-02", periods=count)
+    t = np.arange(count, dtype=np.float64)
+
+    def frame(scale, volume):
+        close = scale * (1.0 + t / count)
+        return pd.DataFrame({
+            "Open": close * .99, "High": close * 1.02,
+            "Low": close * .98, "Close": close, "Volume": volume,
+        }, index=index)
+
+    stock = frame(40.0, np.where(t % 17 == 0, 0.0, np.expm1(3.0 + t / 40.0)))
+    illiquid = frame(12.0, np.where(t % 71 == 0, 1000.0, 0.0))
+    benchmark = frame(80.0, np.expm1(5.0 + np.sin(t / 13.0)))
+    positions = np.asarray([length - 1, length + 3, length + 8, length + 11])
+    benchmark_positions = positions + 1
+    tickers = np.asarray([0, 1, 0, 1])
+
+    def bank(frames=(stock, illiquid), market=benchmark, *, enabled=True, **options):
+        return LazyDailyFeatureBank(
+            frames=frames, benchmark=market, ticker_ids=tickers,
+            source_positions=positions, benchmark_positions=benchmark_positions,
+            policy=DEFAULT_LABEL_POLICY, centered_log_volume=enabled, **options,
+        )
+
+    base = bank(enabled=False)
+    extended = bank()
+    order = np.asarray([3, 0, 2, 0, 1])
+    values = extended[order]
+    check_true("volume_extension_retains_original_ten_columns_bitwise",
+               values.shape == (len(order), length, 12)
+               and values.dtype == np.float32
+               and np.array_equal(values[:, :, :10], base[order]))
+    check_true("volume_extension_publishes_its_full_feature_schema",
+               len(extended.feature_columns) == 12
+               and extended.manifest_feature_columns == extended.feature_columns)
+    check_true("volume_extension_preserves_scalar_slice_boolean_and_empty_indexing",
+               np.array_equal(extended[-1], extended[3])
+               and np.array_equal(extended[1:3], extended[np.asarray([1, 2])])
+               and np.array_equal(extended[np.asarray([True, False, True, False])], extended[[0, 2]])
+               and extended[[]].shape == (0, length, 12))
+    for out, group in enumerate(order):
+        for column, source, position in (
+            (10, (stock, illiquid)[tickers[group]], positions[group]),
+            (11, benchmark, benchmark_positions[group]),
+        ):
+            raw = source["Volume"].to_numpy()[position - length + 1:position + 1]
+            logs = np.log1p(np.maximum(raw, 0.0))
+            expected = (logs - np.median(logs)).astype(np.float32)
+            check_true(f"centered_volume_matches_independent_window_formula_{out}_{column}",
+                       np.array_equal(values[out, :, column], expected))
+    check_true("centered_volume_preserves_amplitude_removed_by_iqr_normalization",
+               not np.allclose(values[1, :, 10], values[1, :, 4]))
+    constants = np.stack([np.zeros(length), np.full(length, 7.0), np.full(length, -2.0)])
+    check_true("centered_volume_zero_constant_and_clamped_volume_are_finite_zero",
+               np.array_equal(centered_log_volume_windows(constants), np.zeros_like(constants)))
+    for bad in (np.nan, np.inf, -np.inf):
+        missing = constants.copy()
+        missing[0, 0] = bad
+        check_true(f"centered_volume_rejects_missing_observation_{bad}",
+                   raises_expected(ValueError, lambda: centered_log_volume_windows(missing)))
+    for invalid in (np.ones(length), np.empty((2, 0))):
+        check_true(f"centered_volume_rejects_invalid_window_shape_{invalid.shape}",
+                   raises_expected(ValueError, lambda: centered_log_volume_windows(invalid)))
+
+    future_stock, future_illiquid, future_benchmark = (item.copy() for item in (stock, illiquid, benchmark))
+    for future in (future_stock, future_illiquid, future_benchmark):
+        future.iloc[length + 14:, :] *= 1000.0
+    check_true("volume_extension_cannot_read_later_stock_or_benchmark_bars",
+               np.array_equal(values, bank((future_stock, future_illiquid), future_benchmark)[order]))
+    scaled = [item.copy() for item in (stock, illiquid, benchmark)]
+    for item, factor in zip(scaled, (2.0, 4.0, 8.0)):
+        item.loc[:, ["Open", "High", "Low", "Close"]] *= factor
+    check_true("volume_extension_is_invariant_to_retrospective_price_rescaling",
+               np.array_equal(values, bank(tuple(scaled[:2]), scaled[2])[order]))
+    check_true("volume_extension_rejects_unapproved_alternate_price_composition",
+               raises_expected(ValueError, lambda: bank(feature_frames=(stock, illiquid))))
+    check_true("centered_volume_architectures_declare_the_same_spec_input_path",
+               all("centered_log_volume" in get_model_spec(item.architecture_id).sequence_input_paths
+                   for item in ARCHITECTURE_DESCRIPTORS.values()
+                   if item.has_capability("centered_log_volume")))
+
+
 def validate_breakout_quality_reusable_model_component_contract_case(_base_params):
     """Protect reusable ranker components without pinning closed experiment identities."""
 
     case_id = "BREAKOUT_QUALITY_REUSABLE_MODEL_COMPONENTS"
     results, summary, check, check_true = _start_case(case_id)
+    _check_centered_log_volume_input(check_true)
 
     from core.breakout_quality_registry import (
         SUPPORTED_CONTINUOUS_RANKER_RESEARCH_PROFILES,

@@ -24,6 +24,7 @@ MULTISCALE_CNN_REGIME_CONTEXT_V1 = "multiscale_cnn_regime_context_v1"
 MULTISCALE_CNN_SEQUENCE_ONLY_V1 = "multiscale_cnn_sequence_only_v1"
 MULTISCALE_CNN_SEQUENCE_ONLY_DUAL_PATH_V1 = "multiscale_cnn_sequence_only_dual_path_v1"
 INCEPTION_TIME_V1 = "inception_time_v1"
+INCEPTION_TIME_CENTERED_LOG_VOLUME_V1 = "inception_time_centered_log_volume_v1"
 INCEPTION_TIME_RISK_CONTEXT_V1 = "inception_time_risk_context_v1"
 INCEPTION_TIME_PREDICTED_UPSIDE_CONTEXT_V1 = "inception_time_predicted_upside_context_v1"
 INCEPTION_TIME_PREDICTED_SAFETY_CONTEXT_V1 = "inception_time_predicted_safety_context_v1"
@@ -133,6 +134,7 @@ def _descriptor(
 
 _ARCHITECTURE_DESCRIPTORS = (
     _descriptor(INCEPTION_TIME_V1, active=True, active_order=0, spec_builder="inception_variant", runtime_builder="inception_time", family="inception_time", pooling=("global_average",), use_dataset_context=False, sequence_input_paths=("raw_level",), head_width=None),
+    _descriptor(INCEPTION_TIME_CENTERED_LOG_VOLUME_V1, active=True, active_order=1, spec_builder="inception_variant", runtime_builder="inception_time", capabilities=("centered_log_volume",), family="inception_time", pooling=("global_average",), use_dataset_context=False, sequence_input_paths=("raw_level", "centered_log_volume"), head_width=None),
     _descriptor(INCEPTION_TIME_SHARED_SAFETY_MFE_V1, active=True, active_order=6, spec_builder="inception_variant", runtime_builder="inception_time", capabilities=("shared_safety_mfe",), family="inception_time_shared_safety_mfe", pooling=("global_average", "raw_safety_head", "raw_mfe_head"), use_dataset_context=False, sequence_input_paths=("raw_level",), head_width=None),
 )
 
