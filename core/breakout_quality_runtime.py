@@ -12,7 +12,7 @@ target/training/context/objective capabilities and is selected declaratively.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 import math
 from functools import lru_cache
 from typing import Any, Callable
@@ -805,11 +805,6 @@ class ContinuousRankerTrainingPolicy:
             raise ValueError("profile_loss_metrics loss_name不得為空或重複")
         if any(not str(metric).strip() for _loss_name, metric in self.profile_loss_metrics):
             raise ValueError("profile_loss_metrics epoch metric不得為空")
-        alternate_metrics = tuple(metric for metric, _rule in self.alternative_epoch_selection_rules)
-        if (len(alternate_metrics) != len(set(alternate_metrics))
-                or any(not metric or not rule for metric, rule in self.alternative_epoch_selection_rules)
-                or set(alternate_metrics).intersection(metric for _loss, metric in self.profile_loss_metrics)):
-            raise ValueError("epoch selection alternatives must be nonempty, unique, and distinct from defaults")
         if self.pairwise_kind not in {
             CONTINUOUS_RANKER_PAIRWISE_KIND_NONE,
             CONTINUOUS_RANKER_PAIRWISE_KIND_SCALAR,
@@ -949,20 +944,6 @@ class ContinuousRankerTrainingPolicy:
             return "pareto_daily_then_global"
         return "daily_spearman_then_percentile_mse"
 
-    @property
-    def alternative_epoch_selection_rules(self) -> tuple[tuple[str, str], ...]:
-        """Non-serialized loss-family capability; it is not an Oracle provider field."""
-        if (self.target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_SCALAR_PAIRWISE
-                and self.loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_SINGLE_PAIRWISE
-                and self.pairwise_kind == CONTINUOUS_RANKER_PAIRWISE_KIND_SCALAR):
-            return (("mean_daily_full_list_ndcg", "daily_full_list_ndcg_then_percentile_mse"),)
-        return ()
-
-    def epoch_selection_rule_for(self, epoch_selection_metric: str) -> str:
-        """Dispatch only a declared validation metric; legacy profiles keep their rule."""
-        alternative = dict(self.alternative_epoch_selection_rules).get(str(epoch_selection_metric))
-        return str(alternative) if alternative is not None else self.epoch_selection_rule
-
     def expected_epoch_metric(self, loss_name: str) -> str:
         mapping = dict(self.profile_loss_metrics)
         if not mapping:
@@ -982,11 +963,10 @@ class ContinuousRankerTrainingPolicy:
         epoch_selection_metric: str,
     ) -> None:
         expected_metric = self.expected_epoch_metric(loss_name)
-        allowed = {expected_metric, *(metric for metric, _rule in self.alternative_epoch_selection_rules)}
-        if str(epoch_selection_metric) not in allowed:
+        if str(epoch_selection_metric) != expected_metric:
             raise ValueError(
                 "continuous ranker epoch selection與training objective composition不一致: "
-                f"expected one of {sorted(allowed)}, actual={epoch_selection_metric}"
+                f"expected={expected_metric}, actual={epoch_selection_metric}"
             )
 
     def validate_research_spec(
@@ -1244,6 +1224,47 @@ SCORE_OUTPUT_POLICY_SAFETY_RAW_MFE_JOINT_MIN = ContinuousRankerScoreOutputPolicy
         ("joint_min", "joint_min_score"),
     ),
 )
+
+
+@dataclass(frozen=True)
+class TrainingPairPartition:
+    """Supervision-only membership; full-list geometry and input universe stay intact."""
+
+    source: str = "fixed_breakout_crossover_union_v1"
+
+    def __post_init__(self) -> None:
+        if self.source != "fixed_breakout_crossover_union_v1":
+            raise ValueError(f"Unsupported training pair membership source: {self.source!r}")
+
+    @property
+    def relation(self) -> str:
+        return CONTINUOUS_RANKER_PAIR_PARTITION_RELATION_WITHIN_POSITIVE
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "source": self.source,
+            "relation": self.relation,
+            "role": "pair_eligibility_only_no_input_or_target_filter",
+            "list_geometry": "original_full_daily_list_gains_ranks_discounts_idcg",
+            "reduction": "sum_masked_weighted_loss_over_sum_masked_weights_across_original_batch",
+            "zero_pair_date": "no_supervision_keep_original_batch_and_forward",
+            "zero_pair_batch": "no_optimizer_update",
+        }
+
+
+@dataclass(frozen=True)
+class PartitionedPairwiseObjectivePolicy(ContinuousRankerObjectivePolicy):
+    """Opt-in composition; existing policy dataclass payloads are unchanged."""
+
+    pair_partition: TrainingPairPartition | None = None
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if not isinstance(self.pair_partition, TrainingPairPartition):
+            raise ValueError("Pair partition composition needs an explicit membership contract")
+        if (self.pairwise_reduction != CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG
+                or self.pair_target_schema != CONTINUOUS_RANKER_PAIR_TARGET_SCHEMA_SCALAR):
+            raise ValueError("Training membership currently requires scalar full-list Delta-NDCG")
 
 
 @dataclass(frozen=True)
@@ -2093,6 +2114,13 @@ def build_continuous_ranker_execution_recipe(
     target_policy = _resolve_continuous_ranker_target_policy(profile)
     training_policy = get_continuous_ranker_training_policy(profile.training_objective)
     objective_policy = _resolve_continuous_ranker_objective_policy(spec)
+    pair_partition = getattr(spec, "pair_partition", None)
+    if pair_partition is not None:
+        if training_policy.loss_handler != CONTINUOUS_RANKER_LOSS_HANDLER_SINGLE_PAIRWISE:
+            raise ValueError("Training pair partition requires a single scalar pairwise loss")
+        objective_policy = PartitionedPairwiseObjectivePolicy(
+            **asdict(objective_policy), pair_partition=pair_partition,
+        )
     context_policy = _resolve_continuous_ranker_context_policy(
         target_policy, objective_policy
     )

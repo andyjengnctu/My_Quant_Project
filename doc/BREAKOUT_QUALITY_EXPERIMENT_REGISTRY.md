@@ -4,7 +4,19 @@
 
 本文件是 `breakout_quality` 的**實驗 identity、命名、版本語意、namespace、目前基準與 ID 佔用狀態**單一真理來源。
 
+### 2026-11-29 T40 Breakout-to-Breakout pair supervision（MR-13DU／C215／C216；使用者核准）
+
+前置一次性唯讀 PIT Audit 已完成，使用者明確選擇 **原模型診斷的固定 high_len 突破聯集**，不是 P16 正常／續掛候選。`build_candidate_event_positions` 的既有固定清單與原 High／Close crossover 公式按資訊日重建 B_t，交集 CJ 原 daily-universal 合法股票日；不使用優化後的 high_len、Target／label、OOS 分數或回放候選。2,075,176 股票日、4,114 次跨六折邊界的逐股票前綴檢查通過。既有診斷快取與 PIT 重建有 27 筆尾端差異，但六折成熟 FIT 差異皆為 0；新的訓練資格直接重建，不能把全期快取當 PIT 來源。Audit 不占 MR／C 編號；已完成 evidence 為 `outputs/audit/breakout_quality/one_time/breakout_pair_pit_20261129/result.md` 與同目錄 JSON／逐日、年度表。
+
+`MR-13DU`，profile=`daily_universal_terminal_mae_gated_t40_full_list_ndcg_pairwise_breakout_pairs`，沿用 `ARCH-inception_time_v1`，獨立 FIT v1，唯一模型控制為原 `MR-13CJ`。T40、300×10 OHLCV+0050、daily-universal 樣本／排序、InceptionTime、Adam、Seed42、六折與 inner validation、Daily Spearman epoch selector、原 early-stop/min_delta、selected-epochs refit、P16、Exact／Direct、費稅與截止 2026-03-02 全部不變。**唯一變因是有效 pair 資格：同日兩端都在 PIT B_t 才監督。** 先依原全日榜單建立 percentile gains、predicted ranks／discounts／IDCG，再沿既有 scalar pair-partition primitive 遮罩；分子、分母同時乘該 mask，仍為同一原 batch 的 `sum(mask*w*softplus)/sum(mask*w)`，不改日期權重、不用候選子榜單重算、不增加 K／閾值。零 pair 日期無 supervision；整個 batch 無 pair 不更新 optimizer，仍保留原全母體 forward／batch 順序。CJ、所有既有 profile／policy 序列化、FIT／Replay 版本及科學契約保持原值。
+
+`SR-C215` 是同 P16 的 Exact K/R0（控制 C107）；`SR-C216` 是同一 `DL-CONT13DU-ROLL`／`CONT13DU_ROLL` FIT／PIT scores 的 Direct No-K/No-R0（控制 C109），各 Replay v1。共用原 Summary roster、Model Compare/Test、Forward／Rolling 與既有 Compare Suite；不開新選單／報表版本／ABC 比較器。Contrast `C107-C215` 設 left=C107/right=C215、`C109-C216` 設 left=C109/right=C216，遵守正式 **right−left**，正值才是 DU 增量；不由名稱猜差值方向。Training Model 指向 DU；DT 已退役，不回收 MR-13DT／C213／C214。
+
+現況 `IMPLEMENTED / PIT_AUDIT_PASS / SEED42_ROLLING_AUTHORIZED / MARKET_RESULTS_PENDING / FOUR_SEED_NOT_RUN / RESEARCH_ONLY / NO_TRADING`。先執行模型 Seed42 Rolling 並核對原 SOP Gate，再執行依 Gate 合法的策略 Rolling／Summary。若新模型 Gate FAIL、主要 Exact ΔRoMD≤0 或 MDD 增加，即停止，不跑四 Seed；通過亦先回傳實測結果及下一步，不自行進入四 Seed、不重算 Target Oracle、不 promotion。2021 起是迭代研究 OOS，不能回饋 FIT／選模或稱為 untouched holdout。市場結果另據實登錄。
+
 ### 2026-11-28 T40 選模指標隔離研究（MR-13DT／C213／C214；使用者核准）
+
+**2026-11-29 使用者後續退役決策（以下原定義及首輪狀態為歷史）：** `MR-13DT / SR-C213 / SR-C214` 現況為 `NO_OBSERVABLE_CHANGE / RETIRED / FOUR_SEED_NOT_RUN / NO_ADVANCEMENT / HISTORICAL_ID_RESERVED / NO_TRADING`。Seed42 六折 CJ／DT 的 selected epochs 都是 `[2,1,1,1,1,1]`，逐 fold 原始分數逐 bytes 相同，Exact／Direct 全部經濟指標增量為 0，原模型 Gate FAIL，故停止 DT，不跑四 Seed。DT 專屬 profile／spec、分數來源、策略、Summary 綁定、三條 Contrast 定義、NDCG epoch 選模替代分支／helper 及專用測試已實際刪除；共用 full-list Delta-NDCG 訓練 loss、Top-K NDCG 診斷與其他現役能力保留。退役時 Training Model 恢復 CJ；後續研究的 current pointer 仍由 config 唯一持有。歷史模型、六折 FIT／scores、策略成果、原始數字、版本及編號永久保留。逐 fold SHA 與實體保留證據：`outputs/audit/breakout_quality/one_time/breakout_pair_pit_20261129/dt_retirement_evidence.json`。原先三條未啟用的 DT contrasts 隨退役清除，不另外為退役 arm 補產報表；獨立整合處理證據位於同目錄的 `engineering/`，不作新的研究實驗。
 
 `MR-13DT`，profile=`daily_universal_terminal_mae_gated_t40_full_list_ndcg_pairwise_ndcg_epoch`，沿用 `ARCH-inception_time_v1`，獨立 FIT v1。以 `MR-13CJ` 為唯一模型控制組：300×10 個股／0050 還原 OHLCV、原 IQR-normalized Volume、T40 原真值、daily-universal eligible stock-days、40D maturity、6 folds／inner 24M validation、InceptionTime、Adam、原 full-list Delta-NDCG pairwise loss、原訓練批次／early-stop patience／min_delta／percentile-MSE tie-break／selected_epochs refit 均不改。**唯一變因**：inner-validation 每個 epoch 的 primary selector 從 mean daily Spearman 換為 mean daily full-list NDCG；同日合法 validation 0～1 percentile target 為 linear gains、全部候選位置以 `1/log2(rank+1)` 折扣，日期等權平均，不設定 K、不取 OOS／Breakout 策略輸入、不改推論分數表示；同分時沿用穩定順序，無可分辨 Target 的日期不計入。每個 epoch 的選模數值與所選 epoch 存入 FIT evidence，與原 CJ 的 epoch selection 身分獨立，無跨身分 FIT／score 重用。
 
@@ -52,6 +64,7 @@
 | SR-C207, SR-C208, HV2 | RETIRED | REMOVED |
 | MR-13DR, SR-C209, SR-C210 | RETIRED | REMOVED |
 | MR-13DS, SR-C211, SR-C212 | RETIRED | REMOVED (descriptor, replacement input path, centered-volume helper and dedicated tests deleted) |
+| MR-13DT, SR-C213, SR-C214 | RETIRED | REMOVED (profile, spec, source, arms, Summary, contrasts, NDCG epoch selector/helper and dedicated tests deleted) |
 | MR-10A | RETIRED | REMOVED |
 <!-- /implementation-lifecycle -->
 

@@ -428,6 +428,9 @@ def _extended_semantics(*, batching: str, **contracts: Any) -> dict[str, Any]:
 def _pairwise_contract_for_recipe(recipe) -> dict[str, Any]:
     contract = dict(PAIRWISE_TRAINING_CONTRACT)
     contract["pair_weighting"] = str(recipe.pairwise_reduction)
+    pair_partition = getattr(recipe.objective_policy, "pair_partition", None)
+    if pair_partition is not None:
+        contract["training_pair_partition"] = pair_partition.as_dict()
     context_policy = recipe.context_policy
     if context_policy.source == CONTINUOUS_RANKER_CONTEXT_SOURCE_PREDICTED_UPSIDE:
         contract["predicted_upside_context_contract"] = get_predicted_upside_context_contract()
@@ -645,11 +648,6 @@ def training_semantics(profile) -> dict[str, Any]:
 
     if semantics_key == CONTINUOUS_RANKER_SEMANTICS_PAIRWISE:
         pairwise_contract = _pairwise_contract_for_recipe(recipe)
-        # Legacy pairwise contracts have no explicit selector key.  A new
-        # validation-only selector is separately recorded without changing
-        # the stored meaning/bytes of any pre-existing model.
-        if profile.epoch_selection_metric != recipe.training_policy.expected_epoch_metric(profile.loss_name):
-            pairwise_contract["epoch_selection"] = str(profile.epoch_selection_metric)
         return _extended_semantics(
             batching=pairwise_contract["batching"],
             pairwise_contract=pairwise_contract,

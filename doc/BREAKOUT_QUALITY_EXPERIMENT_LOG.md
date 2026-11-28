@@ -5708,3 +5708,11 @@ DS−CJ 的 RoMD 為 Exact **−2.24**、Direct **−2.54**；MDD 分別 **+0.80
 **結論與界線。** 原清單 35 arms 中 C213／C214 為 RUN，其餘 33 為合法 REUSE；Exact／Direct 對 CJ 的 RoMD、MDD、報酬、交易數及逐年結果均無增量。本次支持「在這組既定設定下更換 epoch 主指標沒有產生可觀察改變」，不支持泛稱 NDCG／所有其他 epoch 設計無效。未執行四 Seed Robustness、Target Oracle 重算或 Trading promotion；四 Seed 未測不能寫成 FAIL／0/4。依原先階段規則，本次沒有正增量，不具自動進入 Robustness 的依據；未擅自調 patience／epoch／K 或啟動下一實驗，亦未自行退役 DT。
 
 **成果定位。** 模型來源為原 CJ／DT profile 下 `point_in_time/selection_point_in_time_audit.json` 與六折 manifest；正式策略成果為 `outputs/strategy_compare/broker_cash_dl_conversion/rolling_2021_forward/latest/strategy_comparison.json`，本次 SHA256 `3c99e37157e73a98d1742adf6f4a077a1d8ef258f5e46b31aba099211ad24766`，對應不可變 run `20261129_010505_*_1c0f8659c9bf` 與其逐 arm 原始回放。數值取自並核對本機正式工件，非僅使用者貼出摘要。
+
+**2026-11-29 使用者後續決策。** 使用者在結果分析後明確授權退役 DT。現況為 `NO_OBSERVABLE_CHANGE / RETIRED / FOUR_SEED_NOT_RUN / NO_ADVANCEMENT`；這是 Seed42 Rolling 零增量與原模型 Gate FAIL 的停止決策，不是四 Seed 失敗或 0/4。DT 專屬實作與現行接線實際刪除，Training Model 在退役時恢復 CJ；原始六折模型／分數、策略結果與 scientific identity 永久保留，不回收 MR-13DT／C213／C214。後續本機唯讀核對再次確認六折原始分數逐 bytes 相同；證據見 `outputs/audit/breakout_quality/one_time/breakout_pair_pit_20261129/dt_retirement_evidence.json`。不回寫前段當次「未自行退役」的歷史決策。
+
+## 2026-11-29 固定 high_len Breakout pair 前置 PIT／樣本 Audit（一次性、唯讀）
+
+使用者明確選擇原模型診斷的固定 high_len 突破聯集，而非 P16 正常／續掛候選。B_t 由原 canonical crossover builder 與既有固定清單，使用當日 Close、過往 High／Close 及 CJ 原合法股票日重建，不用 label、優化後參數或 OOS 回放結果。2,075,176 股票日、4,114 個逐股票／跨折截止前綴檢查全部一致，正比例價格重調整亦不改候選；原 Dataset／CJ FIT／參數來源逐 SHA 核對前後未變。六折 inner train 的候選股票日依序 `[29973,33165,36213,39635,41807,45913]`，可辨識 pairs 為 `[225216,253523,286824,318885,330462,387674]`，有 pair 日為 `[2557,2789,2983,3200,3419,3652]`；所有資訊日／40D 成熟日遵守原 canonical cutoff，train/validation 與 refit/score 無 key 交集。
+
+既有診斷快取與直接訊號聯集相差 27 筆，落於 2025-12-29～2026-03-02，原因是 Dataset builder 的整檔最少列數 360 與 Daily Universal 的 300-bar 合法窗不同；這 27 筆均未進入任一六折成熟 FIT，逐 Fold FIT 差異為 0。新監督須從歷史價格訊號重建，不能直接用全期快取。另一未採用定義的歷史 Min／P16 僅從 2014 起有合法參數，六折各有 735,121 筆更早股票日無覆蓋，不得回填；固定清單研究不使用該選參。結論 `PIT_AUDIT_PASS / ALL_SIX_FOLDS_HAVE_IDENTIFIABLE_SUPERVISION`；可進入使用者已授權的單變因 pair 資格研究，不代表新模型已有成績。完整逐日／年度分布與限制見 `outputs/audit/breakout_quality/one_time/breakout_pair_pit_20261129/result.md` 及同目錄 `sample_audit.json`、`fixed_union_pit_proof.json`；不占正式實驗編號，不以本 Audit 調整高低門檻或 OOS 設定。
