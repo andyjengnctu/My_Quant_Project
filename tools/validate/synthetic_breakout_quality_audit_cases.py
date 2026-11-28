@@ -915,13 +915,57 @@ def validate_breakout_quality_audit_framework_contract_case(_base_params):
                        < transcript.index(f"[{index + 1}/6]")
                        for index, name in enumerate(expected_order, start=1))
                and transcript.index("[6/6]") < transcript.index("updated"))
-    with patch.object(research_app, "_run_model_cli", return_value=2), \
-         patch.object(research_app, "_run_current_comparison") as later_step, \
-         patch.object(research_app, "_show_research_summary") as final_step, \
-         redirect_stdout(io.StringIO()):
-        failed_rc = research_app.main(["research", "summary", "verify"])
-    check_true("summary_verify_stops_after_unsuccessful_producer",
-               failed_rc == 2 and not later_step.called and not final_step.called)
+    # Rolling-only uses the same native producers and fresh Summary, with no
+    # Robustness or Oracle side effects even when those results are missing.
+    run_order.clear()
+    with ExitStack() as stack:
+        stack.enter_context(patch("builtins.input", side_effect=["1", "R", "0"]))
+        collect = stack.enter_context(patch.object(
+            target_dl_overview, "collect_target_dl_overview", side_effect=["initial", "updated"]))
+        stack.enter_context(patch.object(
+            target_dl_overview, "render_target_dl_overview", side_effect=lambda report, **kw: report))
+        model_step = stack.enter_context(patch.object(research_app, "_run_model_cli",
+            side_effect=lambda args: stage_result(args[-1], 0)))
+        strategy_step = stack.enter_context(patch.object(research_app, "_run_current_comparison",
+            side_effect=lambda **kw: stage_result("strategy", {"result": "ok"})))
+        robustness_step = stack.enter_context(patch.object(research_app, "_run_current_robustness"))
+        target_step = stack.enter_context(patch.object(research_app, "_run_reusable_audit_method"))
+        output = stack.enter_context(redirect_stdout(io.StringIO()))
+        menu_rc = research_app._interactive_menu()
+    transcript = output.getvalue()
+    check_true("summary_rolling_only_menu_runs_native_rolling_then_fresh_summary_without_robustness_or_target",
+               menu_rc == 0 and run_order == ["rolling", "strategy"] and collect.call_count == 2
+               and model_step.call_count == 1 and model_step.call_args.args == (["compare", "rolling"],)
+               and strategy_step.call_args.kwargs == {
+                   "profile_id": rolling_mode["profile_id"], "confirm": False, "compact": True}
+               and not robustness_step.called and not target_step.called
+               and "[R]Rolling only 驗證" in transcript
+               and all(transcript.index(f"[{index}/3]") < transcript.index(f"report-{name}\n")
+                       < transcript.index(f"[{index + 1}/3]")
+                       for index, name in enumerate(run_order, start=1))
+               and transcript.index("[3/3]") < transcript.index("updated"))
+    with patch.object(research_app, "_run_summary_verification", return_value=0) as verify:
+        cli_rc = research_app.main(["research", "summary", "verify", "--rolling-only"])
+    check_true("summary_rolling_only_cli_shares_menu_workflow",
+               cli_rc == 0 and verify.call_args.kwargs == {"rolling_only": True})
+    for suffix in ([], ["--rolling-only"]):
+        with patch.object(research_app, "_run_model_cli", return_value=2), \
+             patch.object(research_app, "_run_current_comparison") as later_step, \
+             patch.object(research_app, "_show_research_summary") as final_step, \
+             redirect_stdout(io.StringIO()):
+            failed_rc = research_app.main(["research", "summary", "verify", *suffix])
+        check_true("summary_verify_stops_after_unsuccessful_producer" + ("_rolling_only" if suffix else ""),
+                   failed_rc == 2 and not later_step.called and not final_step.called)
+    for failure in ("empty_result", "exception"):
+        with patch.object(research_app, "_run_model_cli", return_value=0), \
+             patch.object(research_app, "_run_current_comparison", return_value={},
+                          side_effect=RuntimeError("producer failed") if failure == "exception" else None), \
+             patch.object(research_app, "_show_research_summary") as final_step, \
+             redirect_stdout(io.StringIO()):
+            blocked = raises_expected(RuntimeError, lambda: research_app.main(
+                ["research", "summary", "verify", "--rolling-only"]))
+        check_true("summary_rolling_only_failed_strategy_stops_summary_" + failure,
+                   blocked and not final_step.called)
 
     from services.research import breakout_quality_application as model_application
     from services.research import strategy_compare_application as strategy_application

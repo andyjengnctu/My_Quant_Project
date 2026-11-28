@@ -201,6 +201,7 @@ project/
 
 - `apps/research.py`：Research 單一選單；`[1] Summary`、`[2] Target 驗證`、`[3] 模型訓練／驗證`、`[4] 策略參數最佳化`、`[5] 策略組合比較`，其餘工作依序延後。
 - Summary 的 `[V] 一鍵驗證並補齊結果` 依序委派模型 Rolling、策略 Rolling、模型 Rolling Robustness、策略 Rolling Robustness、Target 驗證，再重新讀取 Summary。每步使用目前共用清單與原有 producer 的完整身分驗證／補件規則，精簡顯示執行階段並在完成時輸出原正式結果報表，失敗即停止後續工作。批次入口 `summary verify` 使用相同流程。
+- Summary 的 `[R] Rolling only 驗證` 與批次入口 `summary verify --rolling-only` 使用同一驗證流程，僅執行模型 Rolling、策略 Rolling，再重新讀取 Summary；不啟動模型／策略 Robustness 或 Target 驗證。Summary 仍唯讀呈現合法既有證據，缺少的 Robustness 結果維持空白。
 - Research 互動確認：模型比較／模型 Robustness 與策略 Robustness 先完成 canonical 前置檢查並列出 REUSE／BUILD 狀態，再提供 Enter 執行、0／EOF 返回。確認後重新解析當下依賴，讀取範圍及來源驗證結果不跨使用者輸入持有；相同計畫不重複列印。Summary 一鍵驗證與非互動批次入口維持既有流程。
 - Research 執行狀態：`core/research_status_display.py` 共用 Target 風格的 `S1=實際 Seed` 對照與逐 Seed 矩陣。策略只列 C 編號，模型只列 MR 編號；每格直接消費 canonical Strategy Result／Model Readiness，不從整列摘要或模型分數推斷策略 REUSE。已重用的前置工件合併計數，共通原因合併顯示，待處理原因完整換行保留；此為確認前的操作資訊，不改 Standard SOP、工作計畫或科學身分。
 - Research 唯讀載入：Summary／Target preview 在同一次操作內共用 Oracle build 檢查，進入及返回前仍完整驗證來源與證書；Strategy plan 共用歷史 REUSE 鏈的解析結果與路徑觀察，返回前重驗每份來源紀錄及明細路徑的實體位置、存在狀態與 change time。模型比較、模型 Robustness 與策略 Robustness 的完整前置計畫，各自共用一次行情 inventory 讀取範圍，由 `source_inventory.py` 在操作兩端完整核對來源清單與內容見證，發布 price manifest 不使用此讀取快取。這些觀察在完成／失敗後即清空。Pair 與 PIT Fold 檔案 SHA 依既有 `compute_observed_file_sha256` 重用相同實體 revision 的已驗證 digest，工件清單、canonical manifest 與 RUN／REUSE 判定每次重新核對；不跨使用者確認或 producer 執行持有 preview 狀態。

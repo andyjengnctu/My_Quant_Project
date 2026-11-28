@@ -404,20 +404,23 @@ def _run_reusable_audit_method(module_id: str, method_id: str, *, one_click: boo
     return 0
 
 
-def _run_summary_verification() -> int:
+def _run_summary_verification(*, rolling_only: bool = False) -> int:
     """Run the Summary producers in dependency order, then read fresh results."""
     _, rolling = _current_strategy_mode_rows()
     steps = (
         ("模型比較 Rolling", lambda: _run_model_cli(["compare", "rolling"])),
         ("策略比較 Rolling", lambda: _run_current_comparison(
             profile_id=rolling["profile_id"], confirm=False, compact=True)),
-        ("模型比較 Robustness", lambda: _run_model_cli(["compare", "rolling-robustness"])),
-        ("策略比較 Robustness", lambda: _run_current_robustness(
-            robustness_id=rolling["robustness_id"], confirm=False, compact=True)),
-        ("Target 驗證", lambda: _run_reusable_audit_method(
-            get_active_audit_module_id(), "target_ground_truth_strategy_romd", one_click=True)),
-        ("Summary", _show_research_summary),
     )
+    if not rolling_only:
+        steps += (
+            ("模型比較 Robustness", lambda: _run_model_cli(["compare", "rolling-robustness"])),
+            ("策略比較 Robustness", lambda: _run_current_robustness(
+                robustness_id=rolling["robustness_id"], confirm=False, compact=True)),
+            ("Target 驗證", lambda: _run_reusable_audit_method(
+                get_active_audit_module_id(), "target_ground_truth_strategy_romd", one_click=True)),
+        )
+    steps += (("Summary", _show_research_summary),)
     for index, (label, run) in enumerate(steps, start=1):
         stage = f"[{index}/{len(steps)}] {label}"
         print(f"\n{stage}｜執行中", flush=True)
@@ -455,20 +458,22 @@ def _show_research_summary(*, sortable: bool = False) -> int:
             f"[{index}]{column.label}" + (" ↑" if column.key == "strategy" else "")
             for index, column in enumerate(sort_columns, start=1)
         ]
-        print(" ".join((*choices, "[V]一鍵驗證並補齊結果", "[0]返回")))
+        print(" ".join((*choices, "[V]一鍵驗證並補齊結果", "[R]Rolling only 驗證", "[0]返回")))
         try:
-            choice = input("👉 選擇排序欄位，或按 V 一鍵驗證（Enter 預設排序，0 返回）：").strip().lower()
+            choice = input("👉 選擇排序欄位，或按 V 一鍵驗證、R Rolling only 驗證（Enter 預設排序，0 返回）：").strip().lower()
         except EOFError:
             return 0
         if choice in {"0", "q", "quit", "exit"}:
             return 0
         if choice == "v":
             return _run_summary_verification()
+        if choice == "r":
+            return _run_summary_verification(rolling_only=True)
         if choice == "":
             sort_key = DEFAULT_SORT_COLUMN
             continue
         if not choice.isdecimal() or not 1 <= int(choice) <= len(sort_columns):
-            print(f"選項無效，請按 Enter、V 或輸入 0～{len(sort_columns)}。")
+            print(f"選項無效，請按 Enter、V、R 或輸入 0～{len(sort_columns)}。")
             continue
         sort_key = sort_columns[int(choice) - 1].key
 
@@ -936,6 +941,7 @@ def _print_help(program_name: str) -> None:
     print(f"用法: python {program_name} [summary|target|model|optimizer|compare|audit|market-data|status] [options]")
     print("說明: Research 單一正式入口；互動選單只選工作類型，研究標的與設定由 config/ 決定。")
     print("  summary    顯示研究成果總覽；summary verify 依序補齊目前清單並顯示各步結果")
+    print("             summary verify --rolling-only 僅執行模型與策略 Rolling，再更新 Summary")
     print("  target     正式 Target 驗證（非 PIT hindsight Oracle）；可接 run/status/latest")
     print("  model      目前 active model 的模型訓練／驗證；後續參數原樣轉交model provider")
     print("  optimizer  依 config/strategy_params.py 執行目前策略參數訓練 profile")
@@ -966,8 +972,10 @@ def main(argv=None) -> int:
     if command == "summary":
         if rest == ["verify"]:
             return _run_summary_verification()
+        if rest == ["verify", "--rolling-only"]:
+            return _run_summary_verification(rolling_only=True)
         if rest:
-            raise ValueError("用法：summary [verify]")
+            raise ValueError("用法：summary [verify [--rolling-only]]")
         return _show_research_summary()
     if command in {"target", "target-validation", "target_validation"}:
         if len(rest) > 1:
