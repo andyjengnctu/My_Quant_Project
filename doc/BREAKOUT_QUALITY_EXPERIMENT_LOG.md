@@ -5670,3 +5670,21 @@ Seed42 Rolling 的 DR−CJ RoMD：Exact **−3.62**、Direct **−3.37**；MDD �
 
 **決策。** 使用者明確要求「登錄結果、退役13dr、進行新的」。本輪登錄 `NO_ADVANCEMENT / RETIRED_FROM_CURRENT_RESEARCH / ROBUSTNESS_INCOMPLETE`，原 DR/C209/C210 編號、研究定義與已存在工件永久保留；現行比較／訓練／Summary 退出 DR。研究假說「量能幅度無效」不被全面否定，因 DR 同時增加 input width 至 12，無法分離新增資訊與重複表示影響。下一個獨立假說為 `MR-13DS`：固定 **300×10**，只用相同 centered log-volume 取代兩條舊 Volume，Exact／Direct 採 C211／C212，仍用原 Research SOP 與四 Seed pairing；此段**只是新研究註冊，不是 DS 已有成績**。
 
+## 2026-11-28 MR-13DS 量能通道取代：Seed42 Rolling 負結果、使用者退役
+
+**來源與控制。** 使用者提供 Research 主控台紀錄 `貼上的文字 (1)(20261128-111655).txt`，期間 2021-01-01～2026-03-02，Seed42、Breakout Min/P16；MR-13DS 固定 300×10，只將個股與0050兩個 Volume 通道由 IQR-normalized log-volume 替換為同窗 centered log-volume，T40、樣本合法性／成熟、模型結構、訓練與交易契約沿用 MR-13CJ。C211 Exact 配對 C107；C212 Direct 配對 C109。6 folds 完成，PIT 分數 630,589/630,589（100%）；共同成熟評估為 Global 608,204、Breakout 17,346 groups。以下是使用者回報數字，未取得原始 FIT／Replay／四 Seed JSON 自行重算，不宣稱獨立重算或完整四 Seed。
+
+| 指標 | C107 CJ Exact | C211 DS Exact | C109 CJ Direct | C212 DS Direct |
+| --- | ---: | ---: | ---: | ---: |
+| Rolling RoMD | 11.05 | 8.81 | 7.19 | 4.65 |
+| 總報酬 | +143.78% | +121.61% | +99.09% | +80.59% |
+| MDD | 13.01% | 13.81% | 13.78% | 17.32% |
+| 勝率 | 40.95% | 41.37% | 38.65% | 37.89% |
+| EV(A) | +0.76R | +0.65R | +0.45R | +0.42R |
+| 成交筆數 | 359 | 336 | 401 | 417 |
+
+DS−CJ 的 RoMD 為 Exact **−2.24**、Direct **−2.54**；MDD 分別 **+0.80pp／+3.54pp**。模型 Global Daily ρ 為 CJ/DS `0.2194/0.2065`、Global ρ `0.1081/0.0943`；Breakout Daily ρ `0.1941/0.2053`、Pair `57.56%/57.60%`，但 Breakout 前十分位 Target `−0.1802/−0.2297`、Top-Bottom Target `−0.1360/−0.1676`，正 Top-Bottom 完整年度 `2/5 / 1/5`。DS 原模型 Gate 為 FAIL；局部排序改善未轉成主要 Exact／Direct 策略增益。前十分位與每日 Top-K 不互代，也不以跨 Target 的原始數值比較好壞。
+
+**結論與限制。** DS 的 RoMD 高於先前 DR（Exact 7.43、Direct 3.82），但 DR→DS 同時改變輸入寬度與量能表示組合，且只有單 Seed；不能據此證明 input 增多／冗餘是 DR 失敗的唯一原因。DS 在維持十欄後仍低於 CJ，支持停止本次 centered log-volume 實驗，不代表所有量能資訊或深度學習均無效。2021 起仍是迭代研究 OOS，非 untouched holdout。
+
+**決策。** 使用者明確要求「退役ds，具體規劃下一步」。登錄 `RETIRED / ROLLING_NEGATIVE / FOUR_SEED_EVIDENCE_NOT_PROVIDED / NO_ADVANCEMENT`，停止此版本後續 Robustness；未提供四 Seed 證據，不能寫成 0/4 或 Robustness FAIL。MR-13DS／C211／C212 退出現行研究並實際刪除專屬實作，Training Model 回到原 MR-13CJ；歷史 identity、定義、版本、原始結果與既有工件保留，編號不回收。下一步僅在回覆提出受控設計，未預占新編號或把猜想寫成已執行結果。

@@ -1538,10 +1538,11 @@ _REVIEWED.setdefault('filters/breakout_quality/models/architectures.py', {"revie
 _REVIEWED_SOURCE_INVENTORIES["oracle_daily_provider"]["current"][
     'filters/breakout_quality/daily_ranker_data.py'
 ] = (
-    # AI 2026-11-28: Hard retirement deleted the unused DR 300x12 branch.
-    # Only opt-in centered-volume calculations changed; all existing Oracle
-    # providers use centered_log_volume=False and unchanged data contracts.
-    'c33e92f593e8592052b766f2931a39fe4eee9a1abacf07bf11ec63b3373c23a5',
-    'c33e92f593e8592052b766f2931a39fe4eee9a1abacf07bf11ec63b3373c23a5',
-    '6a0c1e9e12101d275c3d4240319f8ecaae4907bc77fd7e125ce7aeb9f716a5ce',
+    # AI 2026-11-28: Both volume-input studies are retired; remove their flag
+    # and branches. Retained input tensors, profiles and four Oracle provider
+    # contracts match the frozen 872be2ed source exactly. Review evidence:
+    # outputs/validation/ds_retirement_20261128/provider_preservation_review.json.
+    '1c0d2c77f1680d7608231f2088f6df853123033dee24aedee53f4ed40007a8fd',
+    '1c0d2c77f1680d7608231f2088f6df853123033dee24aedee53f4ed40007a8fd',
+    'd12f4bd60d0381bd4b43acefd1c5525ba8bb3e17ec8437a73891caee6853d83b',
 )

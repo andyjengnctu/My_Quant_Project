@@ -8,7 +8,7 @@ on user-selected current settings from ``config.breakout_quality``.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Any
 
 from config.research import RESEARCH_SINGLE_SEED
@@ -339,9 +339,6 @@ DAILY_UNIVERSAL_SHARED_FULL_D20_SAFETY_HS_CONDITIONAL_MFE_PROFILE = (
 DAILY_UNIVERSAL_TERMINAL_R40_PAIRWISE_PROFILE = "daily_universal_terminal_r40_full_list_ndcg_pairwise"
 DAILY_UNIVERSAL_TERMINAL_R40_POSITIVE_PROFILE = "daily_universal_terminal_r40_positive_binary"
 DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_PAIRWISE_PROFILE = "daily_universal_terminal_mae_gated_t40_full_list_ndcg_pairwise"
-DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_CENTERED_LOG_VOLUME_REPLACE_PROFILE = (
-    "daily_universal_terminal_mae_gated_t40_full_list_ndcg_pairwise_centered_log_volume_replace"
-)
 DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_POSITIVE_PROFILE = "daily_universal_terminal_mae_gated_t40_positive_binary"
 DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_PROBABILISTIC_PROFILE = "daily_universal_terminal_mae_gated_t40_probabilistic_pairwise"
 DAILY_UNIVERSAL_FULL_HORIZON_MAE_GATED_MFE_T40_PAIRWISE_PROFILE = "daily_universal_full_horizon_mae_gated_mfe_t40_full_list_ndcg_pairwise"
@@ -982,13 +979,6 @@ _EXPERIMENT_PROFILES = {
     ),
 }
 
-# AI: One independent replacement-input experiment; historical DR is not executable.
-_EXPERIMENT_PROFILES[DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_CENTERED_LOG_VOLUME_REPLACE_PROFILE] = replace(
-    _EXPERIMENT_PROFILES[DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_PAIRWISE_PROFILE],
-    name=DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_CENTERED_LOG_VOLUME_REPLACE_PROFILE,
-    model_architecture="inception_time_centered_log_volume_replace_v1",
-)
-
 SUPPORTED_BREAKOUT_QUALITY_EXPERIMENT_PROFILES = tuple(_EXPERIMENT_PROFILES)
 SUPPORTED_BREAKOUT_QUALITY_CLASSIFICATION_EXPERIMENT_PROFILES = tuple(
     name
@@ -1616,23 +1606,6 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
         current_time_validation_authorized=False,
     ),
 }
-
-_CONTINUOUS_RANKER_RESEARCH_SPECS[DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_CENTERED_LOG_VOLUME_REPLACE_PROFILE] = replace(
-    _CONTINUOUS_RANKER_RESEARCH_SPECS[DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_PAIRWISE_PROFILE],
-    profile_name=DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_CENTERED_LOG_VOLUME_REPLACE_PROFILE,
-    model_research_id="MR-13DS",
-    experiment_name="MR-13DS T40 Centered Log-Volume Replacement Full-list Ranker",
-    phase="13DS",
-    objective_description=(
-        "Same T40 truth, maturity, PIT cohort, InceptionTime topology, Adam, "
-        "full-list Delta-NDCG, folds and epoch selection as CJ. Replace only the "
-        "stock and 0050 IQR-normalized log-volume columns with log1p(max(Volume,0)) "
-        "minus each historical window median. Preserve all eight normalized price "
-        "channels and 300x10 width. One independent FIT/PIT score source serves "
-        "P16 Exact and Direct. No OOS fitting or Trading promotion."
-    ),
-)
-
 
 def _continuous_ranker_profile_names_from_experiment_registry() -> tuple[str, ...]:
     """Return continuous-profile membership/order from the canonical profile owner."""

@@ -193,7 +193,7 @@ project/
 - `services/trading/market_data_consumer.py` 在短 thread/process lock 內核對 expected consumer fingerprint 後發布；日期及同日 overlay lineage 不得倒退。promotion 發生衝突時重新擷取來源與規劃，不能用舊 read model 盲目重試。
 - Forward READY 由 `services/breakout_quality/forward_model_source.py` 統一驗證；canonical 與 isolated Strategy Compare／Robustness 以可重驗的 binding 消費相同工件契約。`services/breakout_quality/forward_publication.py` 持有 producer lease、唯一 staging 與可恢復提交，接收 canonical FIT owner 的驗證 callback；FIT 與 evaluation 分別發布，report 失敗不撤銷已驗證的 FIT。
 - Ranker 路徑解析由 `services/breakout_quality/ranker_output_paths.py` 持有，feature price 身分由 `services/breakout_quality/feature_price_source.py` 持有，SOP completeness 純驗證由 `filters/breakout_quality/standard_model_sop_contract.py` 持有；既有 producer 模組保留公開轉接介面。Publication 與 inspection 不透過 trainer 取得這些共用契約，避免 FIT、repair 與研究執行服務形成循環引用。
-- 可選 sequence 輸入表示由 architecture descriptor 宣告 capability 與 spec input path；`features.py` 持有 centered log-volume 的唯一數值公式及欄位 schema，`LazyDailyFeatureBank` 在相同歷史視窗按能力附加個股／0050通道並發布完整欄位。原始十欄、樣本資格與 Target 不變；trainer、FIT owner、推論、Research 選單與 renderer 不辨認實驗名稱，Exact／Direct 共用同一模型來源。
+- 可選 sequence 輸入表示由現役 architecture descriptor 宣告 capability 與 spec input path，`LazyDailyFeatureBank` 依解析後的 capability 建立輸入。退役表示的專用 descriptor、數值 helper、資料分支與專屬測試移除；trainer、FIT owner、推論、Research 選單與 renderer 不辨認實驗名稱，Exact／Direct 共用同一模型來源。
 
 ## 正式入口
 

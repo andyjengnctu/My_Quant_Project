@@ -10,7 +10,9 @@
 
 `SR-C211` 是 P16 Exact K/R0（配對 C107），`SR-C212` 是 P16 Direct No-K/No-R0（配對 C109），各 Replay v1，兩者共用 `DL-CONT13DS-ROLL`／`CONT13DS_ROLL` 的同一模型／PIT 分數，沒有兩套 DL。正式 Summary T40 Exact／Direct、Model Compare、Forward／Rolling、四種 benchmark seed Robustness 與 Oracle binding 皆由既有共通 Research roster 派生；Compare Suite 對照為 `C211-C107`、`C212-C109`、`C211-C212`。原 CJ 保留，DR 的 C209／C210、模型與 Source 已退出現行名單但歷史編號不回收。Seed42 用於先行 Rolling 評估；只有取得正式四 seed 證據才能判定四 seed 晉級（Exact 配對 ΔRoMD 均值／中位數皆正、至少 3/4 改善、平均 MDD 不增加；Direct 是交叉檢驗）。無新的 Target／Oracle 公式、Trading promotion、OOS FIT 或專用選單。
 
-目前狀態：`REGISTERED / IMPLEMENTED / MARKET_RESULTS_PENDING / RESEARCH_ONLY / NO_TRADING`。不得把 DR 未完成的 seed 回放或任一歷史工件改名為 DS；舊的合法 FIT／Replay 依完整 identity REUSE。2021-01-01～2026-03-02 是反覆使用的迭代研究 OOS，不宣稱 untouched holdout。
+首次交付狀態：`REGISTERED / IMPLEMENTED / MARKET_RESULTS_PENDING / RESEARCH_ONLY / NO_TRADING`。不得把 DR 未完成的 seed 回放或任一歷史工件改名為 DS；舊的合法 FIT／Replay 依完整 identity REUSE。2021-01-01～2026-03-02 是反覆使用的迭代研究 OOS，不宣稱 untouched holdout。
+
+**2026-11-28 結果及退役決策：** 使用者回報完整 Seed42 Rolling，6 folds、630,589/630,589 PIT scores（100% coverage）。C211 對 C107：RoMD `8.81/11.05`、MDD `13.81%/13.01%`、總報酬 `121.61%/143.78%`；C212 對 C109：RoMD `4.65/7.19`、MDD `17.32%/13.78%`、總報酬 `80.59%/99.09%`。DS 的 Breakout Daily ρ 雖為 `0.2053`（CJ `0.1941`），前十分位 Target 為 `−0.2297`（CJ `−0.1802`），正 Top-Bottom 完整年度只有 `1/5`；原模型 Gate 為 FAIL。未取得四 Seed 結果，不能登錄為四 Seed 0/4 或完整 Robustness FAIL。使用者明確要求退役 DS；目前狀態為 `RETIRED / ROLLING_NEGATIVE / FOUR_SEED_EVIDENCE_NOT_PROVIDED / NO_ADVANCEMENT / HISTORICAL_ID_RESERVED / NO_TRADING`。DS 的 profile／research spec、architecture descriptor、兩列策略與 contrasts／Summary／Source 接線，以及已無現役使用者的 centered-volume helper、資料分支及專屬測試均實際刪除；Training Model 回到既有 MR-13CJ。DS／C211／C212 歷史定義、FIT／Replay 版本、原始結果與既有工件保留；不回收編號、不清除使用者工件。詳見 Experiment Log 同日結果條目；下一步僅作提案，未註冊新 identity。
 
 ### 2026-11-28 T40 centered log-volume 輸入研究（使用者核准）
 
@@ -40,7 +42,8 @@
 | SR-C203, SR-C204 | CANCELLED | REMOVED |
 | SR-C205, SR-C206, HV1 | RETIRED | REMOVED |
 | SR-C207, SR-C208, HV2 | RETIRED | REMOVED |
-| MR-13DR, SR-C209, SR-C210 | RETIRED | REMOVED (DR descriptor and 300x12 execution path deleted; centered-volume primitive retained for DS) |
+| MR-13DR, SR-C209, SR-C210 | RETIRED | REMOVED |
+| MR-13DS, SR-C211, SR-C212 | RETIRED | REMOVED (descriptor, replacement input path, centered-volume helper and dedicated tests deleted) |
 | MR-10A | RETIRED | REMOVED |
 <!-- /implementation-lifecycle -->
 

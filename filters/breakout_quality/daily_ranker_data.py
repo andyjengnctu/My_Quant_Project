@@ -98,8 +98,6 @@ from filters.breakout_quality.risk_normalized_target import (
     load_min_roos_risk_schedule,
 )
 from filters.breakout_quality.features import (
-    CENTERED_LOG_VOLUME_FEATURE_COLUMNS,
-    centered_log_volume_windows,
     normalize_ohlcv_array_window,
     normalize_ohlcv_array_windows,
 )
@@ -138,7 +136,6 @@ class LazyDailyFeatureBank:
         feature_quote_mask: bool = False,
         trade_count_source: dict[str, Any] | None = None,
         trade_count_placebo: bool = False,
-        centered_log_volume: bool = False,
         ticker_ids: np.ndarray,
         source_positions: np.ndarray,
         benchmark_positions: np.ndarray,
@@ -181,28 +178,19 @@ class LazyDailyFeatureBank:
             raise ValueError("trade-count input cannot combine with raw quote mask input")
         self._trade_count_placebo = bool(trade_count_placebo)
         self._trade_count_enabled = trade_count_source is not None
-        self._centered_log_volume = bool(centered_log_volume)
-        if self._centered_log_volume and (
-            self._feature_quote_mask or self._trade_count_enabled
-            or feature_frames is not None or feature_benchmark is not None
-        ):
-            raise ValueError("centered log-volume input只允許canonical adjusted OHLCV表示")
         if self._trade_count_placebo and not self._trade_count_enabled:
             raise ValueError("trade-count placebo requires the same certified source and mask")
         self.feature_columns = (
             (*FEATURE_COLUMNS, "Stock_Raw_Quote_Available", "Benchmark_Raw_Quote_Available")
             if self._feature_quote_mask else
             (*FEATURE_COLUMNS, *TRADE_COUNT_FEATURE_NAMES)
-            if self._trade_count_enabled else
-            (*FEATURE_COLUMNS[:4], CENTERED_LOG_VOLUME_FEATURE_COLUMNS[0],
-             *FEATURE_COLUMNS[5:9], CENTERED_LOG_VOLUME_FEATURE_COLUMNS[1])
-            if self._centered_log_volume else FEATURE_COLUMNS
+            if self._trade_count_enabled else FEATURE_COLUMNS
         )
         # Preserve legacy manifest byte semantics for existing AO/BX artifacts;
         # only the new data capability publishes its additional feature schema.
         self.manifest_feature_columns = (
             self.feature_columns
-            if self._trade_count_enabled or self._centered_log_volume else FEATURE_COLUMNS
+            if self._trade_count_enabled else FEATURE_COLUMNS
         )
         self._stock_trade_counts: tuple[np.ndarray, ...] = ()
         self._stock_trade_masks: tuple[np.ndarray, ...] = ()
@@ -326,11 +314,6 @@ class LazyDailyFeatureBank:
             )
         else:
             feature = self._normalized_window(self._benchmark_feature_array, position)
-        if self._centered_log_volume:
-            length = int(self._policy.feature_window_bars)
-            volume = self._benchmark_feature_array[position - length + 1:position + 1, 4]
-            amplitude = centered_log_volume_windows(volume[None, :])[0]
-            feature[:, 4] = amplitude
         if self._trade_count_enabled:
             length = int(self._policy.feature_window_bars)
             start = position - length + 1
@@ -720,8 +703,6 @@ class LazyDailyFeatureBank:
         if not bool(np.isfinite(stock_features).all()):
             raise RuntimeError("daily feature window產生non-finite value")
         output[:, :, :5] = stock_features
-        if self._centered_log_volume:
-            output[:, :, 4] = centered_log_volume_windows(stock_windows[:, :, 4])
         if self._feature_quote_mask:
             output[:, :, 10] = stock_masks.astype(np.float32)
         if self._trade_count_enabled:
@@ -2189,7 +2170,6 @@ def load_daily_universal_ranker_data(
         feature_quote_mask=use_quote_mask,
         trade_count_source=trade_count_input,
         trade_count_placebo=architecture_descriptor.has_capability("lagged_trade_count_placebo"),
-        centered_log_volume=architecture_descriptor.has_capability("centered_log_volume"),
         ticker_ids=ticker_ids,
         source_positions=source_positions,
         benchmark_positions=benchmark_positions,
