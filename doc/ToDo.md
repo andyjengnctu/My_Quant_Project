@@ -1,5 +1,5 @@
-我現在跟的你對話模式，有沒有什麼不必要的檔案輸出/輸入，是在浪費tokens的?
-
+先給持倉續抱／出場模型的具體設計，說明訓練樣本、inputs、Target 計算、出場時點與如何避免前視；沿用 Research 比較 Exact／Direct，保留原 CO 與 C106，先不要實作。
+在summary選單加一個rolling驗證，只跑模型+策略rolling+summary，不跑robutenss
 - bug
     - 0050 cannot be selected by any DL
 

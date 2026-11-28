@@ -482,24 +482,34 @@ class FormalMinDailyOracleCases(TestCase):
         self.assertGreaterEqual(e60_short["cutoff_truncated_rows"], e40_short["cutoff_truncated_rows"])
 
     def test_all_declared_min_horizons_share_feature_universe_and_cutoff_policy(self):
+        from core.audit_registry import resolve_current_oracle_comparisons
         from services.audit.daily_trade40_oracle import target_identity_for_horizon
         full = definition(full_cycle=True)
-        self.assertEqual(len(full.source["oracle_comparisons"]), 16)
+        # AI: Validate the active declarations, not a historical roster size or
+        # retired Net-R arm. Primitive horizon coverage below stays independent.
+        declared = resolve_current_oracle_comparisons(full.source)
         plan = oracle._oracle_comparison_plan(full)
-        self.assertEqual({name: horizon for name, (_, _, horizon) in plan["daily_recipes"].items()}, {
-            "DailyUniversal_MinTrade40_NetR": 40,
-            "DailyUniversal_MinTrade_NetR": None,
-            "DailyUniversal_MinTrade_NetPnL": None,
-        })
-        self.assertEqual(plan["daily_sources"]["DailyUniversal_MinTrade_NetR_Direct"],
-                         "DailyUniversal_MinTrade_NetR")
-        self.assertEqual(len(plan["targets"]), 16)
+        self.assertEqual({name for name, _ in plan["targets"]},
+                         {row["target"] for row in declared})
         settings, _base, _exact = oracle._contract(full)
         contracts = _ORIGINAL_SCORE_CONTRACT_RESOLVER(full, settings, plan)
-        self.assertEqual(contracts["DailyUniversal_MinTrade_NetR"]["target_id"],
-                         target_identity_for_horizon(None)[0])
-        self.assertEqual(contracts["DailyUniversal_MinTrade_NetR_Direct"]["target_id"],
-                         target_identity_for_horizon(None)[0])
+        min_recipes = {
+            row["target"]: row for row in declared
+            if row.get("score") in {"daily_trade_path_net_r", "daily_trade_path_net_pnl"}
+        }
+        self.assertTrue(min_recipes)
+        for source, row in min_recipes.items():
+            horizon = (None if row.get("horizon_mode") == "full_trade_cycle"
+                       else int(row.get("horizon_sessions", 40)))
+            metric = "net_pnl" if row["score"] == "daily_trade_path_net_pnl" else "net_r"
+            self.assertEqual(plan["daily_recipes"][source],
+                             (row["score"], row["provider"], horizon))
+            expected_target = target_identity_for_horizon(horizon, outcome_metric=metric)[0]
+            for treatment in declared:
+                if treatment["target"] == source or treatment.get("score_source") == source:
+                    name = treatment["target"]
+                    self.assertEqual(plan["daily_sources"][name], source)
+                    self.assertEqual(contracts[name]["target_id"], expected_target)
 
         evidence = {}
         scored = {}
@@ -518,12 +528,14 @@ class FormalMinDailyOracleCases(TestCase):
 
         # Direct can consume full-cycle truth without replaying an unselected
         # full-cycle Exact arm, or requiring a second Target producer.
-        only_direct = replace(full, source={**full.source,
-            "oracle_comparisons": tuple(item for item in full.source["oracle_comparisons"]
-                if item["target"] == "DailyUniversal_MinTrade_NetR_Direct")})
-        direct_plan = oracle._oracle_comparison_plan(only_direct)
-        self.assertEqual(list(direct_plan["daily_recipes"]), ["DailyUniversal_MinTrade_NetR"])
-        self.assertEqual(list(direct_plan["selectors"]), ["DailyUniversal_MinTrade_NetR_Direct"])
+        direct_rows = [row for row in declared if row.get("selector") == "direct"
+                       and row.get("score_source") in min_recipes]
+        self.assertTrue(direct_rows)
+        for row in direct_rows:
+            only_direct = replace(full, source={**full.source, "oracle_comparisons": (row,)})
+            direct_plan = oracle._oracle_comparison_plan(only_direct)
+            self.assertEqual(list(direct_plan["daily_recipes"]), [row["score_source"]])
+            self.assertEqual(list(direct_plan["selectors"]), [row["target"]])
 
     def test_signal_alignment_invalidates_old_signed_netr_fingerprint(self):
         """A genuine setup/continuation semantic fix is NOT additive NetPnL."""
