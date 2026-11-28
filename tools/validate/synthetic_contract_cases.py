@@ -313,6 +313,40 @@ def validate_output_contract_case(_base_params):
         check("validate_summary_fail_count", 1, validate_payload.get("fail_count"))
         check("validate_summary_real_ticker_count", 3, validate_payload.get("real_ticker_count"))
 
+        # AI: A successful minimum bundle must retain every skipped check's evidence.
+        conditional_skip = {"ticker": "0050", "module": "scanner", "metric": "extension", "note": "今日無延續候選"}
+        another_skip = {**conditional_skip, "ticker": "1101"}
+        unavailable_skip = {"ticker": "GPU_CASE", "module": "synthetic", "metric": "device_path", "note": "CUDA unavailable"}
+        pass_row = {"ticker": "1102", "status": "PASS"}
+        fail_row = {"ticker": "1103", "status": "FAIL"}
+        skip_scenarios = (
+            ("pass_with_skip", [pass_row, {**conditional_skip, "status": "SKIP"}, {**another_skip, "status": "SKIP"}], "PASS", [conditional_skip, another_skip]),
+            ("no_skip", [pass_row], "PASS", []),
+            ("failure_with_skip", [pass_row, fail_row, {**conditional_skip, "status": "SKIP"}, {**unavailable_skip, "status": "SKIP"}], "FAIL", [conditional_skip, unavailable_skip]),
+        )
+        with patch.dict(os.environ, {LOCAL_REGRESSION_RUN_DIR_ENV: str(run_dir)}):
+            for scenario, records, expected_status, expected_details in skip_scenarios:
+                scenario_df = pd.DataFrame(records)
+                write_local_regression_summary(
+                    dataset_profile_key="reduced", dataset_source="direct", data_dir="data/fixture",
+                    csv_path=None, xlsx_path=None, elapsed_time=0.1, selected_tickers=["0050", "1101"],
+                    df_results=scenario_df, df_failed=scenario_df[scenario_df["status"] == "FAIL"],
+                    output_dir=str(run_dir), real_data_coverage_ok=True, peak_process_memory_mb=1.0,
+                )
+                scenario_payload = json.loads(validate_summary_path.read_text(encoding="utf-8"))
+                check(f"{scenario}_verdict_preserved", expected_status, scenario_payload.get("status"))
+                check(f"{scenario}_skip_evidence_complete", expected_details, scenario_payload.get("skip_details"))
+                check(f"{scenario}_skip_count_matches_evidence", len(expected_details), scenario_payload.get("skip_count"))
+                if expected_status == "PASS":
+                    check(f"{scenario}_runner_accepts_skip_evidence", [], run_all_module._payload_failure_reasons(scenario_payload))
+                bundle_path = local_common.build_bundle_zip(
+                    run_dir, "skip_evidence.zip",
+                    include_paths=local_common.select_bundle_paths(run_dir, overall_ok=expected_status == "PASS"),
+                )
+                with zipfile.ZipFile(bundle_path) as archive:
+                    archived_summary = json.loads(archive.read("validate_consistency_summary.json"))
+                check(f"{scenario}_bundle_preserves_skip_evidence", expected_details, archived_summary.get("skip_details"))
+
         # XLSX contract: issue report sheet names and headers
         df_failed_summary = pd.DataFrame([{"ticker": "1102", "failed_checks": 1}])
         df_failed_module = pd.DataFrame([{"module": "portfolio", "failed_checks": 1}])

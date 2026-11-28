@@ -1,5 +1,6 @@
 import os
 import re
+from collections import Counter
 from pathlib import Path
 
 import pandas as pd
@@ -58,6 +59,19 @@ def write_issue_excel_report(df_failed, df_failed_summary, df_failed_module, tim
     return report_path
 
 
+def _collect_skip_details(df_results):
+    # AI: Keep the original check identity and reason in the already-bundled summary.
+    if df_results.empty:
+        return []
+    return (
+        df_results.loc[df_results["status"] == "SKIP"]
+        .reindex(columns=["ticker", "module", "metric", "note"])
+        .fillna("")
+        .astype(str)
+        .to_dict(orient="records")
+    )
+
+
 def print_console_summary(
     df_results,
     df_failed,
@@ -97,7 +111,8 @@ def print_console_summary(
     failed_system_items = int(failed_ticker_series[failed_system_mask].nunique()) if not df_failed.empty else 0
 
     pass_count = int((df_results["status"] == "PASS").sum()) if not df_results.empty else 0
-    skip_count = int((df_results["status"] == "SKIP").sum()) if not df_results.empty else 0
+    skip_details = _collect_skip_details(df_results)
+    skip_count = len(skip_details)
     fail_count = int((df_results["status"] == "FAIL").sum()) if not df_results.empty else 0
 
     print("\n================================================================================")
@@ -112,6 +127,11 @@ def print_console_summary(
     print(f"PASS 數: {pass_count}")
     print(f"SKIP 數: {skip_count}")
     print(f"FAIL 數: {fail_count}")
+    if skip_details:
+        print("SKIP 原因分組：")
+        reasons = Counter((row["module"], row["metric"], row["note"]) for row in skip_details)
+        for (module, metric, note), count in sorted(reasons.items()):
+            print(f"  - {count} | {module} / {metric} | {note}")
     print(f"有問題真實股票數: {failed_real_tickers}")
     print(f"有問題 synthetic case 數: {failed_synthetic_cases}")
     print(f"有問題 system 項目數: {failed_system_items}")
@@ -200,6 +220,7 @@ def write_local_regression_summary(*, dataset_profile_key, dataset_source, data_
     )[:10]
     synthetic_duration_sec = round(sum(float(row.get("duration_sec", 0.0) or 0.0) for row in timed_synthetic), 3)
 
+    skip_details = _collect_skip_details(df_results)
     summary = {
         "status": "PASS" if (df_failed.empty and real_data_coverage_ok) else "FAIL",
         "dataset": dataset_profile_key,
@@ -213,7 +234,8 @@ def write_local_regression_summary(*, dataset_profile_key, dataset_source, data_
         "real_data_coverage_ok": bool(real_data_coverage_ok),
         "total_checks": int(len(df_results)),
         "pass_count": int((df_results["status"] == "PASS").sum()) if not df_results.empty else 0,
-        "skip_count": int((df_results["status"] == "SKIP").sum()) if not df_results.empty else 0,
+        "skip_count": len(skip_details),
+        "skip_details": skip_details,
         "fail_count": fail_count,
         "peak_process_memory_mb": round(float(peak_process_memory_mb or 0.0), 3),
         "memory_measurement_mode": "process_peak_rss",

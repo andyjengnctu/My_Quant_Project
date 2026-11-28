@@ -147,6 +147,32 @@ def validate_validate_console_summary_reporting_case(_base_params):
         and "失敗項摘要：無" in pass_console_text,
     )
 
+    add_check(results, "reporting_schema", case_id, "failure_summary_explains_skips", True,
+              "SKIP 原因分組：" in console_text and "1 | system / coverage | skip" in console_text)
+    add_check(results, "reporting_schema", case_id, "no_skip_summary_has_no_reason_groups", False,
+              "SKIP 原因分組：" in pass_console_text)
+
+    # AI: Preserve conditional checks as SKIP, grouping duplicate reasons without hiding rows.
+    skip_results = pd.concat([
+        pass_results,
+        pd.DataFrame([
+            {"ticker": "0050", "module": "scanner", "metric": "extension", "status": "SKIP", "note": "今日無延續候選"},
+            {"ticker": "1101", "module": "scanner", "metric": "extension", "status": "SKIP", "note": "今日無延續候選"},
+            {"ticker": "GPU_CASE", "module": "synthetic", "metric": "device_path", "status": "SKIP", "note": "CUDA unavailable"},
+        ]),
+    ], ignore_index=True)
+    skip_console_text = _capture_output(lambda: print_console_summary(
+        df_results=skip_results, df_failed=pass_failed, df_summary=pass_summary,
+        csv_path=None, xlsx_path=None, elapsed_time=1.0, real_summary_count=1,
+        real_tickers=["0050", "1101"], normalize_ticker_text=lambda value: str(value).strip(),
+        max_console_fail_preview=5,
+    ))
+    add_check(results, "reporting_schema", case_id, "pass_summary_preserves_skip_counts", True,
+              "PASS 數: 1" in skip_console_text and "SKIP 數: 3" in skip_console_text and "FAIL 數: 0" in skip_console_text)
+    add_check(results, "reporting_schema", case_id, "pass_summary_groups_skip_reasons_without_conflation", True,
+              skip_console_text.count("2 | scanner / extension | 今日無延續候選") == 1
+              and skip_console_text.count("1 | synthetic / device_path | CUDA unavailable") == 1)
+
     summary["console_summary_lines"] = len([line for line in console_text.splitlines() if line.strip()])
     return results, summary
 

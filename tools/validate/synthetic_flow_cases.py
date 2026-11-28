@@ -923,6 +923,44 @@ def validate_synthetic_extended_miss_buy_case(base_params):
         add_check(results, "synthetic_extended_miss_buy", case["case_id"], "scanner_tool_status", "extended_tbd", None if scanner_result is None else scanner_result["status"])
         add_check(results, "synthetic_extended_miss_buy", case["case_id"], "has_extended_candidate_tbd_today", True, bool(scanner_ref_stats.get("extended_candidate_tbd_today") is not None))
 
+    # AI: Real quotes may contain no continuation today. Exercise both scanner
+    # classifications and the inclusive touch boundary with the existing fixture.
+    from services.scanner.stock_processor import process_raw_stock_frame_actionable_detail
+
+    check, _check_true = bind_checks(results, "synthetic_extended_miss_buy", case["case_id"])
+    original_limit = 104.0
+    for label, low, expected_kind in (
+        ("below", 103.9, "extended_tbd"),
+        ("equal", 104.0, "extended_tbd"),
+        ("above", 104.1, "extended"),
+    ):
+        frame = case["frames"][primary_ticker].copy()
+        frame.loc[frame.index[-1], ["Open", "High", "Low", "Close", "Volume"]] = (
+            104.15, 104.2, low, 104.15, 0,
+        )
+        stats = run_scanner_reference_check(
+            primary_ticker, None, case["params"], raw_df=frame,
+        )
+        row = process_raw_stock_frame_actionable_detail(frame, primary_ticker, case["params"]) or {}
+        is_extended = expected_kind == "extended"
+        candidate = stats.get(
+            "extended_candidate_today" if is_extended else "extended_candidate_tbd_today"
+        ) or {}
+        seed = row.get("execution_plan_seed") or {}
+        prefix = f"scanner_original_limit_{label}"
+        check(f"{prefix}_no_new_setup", False, bool(stats.get("is_setup_today")))
+        check(f"{prefix}_ordinary_candidate", is_extended, stats.get("extended_candidate_today") is not None)
+        check(f"{prefix}_tbd_candidate", not is_extended, stats.get("extended_candidate_tbd_today") is not None)
+        check(f"{prefix}_candidate_limit", original_limit, candidate.get("limit_price"))
+        candidate_limit = candidate.get("limit_price")
+        check(f"{prefix}_price_geometry", True, candidate_limit is not None and (
+            bool(low > float(candidate_limit) and float(frame["Close"].iloc[-1]) > float(candidate_limit))
+            if is_extended else bool(low <= float(candidate_limit))
+        ))
+        check(f"{prefix}_kind", expected_kind, row.get("kind"))
+        check(f"{prefix}_row_limit", original_limit, row.get("limit_price"))
+        check(f"{prefix}_execution_limit", original_limit, seed.get("limit_price"))
+
     summary["extended_candidate"] = True
     summary["missed_buy"] = True
     return results, summary
