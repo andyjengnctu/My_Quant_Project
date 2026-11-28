@@ -2367,7 +2367,9 @@ def validate_breakout_quality_selection_point_in_time_score_sort_contract_case(_
         (current_daily_accepted, legacy_daily_rejected),
     )
 
-    with tempfile.TemporaryDirectory() as artifact_dir:
+    with tempfile.TemporaryDirectory() as artifact_dir, patch(
+        "core.file_integrity.file_change_signature", return_value=("unchanged_metadata_hint",)
+    ):
         source_path = Path(artifact_dir) / "selection_point_in_time_scores.csv"
         source_path.write_text("ticker,date,score\n2330,2020-01-01,0.8\n", encoding="utf-8")
         source_record = {"path": str(source_path), **build_file_manifest(source_path)}

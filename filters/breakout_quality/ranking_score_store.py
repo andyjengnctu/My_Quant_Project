@@ -32,6 +32,7 @@ from core.breakout_quality_runtime import (
 
 from filters.breakout_quality.continuous_ranker_data import build_same_date_percentile_targets
 from core.file_integrity import compute_observed_file_sha256 as compute_file_sha256
+from core.file_integrity import compute_file_sha256 as compute_strict_file_sha256
 from filters.breakout_quality.pit_fold_provenance import (
     pit_fold_file_signatures, validate_pit_fold_evidence,
 )
@@ -391,7 +392,10 @@ def _validate_audit_source_artifact(
     if str(record.get("filename") or "") != expected_path.name:
         raise ValueError(f"Selection PIT audit {label} filename不一致")
     expected_hash = str(record.get("sha256") or "").lower()
-    actual_hash = compute_file_sha256(expected_path).lower()
+    # A persisted Audit-to-source binding is a content boundary. Windows can
+    # give two rapid same-size writes the same metadata revision hint; that
+    # hint cannot certify that the bytes still match this signed record.
+    actual_hash = compute_strict_file_sha256(expected_path).lower()
     if not expected_hash or expected_hash != actual_hash:
         raise ValueError(
             f"Selection PIT audit {label} SHA256不一致: "
