@@ -176,6 +176,7 @@ from filters.breakout_quality.hs_conditional_mfe import (
 )
 from filters.breakout_quality.continuous_ranker_quality import (
     daily_top_k_metrics as shared_daily_top_k_metrics,
+    mean_daily_full_list_ndcg,
 )
 from filters.breakout_quality.continuous_target import (
     STRATEGY_ALIGNED_TARGET_ID,
@@ -4306,6 +4307,7 @@ def select_epoch(
     )
     best_epoch = 0
     best_daily_spearman = -math.inf
+    best_full_list_ndcg = -math.inf
     best_primary_mfe_daily_spearman = -math.inf
     best_validation_mse = math.inf
     best_joint_ce = math.inf
@@ -4454,7 +4456,8 @@ def select_epoch(
             if pareto_global is None or not math.isfinite(float(pareto_global)):
                 raise ValueError("Pareto validation global pair concordance不可用")
 
-        selection_rule = training_policy.epoch_selection_rule
+        selection_rule = training_policy.epoch_selection_rule_for(profile.epoch_selection_metric)
+        full_list_ndcg_metric = None
         if selection_rule == "categorical_cross_entropy_then_event_brier":
             if not validation_joint_metrics:
                 raise ValueError("categorical validation proper-scoring evidence missing")
@@ -4506,6 +4509,16 @@ def select_epoch(
                     validation_pareto_metrics["global_pareto_pair_concordance"]
                 )
                 comparison = (pareto_daily, best_pareto_concordance, pareto_global, best_global_pareto_concordance, "max", "max")
+            elif selection_rule == "daily_full_list_ndcg_then_percentile_mse":
+                full_list_ndcg_metric = mean_daily_full_list_ndcg(
+                    group_table.iloc[validation_ids]["date"].to_numpy(),
+                    validation_scores,
+                    percentile_target[validation_ids],
+                )
+                measured = full_list_ndcg_metric["mean_daily_full_list_ndcg"]
+                if measured is None or not math.isfinite(float(measured)):
+                    raise ValueError("full-list NDCG validation has no rankable dates")
+                comparison = (float(measured), best_full_list_ndcg, validation_mse, best_validation_mse, "max", "min")
             elif selection_rule == "daily_spearman_then_percentile_mse":
                 comparison = (float(daily_spearman), best_daily_spearman, validation_mse, best_validation_mse, "max", "min")
             else:
@@ -4524,6 +4537,8 @@ def select_epoch(
         if improved:
             best_epoch = int(epoch)
             best_daily_spearman = float(daily_spearman)
+            if full_list_ndcg_metric is not None:
+                best_full_list_ndcg = float(full_list_ndcg_metric["mean_daily_full_list_ndcg"])
             if primary_daily_spearman is not None and math.isfinite(float(primary_daily_spearman)):
                 best_primary_mfe_daily_spearman = float(primary_daily_spearman)
             best_validation_mse = validation_mse
@@ -4575,6 +4590,7 @@ def select_epoch(
             ),
             "elapsed_sec": round(float(elapsed), 3),
             "is_best_epoch": bool(improved),
+            **({"validation_full_list_ndcg": full_list_ndcg_metric} if full_list_ndcg_metric is not None else {}),
         })
         if not compact_console:
             marker = " ★新最佳" if improved else ""
@@ -4684,6 +4700,12 @@ def select_epoch(
                     f"| Val Economic rho {float(daily_spearman):.4f} "
                     f"| {elapsed:.1f}s{marker}"
                 )
+            elif selection_rule == "daily_full_list_ndcg_then_percentile_mse":
+                print(
+                    f"  Epoch {epoch:>3}/{int(args.epochs)} | Train Loss {batch_loss:.6f} "
+                    f"| Val Full-list NDCG {float(full_list_ndcg_metric['mean_daily_full_list_ndcg']):.6f} "
+                    f"| Val Daily Spearman {float(daily_spearman):.4f} | {elapsed:.1f}s{marker}"
+                )
             elif bool(evaluate_train_metrics):
                 print(
                     f"  Epoch {epoch:>3}/{int(args.epochs)} | Train Loss {batch_loss:.6f} | Train MSE {train_metrics['mse_vs_daily_percentile']:.6f} "
@@ -4703,6 +4725,8 @@ def select_epoch(
     result = {
         "best_epoch": int(best_epoch),
         "best_validation_mean_daily_spearman": float(best_daily_spearman),
+        **({"best_validation_mean_daily_full_list_ndcg": float(best_full_list_ndcg)}
+           if math.isfinite(best_full_list_ndcg) else {}),
         "best_validation_conditional_safety_mean_daily_spearman": (
             float(best_daily_spearman)
             if target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_CONDITIONAL_MFE_SAFETY

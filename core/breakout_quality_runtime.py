@@ -805,6 +805,11 @@ class ContinuousRankerTrainingPolicy:
             raise ValueError("profile_loss_metrics loss_name不得為空或重複")
         if any(not str(metric).strip() for _loss_name, metric in self.profile_loss_metrics):
             raise ValueError("profile_loss_metrics epoch metric不得為空")
+        alternate_metrics = tuple(metric for metric, _rule in self.alternative_epoch_selection_rules)
+        if (len(alternate_metrics) != len(set(alternate_metrics))
+                or any(not metric or not rule for metric, rule in self.alternative_epoch_selection_rules)
+                or set(alternate_metrics).intersection(metric for _loss, metric in self.profile_loss_metrics)):
+            raise ValueError("epoch selection alternatives must be nonempty, unique, and distinct from defaults")
         if self.pairwise_kind not in {
             CONTINUOUS_RANKER_PAIRWISE_KIND_NONE,
             CONTINUOUS_RANKER_PAIRWISE_KIND_SCALAR,
@@ -944,6 +949,20 @@ class ContinuousRankerTrainingPolicy:
             return "pareto_daily_then_global"
         return "daily_spearman_then_percentile_mse"
 
+    @property
+    def alternative_epoch_selection_rules(self) -> tuple[tuple[str, str], ...]:
+        """Non-serialized loss-family capability; it is not an Oracle provider field."""
+        if (self.target_builder == CONTINUOUS_RANKER_TARGET_BUILDER_SCALAR_PAIRWISE
+                and self.loss_handler == CONTINUOUS_RANKER_LOSS_HANDLER_SINGLE_PAIRWISE
+                and self.pairwise_kind == CONTINUOUS_RANKER_PAIRWISE_KIND_SCALAR):
+            return (("mean_daily_full_list_ndcg", "daily_full_list_ndcg_then_percentile_mse"),)
+        return ()
+
+    def epoch_selection_rule_for(self, epoch_selection_metric: str) -> str:
+        """Dispatch only a declared validation metric; legacy profiles keep their rule."""
+        alternative = dict(self.alternative_epoch_selection_rules).get(str(epoch_selection_metric))
+        return str(alternative) if alternative is not None else self.epoch_selection_rule
+
     def expected_epoch_metric(self, loss_name: str) -> str:
         mapping = dict(self.profile_loss_metrics)
         if not mapping:
@@ -963,10 +982,11 @@ class ContinuousRankerTrainingPolicy:
         epoch_selection_metric: str,
     ) -> None:
         expected_metric = self.expected_epoch_metric(loss_name)
-        if str(epoch_selection_metric) != expected_metric:
+        allowed = {expected_metric, *(metric for metric, _rule in self.alternative_epoch_selection_rules)}
+        if str(epoch_selection_metric) not in allowed:
             raise ValueError(
                 "continuous ranker epoch selection與training objective composition不一致: "
-                f"expected={expected_metric}, actual={epoch_selection_metric}"
+                f"expected one of {sorted(allowed)}, actual={epoch_selection_metric}"
             )
 
     def validate_research_spec(

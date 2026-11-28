@@ -339,6 +339,7 @@ DAILY_UNIVERSAL_SHARED_FULL_D20_SAFETY_HS_CONDITIONAL_MFE_PROFILE = (
 DAILY_UNIVERSAL_TERMINAL_R40_PAIRWISE_PROFILE = "daily_universal_terminal_r40_full_list_ndcg_pairwise"
 DAILY_UNIVERSAL_TERMINAL_R40_POSITIVE_PROFILE = "daily_universal_terminal_r40_positive_binary"
 DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_PAIRWISE_PROFILE = "daily_universal_terminal_mae_gated_t40_full_list_ndcg_pairwise"
+DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_NDCG_EPOCH_PROFILE = "daily_universal_terminal_mae_gated_t40_full_list_ndcg_pairwise_ndcg_epoch"
 DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_POSITIVE_PROFILE = "daily_universal_terminal_mae_gated_t40_positive_binary"
 DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_PROBABILISTIC_PROFILE = "daily_universal_terminal_mae_gated_t40_probabilistic_pairwise"
 DAILY_UNIVERSAL_FULL_HORIZON_MAE_GATED_MFE_T40_PAIRWISE_PROFILE = "daily_universal_full_horizon_mae_gated_mfe_t40_full_list_ndcg_pairwise"
@@ -808,6 +809,18 @@ _EXPERIMENT_PROFILES = {
         continuous_target_id="daily_terminal_mae_gated_t40_v1",
         loss_name="pairwise_logistic",
         epoch_selection_metric="mean_daily_spearman",
+        training_label_scope=TRAINING_LABEL_SCOPE_ALL,
+        training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
+        model_architecture="inception_time_v1",
+    ),
+    DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_NDCG_EPOCH_PROFILE: BreakoutQualityExperimentProfile(
+        name=DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_NDCG_EPOCH_PROFILE,
+        optimizer_name="adam",
+        training_sampling_mode=TRAINING_SAMPLING_UNIQUE_TICKER_DATE,
+        training_objective=TRAINING_OBJECTIVE_DAILY_PAIRWISE_RANKING,
+        continuous_target_id="daily_terminal_mae_gated_t40_v1",
+        loss_name="pairwise_logistic",
+        epoch_selection_metric="mean_daily_full_list_ndcg",
         training_label_scope=TRAINING_LABEL_SCOPE_ALL,
         training_sample_scope=TRAINING_SAMPLE_SCOPE_DAILY_ELIGIBLE_STOCK_DAYS,
         model_architecture="inception_time_v1",
@@ -1354,6 +1367,26 @@ _CONTINUOUS_RANKER_RESEARCH_SPECS = {
             "changes to nonnegative full-path MAE-gated signed day-40 return. "
             "MAE>=1R gives -1R; neither MAE nor future R40 enter model features/inference. "
             "No OOS-fitted thresholds and no Trading promotion."
+        ),
+        metric_scope="all_stock_days_terminal_mae_gated_t40",
+        score_semantic_id="daily_terminal_mae_gated_t40_rank",
+        pairwise_reduction=CONTINUOUS_RANKER_PAIRWISE_REDUCTION_FULL_LIST_DELTA_NDCG,
+        selection_pit_authorized=True,
+        current_time_validation_authorized=True,
+    ),
+    DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_NDCG_EPOCH_PROFILE: ContinuousRankerResearchSpec(
+        profile_name=DAILY_UNIVERSAL_TERMINAL_MAE_GATED_T40_NDCG_EPOCH_PROFILE,
+        model_research_id="MR-13DT",
+        experiment_name="MR-13DT T40 Full-list NDCG Epoch Selection",
+        phase="13DT",
+        trainer_family=CONTINUOUS_RANKER_TRAINER_DAILY_UNIVERSAL,
+        target_description="same-date rank of T40=(1-min(MAE40_R,1))*R40-min(MAE40_R,1)",
+        objective_description=(
+            "Matched CJ 300x10 InceptionTime, target, PIT folds, Adam, and full-list "
+            "Delta-NDCG pairwise loss; only inner-validation epoch selection changes "
+            "from mean daily Spearman to mean daily full-list linear-gain NDCG. "
+            "Percentile MSE tie-break, patience and selected-epochs refit unchanged. "
+            "Research only, no OOS-fitted threshold or Trading promotion."
         ),
         metric_scope="all_stock_days_terminal_mae_gated_t40",
         score_semantic_id="daily_terminal_mae_gated_t40_rank",

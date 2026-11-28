@@ -4,6 +4,12 @@
 
 本文件是 `breakout_quality` 的**實驗 identity、命名、版本語意、namespace、目前基準與 ID 佔用狀態**單一真理來源。
 
+### 2026-11-28 T40 選模指標隔離研究（MR-13DT／C213／C214；使用者核准）
+
+`MR-13DT`，profile=`daily_universal_terminal_mae_gated_t40_full_list_ndcg_pairwise_ndcg_epoch`，沿用 `ARCH-inception_time_v1`，獨立 FIT v1。以 `MR-13CJ` 為唯一模型控制組：300×10 個股／0050 還原 OHLCV、原 IQR-normalized Volume、T40 原真值、daily-universal eligible stock-days、40D maturity、6 folds／inner 24M validation、InceptionTime、Adam、原 full-list Delta-NDCG pairwise loss、原訓練批次／early-stop patience／min_delta／percentile-MSE tie-break／selected_epochs refit 均不改。**唯一變因**：inner-validation 每個 epoch 的 primary selector 從 mean daily Spearman 換為 mean daily full-list NDCG；同日合法 validation 0～1 percentile target 為 linear gains、全部候選位置以 `1/log2(rank+1)` 折扣，日期等權平均，不設定 K、不取 OOS／Breakout 策略輸入、不改推論分數表示；同分時沿用穩定順序，無可分辨 Target 的日期不計入。每個 epoch 的選模數值與所選 epoch 存入 FIT evidence，與原 CJ 的 epoch selection 身分獨立，無跨身分 FIT／score 重用。
+
+`SR-C213` 是 Breakout Min/P16 Exact K/R0，配對原 `C107`；`SR-C214` 是相同 T40 分數與 P16 的 Direct No-K/No-R0，配對原 `C109`。兩者只共用 `DL-CONT13DT-ROLL`／`CONT13DT_ROLL` 的同一 FIT／PIT scores；`Compare Suite` 使用原 `Research Summary` membership、`C213-C107`／`C214-C109`／`C213-C214`，不得額外建立 A/B/C 或報表版本。原 CJ、C107/C109 與其他 current rows、Oracle T40 perfect score/selector/strategy/費稅／PIT contract 不改。`Training Model` 指向 DT；Seed42 Rolling 為首次研究 Gate，先確認模型 SOP、Exact RoMD、MDD，Direct 另行記錄。若 Exact 無增益或原模型 Gate 失敗則停止；如通過才由原流程進入 4-seed，同 Seed 配對主 Exact ΔRoMD 均值及中位數 >0、至少 3/4 seeds 增益且平均 MDD 不增加，Direct 不抵銷 Exact 失敗。OOS 自 2021 起為 iterated research OOS，不能回饋 FIT／epoch 選擇。先前 `MR-13CY` 同時變更 loss 和 head-priority selector 的負面研究不等於此單變因實驗。狀態：`REGISTERED / IMPLEMENTED / MARKET_RESULTS_PENDING / RESEARCH_ONLY / NO_TRADING`；未有實際市場 Rolling／Robustness 結果，不更新 Experiment Log 成績、不自動 promotion。
+
 ### 2026-11-28 T40 成交量幅度取代輸入研究（MR-13DS／C211／C212；使用者核准）
 
 `MR-13DS`，profile=`daily_universal_terminal_mae_gated_t40_full_list_ndcg_pairwise_centered_log_volume_replace`，`ARCH-inception_time_centered_log_volume_replace_v1`，獨立 FIT v1。沿用 `MR-13CJ` 的 T40 真值、PIT 合法訓練股票日／40D 成熟、InceptionTime trunk／head、Adam、full-list Delta-NDCG、日期批次、Validation／epoch selection、種子及訓練窗口。**唯一實驗變數是 Volume 表示替換**：個股第 5 欄與 0050 第 10 欄原 IQR-normalized log-volume 改為同歷史 300-bar 視窗的 `log1p(max(Volume,0)) − median_window(log1p(max(Volume,0)))`，不除 IQR；其餘八個 OHLC 通道位元等價維持，輸入長寬均為 **300×10**。原基準 CJ 的 FIT／Replay 完全不變，新的 feature manifest 明確區分兩條 Volume 語意。此替換重用已存在的 centered-volume primitive，並不重新啟用已退役 DR 的 300×12 附加模式；不引入外部資料、技術指標、全零控制組、額外模型分支或獨立策略比較器。

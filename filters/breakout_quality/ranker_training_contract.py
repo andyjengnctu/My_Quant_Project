@@ -645,6 +645,11 @@ def training_semantics(profile) -> dict[str, Any]:
 
     if semantics_key == CONTINUOUS_RANKER_SEMANTICS_PAIRWISE:
         pairwise_contract = _pairwise_contract_for_recipe(recipe)
+        # Legacy pairwise contracts have no explicit selector key.  A new
+        # validation-only selector is separately recorded without changing
+        # the stored meaning/bytes of any pre-existing model.
+        if profile.epoch_selection_metric != recipe.training_policy.expected_epoch_metric(profile.loss_name):
+            pairwise_contract["epoch_selection"] = str(profile.epoch_selection_metric)
         return _extended_semantics(
             batching=pairwise_contract["batching"],
             pairwise_contract=pairwise_contract,

@@ -8,6 +8,48 @@ import numpy as np
 import pandas as pd
 
 
+
+def mean_daily_full_list_ndcg(
+    dates: np.ndarray,
+    scores: np.ndarray,
+    percentile_targets: np.ndarray,
+) -> dict[str, Any]:
+    """Mean over rankable validation dates of full-list linear-gain NDCG.
+
+    Uses the same 0..1, same-day percentile relevance and stable score order
+    as the canonical Top-K diagnostic, but discounts *all* positions. It is
+    solely an inner-validation epoch comparator; no strategy K is used here.
+    """
+    score_array = np.asarray(scores, dtype=np.float64)
+    relevance = np.asarray(percentile_targets, dtype=np.float64)
+    date_array = pd.to_datetime(dates, errors="raise")
+    if len(date_array) != len(score_array) or len(score_array) != len(relevance):
+        raise ValueError("full-list NDCG date/score/relevance lengths differ")
+    if (not np.isfinite(score_array).all() or not np.isfinite(relevance).all()
+            or np.any((relevance < 0.0) | (relevance > 1.0))):
+        raise ValueError("full-list NDCG needs finite scores and percentile targets in [0,1]")
+    frame = pd.DataFrame({"date": date_array, "score": score_array, "gain": relevance})
+    per_date: list[float] = []
+    for _date, day in frame.groupby("date", sort=True):
+        values = day["gain"].to_numpy(dtype=np.float64)
+        if len(values) < 2 or not np.any(values != values[0]):
+            continue  # No target-discriminable pair exists on this date.
+        scores_day = day["score"].to_numpy(dtype=np.float64)
+        discount = 1.0 / np.log2(np.arange(len(values), dtype=np.float64) + 2.0)
+        ideal = float(np.sum(np.sort(values)[::-1] * discount))
+        if not np.isfinite(ideal) or ideal <= 0.0:
+            raise ValueError("rankable full-list NDCG day has invalid IDCG")
+        order = np.argsort(-scores_day, kind="mergesort")
+        ndcg = float(np.sum(values[order] * discount) / ideal)
+        if not np.isfinite(ndcg):
+            raise ValueError("non-finite full-list NDCG")
+        per_date.append(ndcg)
+    return {
+        "mean_daily_full_list_ndcg": float(np.mean(per_date)) if per_date else None,
+        "rankable_date_count": int(len(per_date)),
+    }
+
+
 def daily_top_k_metrics(
     dates: np.ndarray,
     scores: np.ndarray,
