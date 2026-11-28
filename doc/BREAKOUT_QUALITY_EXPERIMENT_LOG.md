@@ -5688,3 +5688,23 @@ DS−CJ 的 RoMD 為 Exact **−2.24**、Direct **−2.54**；MDD 分別 **+0.80
 **結論與限制。** DS 的 RoMD 高於先前 DR（Exact 7.43、Direct 3.82），但 DR→DS 同時改變輸入寬度與量能表示組合，且只有單 Seed；不能據此證明 input 增多／冗餘是 DR 失敗的唯一原因。DS 在維持十欄後仍低於 CJ，支持停止本次 centered log-volume 實驗，不代表所有量能資訊或深度學習均無效。2021 起仍是迭代研究 OOS，非 untouched holdout。
 
 **決策。** 使用者明確要求「退役ds，具體規劃下一步」。登錄 `RETIRED / ROLLING_NEGATIVE / FOUR_SEED_EVIDENCE_NOT_PROVIDED / NO_ADVANCEMENT`，停止此版本後續 Robustness；未提供四 Seed 證據，不能寫成 0/4 或 Robustness FAIL。MR-13DS／C211／C212 退出現行研究並實際刪除專屬實作，Training Model 回到原 MR-13CJ；歷史 identity、定義、版本、原始結果與既有工件保留，編號不回收。下一步僅在回覆提出受控設計，未預占新編號或把猜想寫成已執行結果。
+
+
+## 2026-11-29 MR-13DT Full-list NDCG 選 epoch：Seed42 Rolling 無可觀察改變
+
+**來源與控制。** Codex 依使用者授權於 Windows 主專案執行正式 `summary verify --rolling-only`，模型 Rolling、策略 Rolling、Summary 均完成（exit 0）。本輪程式基準 `15a0aab7`；評估 2021-01-01～2026-03-02，2026 為部分年度，仍是反覆使用的迭代研究 OOS。原 T40、300×10、InceptionTime、full-list Delta-NDCG pairwise loss、Seed42、P16、Exact／Direct、費稅及時間合法性維持原契約；唯一實驗變數是 inner-validation 主選模指標由 Daily Spearman 改為 Full-list NDCG。模型有 6 folds、630,589/630,589 PIT 分數，coverage 100%，無重複、缺漏或額外 group；共同成熟 Global／Breakout 為 608,204／17,346 groups。
+
+| 指標 | C107 CJ Exact | C213 DT Exact | C109 CJ Direct | C214 DT Direct |
+| --- | ---: | ---: | ---: | ---: |
+| Rolling RoMD | 11.0508410853 | 11.0508410853 | 7.1922060392 | 7.1922060392 |
+| MDD | 13.0107522863% | 13.0107522863% | 13.7774831865% | 13.7774831865% |
+| 總報酬 | 143.780861% | 143.780861% | 99.091217% | 99.091217% |
+| 勝率 | 40.9470752089% | 40.9470752089% | 38.6533665835% | 38.6533665835% |
+| EV(A) | 0.7572272561R | 0.7572272561R | 0.4520732420R | 0.4520732420R |
+| 成交筆數 | 359 | 359 | 401 | 401 |
+
+**機制與模型證據。** CJ／DT 六折 selected epochs 同為 `[2,1,1,1,1,1]`；六個 fold 的原始 PIT score CSV 各自逐 bytes 相同。整合 CSV 原始文字有浮點序列化末位差異（round-trip 最大差 `1.1102230246251565e-16`），不能宣稱整檔 SHA 相同；canonical pandas 讀取的六欄、630,589 rows 全部一致，正式回放的全部逐年報酬也一致。模型 SOP 的全部 split metrics 相同：Global Daily ρ `0.2194173896`、Global ρ `0.1081013844`、Pair `58.0436126903%`；Breakout Daily ρ `0.1941493930`、Pair `57.5623895846%`、前／後十分位 raw Target `−0.1802447118／−0.0441978470`，正 Top-Bottom 完整年 `2/5`，原模型品質 gate 仍 FAIL，drift flag 為 false。沒有把「訓練完成」當成研究品質 PASS。
+
+**結論與界線。** 原清單 35 arms 中 C213／C214 為 RUN，其餘 33 為合法 REUSE；Exact／Direct 對 CJ 的 RoMD、MDD、報酬、交易數及逐年結果均無增量。本次支持「在這組既定設定下更換 epoch 主指標沒有產生可觀察改變」，不支持泛稱 NDCG／所有其他 epoch 設計無效。未執行四 Seed Robustness、Target Oracle 重算或 Trading promotion；四 Seed 未測不能寫成 FAIL／0/4。依原先階段規則，本次沒有正增量，不具自動進入 Robustness 的依據；未擅自調 patience／epoch／K 或啟動下一實驗，亦未自行退役 DT。
+
+**成果定位。** 模型來源為原 CJ／DT profile 下 `point_in_time/selection_point_in_time_audit.json` 與六折 manifest；正式策略成果為 `outputs/strategy_compare/broker_cash_dl_conversion/rolling_2021_forward/latest/strategy_comparison.json`，本次 SHA256 `3c99e37157e73a98d1742adf6f4a077a1d8ef258f5e46b31aba099211ad24766`，對應不可變 run `20261129_010505_*_1c0f8659c9bf` 與其逐 arm 原始回放。數值取自並核對本機正式工件，非僅使用者貼出摘要。
